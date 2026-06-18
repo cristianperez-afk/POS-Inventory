@@ -1,0 +1,5 @@
+/* Import Poppins for Headings */
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap');
+
+/* Import Inter as fallback for Code Next (Code Next is not widely available as a web font) */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');

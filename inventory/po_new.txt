@@ -1,0 +1,480 @@
+// Purchase Orders View
+function PurchaseOrdersView({ orders, setPurchaseOrders, inventory, setInventory }: {
+  orders: PurchaseOrder[];
+  setPurchaseOrders: React.Dispatch<React.SetStateAction<PurchaseOrder[]>>;
+  inventory: InventoryItem[];
+  setInventory: React.Dispatch<React.SetStateAction<InventoryItem[]>>;
+}) {
+  const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [showNewPOModal, setShowNewPOModal] = useState(false);
+  const [showNewItemModal, setShowNewItemModal] = useState(false);
+  const [poForm, setPOForm] = useState({
+    supplier: '',
+    date: new Date().toISOString().split('T')[0],
+    items: [] as { name: string; quantity: number; price: number; category?: string; subcategory?: string; size?: string; condition?: string; isNew?: boolean }[]
+  });
+  const [newItemForm, setNewItemForm] = useState({
+    name: '',
+    category: '',
+    subcategory: '',
+    newCategory: '',
+    newSubcategory: '',
+    size: '',
+    condition: 'Good' as 'Excellent' | 'Good' | 'Fair' | 'Damaged',
+    quantity: 1,
+    price: 0
+  });
+
+  const categorySubcategories: { [key: string]: string[] } = {
+    'Tops': ['T-Shirts', 'Polo Shirts', 'Blouses', 'Tank Tops'],
+    'Bottoms': ['Jeans', 'Pants', 'Shorts', 'Skirts'],
+    'Dresses': ['Casual Dresses', 'Formal Dresses'],
+    'Outerwear': ['Jackets', 'Hoodies & Sweaters'],
+    'Shoes': ['Sneakers', 'Boots', 'Sandals'],
+    'Accessories': ['Bags', 'Hats']
+  };
+
+  const filteredOrders = orders.filter(order =>
+    filterStatus === 'all' || order.status === filterStatus
+  );
+
+  const stats = {
+    total: orders.length,
+    pending: orders.filter(o => o.status === 'Pending').length,
+    approved: orders.filter(o => o.status === 'Approved').length,
+    received: orders.filter(o => o.status === 'Received').length
+  };
+
+  const handleAddItemToPO = () => {
+    const finalCategory = newItemForm.newCategory || newItemForm.category;
+    const finalSubcategory = newItemForm.newSubcategory || newItemForm.subcategory;
+
+    const newItem = {
+      name: newItemForm.name,
+      quantity: newItemForm.quantity,
+      price: newItemForm.price,
+      category: finalCategory,
+      subcategory: finalSubcategory,
+      size: newItemForm.size,
+      condition: newItemForm.condition,
+      isNew: true
+    };
+
+    setPOForm({
+      ...poForm,
+      items: [...poForm.items, newItem]
+    });
+
+    setNewItemForm({
+      name: '',
+      category: '',
+      subcategory: '',
+      newCategory: '',
+      newSubcategory: '',
+      size: '',
+      condition: 'Good',
+      quantity: 1,
+      price: 0
+    });
+    setShowNewItemModal(false);
+  };
+
+  const handleCreatePO = () => {
+    if (!poForm.supplier || poForm.items.length === 0) {
+      alert('Please fill in supplier and add at least one item');
+      return;
+    }
+
+    const totalAmount = poForm.items.reduce((sum, item) => sum + (item.quantity * item.price), 0);
+
+    const newPO: PurchaseOrder = {
+      id: Date.now().toString(),
+      orderNumber: `PO-2026-${String(orders.length + 1).padStart(3, '0')}`,
+      supplier: poForm.supplier,
+      date: poForm.date,
+      status: 'Pending',
+      items: poForm.items.map(item => ({
+        name: item.name,
+        quantity: item.quantity,
+        price: item.price
+      })),
+      totalAmount
+    };
+
+    setPurchaseOrders([...orders, newPO]);
+
+    // Add new items to inventory with 0 quantity (will be updated when received)
+    const newInventoryItems = poForm.items
+      .filter(item => item.isNew)
+      .map(item => ({
+        id: `temp-${Date.now()}-${Math.random()}`,
+        name: item.name,
+        category: item.category || 'Uncategorized',
+        subcategory: item.subcategory || 'Other',
+        size: item.size || 'One Size',
+        condition: (item.condition || 'Good') as 'Excellent' | 'Good' | 'Fair' | 'Damaged',
+        quantity: 0,
+        price: item.price,
+        dateAdded: new Date().toISOString().split('T')[0],
+        location: 'Warehouse'
+      }));
+
+    if (newInventoryItems.length > 0) {
+      setInventory([...inventory, ...newInventoryItems]);
+    }
+
+    setPOForm({
+      supplier: '',
+      date: new Date().toISOString().split('T')[0],
+      items: []
+    });
+    setShowNewPOModal(false);
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="text-[30px] font-bold text-[#323B42]">Purchase Orders</h2>
+          <p className="text-[#323B42] text-[14px] mt-1">Create POs and register new items</p>
+        </div>
+        <button
+          onClick={() => setShowNewPOModal(true)}
+          className="bg-[#007A5E] text-white px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-[#008967] transition-colors"
+        >
+          <Plus className="size-4" />
+          New Purchase Order
+        </button>
+      </div>
+
+      {/* New PO Modal */}
+      {showNewPOModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-[14px] p-6 max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+            <h3 className="text-[24px] font-bold text-[#323B42] mb-6">Create Purchase Order</h3>
+
+            <div className="space-y-4 mb-6">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">Supplier</label>
+                  <input
+                    type="text"
+                    value={poForm.supplier}
+                    onChange={(e) => setPOForm({ ...poForm, supplier: e.target.value })}
+                    className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+                    placeholder="Supplier name"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">Date</label>
+                  <input
+                    type="date"
+                    value={poForm.date}
+                    onChange={(e) => setPOForm({ ...poForm, date: e.target.value })}
+                    className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="border-t border-[rgba(0,0,0,0.1)] pt-4 mb-4">
+              <div className="flex items-center justify-between mb-4">
+                <h4 className="text-[16px] font-semibold text-[#323B42]">Items ({poForm.items.length})</h4>
+                <button
+                  onClick={() => setShowNewItemModal(true)}
+                  className="px-3 py-1.5 bg-[#007A5E] text-white rounded-[6px] text-[13px] font-medium flex items-center gap-2 hover:bg-[#008967] transition-colors"
+                >
+                  <Plus className="size-3" />
+                  Add Item
+                </button>
+              </div>
+
+              {poForm.items.length === 0 ? (
+                <p className="text-[14px] text-[#323B42] text-center py-8">No items added yet</p>
+              ) : (
+                <div className="space-y-2">
+                  {poForm.items.map((item, idx) => (
+                    <div key={idx} className="flex items-center justify-between bg-[#F8FAFB] rounded-[8px] px-4 py-3">
+                      <div>
+                        <p className="text-[14px] font-medium text-[#323B42]">{item.name}</p>
+                        {item.isNew && <span className="text-[11px] bg-[#E0F5F1] text-[#008967] px-2 py-0.5 rounded mt-1 inline-block">New Item</span>}
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <span className="text-[13px] text-[#323B42]">{item.quantity} × ₱{item.price}</span>
+                        <span className="text-[14px] font-semibold text-[#323B42]">₱{(item.quantity * item.price).toLocaleString()}</span>
+                        <button
+                          onClick={() => setPOForm({ ...poForm, items: poForm.items.filter((_, i) => i !== idx) })}
+                          className="text-[#E7000B] hover:bg-[#ffe2e2] p-1 rounded"
+                        >
+                          <Trash2 className="size-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="border-t border-[rgba(0,0,0,0.1)] pt-4 mb-6">
+              <div className="flex justify-between items-center">
+                <span className="text-[16px] font-semibold text-[#323B42]">Total Amount:</span>
+                <span className="text-[24px] font-bold text-[#323B42]">
+                  ₱{poForm.items.reduce((sum, item) => sum + (item.quantity * item.price), 0).toLocaleString()}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowNewPOModal(false)}
+                className="flex-1 px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] font-medium text-[#323B42] hover:bg-[#F8FAFB] transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCreatePO}
+                className="flex-1 px-4 py-2 bg-[#007A5E] text-white rounded-[8px] text-[14px] font-medium hover:bg-[#008967] transition-colors"
+              >
+                Create Purchase Order
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* New Item Modal */}
+      {showNewItemModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-[14px] p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <h3 className="text-[24px] font-bold text-[#323B42] mb-6">Add Item to Purchase Order</h3>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-[14px] font-medium text-[#323B42] mb-2">Item Name *</label>
+                <input
+                  type="text"
+                  value={newItemForm.name}
+                  onChange={(e) => setNewItemForm({ ...newItemForm, name: e.target.value })}
+                  className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+                  placeholder="e.g., Vintage Denim Jacket"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">Category *</label>
+                  <select
+                    value={newItemForm.category}
+                    onChange={(e) => setNewItemForm({ ...newItemForm, category: e.target.value, subcategory: '', newCategory: '' })}
+                    className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+                  >
+                    <option value="">Select or add new below</option>
+                    {Object.keys(categorySubcategories).map(cat => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">Or New Category</label>
+                  <input
+                    type="text"
+                    value={newItemForm.newCategory}
+                    onChange={(e) => setNewItemForm({ ...newItemForm, newCategory: e.target.value, category: '' })}
+                    className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+                    placeholder="New category name"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">Subcategory *</label>
+                  <select
+                    value={newItemForm.subcategory}
+                    onChange={(e) => setNewItemForm({ ...newItemForm, subcategory: e.target.value, newSubcategory: '' })}
+                    className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+                    disabled={!newItemForm.category}
+                  >
+                    <option value="">Select or add new below</option>
+                    {newItemForm.category && categorySubcategories[newItemForm.category]?.map(sub => (
+                      <option key={sub} value={sub}>{sub}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">Or New Subcategory</label>
+                  <input
+                    type="text"
+                    value={newItemForm.newSubcategory}
+                    onChange={(e) => setNewItemForm({ ...newItemForm, newSubcategory: e.target.value, subcategory: '' })}
+                    className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+                    placeholder="New subcategory name"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">Size *</label>
+                  <input
+                    type="text"
+                    value={newItemForm.size}
+                    onChange={(e) => setNewItemForm({ ...newItemForm, size: e.target.value })}
+                    className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+                    placeholder="e.g., M, L, XL"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">Condition</label>
+                  <select
+                    value={newItemForm.condition}
+                    onChange={(e) => setNewItemForm({ ...newItemForm, condition: e.target.value as any })}
+                    className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+                  >
+                    <option value="Excellent">Excellent</option>
+                    <option value="Good">Good</option>
+                    <option value="Fair">Fair</option>
+                    <option value="Damaged">Damaged</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">Quantity *</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={newItemForm.quantity}
+                    onChange={(e) => setNewItemForm({ ...newItemForm, quantity: parseInt(e.target.value) || 1 })}
+                    className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">Unit Price (₱) *</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={newItemForm.price}
+                    onChange={(e) => setNewItemForm({ ...newItemForm, price: parseFloat(e.target.value) || 0 })}
+                    className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={() => {
+                  setShowNewItemModal(false);
+                  setNewItemForm({
+                    name: '',
+                    category: '',
+                    subcategory: '',
+                    newCategory: '',
+                    newSubcategory: '',
+                    size: '',
+                    condition: 'Good',
+                    quantity: 1,
+                    price: 0
+                  });
+                }}
+                className="flex-1 px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] font-medium text-[#323B42] hover:bg-[#F8FAFB] transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleAddItemToPO}
+                className="flex-1 px-4 py-2 bg-[#007A5E] text-white rounded-[8px] text-[14px] font-medium hover:bg-[#008967] transition-colors"
+              >
+                Add to Order
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Stats */}
+      <div className="grid grid-cols-4 gap-4 mb-6">
+        <div className="bg-white border border-[rgba(0,0,0,0.1)] rounded-[14px] p-4">
+          <p className="text-[#323B42] text-[12px] mb-1">Total Orders</p>
+          <p className="text-[#323B42] text-[24px] font-bold">{stats.total}</p>
+        </div>
+        <div className="bg-white border border-[rgba(0,0,0,0.1)] rounded-[14px] p-4">
+          <p className="text-[#323B42] text-[12px] mb-1">Pending</p>
+          <p className="text-[#FFA500] text-[24px] font-bold">{stats.pending}</p>
+        </div>
+        <div className="bg-white border border-[rgba(0,0,0,0.1)] rounded-[14px] p-4">
+          <p className="text-[#323B42] text-[12px] mb-1">Approved</p>
+          <p className="text-[#007A5E] text-[24px] font-bold">{stats.approved}</p>
+        </div>
+        <div className="bg-white border border-[rgba(0,0,0,0.1)] rounded-[14px] p-4">
+          <p className="text-[#323B42] text-[12px] mb-1">Received</p>
+          <p className="text-[#008967] text-[24px] font-bold">{stats.received}</p>
+        </div>
+      </div>
+
+      {/* Filter */}
+      <div className="bg-white border border-[rgba(0,0,0,0.1)] rounded-[14px] mb-4 p-4">
+        <div className="flex items-center gap-2">
+          <label className="text-[14px] text-[#323B42] font-medium">Status:</label>
+          <select
+            value={filterStatus}
+            onChange={(e) => setFilterStatus(e.target.value)}
+            className="px-3 py-1.5 border border-[rgba(0,0,0,0.1)] rounded-[6px] text-[14px] bg-white focus:outline-none focus:border-[#007A5E]"
+          >
+            <option value="all">All Orders</option>
+            <option value="Pending">Pending</option>
+            <option value="Approved">Approved</option>
+            <option value="Received">Received</option>
+            <option value="Cancelled">Cancelled</option>
+          </select>
+        </div>
+      </div>
+
+      {/* Orders List */}
+      <div className="space-y-4">
+        {filteredOrders.map(order => (
+          <div key={order.id} className="bg-white border border-[rgba(0,0,0,0.1)] rounded-[14px] p-6">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <div className="flex items-center gap-3 mb-2">
+                  <h3 className="text-[18px] font-semibold text-[#323B42]">{order.orderNumber}</h3>
+                  <span className={`px-2 py-1 rounded text-[12px] font-semibold ${
+                    order.status === 'Pending' ? 'bg-[#fff4e6] text-[#FFA500]' :
+                    order.status === 'Approved' ? 'bg-[#E0F2F2] text-[#007A5E]' :
+                    order.status === 'Received' ? 'bg-[#E0F5F1] text-[#008967]' :
+                    'bg-[#ffe2e2] text-[#E7000B]'
+                  }`}>
+                    {order.status}
+                  </span>
+                </div>
+                <p className="text-[14px] text-[#323B42]">Supplier: <span className="font-medium text-[#323B42]">{order.supplier}</span></p>
+                <p className="text-[14px] text-[#323B42]">Date: {order.date}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-[24px] font-bold text-[#323B42]">₱{order.totalAmount.toLocaleString()}</p>
+                <p className="text-[12px] text-[#323B42]">Total Amount</p>
+              </div>
+            </div>
+
+            <div className="border-t border-[rgba(0,0,0,0.1)] pt-4">
+              <p className="text-[14px] font-medium text-[#323B42] mb-2">Items:</p>
+              <div className="space-y-2">
+                {order.items.map((item, idx) => (
+                  <div key={idx} className="flex items-center justify-between text-[13px]">
+                    <span className="text-[#323B42]">{item.name}</span>
+                    <span className="text-[#323B42]">
+                      {item.quantity} × ₱{item.price} = <span className="font-medium">₱{(item.quantity * item.price).toLocaleString()}</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}

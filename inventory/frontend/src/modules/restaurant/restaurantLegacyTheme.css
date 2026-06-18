@@ -1,0 +1,67 @@
+.restaurant-legacy {
+  --font-size: 16px;
+  --font-heading: 'Poppins', sans-serif;
+  --font-body: 'Inter', sans-serif;
+  --font-weight-bold: 700;
+  --font-weight-medium: 500;
+  --font-weight-normal: 400;
+  --text-h1: 36px;
+  --text-h2: 30px;
+  --text-h3: 24px;
+  --text-h4: 20px;
+  --text-base: 16px;
+  --text-small: 14px;
+  --text-caption: 12px;
+  --background: #F8FAFB;
+  --foreground: #323B42;
+  --card: #FFFFFF;
+  --card-foreground: #323B42;
+  --popover: #FFFFFF;
+  --popover-foreground: #323B42;
+  --primary: #007A5E;
+  --primary-foreground: #FFFFFF;
+  --secondary: #005656;
+  --secondary-foreground: #FFFFFF;
+  --muted: #F8FAFB;
+  --muted-foreground: #6B7580;
+  --accent: #009BA5;
+  --accent-foreground: #FFFFFF;
+  --destructive: #dc2626;
+  --destructive-foreground: #FFFFFF;
+  --border: rgba(50, 59, 66, 0.15);
+  --input: rgba(50, 59, 66, 0.2);
+  --input-background: #FFFFFF;
+  --switch-background: #00A7A5;
+  --ring: #007A5E;
+  --chart-1: #007A5E;
+  --chart-2: #008967;
+  --chart-3: #009BA5;
+  --chart-4: #00A7A5;
+  --chart-5: #005656;
+  --radius: 0.75rem;
+  --sidebar: #003534;
+  --sidebar-foreground: #F8FAFB;
+  --sidebar-primary: #007A5E;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #005656;
+  --sidebar-accent-foreground: #F8FAFB;
+  --sidebar-border: rgba(0, 167, 165, 0.2);
+  --sidebar-ring: #009BA5;
+  --success: #008967;
+  --warning: #f59e0b;
+  --info: #009BA5;
+  font-family: var(--font-body);
+  color: var(--foreground);
+}
+
+.restaurant-legacy h1,
+.restaurant-legacy h2,
+.restaurant-legacy h3,
+.restaurant-legacy h4 {
+  font-family: var(--font-heading);
+  color: #003534;
+}
+
+.restaurant-legacy p {
+  font-family: var(--font-body);
+}

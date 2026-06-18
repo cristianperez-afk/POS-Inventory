@@ -1,0 +1,1238 @@
+import { useState, useEffect } from 'react';
+import { Sidebar } from './Sidebar';
+import { Page } from '../App';
+import { Minus, Plus, Search, Edit2, Trash2, X } from 'lucide-react';
+import { useOrders } from '../context/OrderContext';
+import wagyuSteakImg from '../../imports/image-4.png';
+import trufflePastaImg from '../../imports/image-5.png';
+import lobsterThermidorImg from '../../imports/image-6.png';
+import freshLemonadeImg from '../../imports/image-7.png';
+
+interface CreateOrderProps {
+  onNavigate: (page: Page) => void;
+  onOrderCreated: (order: any) => void;
+}
+
+interface IngredientModification {
+  ingredient: string;
+  action: 'remove' | 'add' | 'extra';
+}
+
+interface CartItem {
+  id: number;
+  name: string;
+  price: number;
+  quantity: number;
+  image: string;
+  orderType: 'dine-in' | 'takeout';
+  notes: string;
+  ingredients: Ingredient[];
+  originalIngredients: Ingredient[];
+}
+
+const menuCategories = [
+  { id: 'all', name: 'All' },
+  { id: 'snacks', name: 'Snacks' },
+  { id: 'meal', name: 'Meal' },
+  { id: 'beverages', name: 'Beverages' },
+  { id: 'dessert', name: 'Dessert' },
+];
+
+interface Ingredient {
+  name: string;
+  quantity: number;
+  unit: string;
+}
+
+const products = [
+  {
+    id: 1,
+    name: 'Wagyu Steak',
+    price: 250,
+    category: 'meal',
+    image: wagyuSteakImg,
+    ingredients: [
+      { name: 'Wagyu Beef', quantity: 200, unit: 'g' },
+      { name: 'Salt', quantity: 5, unit: 'g' },
+      { name: 'Pepper', quantity: 3, unit: 'g' },
+      { name: 'Butter', quantity: 20, unit: 'g' },
+      { name: 'Garlic', quantity: 10, unit: 'g' }
+    ]
+  },
+  {
+    id: 2,
+    name: 'Truffle Pasta',
+    price: 180,
+    category: 'meal',
+    image: trufflePastaImg,
+    ingredients: [
+      { name: 'Pasta', quantity: 150, unit: 'g' },
+      { name: 'Truffle Oil', quantity: 15, unit: 'ml' },
+      { name: 'Parmesan', quantity: 30, unit: 'g' },
+      { name: 'Cream', quantity: 50, unit: 'ml' },
+      { name: 'Mushrooms', quantity: 40, unit: 'g' }
+    ]
+  },
+  {
+    id: 3,
+    name: 'Grilled Salmon',
+    price: 220,
+    category: 'meal',
+    image: 'https://images.unsplash.com/photo-1467003909585-2f8a72700288?w=200&h=200&fit=crop',
+    ingredients: [
+      { name: 'Salmon Fillet', quantity: 180, unit: 'g' },
+      { name: 'Lemon', quantity: 20, unit: 'g' },
+      { name: 'Olive Oil', quantity: 10, unit: 'ml' },
+      { name: 'Herbs', quantity: 5, unit: 'g' },
+      { name: 'Salt', quantity: 3, unit: 'g' }
+    ]
+  },
+  {
+    id: 4,
+    name: 'Lobster Thermidor',
+    price: 350,
+    category: 'meal',
+    image: lobsterThermidorImg,
+    ingredients: [
+      { name: 'Lobster', quantity: 300, unit: 'g' },
+      { name: 'Cream', quantity: 60, unit: 'ml' },
+      { name: 'Cheese', quantity: 40, unit: 'g' },
+      { name: 'Butter', quantity: 25, unit: 'g' },
+      { name: 'Brandy', quantity: 30, unit: 'ml' }
+    ]
+  },
+  {
+    id: 5,
+    name: 'Beef Wellington',
+    price: 380,
+    category: 'meal',
+    image: 'https://images.unsplash.com/photo-1588168333986-5078d3ae3976?w=200&h=200&fit=crop',
+    ingredients: [
+      { name: 'Beef Tenderloin', quantity: 250, unit: 'g' },
+      { name: 'Puff Pastry', quantity: 100, unit: 'g' },
+      { name: 'Mushrooms', quantity: 60, unit: 'g' },
+      { name: 'Pate', quantity: 40, unit: 'g' },
+      { name: 'Egg Wash', quantity: 1, unit: 'pc' }
+    ]
+  },
+  {
+    id: 6,
+    name: 'Burger Deluxe',
+    price: 150,
+    category: 'snacks',
+    image: 'https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=200&h=200&fit=crop',
+    ingredients: [
+      { name: 'Beef Patty', quantity: 150, unit: 'g' },
+      { name: 'Burger Bun', quantity: 1, unit: 'pc' },
+      { name: 'Cheese', quantity: 30, unit: 'g' },
+      { name: 'Lettuce', quantity: 20, unit: 'g' },
+      { name: 'Tomato', quantity: 30, unit: 'g' },
+      { name: 'Onions', quantity: 15, unit: 'g' },
+      { name: 'Sauce', quantity: 25, unit: 'ml' }
+    ]
+  },
+  {
+    id: 7,
+    name: 'Spring Rolls',
+    price: 80,
+    category: 'snacks',
+    image: 'https://images.unsplash.com/photo-1534674343483-e7df7f1c69c3?w=200&h=200&fit=crop',
+    ingredients: [
+      { name: 'Spring Roll Wrapper', quantity: 3, unit: 'pcs' },
+      { name: 'Vegetables', quantity: 80, unit: 'g' },
+      { name: 'Ground Pork', quantity: 50, unit: 'g' },
+      { name: 'Soy Sauce', quantity: 10, unit: 'ml' }
+    ]
+  },
+  {
+    id: 8,
+    name: 'Fresh Lemonade',
+    price: 80,
+    category: 'beverages',
+    image: freshLemonadeImg,
+    ingredients: [
+      { name: 'Lemon Juice', quantity: 60, unit: 'ml' },
+      { name: 'Water', quantity: 200, unit: 'ml' },
+      { name: 'Sugar', quantity: 30, unit: 'g' },
+      { name: 'Ice', quantity: 100, unit: 'g' }
+    ]
+  },
+  {
+    id: 9,
+    name: 'Iced Coffee',
+    price: 95,
+    category: 'beverages',
+    image: 'https://images.unsplash.com/photo-1517487881594-2787fef5ebf7?w=200&h=200&fit=crop',
+    ingredients: [
+      { name: 'Coffee', quantity: 60, unit: 'ml' },
+      { name: 'Milk', quantity: 100, unit: 'ml' },
+      { name: 'Sugar', quantity: 15, unit: 'g' },
+      { name: 'Ice', quantity: 120, unit: 'g' }
+    ]
+  },
+  {
+    id: 10,
+    name: 'Tiramisu',
+    price: 120,
+    category: 'dessert',
+    image: 'https://images.unsplash.com/photo-1571877227200-a0d98ea607e9?w=200&h=200&fit=crop',
+    ingredients: [
+      { name: 'Ladyfingers', quantity: 80, unit: 'g' },
+      { name: 'Mascarpone', quantity: 100, unit: 'g' },
+      { name: 'Coffee', quantity: 50, unit: 'ml' },
+      { name: 'Cocoa Powder', quantity: 10, unit: 'g' },
+      { name: 'Sugar', quantity: 30, unit: 'g' }
+    ]
+  },
+  {
+    id: 11,
+    name: 'Cheesecake',
+    price: 110,
+    category: 'dessert',
+    image: 'https://images.unsplash.com/photo-1533134242443-d4fd215305ad?w=200&h=200&fit=crop',
+    ingredients: [
+      { name: 'Cream Cheese', quantity: 120, unit: 'g' },
+      { name: 'Graham Crust', quantity: 60, unit: 'g' },
+      { name: 'Sugar', quantity: 40, unit: 'g' },
+      { name: 'Eggs', quantity: 2, unit: 'pcs' },
+      { name: 'Vanilla', quantity: 5, unit: 'ml' }
+    ]
+  },
+];
+
+// Mock customer order history
+const customerHistory: Record<string, number[]> = {
+  'john': [2, 8],
+  'juan dela cruz': [1, 7],
+  'maria santos': [3, 9],
+  'pedro reyes': [4, 10, 11],
+};
+
+function toOrderListFormat(order: any, paid: boolean) {
+  const hasDineIn = order.items.some((i: CartItem) => i.orderType === 'dine-in');
+  const hasTakeout = order.items.some((i: CartItem) => i.orderType === 'takeout');
+  const type: 'Dine-In' | 'Takeout' | 'Mixed' =
+    hasDineIn && hasTakeout ? 'Mixed' : hasDineIn ? 'Dine-In' : 'Takeout';
+  const now: Date = order.timestamp instanceof Date ? order.timestamp : new Date();
+  const discountTypeLabel =
+    order.discountType === 'senior' ? 'Senior Citizen' :
+    order.discountType === 'pwd' ? 'PWD' : undefined;
+
+  return {
+    customer: order.customerName,
+    type,
+    table: order.tableNumber ? `Table ${order.tableNumber}` : '—',
+    amountNumber: order.total,
+    subtotal: order.subtotal,
+    serviceFee: order.serviceFee,
+    tax: order.tax,
+    discount: order.discount,
+    discountType: discountTypeLabel,
+    paymentStatus: paid ? 'Paid' as const : 'Not Paid' as const,
+    orderStatus: 'Pending' as const,
+    date: now.toISOString().split('T')[0],
+    time: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+    items: order.items.map((item: CartItem) => ({
+      name: item.name,
+      quantity: item.quantity,
+      price: item.price * item.quantity,
+      itemType: item.orderType,
+    })),
+  };
+}
+
+export function CreateOrder({ onNavigate, onOrderCreated }: CreateOrderProps) {
+  const { addOrder } = useOrders();
+  const [customerName, setCustomerName] = useState('');
+  const [hasHistory, setHasHistory] = useState(false);
+  const [recommendedProducts, setRecommendedProducts] = useState<typeof products>([]);
+  const [selectedCategory, setSelectedCategory] = useState('all');
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [diningOption, setDiningOption] = useState<'none' | 'dine-in' | 'takeout'>('none');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [customizeItemIndex, setCustomizeItemIndex] = useState<number | null>(null);
+  const [showPreview, setShowPreview] = useState(false);
+  const [showTakeoutMode, setShowTakeoutMode] = useState(false);
+  const [showPayment, setShowPayment] = useState(false);
+  const [showSuccess, setShowSuccess] = useState(false);
+  const [cashAmount, setCashAmount] = useState('');
+  const [changeAmount, setChangeAmount] = useState(0);
+  const [successOrderDetails, setSuccessOrderDetails] = useState<any>(null);
+  const [showTableSelection, setShowTableSelection] = useState(false);
+  const [selectedTableNumber, setSelectedTableNumber] = useState<number | null>(null);
+  const [discountType, setDiscountType] = useState<'none' | 'senior' | 'pwd' | 'promo' | 'custom'>('none');
+  const [customDiscountPercent, setCustomDiscountPercent] = useState<number>(0);
+  const [validationError, setValidationError] = useState<string>('');
+  const [tables, setTables] = useState([
+    { id: 1, number: 1, status: 'available' },
+    { id: 2, number: 2, status: 'occupied' },
+    { id: 3, number: 3, status: 'reserved' },
+    { id: 4, number: 4, status: 'maintenance' },
+    { id: 5, number: 5, status: 'available' },
+    { id: 6, number: 6, status: 'occupied' },
+    { id: 7, number: 7, status: 'reserved' },
+    { id: 8, number: 8, status: 'maintenance' },
+    { id: 9, number: 9, status: 'available' },
+    { id: 10, number: 10, status: 'occupied' },
+    { id: 11, number: 11, status: 'reserved' },
+    { id: 12, number: 12, status: 'maintenance' },
+    { id: 13, number: 13, status: 'available' },
+    { id: 14, number: 14, status: 'occupied' },
+    { id: 15, number: 15, status: 'reserved' },
+    { id: 16, number: 16, status: 'maintenance' },
+    { id: 17, number: 17, status: 'available' },
+    { id: 18, number: 18, status: 'occupied' },
+    { id: 19, number: 19, status: 'reserved' },
+    { id: 20, number: 20, status: 'maintenance' },
+  ]);
+
+  // Auto-check customer history when name changes
+  useEffect(() => {
+    if (!customerName.trim()) {
+      setHasHistory(false);
+      setRecommendedProducts([]);
+      return;
+    }
+
+    const nameLower = customerName.toLowerCase();
+    const history = customerHistory[nameLower];
+
+    if (history && history.length > 0) {
+      setHasHistory(true);
+      const recommended = products.filter(p => history.includes(p.id));
+      setRecommendedProducts(recommended);
+    } else {
+      setHasHistory(false);
+      setRecommendedProducts([]);
+    }
+  }, [customerName]);
+
+  const addToCart = (product: typeof products[0], orderType?: 'dine-in' | 'takeout') => {
+    const typeToUse = orderType || defaultOrderType;
+    const newItem: CartItem = {
+      id: product.id,
+      name: product.name,
+      price: product.price,
+      image: product.image,
+      quantity: 1,
+      orderType: typeToUse,
+      notes: '',
+      ingredients: JSON.parse(JSON.stringify(product.ingredients)),
+      originalIngredients: JSON.parse(JSON.stringify(product.ingredients))
+    };
+    setCart([...cart, newItem]);
+  };
+
+  const updateQuantity = (index: number, newQuantity: number) => {
+    if (newQuantity <= 0) {
+      setCart(cart.filter((_, i) => i !== index));
+    } else {
+      setCart(cart.map((item, i) =>
+        i === index ? { ...item, quantity: newQuantity } : item
+      ));
+    }
+  };
+
+  const updateNotes = (index: number, notes: string) => {
+    setCart(cart.map((item, i) =>
+      i === index ? { ...item, notes } : item
+    ));
+  };
+
+  const updateIngredientQuantity = (index: number, ingredientName: string, newQuantity: number) => {
+    setCart(cart.map((item, i) => {
+      if (i === index) {
+        return {
+          ...item,
+          ingredients: item.ingredients.map(ing =>
+            ing.name === ingredientName ? { ...ing, quantity: Math.max(0, newQuantity) } : ing
+          )
+        };
+      }
+      return item;
+    }));
+  };
+
+  const deleteIngredient = (index: number, ingredientName: string) => {
+    setCart(cart.map((item, i) => {
+      if (i === index) {
+        return {
+          ...item,
+          ingredients: item.ingredients.filter(ing => ing.name !== ingredientName)
+        };
+      }
+      return item;
+    }));
+  };
+
+  const removeItem = (index: number) => {
+    setCart(cart.filter((_, i) => i !== index));
+    if (customizeItemIndex === index) {
+      setCustomizeItemIndex(null);
+    }
+  };
+
+  const filteredProducts = products.filter(p => {
+    const matchesCategory = selectedCategory === 'all' || p.category === selectedCategory;
+    const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase());
+    return matchesCategory && matchesSearch;
+  });
+
+  const subtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+
+  // Calculate discount based on type
+  const discountRate = discountType === 'senior' || discountType === 'pwd' ? 0.20 : 0;
+  const discount = subtotal * discountRate;
+
+  // Calculate amounts after discount
+  const afterDiscount = subtotal - discount;
+  const serviceFee = afterDiscount * 0.01; // 1%
+  const tax = afterDiscount * 0.12; // 12%
+
+  const total = afterDiscount + serviceFee + tax;
+
+  const handlePreviewOrder = () => {
+    setShowPreview(true);
+  };
+
+  const handleConfirmOrder = () => {
+    const hasDineIn = cart.some(item => item.orderType === 'dine-in');
+    const hasTakeout = cart.some(item => item.orderType === 'takeout');
+
+    // Check if dine-in order needs table selection
+    if (hasDineIn && !selectedTableNumber) {
+      setShowPreview(false);
+      setShowTableSelection(true);
+      return;
+    }
+
+    const order = {
+      customerName,
+      items: cart,
+      subtotal,
+      discount,
+      discountType,
+      serviceFee,
+      tax,
+      total,
+      orderType: defaultOrderType,
+      timestamp: new Date(),
+      paid: false,
+      tableNumber: selectedTableNumber,
+    };
+
+    setShowPreview(false);
+
+    if (hasTakeout && !hasDineIn) {
+      // Pure takeout - pay now
+      setSuccessOrderDetails(order);
+      setShowPayment(true);
+    } else if (hasDineIn) {
+      // Has dine-in - pay later, goes straight to Order List as Not Paid
+      addOrder(toOrderListFormat(order, false));
+      onOrderCreated(order);
+      setSuccessOrderDetails(order);
+      setShowSuccess(true);
+    }
+  };
+
+  const handlePaymentSubmit = () => {
+    const cash = parseFloat(cashAmount);
+    if (cash >= total) {
+      const change = cash - total;
+      setChangeAmount(change);
+      if (successOrderDetails) {
+        const paidOrder = { ...successOrderDetails, paid: true };
+        // Takeout paid immediately — add as Paid to Order List
+        addOrder({ ...toOrderListFormat(paidOrder, true), cashReceived: cash, changeGiven: change });
+        onOrderCreated(paidOrder);
+      }
+      setCashAmount('');
+      setShowPayment(false);
+      setShowSuccess(true);
+    }
+  };
+
+  const handleSuccessClose = () => {
+    setShowSuccess(false);
+    setSuccessOrderDetails(null);
+    setChangeAmount(0);
+    setCart([]);
+    setCustomerName('');
+    setSelectedTableNumber(null);
+    setDiscountType('none');
+    onNavigate('create-order');
+  };
+
+  const handleTakeTable = () => {
+    if (selectedTableNumber) {
+      setShowTableSelection(false);
+
+      // If this was triggered from preview, confirm the order
+      if (showPreview || cart.length > 0) {
+        const order = {
+          customerName,
+          items: cart,
+          subtotal,
+          discount,
+          discountType,
+          serviceFee,
+          tax,
+          total,
+          orderType: 'dine-in',
+          timestamp: new Date(),
+          paid: false,
+          tableNumber: selectedTableNumber,
+        };
+
+        onOrderCreated(order);
+        setSuccessOrderDetails(order);
+        setShowSuccess(true);
+      }
+    }
+  };
+
+  const handleAddToQueue = () => {
+    const order = {
+      customerName,
+      items: cart,
+      subtotal,
+      discount,
+      discountType,
+      serviceFee,
+      tax,
+      total,
+      orderType: 'dine-in',
+      timestamp: new Date(),
+      paid: false,
+      inQueue: true,
+    };
+    onOrderCreated(order);
+    setSuccessOrderDetails(order);
+    setShowTableSelection(false);
+    setShowSuccess(true);
+  };
+
+  const handleConvertToTakeout = () => {
+    // Convert all dine-in items to takeout
+    setCart(cart.map(item => ({ ...item, orderType: 'takeout' })));
+    setDefaultOrderType('takeout');
+    setShowTableSelection(false);
+
+    // Proceed to payment since it's now takeout
+    const order = {
+      customerName,
+      items: cart.map(item => ({ ...item, orderType: 'takeout' })),
+      subtotal,
+      discount,
+      discountType,
+      serviceFee,
+      tax,
+      total,
+      orderType: 'takeout',
+      timestamp: new Date(),
+      paid: false,
+    };
+    setSuccessOrderDetails(order);
+    setShowPayment(true);
+  };
+
+  const getTableColor = (status: string) => {
+    switch (status) {
+      case 'available': return 'bg-green-500';
+      case 'occupied': return 'bg-orange-500';
+      case 'reserved': return 'bg-blue-500';
+      case 'maintenance': return 'bg-gray-400';
+      default: return 'bg-gray-500';
+    }
+  };
+
+  const availableTables = tables.filter(t => t.status === 'available');
+
+  return (
+    <div className="flex h-screen bg-background">
+      <Sidebar currentPage="create-order" onNavigate={onNavigate} onLogout={() => onNavigate('login')} />
+
+      <div className="flex-1 overflow-auto bg-gray-50">
+        <div className="p-5">
+          <h2 className="text-lg mb-4">Menu</h2>
+
+          <div className="relative mb-4">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search Products"
+              className="w-full pl-9 pr-4 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary bg-white"
+            />
+          </div>
+
+          {hasHistory && recommendedProducts.length > 0 && (
+            <div className="mb-4 bg-white rounded-lg p-4">
+              <p className="text-xs text-muted-foreground mb-3">Recommendations for {customerName}</p>
+              <div className="grid grid-cols-2 gap-3">
+                {recommendedProducts.map(product => (
+                  <button
+                    key={product.id}
+                    onClick={() => addToCart(product)}
+                    className="bg-white rounded-lg p-3 text-left hover:shadow-md transition-shadow border border-border"
+                  >
+                    <div className="w-20 h-20 rounded-full overflow-hidden mx-auto mb-2 bg-muted">
+                      <img
+                        src={product.image}
+                        alt={product.name}
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                    <h3 className="text-xs text-center mb-1">{product.name}</h3>
+                    <p className="text-xs text-center text-primary">₱ {product.price.toFixed(2)}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="bg-white rounded-lg p-1 mb-4 inline-flex gap-1">
+            {menuCategories.map(cat => (
+              <button
+                key={cat.id}
+                onClick={() => setSelectedCategory(cat.id)}
+                className={`px-4 py-1.5 rounded-lg text-xs transition-colors ${
+                  selectedCategory === cat.id
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:bg-muted'
+                }`}
+              >
+                {cat.name}
+              </button>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+            {filteredProducts.map(product => (
+              <button
+                key={product.id}
+                onClick={() => addToCart(product)}
+                className="bg-white rounded-lg p-2.5 hover:shadow-md transition-shadow text-left"
+              >
+                <div className="aspect-square bg-muted rounded-lg mb-2 overflow-hidden">
+                  <img
+                    src={product.image}
+                    alt={product.name}
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+                <h3 className="text-xs mb-0.5 line-clamp-1">{product.name}</h3>
+                <p className="text-xs text-primary">₱ {product.price.toFixed(2)}</p>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="w-80 bg-white border-l border-border p-5 flex flex-col">
+        <div className="mb-4">
+          <label className="block text-xs text-muted-foreground mb-1.5">Name:</label>
+          <input
+            type="text"
+            value={customerName}
+            onChange={(e) => setCustomerName(e.target.value)}
+            placeholder="Enter customer name"
+            className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary bg-gray-50"
+          />
+        </div>
+
+        <div className="mb-4">
+          <label className="block text-xs text-muted-foreground mb-1.5">Select Dining:</label>
+          <div className="flex gap-2">
+            <select
+              value={defaultOrderType}
+              onChange={(e) => setDefaultOrderType(e.target.value as 'dine-in' | 'takeout')}
+              className="flex-1 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary bg-white"
+            >
+              <option value="dine-in">Dine In</option>
+              <option value="takeout">Takeout</option>
+            </select>
+            {defaultOrderType === 'dine-in' && (
+              <button
+                onClick={() => setShowTableSelection(true)}
+                className={`px-3 py-2 ${selectedTableNumber ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground'} rounded-lg hover:opacity-90 transition-colors text-xs whitespace-nowrap`}
+              >
+                {selectedTableNumber ? `Table #${selectedTableNumber}` : 'Select Table'}
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="mb-3">
+          <h3 className="text-sm mb-2">Order Summary</h3>
+          {defaultOrderType === 'dine-in' && (
+            <button
+              onClick={() => setShowTakeoutMode(true)}
+              className="w-full text-xs bg-secondary text-secondary-foreground px-3 py-2 rounded-lg hover:bg-secondary/90 transition-colors mb-2"
+            >
+              + Add Takeout Order
+            </button>
+          )}
+        </div>
+
+        <div className="mb-3">
+          <label className="block text-xs text-muted-foreground mb-1.5">Discount Type:</label>
+          <select
+            value={discountType}
+            onChange={(e) => setDiscountType(e.target.value as 'none' | 'senior' | 'pwd')}
+            className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary bg-white"
+          >
+            <option value="none">None</option>
+            <option value="senior">Senior Citizen (20%)</option>
+            <option value="pwd">PWD (20%)</option>
+          </select>
+        </div>
+
+        <div className="flex-1 overflow-auto mb-4">
+          {cart.length === 0 ? (
+            <p className="text-xs text-muted-foreground text-center py-8">No items in cart</p>
+          ) : (
+            <div className="space-y-2">
+              {cart.map((item, index) => (
+                <div key={`cart-${index}`} className="border border-border rounded-lg p-2">
+                  <div className="flex items-start gap-2">
+                    <div className="w-10 h-10 rounded-full overflow-hidden bg-muted flex-shrink-0">
+                      <img src={item.image} alt={item.name} className="w-full h-full object-cover" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1 mb-0.5">
+                        <p className="text-xs truncate flex-1">{item.name}</p>
+                        <span className={`text-xs px-1.5 py-0.5 rounded ${item.orderType === 'dine-in' ? 'bg-primary/10 text-primary' : 'bg-secondary/10 text-secondary'}`}>
+                          {item.orderType === 'dine-in' ? 'D' : 'T'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-muted-foreground">₱ {item.price.toFixed(2)} each</p>
+                      <p className="text-xs text-primary font-medium">Subtotal: ₱ {(item.price * item.quantity).toFixed(2)}</p>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => updateQuantity(index, item.quantity - 1)}
+                        className="w-5 h-5 rounded bg-gray-100 hover:bg-gray-200 flex items-center justify-center"
+                      >
+                        <Minus className="w-3 h-3" />
+                      </button>
+                      <span className="text-xs w-6 text-center">{item.quantity}</span>
+                      <button
+                        onClick={() => updateQuantity(index, item.quantity + 1)}
+                        className="w-5 h-5 rounded bg-gray-100 hover:bg-gray-200 flex items-center justify-center"
+                      >
+                        <Plus className="w-3 h-3" />
+                      </button>
+                    </div>
+                    <button
+                      onClick={() => removeItem(index)}
+                      className="text-destructive hover:bg-destructive/10 p-1 rounded"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+
+                  <button
+                    onClick={() => setCustomizeItemIndex(index)}
+                    className="text-xs text-primary hover:underline mt-2 flex items-center gap-1"
+                  >
+                    <Edit2 className="w-3 h-3" />
+                    Customize
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="space-y-1.5 mb-4 text-xs border-t border-border pt-3">
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Subtotal:</span>
+            <span>₱ {subtotal.toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Service Fee (1%):</span>
+            <span>₱ {serviceFee.toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Tax (12%):</span>
+            <span>₱ {tax.toFixed(2)}</span>
+          </div>
+          {discount > 0 && (
+            <div className="flex justify-between text-destructive">
+              <span>Discount ({discountType === 'senior' ? 'Senior Citizen' : 'PWD'} 20%):</span>
+              <span>- ₱ {discount.toFixed(2)}</span>
+            </div>
+          )}
+          <div className="flex justify-between pt-2 border-t border-border font-medium">
+            <span>TOTAL:</span>
+            <span className="text-primary">₱ {total.toFixed(2)}</span>
+          </div>
+        </div>
+
+        <button
+          onClick={handlePreviewOrder}
+          disabled={!customerName || cart.length === 0 || (defaultOrderType === 'dine-in' && !selectedTableNumber)}
+          className="w-full bg-primary text-primary-foreground py-2.5 rounded-lg hover:bg-primary/90 transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed mb-2"
+        >
+          PREVIEW ORDER
+        </button>
+        {defaultOrderType === 'dine-in' && !selectedTableNumber && cart.length > 0 && (
+          <p className="text-xs text-destructive text-center">⚠️ Please select a table first</p>
+        )}
+      </div>
+
+      {showPreview && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 overflow-y-auto">
+          <div className="bg-white rounded-xl w-full max-w-2xl my-8 max-h-[calc(100vh-4rem)] overflow-hidden flex flex-col">
+            <div className="flex justify-between items-center p-5 border-b border-border flex-shrink-0">
+              <h2 className="text-lg text-primary">Order Preview</h2>
+              <button
+                onClick={() => setShowPreview(false)}
+                className="text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="overflow-y-auto flex-1 p-5">
+              <div className="mb-4">
+                <p className="text-sm"><strong>Customer:</strong> {customerName}</p>
+                <p className="text-sm"><strong>Default Type:</strong> {defaultOrderType === 'dine-in' ? 'Dine-In' : 'Takeout'}</p>
+              </div>
+
+              <div className="space-y-3">
+                <h3 className="text-sm font-medium">Order Items:</h3>
+                {cart.map((item, index) => (
+                  <div key={`preview-${index}`} className="border border-border rounded-lg p-3">
+                    <div className="flex justify-between mb-2">
+                      <div>
+                        <p className="text-sm">{item.name} x{item.quantity}</p>
+                        <span className={`text-xs px-2 py-0.5 rounded inline-block mt-1 ${item.orderType === 'dine-in' ? 'bg-primary/10 text-primary' : 'bg-secondary/10 text-secondary'}`}>
+                          {item.orderType === 'dine-in' ? 'Dine-In' : 'Takeout'}
+                        </span>
+                      </div>
+                      <p className="text-sm">₱{(item.price * item.quantity).toFixed(2)}</p>
+                    </div>
+                    {item.notes && (
+                      <p className="text-xs text-muted-foreground italic mt-1">📝 {item.notes}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <div className="border-t border-border pt-3 mt-4 space-y-2 text-sm">
+                <div className="flex justify-between">
+                  <span>Subtotal:</span>
+                  <span>₱{subtotal.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span>Service Fee (1%):</span>
+                  <span>₱{serviceFee.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span>Tax (12%):</span>
+                  <span>₱{tax.toFixed(2)}</span>
+                </div>
+                {discount > 0 && (
+                  <div className="flex justify-between text-destructive">
+                    <span>Discount ({discountType === 'senior' ? 'Senior Citizen' : 'PWD'} 20%):</span>
+                    <span>- ₱{discount.toFixed(2)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-lg font-medium text-primary border-t border-border pt-2">
+                  <span>Total:</span>
+                  <span>₱{total.toFixed(2)}</span>
+                </div>
+              </div>
+
+              <div className="bg-blue-50 border border-primary/20 rounded-lg p-3 mt-4">
+                <p className="text-xs text-primary">✓ Order will be sent to kitchen queue</p>
+                <p className="text-xs text-muted-foreground mt-1">✓ Inventory will be automatically adjusted</p>
+              </div>
+            </div>
+            <div className="p-5 border-t border-border flex gap-3 flex-shrink-0">
+              <button
+                onClick={() => setShowPreview(false)}
+                className="flex-1 px-6 py-2.5 border border-border rounded-lg hover:bg-muted transition-colors text-sm"
+              >
+                Back to Edit
+              </button>
+              <button
+                onClick={handleConfirmOrder}
+                className="flex-1 px-6 py-2.5 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/90 transition-colors text-sm"
+              >
+                CONFIRM & SEND TO KITCHEN
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {customizeItemIndex !== null && cart[customizeItemIndex] && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 overflow-y-auto">
+          <div className="bg-white rounded-xl w-full max-w-lg my-8 max-h-[calc(100vh-4rem)] overflow-hidden flex flex-col">
+            <div className="flex justify-between items-center p-5 border-b border-border flex-shrink-0">
+              <h2 className="text-lg text-primary">Customize - {cart[customizeItemIndex].name}</h2>
+              <button
+                onClick={() => setCustomizeItemIndex(null)}
+                className="text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="overflow-y-auto flex-1 p-5">
+              <div className="mb-4">
+                <label className="block text-xs text-muted-foreground mb-2">Ingredients:</label>
+                <div className="space-y-2">
+                  {cart[customizeItemIndex].ingredients.map((ingredient, ingIndex) => (
+                    <div key={`ing-${ingIndex}-${ingredient.name}`} className="flex items-center gap-2 p-2 border border-border rounded-lg">
+                      <div className="flex-1">
+                        <p className="text-xs">{ingredient.name}</p>
+                        <p className="text-xs text-muted-foreground">{ingredient.quantity} {ingredient.unit}</p>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => updateIngredientQuantity(customizeItemIndex, ingredient.name, ingredient.quantity - (ingredient.unit === 'g' || ingredient.unit === 'ml' ? 5 : 1))}
+                          className="w-6 h-6 rounded bg-gray-100 hover:bg-gray-200 flex items-center justify-center"
+                        >
+                          <Minus className="w-3 h-3" />
+                        </button>
+                        <span className="text-xs w-10 text-center">{ingredient.quantity}</span>
+                        <button
+                          onClick={() => updateIngredientQuantity(customizeItemIndex, ingredient.name, ingredient.quantity + (ingredient.unit === 'g' || ingredient.unit === 'ml' ? 5 : 1))}
+                          className="w-6 h-6 rounded bg-gray-100 hover:bg-gray-200 flex items-center justify-center"
+                        >
+                          <Plus className="w-3 h-3" />
+                        </button>
+                      </div>
+                      <button
+                        onClick={() => deleteIngredient(customizeItemIndex, ingredient.name)}
+                        className="text-destructive hover:bg-destructive/10 p-1.5 rounded"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mb-4">
+                <label className="block text-xs text-muted-foreground mb-1.5">Special Instructions:</label>
+                <textarea
+                  value={cart[customizeItemIndex].notes}
+                  onChange={(e) => updateNotes(customizeItemIndex, e.target.value)}
+                  placeholder="e.g., Well done, Extra sauce"
+                  className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  rows={3}
+                />
+              </div>
+
+              <div className="bg-blue-50 border border-primary/20 rounded-lg p-3">
+                <p className="text-xs text-primary">ℹ️ Inventory will be adjusted based on ingredient modifications</p>
+              </div>
+            </div>
+            <div className="p-5 border-t border-border flex-shrink-0">
+              <button
+                onClick={() => setCustomizeItemIndex(null)}
+                className="w-full px-6 py-2.5 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors text-sm"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showTakeoutMode && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 overflow-y-auto">
+          <div className="bg-white rounded-xl w-full max-w-4xl my-8 max-h-[calc(100vh-4rem)] overflow-hidden flex flex-col">
+            <div className="flex justify-between items-center p-5 border-b border-border flex-shrink-0">
+              <h2 className="text-lg text-secondary">Add Takeout Order</h2>
+              <button
+                onClick={() => setShowTakeoutMode(false)}
+                className="text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="overflow-y-auto flex-1 p-5">
+              <div className="mb-4">
+                <div className="bg-white rounded-lg p-1 inline-flex gap-1">
+                  {menuCategories.map(cat => (
+                    <button
+                      key={cat.id}
+                      onClick={() => setSelectedCategory(cat.id)}
+                      className={`px-4 py-1.5 rounded-lg text-xs transition-colors ${
+                        selectedCategory === cat.id
+                          ? 'bg-secondary text-secondary-foreground'
+                          : 'text-muted-foreground hover:bg-muted'
+                      }`}
+                    >
+                      {cat.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3">
+                {filteredProducts.map(product => (
+                  <button
+                    key={product.id}
+                    onClick={() => {
+                      addToCart(product, 'takeout');
+                    }}
+                    className="bg-white rounded-lg p-2.5 hover:shadow-md transition-shadow text-left border border-border"
+                  >
+                    <div className="aspect-square bg-muted rounded-lg mb-2 overflow-hidden">
+                      <img
+                        src={product.image}
+                        alt={product.name}
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                    <h3 className="text-xs mb-0.5 line-clamp-1">{product.name}</h3>
+                    <p className="text-xs text-secondary">₱ {product.price.toFixed(2)}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="p-5 border-t border-border flex-shrink-0">
+              <button
+                onClick={() => setShowTakeoutMode(false)}
+                className="w-full px-6 py-2.5 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/90 transition-colors text-sm"
+              >
+                Done Adding Takeout Items
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showPayment && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 overflow-y-auto">
+          <div className="bg-white rounded-xl w-full max-w-md my-8 max-h-[calc(100vh-4rem)] overflow-hidden flex flex-col">
+            <div className="flex justify-between items-center p-5 border-b border-border flex-shrink-0">
+              <h2 className="text-lg text-primary">Payment</h2>
+              <button
+                onClick={() => setShowPayment(false)}
+                className="text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 overflow-y-auto flex-1">
+              <div className="bg-muted rounded-lg p-4 mb-4">
+                <div className="space-y-1 text-sm mb-3">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Subtotal:</span>
+                    <span>₱{subtotal.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-muted-foreground">Service Fee (1%):</span>
+                    <span>₱{serviceFee.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-muted-foreground">Tax (12%):</span>
+                    <span>₱{tax.toFixed(2)}</span>
+                  </div>
+                  {discount > 0 && (
+                    <div className="flex justify-between text-destructive">
+                      <span>Discount ({discountType === 'senior' ? 'Senior' : 'PWD'} 20%):</span>
+                      <span>- ₱{discount.toFixed(2)}</span>
+                    </div>
+                  )}
+                </div>
+                <div className="border-t border-border pt-2">
+                  <p className="text-xs text-muted-foreground mb-1">Total Amount</p>
+                  <p className="text-3xl text-primary font-medium">₱ {total.toFixed(2)}</p>
+                </div>
+              </div>
+
+              <div className="mb-4">
+                <label className="block text-sm text-muted-foreground mb-2">Cash Received</label>
+                <input
+                  type="number"
+                  value={cashAmount}
+                  onChange={(e) => setCashAmount(e.target.value)}
+                  placeholder="Enter amount"
+                  className="w-full px-4 py-3 border border-border rounded-lg text-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                  autoFocus
+                />
+              </div>
+
+              {cashAmount && parseFloat(cashAmount) >= total && (
+                <div className="bg-secondary/10 rounded-lg p-4 mb-4">
+                  <p className="text-sm text-muted-foreground mb-1">Change</p>
+                  <p className="text-2xl text-secondary">₱ {(parseFloat(cashAmount) - total).toFixed(2)}</p>
+                </div>
+              )}
+
+              <button
+                onClick={handlePaymentSubmit}
+                disabled={!cashAmount || parseFloat(cashAmount) < total}
+                className="w-full bg-primary text-primary-foreground py-3 rounded-lg hover:bg-primary/90 transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Confirm Payment
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSuccess && successOrderDetails && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 overflow-y-auto">
+          <div className="bg-white rounded-xl w-full max-w-md my-8 max-h-[calc(100vh-4rem)] overflow-y-auto">
+            <div className="p-5 text-center">
+              <div className="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              </div>
+              <h2 className="text-xl text-primary mb-2">Order Successful!</h2>
+              <p className="text-sm text-muted-foreground mb-4">
+                {successOrderDetails.inQueue
+                  ? 'Order added to queue. Will be assigned when table is available.'
+                  : successOrderDetails.items.some((item: CartItem) => item.orderType === 'dine-in')
+                  ? 'Order has been sent to the kitchen. Payment will be collected later.'
+                  : 'Payment received. Order has been sent to the kitchen.'}
+              </p>
+
+              <div className="bg-muted rounded-lg p-4 mb-4 text-left">
+                <p className="text-sm mb-2"><strong>Customer:</strong> {successOrderDetails.customerName}</p>
+                <p className="text-sm mb-2"><strong>Items:</strong> {successOrderDetails.items.length}</p>
+
+                <div className="border-t border-border my-2 pt-2 space-y-1">
+                  <div className="flex justify-between text-xs">
+                    <span>Subtotal:</span>
+                    <span>₱{successOrderDetails.subtotal?.toFixed(2) || '0.00'}</span>
+                  </div>
+                  <div className="flex justify-between text-xs">
+                    <span>Service Fee (1%):</span>
+                    <span>₱{successOrderDetails.serviceFee?.toFixed(2) || '0.00'}</span>
+                  </div>
+                  <div className="flex justify-between text-xs">
+                    <span>Tax (12%):</span>
+                    <span>₱{successOrderDetails.tax?.toFixed(2) || '0.00'}</span>
+                  </div>
+                  {successOrderDetails.discount > 0 && (
+                    <div className="flex justify-between text-xs text-destructive">
+                      <span>Discount ({successOrderDetails.discountType === 'senior' ? 'Senior' : 'PWD'} 20%):</span>
+                      <span>- ₱{successOrderDetails.discount?.toFixed(2)}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between text-sm font-medium border-t border-border pt-1 mt-1">
+                    <span>Total:</span>
+                    <span className="text-primary">₱{successOrderDetails.total?.toFixed(2) || '0.00'}</span>
+                  </div>
+                </div>
+
+                {changeAmount > 0 && (
+                  <p className="text-sm text-secondary mt-2"><strong>Change:</strong> ₱{changeAmount.toFixed(2)}</p>
+                )}
+                {!successOrderDetails.paid && (
+                  <p className="text-sm text-destructive mt-2"><strong>Status:</strong> Not Paid (Pay Later)</p>
+                )}
+                {successOrderDetails.inQueue && (
+                  <p className="text-sm text-secondary mt-2"><strong>Status:</strong> In Queue</p>
+                )}
+              </div>
+
+              <button
+                onClick={handleSuccessClose}
+                className="w-full bg-primary text-primary-foreground py-3 rounded-lg hover:bg-primary/90 transition-colors text-sm"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showTableSelection && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 overflow-y-auto">
+          <div className="bg-white rounded-xl w-full max-w-3xl my-8 max-h-[calc(100vh-4rem)] overflow-hidden flex flex-col">
+            <div className="flex justify-between items-center p-5 border-b border-border flex-shrink-0">
+              <h2 className="text-lg text-primary">Select Table</h2>
+              <button
+                onClick={() => setShowTableSelection(false)}
+                className="text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto flex-1">
+              <div className="grid grid-cols-5 gap-3 mb-6">
+                {tables.map(table => (
+                  <button
+                    key={table.id}
+                    onClick={() => table.status === 'available' && setSelectedTableNumber(table.number)}
+                    disabled={table.status !== 'available'}
+                    className={`aspect-square ${getTableColor(table.status)} text-white rounded-lg flex items-center justify-center text-2xl transition-all ${
+                      table.status === 'available' ? 'hover:opacity-80 cursor-pointer' : 'cursor-not-allowed opacity-70'
+                    } ${selectedTableNumber === table.number ? 'ring-4 ring-secondary' : ''}`}
+                  >
+                    {table.number}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center justify-center gap-6 mb-6">
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 bg-green-500 rounded"></div>
+                  <span className="text-sm">Available</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 bg-orange-500 rounded"></div>
+                  <span className="text-sm">Occupied</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 bg-blue-500 rounded"></div>
+                  <span className="text-sm">Reserved</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 bg-gray-400 rounded"></div>
+                  <span className="text-sm">Maintenance</span>
+                </div>
+              </div>
+
+            </div>
+            <div className="p-6 border-t border-border flex-shrink-0">
+              {availableTables.length > 0 ? (
+                <button
+                  onClick={handleTakeTable}
+                  disabled={!selectedTableNumber}
+                  className="w-full bg-secondary text-secondary-foreground py-3 rounded-lg hover:bg-secondary/90 transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  TAKE TABLE {selectedTableNumber ? `#${selectedTableNumber}` : ''}
+                </button>
+              ) : (
+                <div className="space-y-3">
+                  <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4 text-center">
+                    <p className="text-sm text-destructive mb-2">⚠️ All tables are currently full</p>
+                    <p className="text-xs text-muted-foreground">Choose an option below</p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      onClick={handleAddToQueue}
+                      className="bg-primary text-primary-foreground py-3 rounded-lg hover:bg-primary/90 transition-colors text-sm"
+                    >
+                      Add to Queue
+                    </button>
+                    <button
+                      onClick={handleConvertToTakeout}
+                      className="bg-secondary text-secondary-foreground py-3 rounded-lg hover:bg-secondary/90 transition-colors text-sm"
+                    >
+                      Convert to Takeout
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

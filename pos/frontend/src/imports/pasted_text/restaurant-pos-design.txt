@@ -1,0 +1,312 @@
+Create a complete, production-ready Figma design for a Restaurant POS system with all screens, states, interactions, and edge cases. The design must match a real working system, not just a static UI. It must include the full process from creating an order, selecting tables, handling queue/waitlist, previewing orders, processing payment, printing receipts, viewing order lists, managing table status, and removing queue entries. Design it so developers can implement it exactly as shown.
+
+Design style:
+- Clean, modern, professional restaurant POS interface
+- Desktop-first layout
+- Clear hierarchy, easy to scan, fast to operate
+- Neutral background with strong contrast for important actions
+- Use consistent spacing, rounded cards, subtle shadows, and clear status colors
+- Make it feel like an actual cashier/admin system, not a marketing website
+- Use realistic table, queue, receipt, and payment workflows
+
+Main screens to design:
+1. Login page
+2. POS dashboard
+3. Create Order page
+4. Table selection modal
+5. No tables available modal
+6. Order preview modal
+7. Payment modal
+8. Payment success modal
+9. Receipt preview modal
+10. Order list page
+11. Table management page
+12. Queue / waitlist info modal
+13. Item customization modal
+14. Discount modal
+15. Takeout mode modal
+16. Order success modal
+
+Global layout requirements:
+- Main app should use a sidebar navigation on the left
+- Main content should have a menu/product area and a right-side order summary panel
+- Top-level pages must look like a real cashier/admin system with tables, filters, search, and action buttons
+- Use desktop screen width around 1440px
+- Add responsive behavior for smaller screens if possible
+- Every modal must have a clear title, close button, body content, and action footer
+
+Create Order page requirements:
+- Show product grid with image, name, description, price, and add button
+- Include category filters: All, Snacks, Meal, Beverages, Dessert
+- Include search bar for products
+- Show recommended products when customer name matches past orders
+- Right panel must contain:
+  - Customer name input
+  - Order type selector: Dine-In, Takeout
+  - Table selection button if Dine-In
+  - Button to switch to takeout order
+  - Order summary with cart items
+  - subtotal, service fee, tax, discount, and total
+  - Preview Order button
+- Cart item actions:
+  - Increase quantity
+  - Decrease quantity
+  - Delete item
+  - Customize item
+- Customization must allow:
+  - Remove ingredients
+  - Adjust ingredient quantity
+  - Add notes/comments
+- Show validation messages if fields are missing
+
+Table selection flow:
+- If user selects Dine-In and tables are available, show a modal with a grid of tables
+- Tables must have status colors:
+  - Available = green
+  - Occupied = red
+  - Reserved = yellow
+  - Maintenance = gray
+- Clicking an available table selects it
+- Assign Table button confirms selection
+- If no tables are available, show a No Tables Available modal
+
+No tables available flow:
+- Modal title: No tables available at the moment
+- Show message that all tables are occupied, reserved, or under maintenance
+- Provide two actions:
+  - Wait for Available Table
+  - Switch to Takeout
+- If user chooses Wait for Available Table:
+  - System should allow the order to continue
+  - The customer is added to queue/waitlist
+  - The order may still be previewed and confirmed
+  - Table is assigned later when one becomes available
+- Important: this is not a blocked flow. The user can proceed.
+
+Preview order modal requirements:
+- Show order summary before confirmation
+- Include:
+  - Customer name
+  - Order number
+  - Dining type
+  - Table number or N/A
+  - Full item list
+  - Notes and modifications
+  - Totals
+- If order contains both dine-in and takeout items, split the preview into two clear sections:
+  - Dine-In
+  - Takeout
+- If only one order type exists, do not show a divider or split section
+- Buttons:
+  - Back to Edit
+  - Confirm Order
+
+Order success modal requirements:
+- Show after confirming an order
+- Display:
+  - Order number
+  - Customer
+  - Table number if available
+  - Order type
+  - Total amount
+  - Payment status
+  - Order status
+- If the order has both dine-in and takeout items, clearly show it as:
+  - Dine-In + Takeout
+- Button:
+  - Back to Orders
+
+Payment modal requirements:
+- Show order item summary
+- Show subtotal, service fee, discount, tax, and total amount due
+- Provide amount received input
+- Automatically calculate change
+- Confirm Payment button should be disabled until amount received is enough
+- Cancel button should close the modal
+- After payment:
+  - Mark order as Paid
+  - Mark order as Completed
+  - Insert payment record
+  - Insert receipt record
+  - Free the table if it was dine-in
+  - Show Payment Successful modal
+
+Payment successful modal requirements:
+- Show payment ID, receipt ID, order ID, total amount due, amount received, and change
+- Buttons:
+  - Print Receipt
+  - Close
+
+Receipt preview requirements:
+- Design a thermal receipt style modal
+- Show restaurant name, address, and official receipt heading
+- Show:
+  - Receipt ID
+  - Order ID
+  - Payment ID
+  - Customer name
+  - Type
+  - Table if available
+- Show order items
+- If order contains both dine-in and takeout items:
+  - Group items into Dine-In and Takeout sections
+  - Show subtotal per section
+- If only one type exists:
+  - Show a flat list with no divider
+- Show final totals:
+  - Subtotal
+  - Service fee
+  - Tax
+  - Discount
+  - Total
+  - Received
+  - Change
+- Buttons:
+  - Print Receipt
+  - Download Receipt
+  - Close
+- Important behavior:
+  - When closing the receipt after payment, the order should be removed from the order list so it no longer appears there
+
+Order list page requirements:
+- Show all orders in a table
+- Columns:
+  - Order ID
+  - Customer Name
+  - Order Type
+  - Table
+  - Total
+  - Payment Status
+  - Order Status
+  - Date
+  - Actions
+- Include search and filters:
+  - Search by order ID or customer name
+  - Filter by order type
+  - Filter by payment status
+  - Filter by order status
+  - Filter by date
+- Actions:
+  - View Details
+  - Process Payment
+  - Receipt
+  - Refund
+- If payment is completed, receipt and refund actions should appear
+- If payment is pending, Process Payment should appear
+- Viewing receipt should show the same receipt preview design
+- Closing the receipt after payment should remove the order from the list
+
+Table management page requirements:
+- Show a visual grid of tables
+- Show current table statuses with color coding
+- Show a queue / waitlist panel on the right
+- Include search and status filter for tables
+- Allow selecting a table and changing status
+- Allow assigning the next queued customer to an available table
+- Queue panel should show:
+  - Customer name
+  - Queue number
+  - Guests
+  - Waiting time
+  - Status
+  - Assigned table if any
+- Each queue item should have:
+  - View
+  - Remove
+- View opens a queue info modal
+- Remove must permanently delete the queue entry
+- When a queue entry is removed, it should disappear immediately from the list
+- If the queue entry has a linked order, show that information in the modal
+
+Queue info modal requirements:
+- Title: Queue Entry Info
+- Show:
+  - Customer name
+  - Queue number
+  - Status
+  - Waiting time
+  - Assigned table if any
+  - Linked order details if available
+- Linked order details should show:
+  - Order ID
+  - Customer
+  - Order status
+  - Item list
+- Provide a Remove button inside the modal
+- Provide a Close button
+
+Discount modal requirements:
+- Show discount types:
+  - Senior Citizen
+  - PWD
+  - Promo
+  - Custom Discount
+- For Senior and PWD:
+  - Require ID number
+- For Custom Discount:
+  - Require percentage input
+- Validate before applying
+- Show note that discount saves to the discounts table
+
+Takeout mode modal requirements:
+- Allow adding takeout items separately
+- Show product grid and category filters inside the modal
+- Can be opened when user chooses to switch to takeout
+- Must look like a dedicated takeout ordering mode
+
+Data and state requirements:
+- Use realistic mock data
+- Include sample customer queue entry like “Jely”
+- Include sample mixed order with both dine-in and takeout items
+- Include sample paid order and receipt
+- Include sample table statuses
+- Include sample products and ingredient data
+- Show state differences clearly:
+  - Empty cart
+  - Cart with items
+  - Mixed dine-in and takeout
+  - Waiting queue
+  - Table assigned
+  - Payment pending
+  - Paid
+  - Refunded
+  - Order removed after receipt close
+
+Interaction requirements:
+- Prototype should connect these flows:
+  - Create Order → Preview Order → Confirm Order → Payment → Payment Successful → Receipt Preview → Close → Back to Order List
+  - Create Order → No Tables Available → Wait for Available Table → Preview Order → Confirm Order → Queue entry created
+  - Table Management → Assign Next Queue → queue entry assigned to table
+  - Queue View → Remove → hard delete queue entry
+- All modals should open as overlays
+- Buttons should have hover and pressed states
+- Include realistic empty states and disabled states
+- Include success and validation messages
+
+Developer handoff requirements:
+- Include notes that this system uses local database-like mock data
+- Show that orders, payments, receipts, discounts, queue entries, and table statuses are all connected
+- Mention that removing a queue entry deletes it permanently
+- Mention that closing receipt after payment removes the order from order list
+- Mention that mixed dine-in and takeout items must be separated in receipt display
+- Add clear redlines for spacing, font sizes, button sizes, and modal widths
+
+Important UX rules:
+- Make the flows unambiguous
+- Do not hide critical actions
+- Keep cashier actions fast and efficient
+- Avoid unnecessary decoration
+- Make the queue flow feel intentional and operational
+- Make receipt display look like a real thermal receipt
+- Make the order list and table management feel like a live operational dashboard
+
+Use this exact product naming style and business context:
+- Restaurant POS
+- Order Management
+- Table Management
+- Queue / Waitlist
+- Receipt Preview
+- Payment Summary
+- Order Preview
+- Dine-In
+- Takeout
