@@ -13,14 +13,24 @@ const envPath = path.resolve(__dirname, '..', '.env');
 const envText = fs.readFileSync(envPath, 'utf8');
 const env = parseEnv(envText);
 const sourceKey = `DATABASE_URL_${target.toUpperCase()}`;
-const nextUrl = env[sourceKey];
+const configuredUrl = env[sourceKey];
 
-if (!nextUrl) {
+if (!configuredUrl) {
   console.error(`${sourceKey} is missing in backend/.env`);
   process.exit(1);
 }
 
-const nextText = upsertEnvValue(upsertEnvValue(envText, 'DATABASE_TARGET', target), 'DATABASE_URL', nextUrl);
+// Supabase's session pooler (5432) has a small per-project session limit and
+// can lock every login out with EMAXCONNSESSION. Application traffic should
+// use the transaction pooler on 6543 instead.
+const nextUrl = target === 'supabase' ? configuredUrl.replace(/:5432(?=\/)/, ':6543') : configuredUrl;
+let nextText = upsertEnvValue(envText, 'DATABASE_TARGET', target);
+nextText = upsertEnvValue(nextText, 'DATABASE_URL', nextUrl);
+
+if (target === 'supabase') {
+  nextText = upsertEnvValue(nextText, sourceKey, nextUrl);
+}
+
 fs.writeFileSync(envPath, nextText);
 
 console.log(`Database switched to ${target}. Restart the backend server for the change to take effect.`);

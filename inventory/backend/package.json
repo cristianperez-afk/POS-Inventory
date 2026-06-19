@@ -18,11 +18,8 @@
     "start": "nest start",
     "prestart:dev": "prisma generate",
     "start:dev": "nest start --watch",
-<<<<<<< Updated upstream
     "dev:backend": "npm run start:dev",
-=======
     "start:dev:no-migrate": "nest start --watch",
->>>>>>> Stashed changes
     "start:debug": "nest start --debug --watch",
     "prestart:prod": "npm run db:deploy",
     "start:prod": "node dist/main",

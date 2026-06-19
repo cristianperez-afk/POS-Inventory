@@ -8,3 +8,4 @@ backend/node_modules/
 backend/dist/
 backend/.env
 backend/*.tsbuildinfo
+backend/backend-live.*.log
