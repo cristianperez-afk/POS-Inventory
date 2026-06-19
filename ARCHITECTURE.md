@@ -1,17 +1,19 @@
 # POS + Inventory System Architecture
 
+For local startup instructions, see [RUNNING.md](RUNNING.md).
+
 ## System Structure
 
 The merged system uses the POS frontend as the main shell and connects POS and Inventory features through a shared React application flow.
 
-- `pos/frontend/src/shared/App.tsx` is the merged application shell.
-- `inventory/frontend/src/app` contains the inventory app shell helpers:
+- `frontend/src/shared/App.tsx` is the merged application shell.
+- `frontend/src/features/inventory/app` contains the inventory app shell helpers:
   - session bridge via `useSession`
   - typed API client in `app/api/client.ts`
   - domain types in `app/api/domainTypes.ts`
   - shared TanStack Query client
-- `inventory/frontend/src/modules/restaurant` contains restaurant inventory screens.
-- `inventory/frontend/src/modules/retail` contains retail inventory screens.
+- `frontend/src/features/inventory/modules/restaurant` contains restaurant inventory screens.
+- `frontend/src/features/inventory/modules/retail` contains retail inventory screens.
 - Runtime access is based on the logged-in POS user and the store type:
   - Restaurant store users see restaurant POS and restaurant inventory modules.
   - Retail store users see retail POS and retail inventory modules.
@@ -43,7 +45,7 @@ Backend API
 Service layer
   |
   v
-Prisma
+Shared database access
   |
   v
 Database
@@ -56,20 +58,41 @@ This means:
 - Hooks call the centralized API client.
 - The API client talks to backend endpoints.
 - Backend controllers receive requests and delegate business logic to services.
-- Services use Prisma for data access.
-- Prisma reads and writes PostgreSQL or Supabase.
+- Services use the shared POS database access layer.
+- PostgreSQL/Supabase is the single database.
 
 ## Backend Architecture
 
-The inventory backend is a NestJS modular monolith.
+The POS backend is the single NestJS backend for normal POS + Inventory use.
 
-- Feature modules are registered in `inventory/backend/src/app.module.ts`.
-- Controllers expose API endpoints.
+- POS auth/admin/POS modules remain in `backend/src`.
+- Inventory compatibility endpoints live in `backend/src/modules/inventory`.
+- Controllers expose POS endpoints and Inventory `/api/...` endpoints.
 - Services contain business logic.
-- Prisma is the only ORM/data access layer.
-- PostgreSQL/Supabase is the database.
+- `PrismaService` in `backend/src/prisma` is the canonical database layer.
+- `DatabaseService` is a temporary compatibility layer for old POS SQL flows while they are migrated module by module.
+- `DB_POOL_MAX=1` is used locally for remaining compatibility SQL to avoid Supabase connection limits.
+- PostgreSQL/Supabase is the single database.
 
-The POS backend remains responsible for POS login, POS accounts, POS store data, and POS transactions.
+The old `inventory/backend` is kept as migration/source reference, but it is not started during normal development.
+
+The target backend folder shape is:
+
+```text
+backend/
+  prisma/
+  src/
+    prisma/
+    modules/
+      auth/
+      users/
+      inventory/
+      stores/
+      products/
+      orders/
+      payments/
+      reports/
+```
 
 ## Tenancy Model
 
@@ -86,25 +109,40 @@ The system uses:
 
 - POS login as the single visible login page.
 - POS account role/staff type for frontend visibility.
-- Inventory JWT guards and role/module guards for inventory backend requests.
-- A bridge from the merged POS shell to the inventory backend so inventory requests resolve to the correct inventory tenant/module by store type.
+- POS account role/staff type is bridged to Inventory module visibility.
+- Inventory `/api/...` requests resolve to the correct inventory tenant/module by store type.
 
 Authorization should be enforced on backend requests, not only in the UI.
 
 ## Connection In Development
 
-Run the merged system with separate backend ports:
+Run normal POS work with the POS backend only:
 
 ```text
 POS backend:       http://localhost:3000
-Inventory backend: http://localhost:3001
 POS frontend:      http://127.0.0.1:5173
 ```
 
 The POS frontend sends:
 
 - POS auth/admin/POS requests to `VITE_API_BASE_URL` or `http://localhost:3000`.
-- Inventory `/api/...` requests through the Vite proxy to `http://localhost:3001`.
+- Inventory `/api/...` requests through the Vite proxy to the POS backend.
+
+POS sales should not manage products through the old POS product/category/ingredient screens. Product, ingredient, and category source data lives in the Inventory schema inside the POS database.
+
+For the one-time merge from the old Inventory database:
+
+```powershell
+cd C:\Users\jelyl\POS-Inventory\backend
+npm.cmd run db:merge-inventory
+```
+
+After that, re-run the lightweight catalog sync when Inventory catalog data changes:
+
+```powershell
+cd C:\Users\jelyl\POS-Inventory\backend
+npm.cmd run db:sync-inventory-catalog
+```
 
 ## Architecture Rule
 
@@ -119,5 +157,5 @@ React screen -> fetch directly -> database-like logic in UI
 Do this:
 
 ```text
-React screen -> feature hook -> API client -> controller -> service -> Prisma -> database
+React screen -> feature hook -> API client -> controller -> service -> shared database access -> database
 ```
