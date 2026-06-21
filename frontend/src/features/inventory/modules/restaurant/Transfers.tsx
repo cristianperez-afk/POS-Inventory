@@ -4,13 +4,13 @@ import { toast } from "sonner";
 import {
   useCreateRestaurantStockMovementMutation,
   useCreateRestaurantTransferMutation,
-  useRestaurantAdjustmentsQuery,
   useRestaurantInventoryQuery,
   useRestaurantLocationsQuery,
   useRestaurantTransferActionMutation,
   useRestaurantTransfersQuery,
   useRestaurantWasteQuery,
 } from "../lib/restaurant";
+import { StockAdjustments } from "./StockAdjustments";
 
 type TransferStatus = "pending" | "approved" | "in-transit" | "completed" | "rejected";
 type AdjustmentType = "damage" | "shrinkage" | "waste" | "found" | "correction";
@@ -65,15 +65,12 @@ export function Transfers() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [showTransferModal, setShowTransferModal] = useState(false);
-  const [showAdjustmentModal, setShowAdjustmentModal] = useState(false);
   const [showWasteModal, setShowWasteModal] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [selectedItem, setSelectedItem] = useState<Transfer | Adjustment | WasteLog | null>(null);
   const [dateRange, setDateRange] = useState({ start: "2026-05-01", end: "2026-05-31" });
 
   const { data: transfers = [] } = useRestaurantTransfersQuery();
-
-  const { data: adjustments = [] } = useRestaurantAdjustmentsQuery();
 
   const { data: wasteLogs = [] } = useRestaurantWasteQuery();
 
@@ -83,16 +80,6 @@ export function Transfers() {
     unit: "kg",
     from: "",
     to: "",
-    notes: "",
-  });
-
-  const [newAdjustment, setNewAdjustment] = useState({
-    item: "",
-    quantity: "",
-    unit: "kg",
-    location: "",
-    type: "damage" as AdjustmentType,
-    reason: "",
     notes: "",
   });
 
@@ -121,13 +108,6 @@ export function Transfers() {
     return matchesSearch && matchesStatus;
   });
 
-  const filteredAdjustments = adjustments.filter(adj => {
-    const matchesSearch = (adj.item || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         (adj.id || '').toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesType = statusFilter === "all" || adj.type === statusFilter;
-    return matchesSearch && matchesType;
-  });
-
   const filteredWasteLogs = wasteLogs.filter(waste => {
     const matchesSearch = (waste.item || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
                          (waste.id || '').toLowerCase().includes(searchQuery.toLowerCase());
@@ -149,25 +129,6 @@ export function Transfers() {
       setNewTransfer({ item: "", quantity: "", unit: "kg", from: "", to: "", notes: "" });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to create transfer");
-    }
-  };
-
-  const handleCreateAdjustment = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      await saveMovement.mutateAsync({
-        itemId: newAdjustment.item,
-        locationId: newAdjustment.location,
-        type: newAdjustment.type === "found" ? "STOCK_IN" : newAdjustment.type === "correction" ? "ADJUSTMENT" : "STOCK_OUT",
-        quantity: parseFloat(newAdjustment.quantity),
-        reason: newAdjustment.reason || newAdjustment.type,
-        referenceType: "RESTAURANT_ADJUSTMENT",
-        notes: newAdjustment.notes || undefined,
-      });
-      setShowAdjustmentModal(false);
-      setNewAdjustment({ item: "", quantity: "", unit: "kg", location: "", type: "damage", reason: "", notes: "" });
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to save adjustment");
     }
   };
 
@@ -305,7 +266,6 @@ export function Transfers() {
     { label: "Pending Approvals", value: transfers.filter(t => t.status === "pending").length, icon: Clock, color: "from-yellow-500 to-orange-500" },
     { label: "In Transit", value: transfers.filter(t => t.status === "in-transit").length, icon: ArrowLeftRight, color: "from-purple-500 to-indigo-500" },
     { label: "Completed Today", value: transfers.filter(t => t.status === "completed" && t.completedDate === new Date().toISOString().split('T')[0]).length, icon: CheckCircle, color: "from-green-500 to-emerald-500" },
-    { label: "Total Adjustments", value: adjustments.length, icon: FileText, color: "from-blue-500 to-cyan-500" },
   ];
 
   return (
@@ -326,15 +286,6 @@ export function Transfers() {
               New Transfer
             </button>
           )}
-          {activeTab === "adjustments" && (
-            <button
-              onClick={() => setShowAdjustmentModal(true)}
-              className="px-4 py-2 bg-gradient-to-r from-primary to-secondary text-white rounded-xl hover:shadow-lg hover:shadow-primary/30 transition-all duration-200 flex items-center gap-2 text-sm"
-            >
-              <Plus className="w-4 h-4" />
-              New Adjustment
-            </button>
-          )}
           {activeTab === "waste" && wasteView === "logs" && (
             <button
               onClick={() => setShowWasteModal(true)}
@@ -348,7 +299,7 @@ export function Transfers() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
         {transferStats.map((stat, index) => {
           const Icon = stat.icon;
           return (
@@ -428,7 +379,8 @@ export function Transfers() {
         </div>
       )}
 
-      {/* Filters */}
+      {/* Filters — the embedded Stock Adjustments panel brings its own search/filters */}
+      {activeTab !== "adjustments" && (
       <div className="bg-card rounded-2xl p-6 shadow-sm border border-border mb-6">
         <div className="flex flex-col md:flex-row gap-3">
           <div className="flex-1 relative">
@@ -471,15 +423,6 @@ export function Transfers() {
                 <option value="completed">Completed</option>
                 <option value="rejected">Rejected</option>
               </>
-            ) : activeTab === "adjustments" ? (
-              <>
-                <option value="all">All Types</option>
-                <option value="damage">Damage</option>
-                <option value="shrinkage">Shrinkage</option>
-                <option value="waste">Waste</option>
-                <option value="found">Found</option>
-                <option value="correction">Correction</option>
-              </>
             ) : (
               <>
                 <option value="all">All Types</option>
@@ -494,6 +437,7 @@ export function Transfers() {
           </select>
         </div>
       </div>
+      )}
 
       {/* Content */}
       {activeTab === "transfers" ? (
@@ -572,54 +516,7 @@ export function Transfers() {
           </div>
         </div>
       ) : activeTab === "adjustments" ? (
-        <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-muted/50 border-b border-border">
-                <tr>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-foreground">Adjustment ID</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-foreground">Item</th>
-                  <th className="px-4 py-3 text-center text-xs font-medium text-foreground">Quantity</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-foreground">Location</th>
-                  <th className="px-4 py-3 text-center text-xs font-medium text-foreground">Type</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-foreground">Reason</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-foreground">Adjusted By</th>
-                  <th className="px-4 py-3 text-center text-xs font-medium text-foreground">Date</th>
-                  <th className="px-4 py-3 text-center text-xs font-medium text-foreground">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {filteredAdjustments.map((adjustment) => (
-                  <tr key={adjustment.id} className="hover:bg-muted/30 transition-colors">
-                    <td className="px-4 py-3">
-                      <span className="font-medium text-primary text-sm">{adjustment.id}</span>
-                    </td>
-                    <td className="px-4 py-3 text-foreground text-sm">{adjustment.item}</td>
-                    <td className="px-4 py-3 text-center text-foreground text-sm">
-                      {adjustment.quantity} {adjustment.unit}
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground text-sm">{adjustment.location}</td>
-                    <td className="px-4 py-3 text-center">{getAdjustmentBadge(adjustment.type)}</td>
-                    <td className="px-4 py-3 text-muted-foreground text-sm">{adjustment.reason}</td>
-                    <td className="px-4 py-3 text-muted-foreground text-sm">{adjustment.adjustedBy}</td>
-                    <td className="px-4 py-3 text-center text-muted-foreground text-sm">{adjustment.date}</td>
-                    <td className="px-4 py-3 text-center">
-                      <button
-                        onClick={() => {
-                          setSelectedItem(adjustment);
-                          setShowDetailsModal(true);
-                        }}
-                        className="text-primary hover:text-primary/80 text-xs"
-                      >
-                        View Details
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <StockAdjustments embedded />
       ) : wasteView === "logs" ? (
         <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
           <div className="overflow-x-auto">
@@ -880,120 +777,6 @@ export function Transfers() {
                   className="flex-1 px-4 py-2 bg-gradient-to-r from-primary to-secondary text-white rounded-lg hover:shadow-lg transition-all text-sm"
                 >
                   Create Transfer
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Create Adjustment Modal */}
-      {showAdjustmentModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-card rounded-xl shadow-xl w-full max-w-md border border-border">
-            <div className="flex items-center justify-between p-4 border-b border-border">
-              <h2 className="text-lg font-bold text-foreground">Create Inventory Adjustment</h2>
-              <button onClick={() => setShowAdjustmentModal(false)} className="text-muted-foreground hover:text-foreground">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <form onSubmit={handleCreateAdjustment} className="p-4 space-y-3">
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-1">Item</label>
-                <select
-                  value={newAdjustment.item}
-                  onChange={(e) => setNewAdjustment({ ...newAdjustment, item: e.target.value })}
-                  className="w-full px-3 py-2 bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 text-sm"
-                  required
-                  disabled={availableItems.length === 0}
-                >
-                  <option value="">{availableItems.length === 0 ? "No available inventory items" : "Select item"}</option>
-                  {availableItems.map(item => <option key={item.id} value={item.backendId}>{item.name}</option>)}
-                </select>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-foreground mb-1">Quantity</label>
-                  <input
-                    type="number"
-                    value={newAdjustment.quantity}
-                    onChange={(e) => setNewAdjustment({ ...newAdjustment, quantity: e.target.value })}
-                    className="w-full px-3 py-2 bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 text-sm"
-                    required
-                    min="0.01"
-                    step="0.01"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-foreground mb-1">Unit</label>
-                  <select
-                    value={newAdjustment.unit}
-                    onChange={(e) => setNewAdjustment({ ...newAdjustment, unit: e.target.value })}
-                    className="w-full px-3 py-2 bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 text-sm"
-                  >
-                    {units.map(unit => <option key={unit} value={unit}>{unit}</option>)}
-                  </select>
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-1">Location</label>
-                <select
-                  value={newAdjustment.location}
-                  onChange={(e) => setNewAdjustment({ ...newAdjustment, location: e.target.value })}
-                  className="w-full px-3 py-2 bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 text-sm"
-                  required
-                >
-                  <option value="">Select location</option>
-                  {locations.map((loc: any) => <option key={loc.id} value={loc.id}>{loc.name}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-1">Adjustment Type</label>
-                <select
-                  value={newAdjustment.type}
-                  onChange={(e) => setNewAdjustment({ ...newAdjustment, type: e.target.value as AdjustmentType })}
-                  className="w-full px-3 py-2 bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 text-sm"
-                  required
-                >
-                  <option value="damage">Damage</option>
-                  <option value="shrinkage">Shrinkage</option>
-                  <option value="waste">Waste</option>
-                  <option value="found">Found</option>
-                  <option value="correction">Correction</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-1">Reason</label>
-                <input
-                  type="text"
-                  value={newAdjustment.reason}
-                  onChange={(e) => setNewAdjustment({ ...newAdjustment, reason: e.target.value })}
-                  className="w-full px-3 py-2 bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 text-sm"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-1">Notes</label>
-                <textarea
-                  value={newAdjustment.notes}
-                  onChange={(e) => setNewAdjustment({ ...newAdjustment, notes: e.target.value })}
-                  className="w-full px-3 py-2 bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 text-sm"
-                  rows={2}
-                />
-              </div>
-              <div className="flex gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowAdjustmentModal(false)}
-                  className="flex-1 px-4 py-2 bg-muted text-foreground rounded-lg hover:bg-muted/80 transition-all text-sm"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 px-4 py-2 bg-gradient-to-r from-primary to-secondary text-white rounded-lg hover:shadow-lg transition-all text-sm"
-                >
-                  Create Adjustment
                 </button>
               </div>
             </form>

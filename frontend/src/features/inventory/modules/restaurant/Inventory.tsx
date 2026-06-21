@@ -1,10 +1,9 @@
 import { useState } from "react";
-import { Search, Edit, Trash2, AlertCircle, X, Save, ArrowRight, ChevronRight, ChevronDown, Folder, FolderOpen, Package, PlusCircle } from "lucide-react";
+import { Search, Edit, Archive, ArchiveRestore, AlertCircle, X, Save, ChevronRight, ChevronDown, Folder, FolderOpen, Package, PlusCircle } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "../../app/hooks/useSession";
 import { formatQuantity } from "../lib/inventoryLogic";
 import {
-  useDeleteRestaurantInventoryMutation,
   useRestaurantCategoryHierarchyQuery,
   useRestaurantInventoryQuery,
   useRestaurantLocationsQuery,
@@ -29,6 +28,7 @@ type Product = {
   location?: string;
   unit: string;
   storageTemperature?: string;
+  isActive?: boolean;
 };
 
 export function Inventory() {
@@ -39,12 +39,9 @@ export function Inventory() {
   const [expandedSubCategories, setExpandedSubCategories] = useState<Set<string>>(new Set());
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
-  const [showTransferModal, setShowTransferModal] = useState(false);
   const [showInitialStockModal, setShowInitialStockModal] = useState(false);
-  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
-  const [transferProduct, setTransferProduct] = useState<Product | null>(null);
-  const [editMainCategory, setEditMainCategory] = useState("");
-  const [editSubCategory, setEditSubCategory] = useState("");
+  const [pendingDeactivateId, setPendingDeactivateId] = useState<number | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
 
   // Hierarchical category structure — read from persisted backend settings so
   // categories added via Initial Stock Setup appear here immediately.
@@ -54,7 +51,6 @@ export function Inventory() {
   const { data: products = [] } = useRestaurantInventoryQuery<Product[]>();
   const { data: locations = [] } = useRestaurantLocationsQuery();
   const updateProduct = useUpdateRestaurantInventoryMutation();
-  const deleteProduct = useDeleteRestaurantInventoryMutation();
 
   const mainCategories = Object.keys(categoryHierarchy);
 
@@ -92,7 +88,9 @@ export function Inventory() {
       const matchesSearch = searchQuery === "" ||
         (p.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
         (p.sku || '').toLowerCase().includes(searchQuery.toLowerCase());
-      return matchesCategory && matchesSearch;
+      // Archived (deactivated) items are hidden unless the user opts to see them.
+      const matchesArchived = showArchived || p.isActive !== false;
+      return matchesCategory && matchesSearch && matchesArchived;
     });
   };
 
@@ -109,102 +107,66 @@ export function Inventory() {
   };
 
   const handleEdit = (product: Product) => {
-    const [main, sub] = product.category.split(" > ");
-    setEditMainCategory(main);
-    setEditSubCategory(sub);
     setEditingProduct({ ...product });
     setShowEditModal(true);
   };
 
-  const handleEditMainCategoryChange = (newMainCategory: string) => {
-    setEditMainCategory(newMainCategory);
-    setEditSubCategory("");
-  };
-
+  // Food Inventory only edits the per-row operational fields that genuinely belong to
+  // a specific batch/location — expiry date and storage temperature. Shared master data
+  // (name, category, price, stock thresholds) is edited in Product Management, so it
+  // isn't duplicated (or silently overwritten) here.
   const handleSaveEdit = async () => {
-    if (editingProduct && editMainCategory && editSubCategory) {
-      const updatedProduct = {
-        ...editingProduct,
-        category: `${editMainCategory} > ${editSubCategory}`
-      };
-      try {
-        await updateProduct.mutateAsync({
-          id: editingProduct.backendId ?? String(editingProduct.id),
-          data: {
-            name: updatedProduct.name,
-            sku: updatedProduct.sku,
-            category: updatedProduct.category,
-            quantity: updatedProduct.stock,
-            maxStock: updatedProduct.maxStock,
-            minStock: updatedProduct.minStock,
-            reorderPoint: updatedProduct.reorderPoint,
-            price: updatedProduct.price,
-            expiryDate: updatedProduct.expiry
-              ? new Date(`${updatedProduct.expiry}T00:00:00`).toISOString()
-              : undefined,
-            storageTemperature: updatedProduct.storageTemperature || undefined,
-            unit: updatedProduct.unit,
-            locationId: updatedProduct.locationId,
-          },
-        });
-        setShowEditModal(false);
-        setEditingProduct(null);
-        setEditMainCategory("");
-        setEditSubCategory("");
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : "Failed to update inventory item");
-      }
+    if (!editingProduct) return;
+    try {
+      await updateProduct.mutateAsync({
+        id: editingProduct.backendId ?? String(editingProduct.id),
+        data: {
+          expiryDate: editingProduct.expiry
+            ? new Date(`${editingProduct.expiry}T00:00:00`).toISOString()
+            : undefined,
+          storageTemperature: editingProduct.storageTemperature || undefined,
+        },
+      });
+      setShowEditModal(false);
+      setEditingProduct(null);
+      toast.success("Storage details updated");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to update inventory item");
     }
   };
 
-  const handleTransfer = (product: Product) => {
-    const [main, sub] = product.category.split(" > ");
-    setEditMainCategory(main);
-    setEditSubCategory(sub);
-    setTransferProduct({ ...product });
-    setShowTransferModal(true);
+  // Soft delete: deactivating archives the item (isActive=false) instead of removing
+  // the row, so recipes/sales/PO references that point at it stay intact. Reactivating
+  // simply flips it back.
+  const handleDeactivate = (id: number) => {
+    setPendingDeactivateId(id);
   };
 
-  const handleSaveTransfer = async () => {
-    if (transferProduct && editMainCategory && editSubCategory) {
-      const updatedProduct = {
-        ...transferProduct,
-        category: `${editMainCategory} > ${editSubCategory}`
-      };
-      const location = locations.find((item: any) => item.name === updatedProduct.location);
-      if (!location) {
-        toast.error("Select a valid backend location");
-        return;
-      }
-      try {
-        await updateProduct.mutateAsync({
-          id: transferProduct.backendId ?? String(transferProduct.id),
-          data: { category: updatedProduct.category, locationId: location.id },
-        });
-        setShowTransferModal(false);
-        setTransferProduct(null);
-        setEditMainCategory("");
-        setEditSubCategory("");
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : "Failed to move inventory item");
-      }
-    }
-  };
-
-  const handleDelete = (id: number) => {
-    setPendingDeleteId(id);
-  };
-
-  const confirmDelete = async () => {
-    if (pendingDeleteId === null) return;
-    const product = products.find((item) => item.id === pendingDeleteId);
-    setPendingDeleteId(null);
+  const confirmDeactivate = async () => {
+    if (pendingDeactivateId === null) return;
+    const product = products.find((item) => item.id === pendingDeactivateId);
+    setPendingDeactivateId(null);
     if (!product) return;
     try {
-      await deleteProduct.mutateAsync(product.backendId ?? String(product.id));
-      toast.success("Item deleted successfully");
+      await updateProduct.mutateAsync({
+        id: product.backendId ?? String(product.id),
+        data: { isActive: false },
+      });
+      toast.success(`"${product.name}" archived`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to delete inventory item");
+      toast.error(error instanceof Error ? error.message : "Failed to archive inventory item");
+    }
+  };
+
+  const handleReactivate = async (product: Product) => {
+    try {
+      await updateProduct.mutateAsync({
+        id: product.backendId ?? String(product.id),
+        data: { isActive: true },
+      });
+      toast.success(`"${product.name}" reactivated`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to reactivate inventory item");
     }
   };
 
@@ -260,6 +222,15 @@ export function Inventory() {
               className="w-full pl-12 pr-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary transition-all"
             />
           </div>
+          <label className="flex items-center gap-2 px-4 py-3 text-sm text-foreground bg-input-background border border-input rounded-xl cursor-pointer whitespace-nowrap">
+            <input
+              type="checkbox"
+              checked={showArchived}
+              onChange={(e) => setShowArchived(e.target.checked)}
+              className="accent-primary"
+            />
+            Show archived
+          </label>
         </div>
 
         {/* Stats Row */}
@@ -393,6 +364,11 @@ export function Inventory() {
                                   </div>
 
                                   <div className="flex items-center gap-1 flex-shrink-0">
+                                    {product.isActive === false && (
+                                      <span className="px-2 py-0.5 rounded text-xs font-medium border bg-muted text-muted-foreground border-border">
+                                        Archived
+                                      </span>
+                                    )}
                                     <span className={`px-2 py-0.5 rounded text-xs font-medium border ${getStockStatus(product.stock, product.maxStock, product.minStock, product.reorderPoint).color}`}>
                                       {getStockStatus(product.stock, product.maxStock, product.minStock, product.reorderPoint).label}
                                     </span>
@@ -400,26 +376,29 @@ export function Inventory() {
 
                                   <div className="flex items-center gap-1 flex-shrink-0">
                                     <button
-                                      onClick={() => handleTransfer(product)}
-                                      className="p-1.5 hover:bg-blue-50 text-blue-600 rounded-lg transition-colors"
-                                      title="Transfer"
-                                    >
-                                      <ArrowRight className="w-5 h-5" />
-                                    </button>
-                                    <button
                                       onClick={() => handleEdit(product)}
                                       className="p-1.5 hover:bg-green-50 text-green-600 rounded-lg transition-colors"
-                                      title="Edit"
+                                      title="Edit storage & expiry"
                                     >
                                       <Edit className="w-5 h-5" />
                                     </button>
-                                    <button
-                                      onClick={() => handleDelete(product.id)}
-                                      className="p-1.5 hover:bg-red-50 text-red-600 rounded-lg transition-colors"
-                                      title="Delete"
-                                    >
-                                      <Trash2 className="w-5 h-5" />
-                                    </button>
+                                    {product.isActive === false ? (
+                                      <button
+                                        onClick={() => handleReactivate(product)}
+                                        className="p-1.5 hover:bg-green-50 text-green-600 rounded-lg transition-colors"
+                                        title="Reactivate"
+                                      >
+                                        <ArchiveRestore className="w-5 h-5" />
+                                      </button>
+                                    ) : (
+                                      <button
+                                        onClick={() => handleDeactivate(product.id)}
+                                        className="p-1.5 hover:bg-amber-50 text-amber-600 rounded-lg transition-colors"
+                                        title="Archive (deactivate)"
+                                      >
+                                        <Archive className="w-5 h-5" />
+                                      </button>
+                                    )}
                                   </div>
                                 </div>
                               ))}
@@ -451,7 +430,7 @@ export function Inventory() {
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-2">
           <div className="bg-card rounded-2xl shadow-xl max-w-xl w-full max-h-[90vh] overflow-y-auto">
             <div className="p-6 border-b border-border flex items-center justify-between sticky top-0 bg-card">
-              <h2 className="text-lg font-bold text-foreground">Edit Food Item</h2>
+              <h2 className="text-lg font-bold text-foreground">Edit Storage &amp; Expiry</h2>
               <button
                 onClick={() => setShowEditModal(false)}
                 className="p-2 hover:bg-muted rounded-xl transition-colors"
@@ -461,112 +440,19 @@ export function Inventory() {
             </div>
 
             <div className="p-6 space-y-4">
-              <div>
-                <label className="block text-sm mb-2 text-foreground">Name</label>
-                <input
-                  type="text"
-                  value={editingProduct.name}
-                  onChange={(e) => setEditingProduct({ ...editingProduct, name: e.target.value })}
-                  className="w-full px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
-                />
+              {/* Read-only context — which row is being edited. Master data is managed
+                  in Product Management; stock via Stock Adjustments; location via Transfers. */}
+              <div className="bg-muted/50 rounded-xl p-4 space-y-1">
+                <p className="font-semibold text-foreground">{editingProduct.name}</p>
+                <p className="text-sm text-muted-foreground">{editingProduct.category}</p>
+                <p className="text-sm text-muted-foreground">
+                  {editingProduct.location} • {formatQuantity(editingProduct.stock, editingProduct.unit)} on hand
+                </p>
               </div>
-
-              <div>
-                <label className="block text-sm mb-2 text-foreground">SKU</label>
-                <input
-                  type="text"
-                  value={editingProduct.sku}
-                  onChange={(e) => setEditingProduct({ ...editingProduct, sku: e.target.value })}
-                  className="w-full px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
-                />
-              </div>
-
-              <div className="grid grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-sm mb-2 text-foreground">Main Category</label>
-                  <select
-                    value={editMainCategory}
-                    onChange={(e) => handleEditMainCategoryChange(e.target.value)}
-                    className="w-full px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
-                  >
-                    <option value="">Select Category</option>
-                    {mainCategories.map((cat) => (
-                      <option key={cat} value={cat}>{cat}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm mb-2 text-foreground">Sub Category</label>
-                  <select
-                    value={editSubCategory}
-                    onChange={(e) => setEditSubCategory(e.target.value)}
-                    className="w-full px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
-                    disabled={!editMainCategory}
-                  >
-                    <option value="">Select Subcategory</option>
-                    {editMainCategory && categoryHierarchy[editMainCategory]?.map((subCat) => (
-                      <option key={subCat} value={subCat}>{subCat}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-sm mb-2 text-foreground">Current Stock</label>
-                  <input
-                    type="number"
-                    value={editingProduct.stock}
-                    onChange={(e) => setEditingProduct({ ...editingProduct, stock: parseFloat(e.target.value) })}
-                    className="w-full px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm mb-2 text-foreground">Min Stock</label>
-                  <input
-                    type="number"
-                    value={editingProduct.minStock ?? ""}
-                    onChange={(e) => setEditingProduct({ ...editingProduct, minStock: e.target.value ? parseFloat(e.target.value) : undefined })}
-                    placeholder="Critical threshold"
-                    className="w-full px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm mb-2 text-foreground">Reorder Point</label>
-                  <input
-                    type="number"
-                    value={editingProduct.reorderPoint ?? ""}
-                    onChange={(e) => setEditingProduct({ ...editingProduct, reorderPoint: e.target.value ? parseFloat(e.target.value) : undefined })}
-                    placeholder="Low stock threshold"
-                    className="w-full px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm mb-2 text-foreground">Max Stock</label>
-                  <input
-                    type="number"
-                    value={editingProduct.maxStock}
-                    onChange={(e) => setEditingProduct({ ...editingProduct, maxStock: parseFloat(e.target.value) })}
-                    placeholder="Maximum capacity"
-                    className="w-full px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm mb-2 text-foreground">Price</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={editingProduct.price}
-                    onChange={(e) => setEditingProduct({ ...editingProduct, price: parseFloat(e.target.value) })}
-                    className="w-full px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
-                  />
-                </div>
-              </div>
+              <p className="text-xs text-muted-foreground">
+                Name, category, price and stock thresholds are edited in <span className="font-medium">Product Management</span>;
+                stock via <span className="font-medium">Stock Adjustments</span>; location via <span className="font-medium">Transfers</span>.
+              </p>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -577,19 +463,6 @@ export function Inventory() {
                     onChange={(e) => setEditingProduct({ ...editingProduct, expiry: e.target.value })}
                     className="w-full px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
                   />
-                </div>
-
-                <div>
-                  <label className="block text-sm mb-2 text-foreground">Location</label>
-                  <select
-                    value={editingProduct.location}
-                    onChange={(e) => setEditingProduct({ ...editingProduct, location: e.target.value })}
-                    className="w-full px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
-                  >
-                    {locations.map((loc: any) => (
-                      <option key={loc.id} value={loc.name}>{loc.name}</option>
-                    ))}
-                  </select>
                 </div>
 
                 <div>
@@ -627,95 +500,11 @@ export function Inventory() {
         </div>
       )}
 
-      {/* Transfer Modal */}
-      {showTransferModal && transferProduct && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-card rounded-2xl shadow-xl max-w-md w-full">
-            <div className="p-6 border-b border-border flex items-center justify-between">
-              <h2 className="text-2xl font-bold text-foreground">Transfer Item</h2>
-              <button
-                onClick={() => setShowTransferModal(false)}
-                className="p-6 hover:bg-muted rounded-2xl transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="p-6 space-y-4">
-              <div className="bg-muted/50 rounded-xl p-4">
-                <p className="text-sm text-muted-foreground mb-6">Transferring</p>
-                <p className="font-semibold text-foreground">{transferProduct.name}</p>
-                <p className="text-sm text-muted-foreground mt-2">Current Location: {transferProduct.location}</p>
-              </div>
-
-              <div>
-                <label className="block text-sm mb-2 text-foreground">New Location</label>
-                <select
-                  value={transferProduct.location}
-                  onChange={(e) => setTransferProduct({ ...transferProduct, location: e.target.value })}
-                  className="w-full px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
-                >
-                  {locations.map((loc: any) => (
-                    <option key={loc.id} value={loc.name}>{loc.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm mb-2 text-foreground">Main Category</label>
-                  <select
-                    value={editMainCategory}
-                    onChange={(e) => handleEditMainCategoryChange(e.target.value)}
-                    className="w-full px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
-                  >
-                    {mainCategories.map((cat) => (
-                      <option key={cat} value={cat}>{cat}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm mb-2 text-foreground">Sub Category</label>
-                  <select
-                    value={editSubCategory}
-                    onChange={(e) => setEditSubCategory(e.target.value)}
-                    className="w-full px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
-                    disabled={!editMainCategory}
-                  >
-                    <option value="">Select Subcategory</option>
-                    {editMainCategory && categoryHierarchy[editMainCategory]?.map((subCat) => (
-                      <option key={subCat} value={subCat}>{subCat}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            <div className="p-6 border-t border-border flex gap-3 justify-end">
-              <button
-                onClick={() => setShowTransferModal(false)}
-                className="px-6 py-3 bg-muted text-foreground rounded-xl hover:bg-muted/80 transition-all"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSaveTransfer}
-                className="px-6 py-3 bg-gradient-to-r from-primary to-secondary text-white rounded-xl hover:shadow-lg hover:shadow-primary/30 transition-all flex items-center gap-2"
-              >
-                <ArrowRight className="w-5 h-5" />
-                Transfer Item
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Initial Stock Setup Modal */}
       {showInitialStockModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 overflow-auto">
-          <div className="min-h-full bg-background">
-            <div className="sticky top-0 bg-card border-b border-border px-8 py-3 flex items-center justify-between z-10">
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-card rounded-2xl shadow-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-card border-b border-border px-6 py-3 flex items-center justify-between z-10">
               <p className="text-sm font-medium text-muted-foreground">Admin — Initial Stock Setup</p>
               <button
                 onClick={() => setShowInitialStockModal(false)}
@@ -729,27 +518,27 @@ export function Inventory() {
         </div>
       )}
 
-      {/* Delete Confirmation Modal */}
-      {pendingDeleteId !== null && (
+      {/* Archive (deactivate) Confirmation Modal */}
+      {pendingDeactivateId !== null && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-card rounded-2xl shadow-xl border border-border w-full max-w-sm">
             <div className="p-6 border-b border-border flex items-center gap-3">
-              <AlertCircle className="w-6 h-6 text-red-600 flex-shrink-0" />
-              <h2 className="text-lg font-bold text-foreground">Delete Item</h2>
+              <AlertCircle className="w-6 h-6 text-amber-600 flex-shrink-0" />
+              <h2 className="text-lg font-bold text-foreground">Archive Item</h2>
             </div>
             <div className="p-6">
-              <p className="text-foreground mb-1">Are you sure you want to delete this item?</p>
-              <p className="text-sm text-muted-foreground mb-6">This action cannot be undone.</p>
+              <p className="text-foreground mb-1">Archive this item?</p>
+              <p className="text-sm text-muted-foreground mb-6">It will be hidden from the inventory list but kept for history (recipes, sales and PO records stay intact). You can reactivate it anytime from “Show archived”.</p>
               <div className="flex gap-3">
                 <button
-                  onClick={confirmDelete}
-                  className="flex-1 px-4 py-2 bg-red-600 text-white rounded-xl hover:bg-red-700 transition-colors flex items-center justify-center gap-2"
+                  onClick={confirmDeactivate}
+                  className="flex-1 px-4 py-2 bg-amber-600 text-white rounded-xl hover:bg-amber-700 transition-colors flex items-center justify-center gap-2"
                 >
-                  <Trash2 className="w-4 h-4" />
-                  Delete
+                  <Archive className="w-4 h-4" />
+                  Archive
                 </button>
                 <button
-                  onClick={() => setPendingDeleteId(null)}
+                  onClick={() => setPendingDeactivateId(null)}
                   className="px-4 py-2 bg-muted text-foreground rounded-xl hover:bg-muted/80 transition-colors"
                 >
                   Cancel

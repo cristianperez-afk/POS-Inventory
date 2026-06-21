@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { toast } from 'sonner';
 import { Search, Receipt, RotateCcw, X, Download, TrendingUp, PhilippinePeso, ShoppingBag } from 'lucide-react';
 import {
   useRefundRetailSaleMutation,
@@ -118,13 +119,13 @@ export default function SalesHistoryView({
 
   const handleRefund = async () => {
     if (!refundTarget) return;
-    if (!refundReason.trim()) { alert('Please provide a reason for the refund'); return; }
+    if (!refundReason.trim()) { toast.error('Please provide a reason for the refund'); return; }
     try {
       await refundSaleMutation.mutateAsync({ id: refundTarget.id, reason: refundReason.trim() });
       setRefundTarget(null);
       setRefundReason('');
     } catch (err: any) {
-      alert(err.message ?? 'Failed to process refund');
+      toast.error(err.message ?? 'Failed to process refund');
     }
   };
 

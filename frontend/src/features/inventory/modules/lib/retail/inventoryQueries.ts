@@ -9,7 +9,7 @@ import {
 import { useInventoryQuery, useStockMovementsQuery } from '../domainQueries';
 import { formatDate, mapItems, retailQueryKeys, useRetailMutation } from './shared';
 
-export type RetailInventoryItem = InventoryItem & { locationId?: string };
+export type RetailInventoryItem = InventoryItem & { locationId?: string; isActive?: boolean };
 export type RetailInventoryRecord = ApiInventoryItem & { locationId: string };
 
 export const mapRetailInventory = (item: ApiInventoryItem): RetailInventoryItem => ({
@@ -25,6 +25,7 @@ export const mapRetailInventory = (item: ApiInventoryItem): RetailInventoryItem 
   dateAdded: formatDate(item.dateAdded),
   location: item.location?.name ?? 'Unknown Location',
   locationId: item.locationId,
+  isActive: item.isActive ?? true,
 });
 
 export const mapRetailInventoryRecord = (item: ApiInventoryItem): RetailInventoryRecord => ({

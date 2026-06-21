@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { QueryResultRow } from 'pg';
 import { DatabaseService } from '../../shared/database/database.service';
@@ -27,6 +27,16 @@ type Paged<T> = {
   page: number;
   limit: number;
   totalPages: number;
+};
+
+type LowStockCandidate = {
+  id: string;
+  name: string;
+  unit: string | null;
+  previousQuantity: number;
+  newQuantity: number;
+  reorderPoint: number | null;
+  minStock: number | null;
 };
 
 @Injectable()
@@ -201,6 +211,33 @@ export class InventoryApiService {
       [scope.businessId],
     );
     return this.paged(rows);
+  }
+
+  async createLocation(headers: HeadersLike, body: Record<string, unknown>) {
+    const scope = await this.resolveScope(headers);
+    const name = String(body.name ?? '').trim();
+    if (!name) throw new BadRequestException('Location name is required.');
+    const address = String(body.address ?? '').trim();
+    const manager = String(body.manager ?? '').trim();
+    const phone = String(body.phone ?? '').trim();
+
+    const existing = await this.safeQuery<{ id: string }>(
+      `SELECT id FROM "Location" WHERE "businessId" = $1 AND lower(name) = lower($2) LIMIT 1`,
+      [scope.businessId, name],
+    );
+    if (existing[0]) {
+      throw new ConflictException(`A location named "${name}" already exists`);
+    }
+
+    const rows = await this.safeQuery<Record<string, unknown>>(
+      `
+        INSERT INTO "Location" (id, name, address, manager, phone, "businessId", "updatedAt")
+        VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+        RETURNING *, json_build_object('items', 0) AS "_count"
+      `,
+      [randomUUID(), name, address, manager, phone, scope.businessId],
+    );
+    return rows[0];
   }
 
   async listUsers(headers: HeadersLike) {
@@ -551,6 +588,81 @@ export class InventoryApiService {
     return this.paged(rows);
   }
 
+  async createSupplier(headers: HeadersLike, body: Record<string, unknown>) {
+    const scope = await this.resolveScope(headers);
+    const name = String(body.name ?? '').trim();
+    if (!name) throw new BadRequestException('Supplier name is required.');
+
+    const existing = await this.safeQuery<{ id: string }>(
+      `SELECT id FROM "Supplier" WHERE "businessId" = $1 AND module = $2::"BusinessModule" AND lower(name) = lower($3) LIMIT 1`,
+      [scope.businessId, scope.module, name],
+    );
+    if (existing[0]) throw new ConflictException(`Supplier "${name}" already exists`);
+
+    const rows = await this.safeQuery<Record<string, unknown>>(
+      `
+        INSERT INTO "Supplier" (
+          id, name, "contactPerson", email, phone, address, category, "categoryId",
+          "isActive", "businessId", module, "updatedAt"
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::"BusinessModule", CURRENT_TIMESTAMP)
+        RETURNING *
+      `,
+      [
+        randomUUID(),
+        name,
+        body.contactPerson ?? null,
+        body.email ?? null,
+        body.phone ?? null,
+        body.address ?? null,
+        body.category ?? null,
+        body.categoryId ?? null,
+        body.isActive ?? true,
+        scope.businessId,
+        scope.module,
+      ],
+    );
+    return rows[0];
+  }
+
+  async updateSupplier(headers: HeadersLike, id: string, body: Record<string, unknown>) {
+    const scope = await this.resolveScope(headers);
+    const allowed = ['name', 'contactPerson', 'email', 'phone', 'address', 'category', 'categoryId', 'isActive'];
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    for (const field of allowed) {
+      if (body[field] !== undefined) {
+        params.push(body[field]);
+        sets.push(`"${field}" = $${params.length}`);
+      }
+    }
+    if (sets.length === 0) throw new BadRequestException('No supplier fields to update.');
+    sets.push(`"updatedAt" = CURRENT_TIMESTAMP`);
+
+    params.push(id, scope.businessId, scope.module);
+    const rows = await this.safeQuery<Record<string, unknown>>(
+      `
+        UPDATE "Supplier"
+        SET ${sets.join(', ')}
+        WHERE id = $${params.length - 2} AND "businessId" = $${params.length - 1} AND module = $${params.length}::"BusinessModule"
+        RETURNING *
+      `,
+      params,
+    );
+    if (!rows[0]) throw new NotFoundException(`Supplier #${id} not found`);
+    return rows[0];
+  }
+
+  async deleteSupplier(headers: HeadersLike, id: string) {
+    const scope = await this.resolveScope(headers);
+    const rows = await this.safeQuery<{ id: string }>(
+      `DELETE FROM "Supplier" WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule" RETURNING id`,
+      [id, scope.businessId, scope.module],
+    );
+    if (!rows[0]) throw new NotFoundException(`Supplier #${id} not found`);
+    return rows[0];
+  }
+
   async listPurchaseOrders(headers: HeadersLike, query: Record<string, string | undefined>) {
     const scope = await this.resolveScope(headers);
     const rows = await this.safeQuery<Record<string, unknown>>(
@@ -595,6 +707,361 @@ export class InventoryApiService {
       [scope.businessId, query.module ?? scope.module, query.purchaseOrderId ?? null],
     );
     return this.paged(rows);
+  }
+
+  private async getPurchaseOrderRow(scope: Scope, id: string) {
+    const rows = await this.safeQuery<Record<string, unknown>>(
+      `
+        SELECT
+          po.*,
+          row_to_json(s.*) AS supplier,
+          COALESCE(items.items, '[]'::json) AS items
+        FROM "PurchaseOrder" po
+        LEFT JOIN "Supplier" s ON s.id = po."supplierId"
+        LEFT JOIN LATERAL (
+          SELECT json_agg(poi.* ORDER BY poi."createdAt") AS items
+          FROM "PurchaseOrderItem" poi
+          WHERE poi."purchaseOrderId" = po.id
+        ) items ON TRUE
+        WHERE po.id = $1 AND po."businessId" = $2 AND po.module = $3::"BusinessModule"
+        LIMIT 1
+      `,
+      [id, scope.businessId, scope.module],
+    );
+    if (!rows[0]) throw new NotFoundException(`Purchase order #${id} not found`);
+    return rows[0];
+  }
+
+  async getPurchaseOrder(headers: HeadersLike, id: string) {
+    const scope = await this.resolveScope(headers);
+    return this.getPurchaseOrderRow(scope, id);
+  }
+
+  async createPurchaseOrder(headers: HeadersLike, body: Record<string, unknown>) {
+    const scope = await this.resolveScope(headers);
+    const items = Array.isArray(body.items) ? (body.items as Record<string, unknown>[]) : [];
+    if (items.length === 0) {
+      throw new BadRequestException('A purchase order must include at least one item.');
+    }
+    const orderNumber = `PO-${Date.now()}`;
+    const totalAmount = items.reduce(
+      (sum, i) => sum + Number(i.quantity ?? 0) * Number(i.unitPrice ?? 0),
+      0,
+    );
+    const poId = randomUUID();
+
+    await this.databaseService.withTransaction(async (client) => {
+      await client.query(
+        `
+          INSERT INTO "PurchaseOrder" (
+            id, "orderNumber", "supplierId", status, notes, "paymentMethod",
+            "paymentTerms", "expectedDelivery", "totalAmount", "businessId", module,
+            "createdById", "updatedAt"
+          )
+          VALUES ($1, $2, $3, 'DRAFT', $4, $5, $6, $7, $8, $9, $10::"BusinessModule", $11, CURRENT_TIMESTAMP)
+        `,
+        [
+          poId,
+          orderNumber,
+          body.supplierId ?? null,
+          body.notes ?? null,
+          body.paymentMethod ?? null,
+          body.paymentTerms ?? null,
+          body.expectedDelivery ? new Date(String(body.expectedDelivery)) : null,
+          totalAmount,
+          scope.businessId,
+          scope.module,
+          scope.user.id,
+        ],
+      );
+      for (const item of items) {
+        const qty = Number(item.quantity ?? 0);
+        const price = Number(item.unitPrice ?? 0);
+        await client.query(
+          `
+            INSERT INTO "PurchaseOrderItem" (
+              id, "purchaseOrderId", "inventoryItemId", name, quantity, "unitPrice", "totalPrice", "updatedAt"
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+          `,
+          [randomUUID(), poId, item.inventoryItemId ?? null, String(item.name ?? ''), qty, price, qty * price],
+        );
+      }
+    });
+
+    return this.getPurchaseOrderRow(scope, poId);
+  }
+
+  async updatePurchaseOrder(headers: HeadersLike, id: string, body: Record<string, unknown>) {
+    const scope = await this.resolveScope(headers);
+    const existing = await this.safeQuery<{ status: string }>(
+      `SELECT status FROM "PurchaseOrder" WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule" LIMIT 1`,
+      [id, scope.businessId, scope.module],
+    );
+    if (!existing[0]) throw new NotFoundException(`Purchase order #${id} not found`);
+    if (existing[0].status !== 'DRAFT') {
+      throw new BadRequestException('Only DRAFT purchase orders can be edited.');
+    }
+
+    const items = Array.isArray(body.items) ? (body.items as Record<string, unknown>[]) : null;
+
+    await this.databaseService.withTransaction(async (client) => {
+      await client.query(
+        `
+          UPDATE "PurchaseOrder"
+          SET "supplierId" = COALESCE($1, "supplierId"),
+              notes = $2,
+              "paymentMethod" = $3,
+              "paymentTerms" = $4,
+              "expectedDelivery" = $5,
+              "updatedAt" = CURRENT_TIMESTAMP
+          WHERE id = $6
+        `,
+        [
+          body.supplierId ?? null,
+          body.notes ?? null,
+          body.paymentMethod ?? null,
+          body.paymentTerms ?? null,
+          body.expectedDelivery ? new Date(String(body.expectedDelivery)) : null,
+          id,
+        ],
+      );
+      if (items) {
+        await client.query(`DELETE FROM "PurchaseOrderItem" WHERE "purchaseOrderId" = $1`, [id]);
+        let total = 0;
+        for (const item of items) {
+          const qty = Number(item.quantity ?? 0);
+          const price = Number(item.unitPrice ?? 0);
+          total += qty * price;
+          await client.query(
+            `
+              INSERT INTO "PurchaseOrderItem" (
+                id, "purchaseOrderId", "inventoryItemId", name, quantity, "unitPrice", "totalPrice", "updatedAt"
+              )
+              VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+            `,
+            [randomUUID(), id, item.inventoryItemId ?? null, String(item.name ?? ''), qty, price, qty * price],
+          );
+        }
+        await client.query(`UPDATE "PurchaseOrder" SET "totalAmount" = $1 WHERE id = $2`, [total, id]);
+      }
+    });
+
+    return this.getPurchaseOrderRow(scope, id);
+  }
+
+  async submitPurchaseOrder(headers: HeadersLike, id: string) {
+    const scope = await this.resolveScope(headers);
+    const rows = await this.safeQuery<{ id: string }>(
+      `UPDATE "PurchaseOrder" SET status = 'SUBMITTED', "updatedAt" = CURRENT_TIMESTAMP
+       WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule" AND status = 'DRAFT' RETURNING id`,
+      [id, scope.businessId, scope.module],
+    );
+    if (!rows[0]) throw new BadRequestException('Only DRAFT orders can be submitted.');
+    return this.getPurchaseOrderRow(scope, id);
+  }
+
+  async approvePurchaseOrder(headers: HeadersLike, id: string) {
+    const scope = await this.resolveScope(headers);
+    if (!['Admin', 'Manager'].includes(scope.user.role)) {
+      throw new ForbiddenException('Only Admin or Manager can approve purchase orders.');
+    }
+    const rows = await this.safeQuery<{ id: string }>(
+      `UPDATE "PurchaseOrder" SET status = 'APPROVED', "updatedAt" = CURRENT_TIMESTAMP
+       WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule" AND status = 'SUBMITTED' RETURNING id`,
+      [id, scope.businessId, scope.module],
+    );
+    if (!rows[0]) throw new BadRequestException('Only SUBMITTED orders can be approved.');
+    return this.getPurchaseOrderRow(scope, id);
+  }
+
+  async rejectPurchaseOrder(headers: HeadersLike, id: string, body: { reason?: string }) {
+    const scope = await this.resolveScope(headers);
+    if (!['Admin', 'Manager'].includes(scope.user.role)) {
+      throw new ForbiddenException('Only Admin or Manager can reject purchase orders.');
+    }
+    const reason = String(body?.reason ?? '').trim();
+    if (!reason) throw new BadRequestException('A rejection reason is required.');
+    const rows = await this.safeQuery<{ id: string }>(
+      `UPDATE "PurchaseOrder" SET status = 'REJECTED', "rejectionReason" = $1, "rejectedAt" = CURRENT_TIMESTAMP, "updatedAt" = CURRENT_TIMESTAMP
+       WHERE id = $2 AND "businessId" = $3 AND module = $4::"BusinessModule" AND status IN ('SUBMITTED', 'APPROVED') RETURNING id`,
+      [reason, id, scope.businessId, scope.module],
+    );
+    if (!rows[0]) throw new BadRequestException('Only SUBMITTED or APPROVED orders can be rejected.');
+    return this.getPurchaseOrderRow(scope, id);
+  }
+
+  async cancelPurchaseOrder(headers: HeadersLike, id: string) {
+    const scope = await this.resolveScope(headers);
+    const rows = await this.safeQuery<{ id: string }>(
+      `UPDATE "PurchaseOrder" SET status = 'CANCELLED', "updatedAt" = CURRENT_TIMESTAMP
+       WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule" AND status <> 'RECEIVED' RETURNING id`,
+      [id, scope.businessId, scope.module],
+    );
+    if (!rows[0]) throw new BadRequestException('Order not found, or RECEIVED orders cannot be cancelled.');
+    return this.getPurchaseOrderRow(scope, id);
+  }
+
+  // Receive (full or partial): adds accepted qty to stock with weighted-average
+  // costing, writes a GoodsReceipt + StockMovements, and advances PO status.
+  async receivePurchaseOrder(headers: HeadersLike, id: string, body: Record<string, unknown>) {
+    const scope = await this.resolveScope(headers);
+    const dtoItems = Array.isArray(body.items) ? (body.items as Record<string, unknown>[]) : [];
+
+    await this.databaseService.withTransaction(async (client) => {
+      const poRows = await client.query<{ id: string; status: string; orderNumber: string }>(
+        `SELECT id, status, "orderNumber" FROM "PurchaseOrder" WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule" FOR UPDATE`,
+        [id, scope.businessId, scope.module],
+      );
+      const po = poRows.rows[0];
+      if (!po) throw new NotFoundException(`Purchase order #${id} not found`);
+      if (!['APPROVED', 'PARTIALLY_RECEIVED'].includes(po.status)) {
+        throw new BadRequestException('Only APPROVED or PARTIALLY_RECEIVED orders can be received.');
+      }
+
+      const poItemRows = await client.query<{
+        id: string;
+        name: string;
+        quantity: number;
+        receivedQty: number;
+        rejectedQty: number;
+        inventoryItemId: string | null;
+        unitPrice: number;
+      }>(
+        `SELECT id, name, quantity, "receivedQty", "rejectedQty", "inventoryItemId", "unitPrice" FROM "PurchaseOrderItem" WHERE "purchaseOrderId" = $1`,
+        [id],
+      );
+      const poItems = new Map(poItemRows.rows.map((r) => [r.id, r]));
+
+      const receiptId = randomUUID();
+      const receiptNumber = `GR-${Date.now()}`;
+      const receiptItems: {
+        poItemId: string;
+        inventoryItemId: string | null;
+        receivedQty: number;
+        rejectedQty: number;
+        condition: unknown;
+        notes: unknown;
+      }[] = [];
+
+      for (const ri of dtoItems) {
+        const poItem = poItems.get(String(ri.id));
+        if (!poItem) {
+          throw new BadRequestException(`Purchase order item #${ri.id} does not belong to this order.`);
+        }
+        const receivedQty = Number(ri.receivedQty ?? 0);
+        const rejectedQty = Number(ri.rejectedQty ?? 0);
+        const submittedQty = receivedQty + rejectedQty;
+        if (submittedQty <= 0) continue;
+        const processedQty = Number(poItem.receivedQty) + Number(poItem.rejectedQty);
+        if (processedQty + submittedQty > Number(poItem.quantity)) {
+          throw new BadRequestException(`Receipt quantity for "${poItem.name}" exceeds the remaining ordered quantity.`);
+        }
+
+        if (receivedQty > 0 && poItem.inventoryItemId) {
+          const invRows = await client.query<{ quantity: number; price: number; unit: string | null; locationId: string }>(
+            `SELECT quantity, price, unit, "locationId" FROM "InventoryItem" WHERE id = $1 AND "businessId" = $2 FOR UPDATE`,
+            [poItem.inventoryItemId, scope.businessId],
+          );
+          const inv = invRows.rows[0];
+          if (!inv) throw new BadRequestException(`Inventory item for "${poItem.name}" is unavailable.`);
+
+          const previousQuantity = Number(inv.quantity);
+          const newQuantity = previousQuantity + receivedQty;
+          const wacPrice =
+            newQuantity > 0
+              ? (previousQuantity * Number(inv.price) + receivedQty * Number(poItem.unitPrice)) / newQuantity
+              : Number(inv.price);
+
+          await client.query(
+            `
+              UPDATE "InventoryItem"
+              SET quantity = $1, price = $2,
+                  "expiryDate" = COALESCE($3, "expiryDate"),
+                  "storageTemperature" = COALESCE($4, "storageTemperature"),
+                  "updatedAt" = CURRENT_TIMESTAMP
+              WHERE id = $5
+            `,
+            [
+              newQuantity,
+              wacPrice,
+              ri.expiryDate ? new Date(String(ri.expiryDate)) : null,
+              ri.storageTemperature ?? null,
+              poItem.inventoryItemId,
+            ],
+          );
+
+          await client.query(
+            `
+              INSERT INTO "StockMovement" (
+                id, type, quantity, "previousQuantity", "newQuantity", unit,
+                reason, "referenceType", "referenceId", notes, "itemId",
+                "locationId", "businessId", module, "createdById"
+              )
+              VALUES ($1, 'STOCK_IN', $2, $3, $4, $5, 'Purchase order received', 'PURCHASE_ORDER', $6, $7, $8, $9, $10, $11::"BusinessModule", $12)
+            `,
+            [
+              randomUUID(),
+              receivedQty,
+              previousQuantity,
+              newQuantity,
+              inv.unit,
+              po.id,
+              `Received from PO ${po.orderNumber}`,
+              poItem.inventoryItemId,
+              inv.locationId,
+              scope.businessId,
+              scope.module,
+              scope.user.id,
+            ],
+          );
+        }
+
+        await client.query(
+          `UPDATE "PurchaseOrderItem" SET "receivedQty" = "receivedQty" + $1, "rejectedQty" = "rejectedQty" + $2, "updatedAt" = CURRENT_TIMESTAMP WHERE id = $3`,
+          [receivedQty, rejectedQty, poItem.id],
+        );
+        receiptItems.push({
+          poItemId: poItem.id,
+          inventoryItemId: poItem.inventoryItemId,
+          receivedQty,
+          rejectedQty,
+          condition: ri.condition ?? null,
+          notes: ri.notes ?? null,
+        });
+      }
+
+      if (receiptItems.length === 0) {
+        throw new BadRequestException('At least one item quantity must be received or rejected.');
+      }
+
+      await client.query(
+        `INSERT INTO "GoodsReceipt" (id, "receiptNumber", "purchaseOrderId", "receivedById", notes, "businessId", module)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::"BusinessModule")`,
+        [receiptId, receiptNumber, po.id, scope.user.id, body.notes ?? null, scope.businessId, scope.module],
+      );
+      for (const it of receiptItems) {
+        await client.query(
+          `INSERT INTO "GoodsReceiptItem" (id, "goodsReceiptId", "purchaseOrderItemId", "inventoryItemId", "receivedQty", "rejectedQty", condition, notes)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [randomUUID(), receiptId, it.poItemId, it.inventoryItemId, it.receivedQty, it.rejectedQty, it.condition, it.notes],
+        );
+      }
+
+      const allItems = await client.query<{ quantity: number; receivedQty: number; rejectedQty: number }>(
+        `SELECT quantity, "receivedQty", "rejectedQty" FROM "PurchaseOrderItem" WHERE "purchaseOrderId" = $1`,
+        [id],
+      );
+      const isComplete = allItems.rows.every(
+        (r) => Number(r.receivedQty) + Number(r.rejectedQty) >= Number(r.quantity),
+      );
+      await client.query(
+        `UPDATE "PurchaseOrder" SET status = $1::"PurchaseOrderStatus", "receivedById" = $2, "receivedAt" = $3, "updatedAt" = CURRENT_TIMESTAMP WHERE id = $4`,
+        [isComplete ? 'RECEIVED' : 'PARTIALLY_RECEIVED', scope.user.id, isComplete ? new Date() : null, id],
+      );
+    });
+
+    return this.getPurchaseOrderRow(scope, id);
   }
 
   async listTransfers(headers: HeadersLike, query: Record<string, string | undefined>) {
@@ -720,6 +1187,324 @@ export class InventoryApiService {
       [scope.businessId, query.module ?? scope.module, query.status ?? null],
     );
     return this.paged(rows);
+  }
+
+  async getAdjustment(headers: HeadersLike, id: string) {
+    const scope = await this.resolveScope(headers);
+    const rows = await this.safeQuery<Record<string, unknown>>(
+      `
+        SELECT *
+        FROM "StockAdjustment"
+        WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule"
+        LIMIT 1
+      `,
+      [id, scope.businessId, scope.module],
+    );
+    if (!rows[0]) throw new NotFoundException(`Adjustment #${id} not found`);
+    const items = await this.safeQuery<Record<string, unknown>>(
+      `
+        SELECT ai.*,
+               ii.name AS "inventoryItemName",
+               ii.unit AS "inventoryItemUnit",
+               ii.category AS "inventoryItemCategory"
+        FROM "StockAdjustmentItem" ai
+        JOIN "InventoryItem" ii ON ii.id = ai."inventoryItemId"
+        WHERE ai."adjustmentId" = $1
+      `,
+      [id],
+    );
+    return { ...rows[0], items };
+  }
+
+  async createAdjustment(headers: HeadersLike, body: Record<string, unknown>) {
+    const scope = await this.resolveScope(headers);
+    const items = Array.isArray(body.items) ? (body.items as Record<string, unknown>[]) : [];
+    if (items.length === 0) {
+      throw new BadRequestException('An adjustment must include at least one item.');
+    }
+
+    const type = String(body.type ?? '').toUpperCase();
+    if (!['ADD', 'REMOVE', 'DAMAGE', 'LOST', 'FOUND', 'RECOUNT'].includes(type)) {
+      throw new BadRequestException('A valid adjustment type is required.');
+    }
+
+    const reason = String(body.reason ?? '').trim();
+    if (!reason) throw new BadRequestException('An adjustment reason is required.');
+
+    const itemIds = [...new Set(items.map((i) => String(i.inventoryItemId ?? '')))];
+    const countRows = await this.safeQuery<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM "InventoryItem" WHERE id = ANY($1::text[]) AND "businessId" = $2`,
+      [itemIds, scope.businessId],
+    );
+    if (Number(countRows[0]?.count ?? 0) !== itemIds.length) {
+      throw new BadRequestException('One or more inventory items are unavailable for this business.');
+    }
+
+    const defaultLocationId = await this.getDefaultLocationId(scope.businessId);
+    const adjustmentId = randomUUID();
+    const adjustmentNumber = `ADJ-${Date.now()}`;
+
+    await this.databaseService.withTransaction(async (client) => {
+      await client.query(
+        `
+          INSERT INTO "StockAdjustment" (
+            id, "adjustmentNumber", type, reason, status,
+            "businessId", module, "createdById", "updatedAt"
+          )
+          VALUES ($1, $2, $3::"AdjustmentType", $4, 'PENDING', $5, $6::"BusinessModule", $7, CURRENT_TIMESTAMP)
+        `,
+        [adjustmentId, adjustmentNumber, type, reason, scope.businessId, scope.module, scope.user.id],
+      );
+      for (const item of items) {
+        await client.query(
+          `
+            INSERT INTO "StockAdjustmentItem" (id, "adjustmentId", "inventoryItemId", "quantityChange", "locationId")
+            VALUES ($1, $2, $3, $4, $5)
+          `,
+          [
+            randomUUID(),
+            adjustmentId,
+            String(item.inventoryItemId),
+            Number(item.quantityChange ?? 0),
+            String(item.locationId ?? defaultLocationId),
+          ],
+        );
+      }
+    });
+
+    return this.getAdjustment(headers, adjustmentId);
+  }
+
+  async approveAdjustment(headers: HeadersLike, id: string) {
+    const scope = await this.resolveScope(headers);
+    if (!['Admin', 'Manager'].includes(scope.user.role)) {
+      throw new ForbiddenException('Only Admin or Manager can approve adjustments.');
+    }
+
+    const lowStockCandidates: LowStockCandidate[] = [];
+
+    await this.databaseService.withTransaction(async (client) => {
+      lowStockCandidates.length = 0; // reset in case the transaction retries
+      const adjRows = await client.query<Record<string, unknown>>(
+        `
+          SELECT id, status, type, reason, "adjustmentNumber"
+          FROM "StockAdjustment"
+          WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule"
+          FOR UPDATE
+        `,
+        [id, scope.businessId, scope.module],
+      );
+      const adj = adjRows.rows[0];
+      if (!adj) throw new NotFoundException(`Adjustment #${id} not found`);
+      if (adj.status !== 'PENDING') {
+        throw new BadRequestException('Only PENDING adjustments can be approved.');
+      }
+
+      const itemRows = await client.query<{
+        inventoryItemId: string;
+        quantityChange: number;
+        locationId: string;
+      }>(
+        `SELECT "inventoryItemId", "quantityChange", "locationId" FROM "StockAdjustmentItem" WHERE "adjustmentId" = $1`,
+        [id],
+      );
+
+      for (const adjItem of itemRows.rows) {
+        const invRows = await client.query<{
+          quantity: number;
+          unit: string | null;
+          name: string;
+          reorderPoint: number | null;
+          minStock: number | null;
+        }>(
+          `SELECT quantity, unit, name, "reorderPoint", "minStock" FROM "InventoryItem" WHERE id = $1 AND "businessId" = $2 FOR UPDATE`,
+          [adjItem.inventoryItemId, scope.businessId],
+        );
+        const inv = invRows.rows[0];
+        if (!inv) {
+          throw new NotFoundException(`Inventory item ${adjItem.inventoryItemId} is no longer available.`);
+        }
+        const previousQuantity = Number(inv.quantity);
+        const newQuantity = previousQuantity + Number(adjItem.quantityChange);
+        if (newQuantity < 0) {
+          throw new BadRequestException(`Applying this adjustment would make "${inv.name}" quantity negative.`);
+        }
+
+        lowStockCandidates.push({
+          id: adjItem.inventoryItemId,
+          name: inv.name,
+          unit: inv.unit,
+          previousQuantity,
+          newQuantity,
+          reorderPoint: inv.reorderPoint,
+          minStock: inv.minStock,
+        });
+
+        await client.query(`UPDATE "InventoryItem" SET quantity = $1, "updatedAt" = CURRENT_TIMESTAMP WHERE id = $2`, [
+          newQuantity,
+          adjItem.inventoryItemId,
+        ]);
+
+        await client.query(
+          `
+            INSERT INTO "StockMovement" (
+              id, type, quantity, "previousQuantity", "newQuantity", unit,
+              reason, "referenceType", "referenceId", notes, "itemId",
+              "locationId", "businessId", module, "createdById"
+            )
+            VALUES ($1, 'ADJUSTMENT', $2, $3, $4, $5, $6, 'ADJUSTMENT', $7, $8, $9, $10, $11, $12::"BusinessModule", $13)
+          `,
+          [
+            randomUUID(),
+            Math.abs(Number(adjItem.quantityChange)),
+            previousQuantity,
+            newQuantity,
+            inv.unit,
+            adj.reason,
+            id,
+            `${adj.type} adjustment: ${adj.adjustmentNumber}`,
+            adjItem.inventoryItemId,
+            adjItem.locationId,
+            scope.businessId,
+            scope.module,
+            scope.user.id,
+          ],
+        );
+      }
+
+      await client.query(
+        `UPDATE "StockAdjustment" SET status = 'APPROVED', "reviewedById" = $1, "reviewedAt" = CURRENT_TIMESTAMP, "updatedAt" = CURRENT_TIMESTAMP WHERE id = $2`,
+        [scope.user.id, id],
+      );
+    });
+
+    // Best-effort low-stock alerts after the adjustment commits.
+    await this.notifyLowStock(scope.businessId, lowStockCandidates).catch(() => undefined);
+
+    return this.getAdjustment(headers, id);
+  }
+
+  // Emits a LOW_STOCK notification for each item that crossed at/below its
+  // reorder threshold (downward only), de-duped against existing unread alerts,
+  // to every Admin/Manager in the business.
+  private async notifyLowStock(businessId: string, items: LowStockCandidate[]) {
+    const crossed = items.filter((item) => {
+      const threshold = item.reorderPoint ?? item.minStock ?? 0;
+      return threshold > 0 && item.previousQuantity > threshold && item.newQuantity <= threshold;
+    });
+    if (crossed.length === 0) return;
+
+    const managers = await this.safeQuery<{ id: string }>(
+      `SELECT id FROM "User" WHERE "businessId" = $1 AND role IN ('Admin', 'Manager') AND status = 'Active'`,
+      [businessId],
+    );
+    const recipientIds = managers.map((m) => m.id);
+    if (recipientIds.length === 0) return;
+
+    for (const item of crossed) {
+      const existing = await this.safeQuery<{ id: string }>(
+        `
+          SELECT id FROM "Notification"
+          WHERE "businessId" = $1 AND type = 'LOW_STOCK'
+            AND "entityType" = 'INVENTORY_ITEM' AND "entityId" = $2 AND "isRead" = false
+          LIMIT 1
+        `,
+        [businessId, item.id],
+      );
+      if (existing[0]) continue;
+
+      const unit = item.unit ? ` ${item.unit}` : '';
+      const threshold = item.reorderPoint ?? item.minStock;
+      const message = `"${item.name}" is low — ${item.newQuantity}${unit} left (reorder at ${threshold}${unit}).`;
+
+      for (const userId of recipientIds) {
+        await this.safeQuery(
+          `
+            INSERT INTO "Notification" (id, type, title, message, "entityType", "entityId", "userId", "businessId")
+            VALUES ($1, 'LOW_STOCK', 'Low stock', $2, 'INVENTORY_ITEM', $3, $4, $5)
+          `,
+          [randomUUID(), message, item.id, userId, businessId],
+        );
+      }
+    }
+  }
+
+  async rejectAdjustment(headers: HeadersLike, id: string, body: { reason?: string }) {
+    const scope = await this.resolveScope(headers);
+    if (!['Admin', 'Manager'].includes(scope.user.role)) {
+      throw new ForbiddenException('Only Admin or Manager can reject adjustments.');
+    }
+    const reason = String(body?.reason ?? '').trim();
+    if (!reason) throw new BadRequestException('A rejection reason is required.');
+
+    const rows = await this.safeQuery<Record<string, unknown>>(
+      `
+        UPDATE "StockAdjustment"
+        SET status = 'REJECTED', "rejectionReason" = $1, "reviewedById" = $2,
+            "reviewedAt" = CURRENT_TIMESTAMP, "updatedAt" = CURRENT_TIMESTAMP
+        WHERE id = $3 AND "businessId" = $4 AND module = $5::"BusinessModule" AND status = 'PENDING'
+        RETURNING id
+      `,
+      [reason, scope.user.id, id, scope.businessId, scope.module],
+    );
+    if (!rows[0]) {
+      throw new BadRequestException('Adjustment not found or is not PENDING.');
+    }
+    return this.getAdjustment(headers, id);
+  }
+
+  async listNotifications(headers: HeadersLike, query: Record<string, string | undefined>) {
+    const scope = await this.resolveScope(headers);
+    const onlyUnread = query.unread === 'true';
+    const rows = await this.safeQuery<Record<string, unknown>>(
+      `
+        SELECT *
+        FROM "Notification"
+        WHERE "userId" = $1
+          AND "businessId" = $2
+          AND ($3::boolean IS NOT TRUE OR "isRead" = false)
+        ORDER BY "createdAt" DESC
+      `,
+      [scope.user.id, scope.businessId, onlyUnread],
+    );
+    return this.paged(rows);
+  }
+
+  async countUnreadNotifications(headers: HeadersLike) {
+    const scope = await this.resolveScope(headers);
+    const rows = await this.safeQuery<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM "Notification" WHERE "userId" = $1 AND "businessId" = $2 AND "isRead" = false`,
+      [scope.user.id, scope.businessId],
+    );
+    return Number(rows[0]?.count ?? 0);
+  }
+
+  async markNotificationRead(headers: HeadersLike, id: string) {
+    const scope = await this.resolveScope(headers);
+    const rows = await this.safeQuery<Record<string, unknown>>(
+      `
+        UPDATE "Notification"
+        SET "isRead" = true, "readAt" = CURRENT_TIMESTAMP
+        WHERE id = $1 AND "userId" = $2
+        RETURNING *
+      `,
+      [id, scope.user.id],
+    );
+    if (!rows[0]) throw new NotFoundException(`Notification #${id} not found`);
+    return rows[0];
+  }
+
+  async markAllNotificationsRead(headers: HeadersLike) {
+    const scope = await this.resolveScope(headers);
+    await this.safeQuery(
+      `
+        UPDATE "Notification"
+        SET "isRead" = true, "readAt" = CURRENT_TIMESTAMP
+        WHERE "userId" = $1 AND "businessId" = $2 AND "isRead" = false
+      `,
+      [scope.user.id, scope.businessId],
+    );
+    return { success: true };
   }
 
   async listRestaurantSettings(headers: HeadersLike) {

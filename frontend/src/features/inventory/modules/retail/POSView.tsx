@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { toast } from 'sonner';
 import { Plus, X, Search, ShoppingCart, CreditCard, Trash2, CheckCircle, Receipt, RotateCcw } from 'lucide-react';
 import {
   useCreateRetailSaleMutation,
@@ -71,7 +72,7 @@ export default function POSView({
   const handleAddToCart = (item: any) => {
     const existing = cart.find(c => c.inventoryItemId === item.id);
     if (existing) {
-      if (existing.quantity >= item.quantity) { alert('Insufficient stock!'); return; }
+      if (existing.quantity >= item.quantity) { toast.error('Insufficient stock!'); return; }
       setCart(cart.map(c => c.inventoryItemId === item.id ? { ...c, quantity: c.quantity + 1, totalPrice: (c.quantity + 1) * c.unitPrice } : c));
     } else {
       setCart([...cart, { inventoryItemId: item.id, name: item.name, category: item.category, quantity: 1, unitPrice: item.price, totalPrice: item.price, availableStock: item.quantity }]);
@@ -82,16 +83,16 @@ export default function POSView({
     const cartItem = cart.find(c => c.inventoryItemId === id);
     if (!cartItem) return;
     if (qty <= 0) { setCart(cart.filter(c => c.inventoryItemId !== id)); return; }
-    if (qty > cartItem.availableStock) { alert('Cannot exceed available stock!'); return; }
+    if (qty > cartItem.availableStock) { toast.error('Cannot exceed available stock!'); return; }
     setCart(cart.map(c => c.inventoryItemId === id ? { ...c, quantity: qty, totalPrice: qty * c.unitPrice } : c));
   };
 
   const handleClearCart = () => { setCart([]); setDiscount(0); setCustomer(''); setAmountPaid(0); };
 
   const handleProcessPayment = async () => {
-    if (cart.length === 0) { alert('Cart is empty!'); return; }
-    if (!selectedLocationId) { alert('Please select a location first'); return; }
-    if (paymentMethod === 'Cash' && amountPaid < total) { alert('Insufficient payment amount!'); return; }
+    if (cart.length === 0) { toast.error('Cart is empty!'); return; }
+    if (!selectedLocationId) { toast.error('Please select a location first'); return; }
+    if (paymentMethod === 'Cash' && amountPaid < total) { toast.error('Insufficient payment amount!'); return; }
     setSaving(true);
     try {
       const sale = await createSaleMutation.mutateAsync({
@@ -107,21 +108,21 @@ export default function POSView({
       setShowPaymentModal(false);
       setShowReceiptModal(true);
     } catch (err: any) {
-      alert(err.message ?? 'Failed to process sale');
+      toast.error(err.message ?? 'Failed to process sale');
     } finally {
       setSaving(false);
     }
   };
 
   const handleProcessReturn = async (saleId: string) => {
-    if (!returnReason.trim()) { alert('Please provide a reason for return'); return; }
+    if (!returnReason.trim()) { toast.error('Please provide a reason for return'); return; }
     setSaving(true);
     try {
       await refundSaleMutation.mutateAsync({ id: saleId, reason: returnReason });
       setSelectedSaleForReturn(null);
       setReturnReason('');
     } catch (err: any) {
-      alert(err.message ?? 'Failed to process return');
+      toast.error(err.message ?? 'Failed to process return');
     } finally {
       setSaving(false);
     }

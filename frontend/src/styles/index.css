@@ -19,3 +19,14 @@
   box-shadow: 0 0 0 1000px rgba(255, 255, 255, 0.05) inset !important;
   transition: background-color 9999s ease-out, color 9999s ease-out;
 }
+
+/* Hide the scrollbar visually while keeping scroll functionality. */
+.no-scrollbar {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE / legacy Edge */
+}
+.no-scrollbar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none; /* Chrome / Safari / Edge */
+}

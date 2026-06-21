@@ -48,8 +48,6 @@ export function useRestaurantRecipesQuery() {
           id: recipe.id,
           backendId: recipe.id,
           name: recipe.name,
-          description: recipe.menuItem?.description ?? '',
-          imageUrl: recipe.imageUrl ?? recipe.menuItem?.imageUrl ?? '',
           category: recipe.category,
           servings: recipe.servings,
           yieldPercentage: recipe.yieldPercentage ?? 100,

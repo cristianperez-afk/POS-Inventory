@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { toast } from 'sonner';
 import { Plus, Edit2, Trash2, Search, ChevronRight, ChevronDown, Folder, FolderOpen, AlertTriangle, Package, PackagePlus, ShoppingCart, PackageCheck, Layers, X, Eye, TrendingUp, TrendingDown, RefreshCw, CheckCircle, Users, ClipboardList } from 'lucide-react';
 import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
 import type {
@@ -408,7 +409,7 @@ export function ReportsView() {
 
       case 'Confidential':
         if (!isAdmin || !confidentialReportData) {
-          alert('Access denied. This report is restricted to administrators only.');
+          toast.error('Access denied. This report is restricted to administrators only.');
           return;
         }
         csvContent = 'CONFIDENTIAL REPORT - ADMIN ONLY\n\n';
@@ -439,7 +440,7 @@ export function ReportsView() {
         break;
 
       default:
-        alert('Unknown report type');
+        toast.error('Unknown report type');
         return;
     }
 

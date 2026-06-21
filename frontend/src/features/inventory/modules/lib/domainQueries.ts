@@ -11,6 +11,7 @@ import {
   getInventory,
   getKitchenOrders,
   getLocations,
+  getNotifications,
   getPurchaseOrders,
   getRecipes,
   getRestaurantSettings,
@@ -18,7 +19,10 @@ import {
   getStockMovements,
   getSuppliers,
   getTransfers,
+  getUnreadNotificationCount,
   getUsers,
+  markAllNotificationsRead,
+  markNotificationRead,
   type KitchenOrderStatus,
 } from '../../app/api/client';
 import type {
@@ -27,6 +31,7 @@ import type {
   ApiInventoryItem,
   ApiKitchenOrder,
   ApiLocation,
+  ApiNotification,
   ApiPurchaseOrder,
   ApiRecipe,
   ApiSale,
@@ -46,6 +51,8 @@ export const domainQueryKeys = {
   suppliers: ['suppliers'] as const,
   transfers: ['transfers'] as const,
   stockMovements: ['stock-movements'] as const,
+  adjustments: ['adjustments'] as const,
+  notifications: ['notifications'] as const,
   sales: ['sales'] as const,
   bundles: ['bundles'] as const,
   recipes: ['recipes'] as const,
@@ -82,7 +89,7 @@ const domainInvalidationDependencies = new Map<string, QueryKey[]>([
   ['stock-movements', [domainQueryKeys.inventory]],
   ['sales', [domainQueryKeys.inventory, domainQueryKeys.stockMovements]],
   ['bundles', [domainQueryKeys.inventory]],
-  ['recipes', [domainQueryKeys.kitchenOrders, ['pos-menu']]],
+  ['recipes', [domainQueryKeys.kitchenOrders]],
   ['kitchen-orders', [
     domainQueryKeys.inventory,
     domainQueryKeys.stockMovements,
@@ -263,6 +270,41 @@ export function useRestaurantSettingsQuery<TData = Awaited<ReturnType<typeof get
     queryFn: getRestaurantSettings,
     ...options,
   });
+}
+
+// ─── Notifications (per-user, not module-scoped) ─────────────────────────────
+
+export function useNotificationsQuery<TData = ApiNotification[]>(
+  options?: SelectOptions<ApiNotification[], TData>,
+) {
+  return useQuery({
+    queryKey: domainQueryKeys.notifications,
+    queryFn: () => getNotifications(),
+    ...options,
+  });
+}
+
+export function useUnreadNotificationCountQuery(enabled = true) {
+  return useQuery({
+    queryKey: [...domainQueryKeys.notifications, 'unread-count'],
+    queryFn: getUnreadNotificationCount,
+    enabled,
+    refetchInterval: 60_000, // poll once a minute so the bell stays current
+  });
+}
+
+export function useMarkNotificationReadMutation() {
+  return useDomainMutation(
+    (id: string) => markNotificationRead(id),
+    [domainQueryKeys.notifications],
+  );
+}
+
+export function useMarkAllNotificationsReadMutation() {
+  return useDomainMutation<{ success: boolean }, void>(
+    () => markAllNotificationsRead(),
+    [domainQueryKeys.notifications],
+  );
 }
 
 export function useDomainMutation<TData, TVariables>(

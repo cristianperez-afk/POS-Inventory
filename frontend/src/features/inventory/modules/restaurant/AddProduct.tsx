@@ -376,7 +376,7 @@ export function AddProduct({ onClose }: { onClose?: () => void } = {}) {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div>
                   <label htmlFor="price" className="block text-sm mb-2 text-foreground">
-                    Price (PHP) *
+                    Price (₱) *
                   </label>
                   <div className="relative">
                     <PhilippinePeso className="absolute left-2 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />

@@ -49,10 +49,12 @@ export function mapRestaurantInventory(items: ApiInventoryItem[]) {
     minStock: item.minStock ?? item.reorderPoint ?? 0,
     reorderPoint: item.reorderPoint ?? item.minStock ?? 0,
     price: item.price ?? 0,
+    condition: item.condition ?? 'Good',
     expiry: toDateInput(item.expiryDate),
     location: item.location?.name ?? 'Unassigned',
     unit: item.unit ?? 'pcs',
     storageTemperature: item.storageTemperature ?? 'Dry Storage',
+    isActive: item.isActive ?? true,
   }));
 }
 

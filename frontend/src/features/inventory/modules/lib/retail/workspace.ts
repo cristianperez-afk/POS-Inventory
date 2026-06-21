@@ -1,8 +1,6 @@
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import type { InventoryItem } from '../../../models/retail';
 import {
-  useDeleteRetailInventoryMutation,
   useRetailAdjustmentsQuery,
   useRetailInventoryQuery,
   useSaveRetailInventoryMutation,
@@ -47,7 +45,6 @@ export function useRetailWorkspace({
   const transfersQuery = useRetailTransfersQuery(enabled);
   const adjustmentsQuery = useRetailAdjustmentsQuery(enabled);
   const saveInventoryMutation = useSaveRetailInventoryMutation();
-  const deleteInventoryMutation = useDeleteRetailInventoryMutation();
 
   const inventory = inventoryQuery.data ?? [];
   const locations = locationsQuery.data ?? [];
@@ -59,8 +56,7 @@ export function useRetailWorkspace({
 
   const [formData, setFormData] = useState(emptyForm);
   const [searchTerm, setSearchTerm] = useState('');
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [showEditModal, setShowEditModal] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(
     new Set(),
   );
@@ -118,6 +114,9 @@ export function useRetailWorkspace({
     )?.id;
     if (!locationId) throw new Error('Please select a valid location');
 
+    // Note: quantity is intentionally omitted here. Editing an item must not write
+    // stock — stock changes go through Stock Adjustments (audited). The create flow
+    // re-adds quantity explicitly for the item's opening balance.
     return {
       name: formData.name,
       itemType: 'RETAIL_ITEM',
@@ -126,69 +125,56 @@ export function useRetailWorkspace({
       subcategory: formData.subcategory,
       size: formData.size,
       condition: formData.condition,
-      quantity: Number(formData.quantity),
       price: Number(formData.price),
       locationId,
     };
   };
 
-  const handleEdit = (item: InventoryItem) => {
-    setFormData({
-      name: item.name,
-      category: item.category,
-      targetCustomer: item.targetCustomer,
-      subcategory: item.subcategory,
-      size: item.size,
-      condition: item.condition,
-      quantity: item.quantity,
-      price: item.price,
-      location: item.location,
-    });
-    setEditingId(item.id);
-    setShowEditModal(true);
-  };
-
-  const handleSaveEdit = async () => {
-    if (!editingId) return;
+  const handleAdd = async () => {
     if (!formData.name || !formData.category || !formData.size) {
       toast.error('Please fill in all required fields');
-      return;
+      return false;
     }
 
     try {
+      // Opening balance is allowed only on creation of a new item.
       await saveInventoryMutation.mutateAsync({
-        id: editingId,
-        data: toInventoryPayload(),
+        data: { ...toInventoryPayload(), quantity: Number(formData.quantity) },
       });
-      setEditingId(null);
-      setShowEditModal(false);
       setFormData(emptyForm);
-      toast.success('Inventory item updated');
+      toast.success('Inventory item added');
+      return true;
     } catch (error) {
       toast.error(
         error instanceof Error
           ? error.message
-          : 'Failed to update inventory item',
+          : 'Failed to add inventory item',
+      );
+      return false;
+    }
+  };
+
+  // Soft delete: archiving flips isActive to false instead of removing the row, so any
+  // PO / sales / transfer / bundle references to the item stay intact. Reactivating
+  // flips it back. Both reuse the generic inventory update mutation.
+  const handleArchive = async (id: string) => {
+    try {
+      await saveInventoryMutation.mutateAsync({ id, data: { isActive: false } });
+      toast.success('Item archived');
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : 'Failed to archive inventory item',
       );
     }
   };
 
-  const handleCancelEdit = () => {
-    setEditingId(null);
-    setShowEditModal(false);
-    setFormData(emptyForm);
-  };
-
-  const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this item?')) return;
+  const handleReactivate = async (id: string) => {
     try {
-      await deleteInventoryMutation.mutateAsync(id);
-      toast.success('Inventory item deleted');
+      await saveInventoryMutation.mutateAsync({ id, data: { isActive: true } });
+      toast.success('Item reactivated');
     } catch (error) {
       toast.error(
-        error instanceof Error
-          ? error.message
-          : 'Failed to delete inventory item',
+        error instanceof Error ? error.message : 'Failed to reactivate inventory item',
       );
     }
   };
@@ -217,22 +203,23 @@ export function useRetailWorkspace({
     stockAlerts,
     filteredInventory: inventory.filter(
       (item) =>
-        item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        item.category.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        item.subcategory.toLowerCase().includes(searchTerm.toLowerCase()),
+        (item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          item.category.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          item.subcategory.toLowerCase().includes(searchTerm.toLowerCase())) &&
+        // Archived (deactivated) items are hidden unless the user opts to see them.
+        (showArchived || item.isActive !== false),
     ),
     formData,
     setFormData,
     searchTerm,
     setSearchTerm,
-    editingId,
-    showEditModal,
+    showArchived,
+    setShowArchived,
     expandedCategories,
     expandedSubcategories,
-    handleEdit,
-    handleSaveEdit,
-    handleCancelEdit,
-    handleDelete,
+    handleAdd,
+    handleArchive,
+    handleReactivate,
     toggleCategory: (category: string) =>
       toggleSetValue(category, setExpandedCategories),
     toggleSubcategory: (subcategory: string) =>

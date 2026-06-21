@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { toast } from 'sonner';
 import { Plus, Edit2, Trash2, Search, ChevronRight, ChevronDown, Folder, FolderOpen, AlertTriangle, Package, PackagePlus, ShoppingCart, PackageCheck, Layers, X, Eye, TrendingUp, TrendingDown, RefreshCw, CheckCircle, Users } from 'lucide-react';
 import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
 import type {
@@ -81,23 +82,23 @@ export function UserManagementView({
 
     // Validation
     if (!userForm.name || !userForm.email || !userForm.password) {
-      alert('Please fill in all required fields');
+      toast.error('Please fill in all required fields');
       return;
     }
 
     if (userForm.password !== userForm.confirmPassword) {
-      alert('Passwords do not match');
+      toast.error('Passwords do not match');
       return;
     }
 
     if (userForm.password.length < 6) {
-      alert('Password must be at least 6 characters');
+      toast.error('Password must be at least 6 characters');
       return;
     }
 
     // Check if email already exists
     if (users.some(u => u.email.toLowerCase() === userForm.email.toLowerCase())) {
-      alert('A user with this email already exists');
+      toast.error('A user with this email already exists');
       return;
     }
 
@@ -112,9 +113,9 @@ export function UserManagementView({
 
       setShowAddModal(false);
       setUserForm({ name: '', email: '', role: 'Staff', password: '', confirmPassword: '' });
-      alert(`User ${newUser.name} has been created successfully!`);
+      toast.success(`User ${newUser.name} has been created successfully!`);
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'Failed to create user');
+      toast.error(error instanceof Error ? error.message : 'Failed to create user');
     }
   };
 
@@ -124,13 +125,13 @@ export function UserManagementView({
     if (!selectedUser) return;
 
     if (!userForm.name || !userForm.email) {
-      alert('Please fill in all required fields');
+      toast.error('Please fill in all required fields');
       return;
     }
 
     // Check if email already exists for another user
     if (users.some(u => u.id !== selectedUser.id && u.email.toLowerCase() === userForm.email.toLowerCase())) {
-      alert('A user with this email already exists');
+      toast.error('A user with this email already exists');
       return;
     }
 
@@ -148,9 +149,9 @@ export function UserManagementView({
       setShowEditModal(false);
       setSelectedUser(null);
       setUserForm({ name: '', email: '', role: 'Staff', password: '', confirmPassword: '' });
-      alert('User updated successfully!');
+      toast.success('User updated successfully!');
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'Failed to update user');
+      toast.error(error instanceof Error ? error.message : 'Failed to update user');
     }
   };
 
@@ -160,17 +161,17 @@ export function UserManagementView({
     if (!selectedUser) return;
 
     if (!userForm.password || !userForm.confirmPassword) {
-      alert('Please fill in all password fields');
+      toast.error('Please fill in all password fields');
       return;
     }
 
     if (userForm.password !== userForm.confirmPassword) {
-      alert('Passwords do not match');
+      toast.error('Passwords do not match');
       return;
     }
 
     if (userForm.password.length < 6) {
-      alert('Password must be at least 6 characters');
+      toast.error('Password must be at least 6 characters');
       return;
     }
 
@@ -182,9 +183,9 @@ export function UserManagementView({
       setShowPasswordModal(false);
       setSelectedUser(null);
       setUserForm({ name: '', email: '', role: 'Staff', password: '', confirmPassword: '' });
-      alert(`Password for ${selectedUser.name} has been reset successfully!`);
+      toast.success(`Password for ${selectedUser.name} has been reset successfully!`);
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'Failed to reset password');
+      toast.error(error instanceof Error ? error.message : 'Failed to reset password');
     }
   };
 
@@ -192,7 +193,7 @@ export function UserManagementView({
     const newStatus = user.status === 'Active' ? 'Inactive' : 'Active';
 
     if (user.email === currentUser?.email && newStatus === 'Inactive') {
-      alert('You cannot deactivate your own account');
+      toast.error('You cannot deactivate your own account');
       return;
     }
 
@@ -203,23 +204,23 @@ export function UserManagementView({
           data: { status: newStatus },
         });
       } catch (error) {
-        alert(error instanceof Error ? error.message : 'Failed to update user status');
+        toast.error(error instanceof Error ? error.message : 'Failed to update user status');
       }
     }
   };
 
   const handleDeleteUser = async (user: User) => {
     if (user.email === currentUser?.email) {
-      alert('You cannot delete your own account');
+      toast.error('You cannot delete your own account');
       return;
     }
 
     if (confirm(`Are you sure you want to delete ${user.name}? This action cannot be undone.`)) {
       try {
         await deleteUserMutation.mutateAsync(user.id);
-        alert(`User ${user.name} has been deleted`);
+        toast.success(`User ${user.name} has been deleted`);
       } catch (error) {
-        alert(error instanceof Error ? error.message : 'Failed to delete user');
+        toast.error(error instanceof Error ? error.message : 'Failed to delete user');
       }
     }
   };

@@ -199,6 +199,23 @@ export default function App() {
     setCurrentPage(page);
   };
 
+  // Bridge the restaurant inventory's in-page navigation events (e.g. the
+  // Dashboard "Go to Purchase Orders" button) to the merged shell's router.
+  // The standalone listener lived in the now-unused inventory app shell.
+  useEffect(() => {
+    const RESTAURANT_NAV_MAP: Record<string, Page> = {
+      'restaurant-purchase-orders': 'inventory-purchase-orders',
+      'restaurant-food-inventory': 'inventory-items',
+    };
+    const handleRestaurantNavigate = (event: Event) => {
+      const detail = (event as CustomEvent<string>).detail;
+      const page = RESTAURANT_NAV_MAP[detail];
+      if (page) navigateTo(page);
+    };
+    window.addEventListener('restaurant-navigate', handleRestaurantNavigate);
+    return () => window.removeEventListener('restaurant-navigate', handleRestaurantNavigate);
+  }, [currentUser]);
+
   const updateCurrentUser = (updates: Partial<AuthenticatedUser>) => {
     setCurrentUser((user) => (user ? { ...user, ...updates } : user));
   };

@@ -3,6 +3,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { Toaster, toast } from 'sonner';
 import { appQueryClient } from '../../query/appQueryClient';
 import { SessionProvider } from '@inventory/app/hooks/useSession';
+import { NotificationBell } from '@inventory/app/components/NotificationBell';
 import type { AuthenticatedUser } from '../../auth/types/auth';
 import type { Page } from '../App';
 import '@inventory/modules/restaurant/restaurantLegacyTheme.css';
@@ -111,7 +112,11 @@ export function InventoryModulePage({
                 <h1 className="text-xl font-semibold text-white">{pageTitles[currentPage] ?? 'Inventory'}</h1>
               </div>
             )}
-            <div className="flex-1 overflow-y-auto p-6">
+            {/* Slim bell bar — its own row so it never overlaps page content. */}
+            <div className="flex h-10 shrink-0 items-center justify-end border-b border-black/5 px-6">
+              <NotificationBell buttonClassName="text-[#6b7280] hover:bg-white hover:text-[#323B42]" />
+            </div>
+            <div className="flex-1 overflow-y-auto px-6 pb-6 pt-4">
               <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-slate-500">Loading inventory...</div>}>
                 {isRestaurant ? renderRestaurantPage(currentPage) : renderRetailPage(currentPage, inventoryUser)}
               </Suspense>

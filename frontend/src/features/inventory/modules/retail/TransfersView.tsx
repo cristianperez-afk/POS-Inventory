@@ -1,15 +1,16 @@
 import { useMemo, useState } from 'react';
+import { toast } from 'sonner';
 import { Plus, X, Search, Package, ArrowRightLeft, CheckCircle, RefreshCw, ChevronRight, ChevronDown, Trash2 } from 'lucide-react';
 import {
   useCancelRetailTransferMutation,
   useCompleteRetailTransferMutation,
-  useCreateRetailAdjustmentMutation,
   useCreateRetailTransferMutation,
   useDispatchRetailTransferMutation,
   useRetailInventoryRecordsQuery,
   useRetailLocationsQuery,
   useRetailTransferRecordsQuery,
 } from '../lib/retail';
+import StockAdjustmentsView from './StockAdjustmentsView';
 
 const TRANSFER_STATUS_LABEL: Record<string, string> = {
   PENDING: 'Pending',
@@ -37,14 +38,12 @@ export default function TransfersView({
   const dispatchTransferMutation = useDispatchRetailTransferMutation();
   const completeTransferMutation = useCompleteRetailTransferMutation();
   const cancelTransferMutation = useCancelRetailTransferMutation();
-  const createAdjustmentMutation = useCreateRetailAdjustmentMutation();
   const transfers = transfersQuery.data ?? [];
   const locations = locationsQuery.data ?? [];
   const inventory = inventoryQuery.data ?? [];
   const loading = transfersQuery.isLoading || locationsQuery.isLoading || inventoryQuery.isLoading;
   const [activeTab, setActiveTab] = useState<'transfers' | 'adjustments'>('transfers');
   const [showTransferModal, setShowTransferModal] = useState(false);
-  const [showAdjustmentModal, setShowAdjustmentModal] = useState(false);
   const [showItemSelector, setShowItemSelector] = useState(false);
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [itemSearchTerm, setItemSearchTerm] = useState('');
@@ -59,18 +58,8 @@ export default function TransfersView({
     items: [] as { inventoryItemId: string; name: string; quantity: number; maxQuantity: number; locationId: string }[],
   });
 
-  const [adjustmentForm, setAdjustmentForm] = useState({
-    type: 'Add' as 'Add' | 'Remove' | 'Damage' | 'Lost' | 'Found' | 'Recount',
-    reason: '',
-    items: [] as { inventoryItemId: string; name: string; quantityChange: number; locationId: string; currentQuantity: number }[],
-  });
-
   const availableItemsForTransfer = inventory.filter(
     (item: any) => item.locationId === transferForm.fromLocationId && item.quantity > 0
-  );
-
-  const availableItemsForAdjustment = inventory.filter(
-    (item: any) => item.quantity > 0 || adjustmentForm.type === 'Add' || adjustmentForm.type === 'Found'
   );
 
   const toggleCategory = (cat: string) => {
@@ -86,8 +75,7 @@ export default function TransfersView({
   };
 
   const groupedAvailableItems = useMemo(() => {
-    const items = activeTab === 'transfers' ? availableItemsForTransfer : availableItemsForAdjustment;
-    const filtered = items.filter((item: any) =>
+    const filtered = availableItemsForTransfer.filter((item: any) =>
       item.name.toLowerCase().includes(itemSearchTerm.toLowerCase()) ||
       item.category.toLowerCase().includes(itemSearchTerm.toLowerCase())
     );
@@ -100,7 +88,7 @@ export default function TransfersView({
       grouped[cat][sub].push(item);
     });
     return grouped;
-  }, [availableItemsForTransfer, availableItemsForAdjustment, activeTab, itemSearchTerm]);
+  }, [availableItemsForTransfer, itemSearchTerm]);
 
   const handleAddItemToTransfer = (item: any) => {
     if (!transferForm.items.find(i => i.inventoryItemId === item.id)) {
@@ -109,17 +97,9 @@ export default function TransfersView({
     setShowItemSelector(false);
   };
 
-  const handleAddItemToAdjustment = (item: any) => {
-    if (!adjustmentForm.items.find(i => i.inventoryItemId === item.id)) {
-      const qChange = (adjustmentForm.type === 'Add' || adjustmentForm.type === 'Found') ? 1 : -1;
-      setAdjustmentForm({ ...adjustmentForm, items: [...adjustmentForm.items, { inventoryItemId: item.id, name: item.name, quantityChange: qChange, locationId: item.locationId, currentQuantity: item.quantity }] });
-    }
-    setShowItemSelector(false);
-  };
-
   const handleCreateTransfer = async () => {
     if (!transferForm.fromLocationId || !transferForm.toLocationId || transferForm.items.length === 0) {
-      alert('Fill in all required fields and add at least one item');
+      toast.error('Fill in all required fields and add at least one item');
       return;
     }
     setSaving(true);
@@ -133,7 +113,7 @@ export default function TransfersView({
       setTransferForm({ fromLocationId: '', toLocationId: '', notes: '', items: [] });
       setShowTransferModal(false);
     } catch (err: any) {
-      alert(err.message ?? 'Failed to create transfer');
+      toast.error(err.message ?? 'Failed to create transfer');
     } finally {
       setSaving(false);
     }
@@ -143,7 +123,7 @@ export default function TransfersView({
     try {
       await dispatchTransferMutation.mutateAsync(id);
     } catch (err: any) {
-      alert(err.message ?? 'Failed to dispatch transfer');
+      toast.error(err.message ?? 'Failed to dispatch transfer');
     }
   };
 
@@ -152,7 +132,7 @@ export default function TransfersView({
     try {
       await completeTransferMutation.mutateAsync(id);
     } catch (err: any) {
-      alert(err.message ?? 'Failed to complete transfer');
+      toast.error(err.message ?? 'Failed to complete transfer');
     }
   };
 
@@ -161,41 +141,7 @@ export default function TransfersView({
     try {
       await cancelTransferMutation.mutateAsync(id);
     } catch (err: any) {
-      alert(err.message ?? 'Failed to cancel transfer');
-    }
-  };
-
-  const handleCreateAdjustment = async () => {
-    if (!adjustmentForm.reason || adjustmentForm.items.length === 0) {
-      alert('Please provide a reason and add at least one item');
-      return;
-    }
-    setSaving(true);
-    try {
-      for (const adjItem of adjustmentForm.items) {
-        const invItem = inventory.find((i: any) => i.id === adjItem.inventoryItemId);
-        if (!invItem) continue;
-        const qty = Math.abs(adjItem.quantityChange);
-        if (qty === 0) continue;
-        const movType = adjItem.quantityChange >= 0 ? 'STOCK_IN' : 'STOCK_OUT';
-        await createAdjustmentMutation.mutateAsync({
-          type: 'ADJUSTMENT',
-          quantity: qty,
-          previousQuantity: invItem.quantity,
-          newQuantity: Math.max(0, invItem.quantity + adjItem.quantityChange),
-          unit: invItem.unit,
-          reason: adjustmentForm.reason,
-          notes: `${adjustmentForm.type} adjustment`,
-          itemId: invItem.id,
-          locationId: invItem.locationId,
-        });
-      }
-      setAdjustmentForm({ type: 'Add', reason: '', items: [] });
-      setShowAdjustmentModal(false);
-    } catch (err: any) {
-      alert(err.message ?? 'Failed to create adjustment');
-    } finally {
-      setSaving(false);
+      toast.error(err.message ?? 'Failed to cancel transfer');
     }
   };
 
@@ -212,16 +158,14 @@ export default function TransfersView({
           <h2 className="text-[30px] font-bold text-foreground">Transfers & Adjustments</h2>
           <p className="text-foreground text-[14px] mt-1">Manage inventory transfers and stock adjustments</p>
         </div>
-        <div className="flex gap-3">
-          <button onClick={() => setShowTransferModal(true)} className="bg-secondary text-white px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-secondary">
-            <ArrowRightLeft className="size-4" />
-            New Transfer
-          </button>
-          <button onClick={() => setShowAdjustmentModal(true)} className="bg-secondary text-white px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-secondary">
-            <Plus className="size-4" />
-            New Adjustment
-          </button>
-        </div>
+        {activeTab === 'transfers' && (
+          <div className="flex gap-3">
+            <button onClick={() => setShowTransferModal(true)} className="bg-secondary text-white px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-secondary">
+              <ArrowRightLeft className="size-4" />
+              New Transfer
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Tabs */}
@@ -334,11 +278,7 @@ export default function TransfersView({
           )}
         </div>
       ) : (
-        <div className="bg-white border border-border rounded-[14px] p-12 text-center">
-          <RefreshCw className="size-12 text-muted mx-auto mb-3" />
-          <p className="text-[16px] text-foreground font-medium">Stock Adjustments</p>
-          <p className="text-[14px] text-muted-foreground mt-1">Use "New Adjustment" to record stock changes. Each adjustment is immediately saved as a stock movement.</p>
-        </div>
+        <StockAdjustmentsView currentUser={currentUser} embedded />
       )}
 
       {/* Transfer Modal */}
@@ -411,69 +351,6 @@ export default function TransfersView({
         </div>
       )}
 
-      {/* Adjustment Modal */}
-      {showAdjustmentModal && (
-        <div className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white rounded-[14px] p-6 max-w-3xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-6">
-              <h3 className="text-[24px] font-bold text-foreground">Create Adjustment</h3>
-              <button onClick={() => { setShowAdjustmentModal(false); setAdjustmentForm({ type: 'Add', reason: '', items: [] }); }} className="p-2 hover:bg-muted rounded"><X className="size-5 text-foreground" /></button>
-            </div>
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-[14px] font-medium text-foreground mb-2">Adjustment Type *</label>
-                  <select value={adjustmentForm.type} onChange={(e) => setAdjustmentForm({ ...adjustmentForm, type: e.target.value as any, items: [] })} className="w-full px-4 py-2 border border-border rounded-[8px] text-[14px] focus:outline-none focus:border-secondary">
-                    <option value="Add">Add Stock</option>
-                    <option value="Remove">Remove Stock</option>
-                    <option value="Damage">Damage</option>
-                    <option value="Lost">Lost/Theft</option>
-                    <option value="Found">Found</option>
-                    <option value="Recount">Recount</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-[14px] font-medium text-foreground mb-2">Reason *</label>
-                  <input type="text" value={adjustmentForm.reason} onChange={(e) => setAdjustmentForm({ ...adjustmentForm, reason: e.target.value })} className="w-full px-4 py-2 border border-border rounded-[8px] text-[14px] focus:outline-none focus:border-secondary" placeholder="e.g., Damaged during display" />
-                </div>
-              </div>
-              <div>
-                <div className="flex items-center justify-between mb-4">
-                  <h4 className="text-[16px] font-semibold text-foreground">Items ({adjustmentForm.items.length})</h4>
-                  <button onClick={() => setShowItemSelector(true)} className="px-3 py-1.5 bg-secondary text-white rounded-[6px] text-[13px] font-medium flex items-center gap-2 hover:bg-secondary"><Plus className="size-3" /> Add Item</button>
-                </div>
-                {adjustmentForm.items.length === 0 ? (
-                  <p className="text-[14px] text-muted-foreground text-center py-8">No items added yet</p>
-                ) : (
-                  <div className="space-y-2">
-                    {adjustmentForm.items.map((item) => (
-                      <div key={item.inventoryItemId} className="flex items-center justify-between bg-muted rounded-[8px] px-4 py-3">
-                        <div className="flex-1">
-                          <p className="text-[14px] font-medium text-foreground">{item.name}</p>
-                          <p className="text-[12px] text-muted-foreground">Current qty: {item.currentQuantity}</p>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <div className="flex items-center gap-2">
-                            <button onClick={() => setAdjustmentForm({ ...adjustmentForm, items: adjustmentForm.items.map(i => i.inventoryItemId === item.inventoryItemId ? { ...i, quantityChange: i.quantityChange - 1 } : i) })} className="w-6 h-6 flex items-center justify-center bg-white border border-border rounded text-foreground hover:bg-muted">-</button>
-                            <span className={`text-[14px] font-medium w-12 text-center ${item.quantityChange >= 0 ? 'text-secondary' : 'text-destructive'}`}>{item.quantityChange >= 0 ? '+' : ''}{item.quantityChange}</span>
-                            <button onClick={() => setAdjustmentForm({ ...adjustmentForm, items: adjustmentForm.items.map(i => i.inventoryItemId === item.inventoryItemId ? { ...i, quantityChange: i.quantityChange + 1 } : i) })} className="w-6 h-6 flex items-center justify-center bg-white border border-border rounded text-foreground hover:bg-muted">+</button>
-                          </div>
-                          <button onClick={() => setAdjustmentForm({ ...adjustmentForm, items: adjustmentForm.items.filter(i => i.inventoryItemId !== item.inventoryItemId) })} className="text-destructive hover:bg-destructive/10 p-1 rounded"><Trash2 className="size-4" /></button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-            <div className="flex gap-3 mt-6">
-              <button onClick={() => { setShowAdjustmentModal(false); setAdjustmentForm({ type: 'Add', reason: '', items: [] }); }} className="flex-1 px-4 py-2 border border-border rounded-[8px] text-[14px] font-medium text-foreground hover:bg-muted">Cancel</button>
-              <button onClick={handleCreateAdjustment} disabled={saving} className="flex-1 px-4 py-2 bg-secondary text-white rounded-[8px] text-[14px] font-medium hover:bg-secondary disabled:opacity-60">{saving ? 'Saving…' : 'Create Adjustment'}</button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Item Selector Modal */}
       {showItemSelector && (
         <div className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-50">
@@ -481,7 +358,7 @@ export default function TransfersView({
             <div className="flex items-center justify-between mb-6">
               <div>
                 <h3 className="text-[20px] font-bold text-foreground">Select Items</h3>
-                <p className="text-[14px] text-muted-foreground mt-1">{activeTab === 'transfers' ? `Items from ${locations.find((l: any) => l.id === transferForm.fromLocationId)?.name ?? 'selected location'}` : 'All inventory items'}</p>
+                <p className="text-[14px] text-muted-foreground mt-1">{`Items from ${locations.find((l: any) => l.id === transferForm.fromLocationId)?.name ?? 'selected location'}`}</p>
               </div>
               <button onClick={() => { setShowItemSelector(false); setItemSearchTerm(''); setExpandedCategories(new Set()); setExpandedSubcategories(new Set()); }} className="p-2 hover:bg-muted rounded"><X className="size-5 text-foreground" /></button>
             </div>
@@ -496,7 +373,7 @@ export default function TransfersView({
                 <div className="text-center py-12">
                   <Package className="size-16 text-muted mx-auto mb-3" />
                   <p className="text-[16px] text-foreground font-medium">No items found</p>
-                  <p className="text-[14px] text-muted-foreground mt-1">{itemSearchTerm ? 'Try adjusting your search' : activeTab === 'transfers' ? 'No items in the selected location' : 'No items available'}</p>
+                  <p className="text-[14px] text-muted-foreground mt-1">{itemSearchTerm ? 'Try adjusting your search' : 'No items in the selected location'}</p>
                 </div>
               ) : (
                 Object.entries(groupedAvailableItems).map(([category, subcategories]) => {
@@ -525,9 +402,7 @@ export default function TransfersView({
                                 {isSubExpanded && (
                                   <div className="bg-muted px-6 py-2 space-y-2">
                                     {items.map((item: any) => {
-                                      const isAdded = activeTab === 'transfers'
-                                        ? transferForm.items.some(i => i.inventoryItemId === item.id)
-                                        : adjustmentForm.items.some(i => i.inventoryItemId === item.id);
+                                      const isAdded = transferForm.items.some(i => i.inventoryItemId === item.id);
                                       return (
                                         <div key={item.id} className="flex items-center justify-between p-3 bg-white border border-border rounded-[8px] hover:border-secondary">
                                           <div className="flex-1">
@@ -538,7 +413,7 @@ export default function TransfersView({
                                               <span className="text-[12px] text-muted-foreground"><span className="font-medium">Qty:</span> {item.quantity}</span>
                                             </div>
                                           </div>
-                                          <button onClick={() => activeTab === 'transfers' ? handleAddItemToTransfer(item) : handleAddItemToAdjustment(item)} disabled={isAdded} className={`px-4 py-2 rounded-[6px] text-[13px] font-medium ml-4 ${isAdded ? 'bg-muted text-muted-foreground cursor-not-allowed' : 'bg-secondary text-white hover:bg-secondary'}`}>
+                                          <button onClick={() => handleAddItemToTransfer(item)} disabled={isAdded} className={`px-4 py-2 rounded-[6px] text-[13px] font-medium ml-4 ${isAdded ? 'bg-muted text-muted-foreground cursor-not-allowed' : 'bg-secondary text-white hover:bg-secondary'}`}>
                                             {isAdded ? 'Added' : 'Add Item'}
                                           </button>
                                         </div>
@@ -557,7 +432,7 @@ export default function TransfersView({
               )}
             </div>
             <div className="mt-6 pt-4 border-t border-border flex items-center justify-between">
-              <p className="text-[14px] text-muted-foreground">{activeTab === 'transfers' ? transferForm.items.length : adjustmentForm.items.length} item(s) selected</p>
+              <p className="text-[14px] text-muted-foreground">{transferForm.items.length} item(s) selected</p>
               <button onClick={() => { setShowItemSelector(false); setItemSearchTerm(''); setExpandedCategories(new Set()); setExpandedSubcategories(new Set()); }} className="px-4 py-2 bg-secondary text-white rounded-[8px] text-[14px] font-medium hover:bg-secondary">Done</button>
             </div>
           </div>

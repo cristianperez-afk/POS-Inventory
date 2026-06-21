@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { toast } from 'sonner';
 import { Plus, X, Search, Package, ShoppingCart, CheckCircle, XCircle, Clock, Eye, Users, Trash2 } from 'lucide-react';
 import {
   useApproveRetailPurchaseOrderMutation,
@@ -7,11 +8,14 @@ import {
   useCreateRetailSupplierMutation,
   useRejectRetailPurchaseOrderMutation,
   useRetailInventoryRecordsQuery,
+  useRetailLocationsQuery,
   useRetailPurchaseOrderRecordsQuery,
   useRetailSuppliersQuery,
+  useSaveRetailInventoryMutation,
   useSubmitRetailPurchaseOrderMutation,
 } from '../lib/retail';
-import { categorySubcategories } from '../../app/utils/constants';
+import { categorySubcategories, generalMerchandiseSubcategories } from '../../app/utils/constants';
+import { SuppliersManager, type NormalizedSupplier } from '../shared/suppliers/SuppliersManager';
 
 const STATUS_LABEL: Record<string, string> = {
   DRAFT: 'Draft',
@@ -29,6 +33,62 @@ const STATUS_CLASS: Record<string, string> = {
   CANCELLED: 'bg-[#ffe2e2] text-[#E7000B]',
 };
 
+// A retail store buys two very different kinds of stock:
+//  • GENERAL — brand-new merchandise ordered per unit (pcs/box/case…), with a
+//    SKU, a cost price and a marked-up retail price.
+//  • THRIFT — sealed ukay-ukay/thrift bales bought by bale type and weight,
+//    condition-graded, and later sorted into individual pieces for sale.
+type POProductType = 'GENERAL' | 'THRIFT';
+
+type POItemDraft = {
+  inventoryItemId?: string;
+  productType: POProductType;
+  name: string;
+  quantity: number;
+  unitPrice: number;       // cost per unit / per bale
+  sellingPrice?: number;   // intended retail price per unit
+  unit?: string;
+  sku?: string;
+  reorderPoint?: number;
+  baleType?: string;
+  estimatedWeight?: number;
+  isNew?: boolean;
+  category?: string;
+  subcategory?: string;
+  targetCustomer?: string;
+  size?: string;
+  condition?: string;
+};
+
+// Units a general-merchandise buyer orders in (a mall buys cases/boxes, not bales).
+const GENERAL_UNITS = ['pcs', 'box', 'case', 'pack', 'dozen', 'set', 'roll', 'kg'];
+// Thrift suppliers sell sealed bales or sacks.
+const THRIFT_UNITS = ['bale', 'sack', 'bundle'];
+
+function blankNewItemForm() {
+  return {
+    productType: 'GENERAL' as POProductType,
+    inventoryItemId: '',
+    name: '',
+    sku: '',
+    category: '',
+    subcategory: '',
+    newCategory: '',
+    newSubcategory: '',
+    targetCustomer: 'Unisex' as 'Male' | 'Female' | 'Unisex',
+    size: '',
+    condition: 'Good' as string,
+    unit: 'pcs',
+    baleType: '',
+    estimatedWeight: 0,
+    expectedPieces: 0,
+    quantity: 0,
+    unitPrice: 0,
+    sellingPrice: 0,
+    reorderPoint: 0,
+  };
+}
+
 export default function PurchaseOrdersView({
   currentUser,
 }: {
@@ -37,21 +97,23 @@ export default function PurchaseOrdersView({
   const ordersQuery = useRetailPurchaseOrderRecordsQuery();
   const suppliersQuery = useRetailSuppliersQuery();
   const inventoryQuery = useRetailInventoryRecordsQuery();
+  const locationsQuery = useRetailLocationsQuery();
   const createPurchaseOrderMutation = useCreateRetailPurchaseOrderMutation();
   const submitPurchaseOrderMutation = useSubmitRetailPurchaseOrderMutation();
   const approvePurchaseOrderMutation = useApproveRetailPurchaseOrderMutation();
   const rejectPurchaseOrderMutation = useRejectRetailPurchaseOrderMutation();
   const cancelPurchaseOrderMutation = useCancelRetailPurchaseOrderMutation();
   const createSupplierMutation = useCreateRetailSupplierMutation();
+  const saveInventoryMutation = useSaveRetailInventoryMutation();
   const orders = ordersQuery.data ?? [];
   const suppliers = suppliersQuery.data ?? [];
   const inventory = inventoryQuery.data ?? [];
+  const locations = locationsQuery.data ?? [];
   const loading = ordersQuery.isLoading || suppliersQuery.isLoading || inventoryQuery.isLoading;
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [showNewPOModal, setShowNewPOModal] = useState(false);
   const [showNewItemModal, setShowNewItemModal] = useState(false);
   const [showSuppliersModal, setShowSuppliersModal] = useState(false);
-  const [showNewSupplierModal, setShowNewSupplierModal] = useState(false);
   const [showSupplierDropdown, setShowSupplierDropdown] = useState(false);
   const [showPendingApprovalsModal, setShowPendingApprovalsModal] = useState(false);
   const [selectedPOForAction, setSelectedPOForAction] = useState<string | null>(null);
@@ -63,36 +125,14 @@ export default function PurchaseOrdersView({
     supplierName: '',
     paymentMethod: 'Bank Transfer',
     paymentTerms: '',
+    expectedDelivery: '',
     notes: '',
-    items: [] as { inventoryItemId?: string; name: string; quantity: number; unitPrice: number; baleType?: string; estimatedWeight?: number; isNew?: boolean }[]
+    items: [] as POItemDraft[]
   });
 
-  const [newItemForm, setNewItemForm] = useState({
-    inventoryItemId: '',
-    name: '',
-    category: '',
-    subcategory: '',
-    newCategory: '',
-    newSubcategory: '',
-    targetCustomer: 'Unisex' as 'Male' | 'Female' | 'Unisex',
-    size: '',
-    condition: 'Good' as string,
-    baleType: '',
-    estimatedWeight: 0,
-    quantity: 1,
-    unitPrice: 0
-  });
+  const [newItemForm, setNewItemForm] = useState(blankNewItemForm());
 
   const [showBaleTypeDropdown, setShowBaleTypeDropdown] = useState(false);
-
-  const [newSupplierForm, setNewSupplierForm] = useState({
-    name: '',
-    contactPerson: '',
-    email: '',
-    phone: '',
-    address: '',
-    category: '',
-  });
 
   const baleTypeSuggestions = [
     'Mixed Clothing', 'Ladies Tops', 'Ladies Bottoms', 'Ladies Dresses',
@@ -112,52 +152,164 @@ export default function PurchaseOrdersView({
     s.name.toLowerCase().includes(poForm.supplierName.toLowerCase())
   );
 
+  const isThrift = newItemForm.productType === 'THRIFT';
+  const itemUnitOptions = isThrift ? THRIFT_UNITS : GENERAL_UNITS;
+  // Thrift bales are apparel; general merchandise uses mall/retail categories.
+  const itemCategoryMap = isThrift ? categorySubcategories : generalMerchandiseSubcategories;
+
+  // Whether the Add-Item form has all required details (mirrors handleAddItemToPO).
+  const itemName = isThrift ? newItemForm.baleType.trim() : newItemForm.name.trim();
+  const itemFinalCategory = newItemForm.newCategory.trim() || newItemForm.category;
+  const canAddItem =
+    !!itemName &&
+    newItemForm.quantity > 0 &&
+    newItemForm.unitPrice > 0 &&
+    (!!newItemForm.inventoryItemId || !!itemFinalCategory);
+
+  // Lightweight bale-margin check: a thrift bale costs a fixed amount but is resold
+  // as many sorted pieces. Recovery = expected sellable value ÷ what the bale(s) cost.
+  const baleCost = newItemForm.unitPrice * newItemForm.quantity;
+  const baleExpectedRevenue = isThrift
+    ? newItemForm.sellingPrice * newItemForm.expectedPieces * newItemForm.quantity
+    : 0;
+  const baleRecovery = baleCost > 0 ? baleExpectedRevenue / baleCost : 0;
+  const showBaleMargin =
+    isThrift &&
+    newItemForm.unitPrice > 0 &&
+    newItemForm.sellingPrice > 0 &&
+    newItemForm.expectedPieces > 0 &&
+    newItemForm.quantity > 0;
+
   const handleAddItemToPO = () => {
-    if (!newItemForm.baleType || !newItemForm.quantity || !newItemForm.unitPrice) {
-      alert('Please fill in Item Name, Quantity, and Unit Cost');
+    const isThrift = newItemForm.productType === 'THRIFT';
+    const itemName = isThrift ? newItemForm.baleType.trim() : newItemForm.name.trim();
+    if (!itemName) {
+      toast.error(isThrift ? 'Please enter a Bale Type' : 'Please enter a Product Name');
       return;
     }
-    const finalCategory = newItemForm.newCategory || newItemForm.category || 'General';
-    const finalSubcategory = newItemForm.newSubcategory || newItemForm.subcategory || 'Mixed';
+    if (!newItemForm.quantity || newItemForm.quantity <= 0) {
+      toast.error('Please enter a Quantity greater than zero');
+      return;
+    }
+    if (!newItemForm.unitPrice || newItemForm.unitPrice <= 0) {
+      toast.error('Please enter a Unit Cost greater than zero');
+      return;
+    }
+    const isNew = !newItemForm.inventoryItemId;
+    const finalCategory = newItemForm.newCategory.trim() || newItemForm.category;
+    const finalSubcategory = newItemForm.newSubcategory.trim() || newItemForm.subcategory;
+    // New items become inventory on PO creation, so they must be classified.
+    if (isNew && !finalCategory) {
+      toast.error('Please select or enter a Category for the new item');
+      return;
+    }
+    // A retail price below cost would mean selling at a loss — guard against typos.
+    if (!isThrift && newItemForm.sellingPrice > 0 && newItemForm.sellingPrice < newItemForm.unitPrice) {
+      toast.error('Retail Price is lower than Unit Cost — please review the pricing.');
+      return;
+    }
     setPOForm({
       ...poForm,
       items: [...poForm.items, {
         inventoryItemId: newItemForm.inventoryItemId || undefined,
-        name: newItemForm.baleType,
+        productType: newItemForm.productType,
+        name: itemName,
         quantity: newItemForm.quantity,
         unitPrice: newItemForm.unitPrice,
-        baleType: newItemForm.baleType,
-        estimatedWeight: newItemForm.estimatedWeight,
-        isNew: !newItemForm.inventoryItemId,
+        sellingPrice: newItemForm.sellingPrice > 0 ? newItemForm.sellingPrice : undefined,
+        unit: newItemForm.unit || (isThrift ? 'bale' : 'pcs'),
+        sku: !isThrift && newItemForm.sku.trim() ? newItemForm.sku.trim() : undefined,
+        reorderPoint: !isThrift && newItemForm.reorderPoint > 0 ? newItemForm.reorderPoint : undefined,
+        baleType: isThrift ? newItemForm.baleType : undefined,
+        estimatedWeight: isThrift ? newItemForm.estimatedWeight : undefined,
+        isNew,
+        category: finalCategory || undefined,
+        subcategory: finalSubcategory || undefined,
+        targetCustomer: isThrift ? newItemForm.targetCustomer : undefined,
+        size: newItemForm.size || undefined,
+        condition: isThrift ? newItemForm.condition : undefined,
       }]
     });
-    setNewItemForm({ inventoryItemId: '', name: '', category: '', subcategory: '', newCategory: '', newSubcategory: '', targetCustomer: 'Unisex', size: '', condition: 'Good', baleType: '', estimatedWeight: 0, quantity: 1, unitPrice: 0 });
+    setNewItemForm(blankNewItemForm());
     setShowNewItemModal(false);
   };
 
   const handleCreatePO = async () => {
+    if (!poForm.supplierId) {
+      toast.error('Please select a supplier. For informal/cash buys, add a "Walk-in / Cash Purchase" supplier and select it.');
+      return;
+    }
     if (poForm.items.length === 0) {
-      alert('Add at least one item');
+      toast.error('Add at least one item');
+      return;
+    }
+    const hasNewItems = poForm.items.some(i => !i.inventoryItemId);
+    const location = locations[0];
+    if (hasNewItems && !location) {
+      toast.error('Create a location before ordering a new item');
       return;
     }
     setSaving(true);
     try {
+      // New items (not linked to existing inventory) are registered as inventory
+      // records with zero stock so they can be classified and stocked on receipt.
+      const items = [];
+      for (const i of poForm.items) {
+        let inventoryItemId = i.inventoryItemId;
+        if (!inventoryItemId) {
+          const isThrift = i.productType === 'THRIFT';
+          // Cost is what we pay the supplier (PO unit price); the retail price is
+          // what we sell at. If no selling price was given, fall back to cost so
+          // the item is at least valid — it can be priced later.
+          const sellingPrice = i.sellingPrice && i.sellingPrice > 0 ? i.sellingPrice : i.unitPrice;
+          const created: any = await saveInventoryMutation.mutateAsync({
+            data: {
+              name: i.name,
+              ...(i.sku ? { sku: i.sku } : {}),
+              category: i.category || 'General',
+              subcategory: i.subcategory || 'Mixed',
+              // Apparel attributes only apply to thrift/clothing lines.
+              ...(isThrift
+                ? {
+                    targetCustomer: i.targetCustomer || 'Unisex',
+                    size: i.size || 'Mixed',
+                    condition: i.condition || 'Good',
+                  }
+                : i.size
+                  ? { size: i.size }
+                  : {}),
+              quantity: 0,
+              price: sellingPrice,
+              costPrice: i.unitPrice,
+              unit: i.unit || (isThrift ? 'bale' : 'pcs'),
+              ...(i.reorderPoint ? { reorderPoint: i.reorderPoint } : {}),
+              locationId: location.id,
+            },
+          });
+          inventoryItemId = created.id;
+        }
+        items.push({
+          inventoryItemId,
+          name: i.name,
+          quantity: i.quantity,
+          unitPrice: i.unitPrice,
+        });
+      }
+
       await createPurchaseOrderMutation.mutateAsync({
         supplierId: poForm.supplierId || undefined,
         notes: poForm.notes || undefined,
         paymentMethod: poForm.paymentMethod,
         paymentTerms: poForm.paymentTerms || undefined,
-        items: poForm.items.map(i => ({
-          inventoryItemId: i.inventoryItemId,
-          name: i.name,
-          quantity: i.quantity,
-          unitPrice: i.unitPrice,
-        })),
+        expectedDelivery: poForm.expectedDelivery
+          ? new Date(poForm.expectedDelivery).toISOString()
+          : undefined,
+        items,
       });
-      setPOForm({ supplierId: undefined, supplierName: '', paymentMethod: 'Bank Transfer', paymentTerms: '', notes: '', items: [] });
+      setPOForm({ supplierId: undefined, supplierName: '', paymentMethod: 'Bank Transfer', paymentTerms: '', expectedDelivery: '', notes: '', items: [] });
       setShowNewPOModal(false);
     } catch (err: any) {
-      alert(err.message ?? 'Failed to create purchase order');
+      toast.error(err.message ?? 'Failed to create purchase order');
     } finally {
       setSaving(false);
     }
@@ -167,7 +319,7 @@ export default function PurchaseOrdersView({
     try {
       await submitPurchaseOrderMutation.mutateAsync(id);
     } catch (err: any) {
-      alert(err.message ?? 'Failed to submit purchase order');
+      toast.error(err.message ?? 'Failed to submit purchase order');
     }
   };
 
@@ -177,13 +329,13 @@ export default function PurchaseOrdersView({
       setSelectedPOForAction(null);
       setShowPendingApprovalsModal(false);
     } catch (err: any) {
-      alert(err.message ?? 'Failed to approve purchase order');
+      toast.error(err.message ?? 'Failed to approve purchase order');
     }
   };
 
   const handleRejectPO = async (id: string) => {
     if (!rejectionRemarks.trim()) {
-      alert('Please provide remarks for rejection');
+      toast.error('Please provide remarks for rejection');
       return;
     }
     try {
@@ -191,7 +343,7 @@ export default function PurchaseOrdersView({
       setRejectionRemarks('');
       setSelectedPOForAction(null);
     } catch (err: any) {
-      alert(err.message ?? 'Failed to reject purchase order');
+      toast.error(err.message ?? 'Failed to reject purchase order');
     }
   };
 
@@ -199,24 +351,7 @@ export default function PurchaseOrdersView({
     try {
       await cancelPurchaseOrderMutation.mutateAsync(id);
     } catch (err: any) {
-      alert(err.message ?? 'Failed to cancel purchase order');
-    }
-  };
-
-  const handleCreateSupplier = async () => {
-    if (!newSupplierForm.name.trim()) {
-      alert('Supplier name is required');
-      return;
-    }
-    setSaving(true);
-    try {
-      await createSupplierMutation.mutateAsync(newSupplierForm);
-      setNewSupplierForm({ name: '', contactPerson: '', email: '', phone: '', address: '', category: '' });
-      setShowNewSupplierModal(false);
-    } catch (err: any) {
-      alert(err.message ?? 'Failed to create supplier');
-    } finally {
-      setSaving(false);
+      toast.error(err.message ?? 'Failed to cancel purchase order');
     }
   };
 
@@ -288,7 +423,7 @@ export default function PurchaseOrdersView({
 
             <div className="space-y-4 mt-6">
               <div className="relative">
-                <label className="block text-[12px] font-medium text-[#323b42] mb-2">Supplier (optional)</label>
+                <label className="block text-[12px] font-medium text-[#323b42] mb-2">Supplier <span className="text-[#E7000B]">*</span></label>
                 <input
                   type="text"
                   value={poForm.supplierName}
@@ -322,6 +457,7 @@ export default function PurchaseOrdersView({
                   className="w-full px-[12.8px] py-[8.8px] bg-white border-[0.8px] border-transparent rounded-[10px] text-[14px] focus:outline-none focus:border-[#007A5E]"
                 >
                   <option value="Cash">Cash</option>
+                  <option value="GCash">GCash</option>
                   <option value="Bank Transfer">Bank Transfer</option>
                   <option value="Check">Check</option>
                   <option value="Credit Terms">Credit Terms</option>
@@ -340,6 +476,16 @@ export default function PurchaseOrdersView({
                   />
                 </div>
               )}
+
+              <div>
+                <label className="block text-[12px] font-medium text-[#323b42] mb-2">Expected Delivery Date</label>
+                <input
+                  type="date"
+                  value={poForm.expectedDelivery}
+                  onChange={(e) => setPOForm({ ...poForm, expectedDelivery: e.target.value })}
+                  className="w-full px-[12.8px] py-[8.8px] bg-white border-[0.8px] border-transparent rounded-[10px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+                />
+              </div>
 
               <div>
                 <label className="block text-[12px] font-medium text-[#323b42] mb-2">Notes</label>
@@ -372,9 +518,29 @@ export default function PurchaseOrdersView({
                     <div key={idx} className="bg-[#f9fafb] border-[0.8px] border-[rgba(50,59,66,0.15)] rounded-[12px] p-4">
                       <div className="flex items-center justify-between mb-3">
                         <div className="flex-1">
-                          <p className="text-[14px] font-semibold text-[#364153]">{item.name}</p>
+                          <div className="flex items-center gap-2">
+                            <p className="text-[14px] font-semibold text-[#364153]">{item.name}</p>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${item.productType === 'THRIFT' ? 'bg-[#fdf0e6] text-[#b45309]' : 'bg-[#E0F5F1] text-[#008967]'}`}>
+                              {item.productType === 'THRIFT' ? 'Thrift Bale' : 'General'}
+                            </span>
+                          </div>
+                          {(item.category || item.subcategory) && (
+                            <p className="text-[12px] text-[#6b7280] mt-1">
+                              {[item.category, item.subcategory].filter(Boolean).join(' › ')}
+                              {item.sku && <span className="ml-2">• SKU: {item.sku}</span>}
+                              {item.isNew && <span className="ml-2 text-[11px] text-[#007a5e]">(new item)</span>}
+                            </p>
+                          )}
                           {item.estimatedWeight && item.estimatedWeight > 0 && (
                             <p className="text-[12px] text-[#6b7280] mt-1">Est. Weight: {item.estimatedWeight} kg</p>
+                          )}
+                          {item.sellingPrice && item.sellingPrice > 0 && (
+                            <p className="text-[12px] text-[#6b7280] mt-1">
+                              Retail: ₱{item.sellingPrice.toLocaleString()} / {item.unit ?? 'pcs'}
+                              {item.sellingPrice > item.unitPrice && (
+                                <span className="ml-1 text-[#008967]">(+{Math.round(((item.sellingPrice - item.unitPrice) / item.unitPrice) * 100)}% margin)</span>
+                              )}
+                            </p>
                           )}
                         </div>
                         <button onClick={() => setPOForm({ ...poForm, items: poForm.items.filter((_, i) => i !== idx) })} className="text-[#E7000B] hover:bg-[#ffe2e2] p-1 rounded">
@@ -383,7 +549,7 @@ export default function PurchaseOrdersView({
                       </div>
                       <div className="border-t border-[rgba(50,59,66,0.15)] pt-3">
                         <div className="flex items-center justify-between">
-                          <span className="text-[12px] text-[#6b7280]">{item.quantity} qty × ₱{item.unitPrice.toLocaleString()}</span>
+                          <span className="text-[12px] text-[#6b7280]">{item.quantity} {item.unit ?? (item.productType === 'THRIFT' ? 'bale' : 'pcs')} × ₱{item.unitPrice.toLocaleString()}</span>
                           <span className="text-[14px] font-semibold text-[#007a5e]">₱{(item.quantity * item.unitPrice).toLocaleString()}</span>
                         </div>
                       </div>
@@ -404,7 +570,7 @@ export default function PurchaseOrdersView({
               <button onClick={() => setShowNewPOModal(false)} className="px-[16.8px] py-[8.8px] h-[36px] bg-[#f8fafb] border-[0.8px] border-[rgba(50,59,66,0.15)] rounded-[10px] text-[14px] font-medium text-[#323b42] hover:bg-[#e9ecef] transition-colors">
                 Cancel
               </button>
-              <button onClick={handleCreatePO} disabled={saving} className="px-4 py-2 h-[36px] bg-[#007a5e] text-white rounded-[10px] text-[14px] font-medium hover:bg-[#008967] transition-colors disabled:opacity-60">
+              <button onClick={handleCreatePO} disabled={saving || !poForm.supplierId || poForm.items.length === 0} className="px-4 py-2 h-[36px] bg-[#007a5e] text-white rounded-[10px] text-[14px] font-medium hover:bg-[#008967] transition-colors disabled:opacity-60">
                 {saving ? 'Creating…' : 'Create Order'}
               </button>
             </div>
@@ -416,35 +582,57 @@ export default function PurchaseOrdersView({
       {showNewItemModal && (
         <div className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-50">
           <div className="bg-white rounded-[14px] p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <h3 className="text-[24px] font-bold text-[#323B42] mb-6">Add Item to Purchase Order</h3>
+            <h3 className="text-[24px] font-bold text-[#323B42] mb-1">Add Item to Purchase Order</h3>
+            <p className="text-[14px] text-[#6b7280] mb-6">Order brand-new general merchandise or sealed ukay-ukay/thrift bales.</p>
             <div className="space-y-4">
-              <div className="relative">
-                <label className="block text-[14px] font-medium text-[#323B42] mb-2">Item / Product Name *</label>
-                <input
-                  type="text"
-                  value={newItemForm.baleType}
-                  onChange={(e) => { setNewItemForm({ ...newItemForm, baleType: e.target.value }); setShowBaleTypeDropdown(true); }}
-                  onFocus={() => setShowBaleTypeDropdown(true)}
-                  onBlur={() => setTimeout(() => setShowBaleTypeDropdown(false), 300)}
-                  className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]"
-                  placeholder="e.g., Mixed Clothing, Premium Denim, Ladies Tops"
-                />
-                {showBaleTypeDropdown && filteredBaleTypes.length > 0 && newItemForm.baleType && (
-                  <div className="absolute z-10 w-full mt-1 bg-white border border-[rgba(0,0,0,0.1)] rounded-[8px] shadow-lg max-h-[240px] overflow-y-auto">
-                    {filteredBaleTypes.map((type, index) => (
-                      <div key={index} onMouseDown={(e) => { e.preventDefault(); setNewItemForm({ ...newItemForm, baleType: type }); setShowBaleTypeDropdown(false); }} className="px-4 py-2.5 hover:bg-[#F8FAFB] cursor-pointer border-b border-[rgba(0,0,0,0.05)] last:border-b-0">
-                        <p className="text-[14px] text-[#323B42]">{type}</p>
-                      </div>
-                    ))}
-                  </div>
-                )}
+              {/* Product type — general merchandise vs. thrift bale drive different fields */}
+              <div>
+                <label className="block text-[14px] font-medium text-[#323B42] mb-2">Product Type *</label>
+                <div className="grid grid-cols-2 gap-3">
+                  {([
+                    { type: 'GENERAL' as POProductType, title: 'General Merchandise', desc: 'Brand-new goods sold per unit', defUnit: 'pcs' },
+                    { type: 'THRIFT' as POProductType, title: 'Thrift Bale (Ukay-ukay)', desc: 'Sealed bales sorted into pieces', defUnit: 'bale' },
+                  ]).map(({ type, title, desc, defUnit }) => (
+                    <button
+                      key={type}
+                      type="button"
+                      onClick={() => setNewItemForm({ ...newItemForm, productType: type, unit: defUnit, category: '', subcategory: '', newCategory: '', newSubcategory: '' })}
+                      className={`text-left px-4 py-3 rounded-[10px] border transition-colors ${
+                        newItemForm.productType === type
+                          ? 'border-[#007A5E] bg-[#E0F5F1]'
+                          : 'border-[rgba(0,0,0,0.1)] bg-white hover:bg-[#F8FAFB]'
+                      }`}
+                    >
+                      <p className="text-[14px] font-semibold text-[#323B42]">{title}</p>
+                      <p className="text-[12px] text-[#6b7280] mt-0.5">{desc}</p>
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div>
                 <label className="block text-[14px] font-medium text-[#323B42] mb-2">Link to Existing Inventory Item (optional)</label>
                 <select
                   value={newItemForm.inventoryItemId}
-                  onChange={(e) => setNewItemForm({ ...newItemForm, inventoryItemId: e.target.value })}
+                  onChange={(e) => {
+                    const linked = inventory.find((item: any) => item.id === e.target.value);
+                    setNewItemForm({
+                      ...newItemForm,
+                      inventoryItemId: e.target.value,
+                      // Pull classification from the linked item so it's visible (and read-only).
+                      name: linked?.name ?? newItemForm.name,
+                      baleType: linked?.name ?? newItemForm.baleType,
+                      sku: linked?.sku ?? newItemForm.sku,
+                      category: linked?.category ?? '',
+                      subcategory: linked?.subcategory ?? '',
+                      newCategory: '',
+                      newSubcategory: '',
+                      unit: linked?.unit ?? newItemForm.unit,
+                      targetCustomer: (linked?.targetCustomer as any) ?? newItemForm.targetCustomer,
+                      size: linked?.size ?? newItemForm.size,
+                      condition: (linked?.condition as string) ?? newItemForm.condition,
+                    });
+                  }}
                   className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]"
                 >
                   <option value="">— No link (new item) —</option>
@@ -454,115 +642,283 @@ export default function PurchaseOrdersView({
                 </select>
               </div>
 
+              {/* Name — bale type (autocomplete) for thrift, plain name + SKU for general */}
+              {isThrift ? (
+                <div className="relative">
+                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">Bale Type *</label>
+                  <input
+                    type="text"
+                    value={newItemForm.baleType}
+                    onChange={(e) => { setNewItemForm({ ...newItemForm, baleType: e.target.value }); setShowBaleTypeDropdown(true); }}
+                    onFocus={() => setShowBaleTypeDropdown(true)}
+                    onBlur={() => setTimeout(() => setShowBaleTypeDropdown(false), 300)}
+                    className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+                    placeholder="e.g., Mixed Clothing, Premium Denim, Ladies Tops"
+                  />
+                  {showBaleTypeDropdown && filteredBaleTypes.length > 0 && newItemForm.baleType && (
+                    <div className="absolute z-10 w-full mt-1 bg-white border border-[rgba(0,0,0,0.1)] rounded-[8px] shadow-lg max-h-[240px] overflow-y-auto">
+                      {filteredBaleTypes.map((type, index) => (
+                        <div key={index} onMouseDown={(e) => { e.preventDefault(); setNewItemForm({ ...newItemForm, baleType: type }); setShowBaleTypeDropdown(false); }} className="px-4 py-2.5 hover:bg-[#F8FAFB] cursor-pointer border-b border-[rgba(0,0,0,0.05)] last:border-b-0">
+                          <p className="text-[14px] text-[#323B42]">{type}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[14px] font-medium text-[#323B42] mb-2">Product Name *</label>
+                    <input
+                      type="text"
+                      value={newItemForm.name}
+                      onChange={(e) => setNewItemForm({ ...newItemForm, name: e.target.value })}
+                      disabled={!!newItemForm.inventoryItemId}
+                      className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E] disabled:bg-[#F8FAFB] disabled:text-[#6b7280]"
+                      placeholder="e.g., Cotton Crew Socks 3-pack"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[14px] font-medium text-[#323B42] mb-2">SKU / Barcode (optional)</label>
+                    <input
+                      type="text"
+                      value={newItemForm.sku}
+                      onChange={(e) => setNewItemForm({ ...newItemForm, sku: e.target.value })}
+                      disabled={!!newItemForm.inventoryItemId}
+                      className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E] disabled:bg-[#F8FAFB] disabled:text-[#6b7280]"
+                      placeholder="e.g., SKU-00123"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Category & Subcategory — required for new items (used to file the new inventory record) */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">Estimated Weight (kg)</label>
-                  <input type="number" min="0" step="0.1" value={newItemForm.estimatedWeight} onChange={(e) => setNewItemForm({ ...newItemForm, estimatedWeight: parseFloat(e.target.value) || 0 })} className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]" placeholder="Weight in kg" />
+                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">
+                    Category {!newItemForm.inventoryItemId && <span className="text-[#E7000B]">*</span>}
+                  </label>
+                  <select
+                    value={newItemForm.category}
+                    onChange={(e) => setNewItemForm({ ...newItemForm, category: e.target.value, subcategory: '', newSubcategory: '' })}
+                    disabled={!!newItemForm.inventoryItemId || !!newItemForm.newCategory.trim()}
+                    className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E] disabled:bg-[#F8FAFB] disabled:text-[#6b7280]"
+                  >
+                    <option value="">Select category</option>
+                    {Object.keys(itemCategoryMap).map((cat) => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))}
+                  </select>
+                  {!newItemForm.inventoryItemId && (
+                    <input
+                      type="text"
+                      value={newItemForm.newCategory}
+                      onChange={(e) => setNewItemForm({ ...newItemForm, newCategory: e.target.value, subcategory: '' })}
+                      disabled={!!newItemForm.category}
+                      className="w-full mt-2 px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E] disabled:bg-[#F8FAFB] disabled:text-[#6b7280]"
+                      placeholder={newItemForm.category ? 'Using selected category' : '…or type a new category'}
+                    />
+                  )}
                 </div>
                 <div>
-                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">Condition</label>
-                  <select value={newItemForm.condition} onChange={(e) => setNewItemForm({ ...newItemForm, condition: e.target.value })} className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]">
-                    <option value="Excellent">Excellent</option>
-                    <option value="Good">Good</option>
-                    <option value="Fair">Fair</option>
-                    <option value="Damaged">Damaged</option>
+                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">Subcategory</label>
+                  <select
+                    value={newItemForm.subcategory}
+                    onChange={(e) => setNewItemForm({ ...newItemForm, subcategory: e.target.value })}
+                    disabled={!!newItemForm.inventoryItemId || !newItemForm.category || !!newItemForm.newSubcategory.trim()}
+                    className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E] disabled:bg-[#F8FAFB] disabled:text-[#6b7280]"
+                  >
+                    <option value="">Select subcategory</option>
+                    {(itemCategoryMap[newItemForm.category] ?? []).map((sub: string) => (
+                      <option key={sub} value={sub}>{sub}</option>
+                    ))}
+                  </select>
+                  {!newItemForm.inventoryItemId && (
+                    <input
+                      type="text"
+                      value={newItemForm.newSubcategory}
+                      onChange={(e) => setNewItemForm({ ...newItemForm, newSubcategory: e.target.value })}
+                      disabled={!!newItemForm.subcategory}
+                      className="w-full mt-2 px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E] disabled:bg-[#F8FAFB] disabled:text-[#6b7280]"
+                      placeholder={newItemForm.subcategory ? 'Using selected subcategory' : '…or type a new subcategory'}
+                    />
+                  )}
+                </div>
+              </div>
+
+              {/* Thrift bales are clothing — capture who they're for, sizing, grade and weight */}
+              {isThrift && (
+                <>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[14px] font-medium text-[#323B42] mb-2">Target Customer</label>
+                      <select
+                        value={newItemForm.targetCustomer}
+                        onChange={(e) => setNewItemForm({ ...newItemForm, targetCustomer: e.target.value as 'Male' | 'Female' | 'Unisex' })}
+                        disabled={!!newItemForm.inventoryItemId}
+                        className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E] disabled:bg-[#F8FAFB] disabled:text-[#6b7280]"
+                      >
+                        <option value="Male">Male</option>
+                        <option value="Female">Female</option>
+                        <option value="Unisex">Unisex</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[14px] font-medium text-[#323B42] mb-2">Size</label>
+                      <input
+                        type="text"
+                        value={newItemForm.size}
+                        onChange={(e) => setNewItemForm({ ...newItemForm, size: e.target.value })}
+                        disabled={!!newItemForm.inventoryItemId}
+                        className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E] disabled:bg-[#F8FAFB] disabled:text-[#6b7280]"
+                        placeholder="e.g., M, L, XL, Mixed"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[14px] font-medium text-[#323B42] mb-2">Estimated Weight (kg)</label>
+                      <input type="number" min="0" step="0.1" value={newItemForm.estimatedWeight || ''} onChange={(e) => setNewItemForm({ ...newItemForm, estimatedWeight: parseFloat(e.target.value) || 0 })} className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]" placeholder="Weight in kg" />
+                    </div>
+                    <div>
+                      <label className="block text-[14px] font-medium text-[#323B42] mb-2">Grade / Condition</label>
+                      <select value={newItemForm.condition} onChange={(e) => setNewItemForm({ ...newItemForm, condition: e.target.value })} className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]">
+                        <option value="Excellent">Excellent (Grade A)</option>
+                        <option value="Good">Good (Grade B)</option>
+                        <option value="Fair">Fair (Grade C)</option>
+                        <option value="Damaged">Damaged</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[14px] font-medium text-[#323B42] mb-2">Est. Sellable Pieces per Bale</label>
+                      <input type="number" min="0" value={newItemForm.expectedPieces || ''} onChange={(e) => setNewItemForm({ ...newItemForm, expectedPieces: parseInt(e.target.value) || 0 })} className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]" placeholder="Wearable pieces you expect to sell" />
+                    </div>
+                    <div className="flex items-end">
+                      <p className="text-[12px] text-[#6b7280] pb-2.5">Used only to check the bale will recover its cost — not saved on the item.</p>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">Quantity *</label>
+                  <input type="number" min="1" value={newItemForm.quantity || ''} onChange={(e) => setNewItemForm({ ...newItemForm, quantity: parseInt(e.target.value) || 0 })} className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]" placeholder="How many to order" />
+                </div>
+                <div>
+                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">Unit of Measure</label>
+                  <select value={newItemForm.unit} onChange={(e) => setNewItemForm({ ...newItemForm, unit: e.target.value })} className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]">
+                    {itemUnitOptions.map((u) => (
+                      <option key={u} value={u}>{u}</option>
+                    ))}
                   </select>
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">Quantity *</label>
-                  <input type="number" min="1" value={newItemForm.quantity} onChange={(e) => setNewItemForm({ ...newItemForm, quantity: parseInt(e.target.value) || 1 })} className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]" />
+                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">Unit Cost (₱) *</label>
+                  <input type="number" min="0" step="0.01" value={newItemForm.unitPrice || ''} onChange={(e) => setNewItemForm({ ...newItemForm, unitPrice: parseFloat(e.target.value) || 0 })} className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]" placeholder="What you pay the supplier" />
                 </div>
                 <div>
-                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">Unit Cost (₱) *</label>
-                  <input type="number" min="0" step="0.01" value={newItemForm.unitPrice} onChange={(e) => setNewItemForm({ ...newItemForm, unitPrice: parseFloat(e.target.value) || 0 })} className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]" />
+                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">
+                    Retail Price (₱) {isThrift && <span className="text-[12px] text-[#6b7280] font-normal">(per sorted piece)</span>}
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={newItemForm.sellingPrice || ''}
+                    onChange={(e) => setNewItemForm({ ...newItemForm, sellingPrice: parseFloat(e.target.value) || 0 })}
+                    disabled={!!newItemForm.inventoryItemId}
+                    className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E] disabled:bg-[#F8FAFB] disabled:text-[#6b7280]"
+                    placeholder="What you sell it for"
+                  />
                 </div>
               </div>
+
+              {/* Reorder point only matters for re-stockable general merchandise, not one-off bales */}
+              {!isThrift && (
+                <div>
+                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">Reorder Point (optional)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={newItemForm.reorderPoint || ''}
+                    onChange={(e) => setNewItemForm({ ...newItemForm, reorderPoint: parseFloat(e.target.value) || 0 })}
+                    disabled={!!newItemForm.inventoryItemId}
+                    className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E] disabled:bg-[#F8FAFB] disabled:text-[#6b7280]"
+                    placeholder="Stock level that triggers a re-order"
+                  />
+                </div>
+              )}
+
+              {isThrift ? (
+                showBaleMargin && (
+                  <div
+                    className="rounded-[8px] px-4 py-3 text-[13px]"
+                    style={{
+                      backgroundColor: baleRecovery >= 2 ? '#E0F5F1' : baleRecovery >= 1.5 ? '#FEF3C7' : '#FEE2E2',
+                      color: baleRecovery >= 2 ? '#008967' : baleRecovery >= 1.5 ? '#92400E' : '#991B1B',
+                    }}
+                  >
+                    <div className="flex items-center justify-between font-medium">
+                      <span>Bale cost: ₱{baleCost.toLocaleString()}</span>
+                      <span>Expected sellable value: ₱{baleExpectedRevenue.toLocaleString()} ({baleRecovery.toFixed(1)}×)</span>
+                    </div>
+                    <p className="mt-1">
+                      {baleRecovery >= 2
+                        ? 'Healthy ukay margin — comfortably above the 2× target.'
+                        : baleRecovery >= 1.5
+                          ? 'Tight — duds and unsold pieces will eat into this. Consider raising piece prices.'
+                          : 'Below 1.5× — you are likely to lose money on this bale once unsellables are removed.'}
+                    </p>
+                  </div>
+                )
+              ) : (
+                newItemForm.sellingPrice > 0 && newItemForm.unitPrice > 0 && newItemForm.sellingPrice > newItemForm.unitPrice && (
+                  <div className="bg-[#E0F5F1] rounded-[8px] px-4 py-2 text-[13px] text-[#008967]">
+                    Margin: ₱{(newItemForm.sellingPrice - newItemForm.unitPrice).toLocaleString()} per unit
+                    {' '}(+{Math.round(((newItemForm.sellingPrice - newItemForm.unitPrice) / newItemForm.unitPrice) * 100)}%)
+                  </div>
+                )
+              )}
             </div>
             <div className="flex gap-3 mt-6">
               <button onClick={() => setShowNewItemModal(false)} className="flex-1 px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] font-medium text-[#323B42] hover:bg-[#F8FAFB] transition-colors">Cancel</button>
-              <button onClick={handleAddItemToPO} className="flex-1 px-4 py-2 bg-[#007A5E] text-white rounded-[8px] text-[14px] font-medium hover:bg-[#008967] transition-colors">Add to Order</button>
+              <button onClick={handleAddItemToPO} disabled={!canAddItem} className="flex-1 px-4 py-2 bg-[#007A5E] text-white rounded-[8px] text-[14px] font-medium hover:bg-[#008967] transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Add to Order</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Suppliers Modal */}
-      {showSuppliersModal && (
-        <div className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white rounded-[14px] p-6 max-w-5xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-6">
-              <h3 className="text-[24px] font-bold text-[#323B42]">Suppliers Directory</h3>
-              <div className="flex gap-2">
-                <button onClick={() => setShowNewSupplierModal(true)} className="px-4 py-2 bg-[#007A5E] text-white rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-[#008967]">
-                  <Plus className="size-4" /> Add Supplier
-                </button>
-                <button onClick={() => setShowSuppliersModal(false)} className="p-2 hover:bg-[#F8FAFB] rounded-[6px] transition-colors">
-                  <X className="size-5 text-[#323B42]" />
-                </button>
-              </div>
-            </div>
-            {suppliers.length === 0 ? (
-              <p className="text-center text-[#6b7280] py-8">No suppliers yet. Add one above.</p>
-            ) : (
-              <div className="space-y-3">
-                {suppliers.map((s: any) => (
-                  <div key={s.id} className="bg-[#F8FAFB] border border-[rgba(0,0,0,0.1)] rounded-[12px] p-5">
-                    <div className="flex items-start justify-between mb-3">
-                      <div>
-                        <h4 className="text-[18px] font-semibold text-[#323B42] mb-1">{s.name}</h4>
-                        {s.category && <span className="text-[12px] bg-[#E0F5F1] text-[#008967] px-2 py-1 rounded font-medium">{s.category}</span>}
-                      </div>
-                      <button onClick={() => { setPOForm({ ...poForm, supplierId: s.id, supplierName: s.name }); setShowSuppliersModal(false); setShowNewPOModal(true); }} className="px-3 py-1.5 bg-[#007A5E] text-white rounded-[6px] text-[13px] font-medium hover:bg-[#008967]">
-                        Create PO
-                      </button>
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                      {s.contactPerson && <div><p className="text-[12px] text-[#323B42] mb-1">Contact Person</p><p className="text-[14px] font-medium text-[#323B42]">{s.contactPerson}</p></div>}
-                      {s.phone && <div><p className="text-[12px] text-[#323B42] mb-1">Phone</p><p className="text-[14px] font-medium text-[#323B42]">{s.phone}</p></div>}
-                      {s.email && <div><p className="text-[12px] text-[#323B42] mb-1">Email</p><p className="text-[14px] font-medium text-[#323B42]">{s.email}</p></div>}
-                      {s.address && <div><p className="text-[12px] text-[#323B42] mb-1">Address</p><p className="text-[14px] font-medium text-[#323B42]">{s.address}</p></div>}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="mt-6">
-              <button onClick={() => setShowSuppliersModal(false)} className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] font-medium text-[#323B42] hover:bg-[#F8FAFB]">Close</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* New Supplier Modal */}
-      {showNewSupplierModal && (
-        <div className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-[60]">
-          <div className="bg-white rounded-[14px] p-6 max-w-md w-full">
-            <h3 className="text-[20px] font-bold text-[#323B42] mb-4">Add New Supplier</h3>
-            <div className="space-y-3">
-              {[
-                { label: 'Name *', key: 'name', placeholder: 'Supplier name' },
-                { label: 'Contact Person', key: 'contactPerson', placeholder: 'Contact name' },
-                { label: 'Email', key: 'email', placeholder: 'email@example.com' },
-                { label: 'Phone', key: 'phone', placeholder: '+63 9XX XXX XXXX' },
-                { label: 'Address', key: 'address', placeholder: 'City, Province' },
-                { label: 'Category', key: 'category', placeholder: 'e.g. Clothing, Footwear' },
-              ].map(({ label, key, placeholder }) => (
-                <div key={key}>
-                  <label className="block text-[12px] font-medium text-[#323B42] mb-1">{label}</label>
-                  <input type="text" value={(newSupplierForm as any)[key]} onChange={(e) => setNewSupplierForm({ ...newSupplierForm, [key]: e.target.value })} placeholder={placeholder} className="w-full px-3 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]" />
-                </div>
-              ))}
-            </div>
-            <div className="flex gap-2 mt-4">
-              <button onClick={() => setShowNewSupplierModal(false)} className="flex-1 px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] text-[#323B42] hover:bg-[#F8FAFB]">Cancel</button>
-              <button onClick={handleCreateSupplier} disabled={saving} className="flex-1 px-4 py-2 bg-[#007A5E] text-white rounded-[8px] text-[14px] font-medium hover:bg-[#008967] disabled:opacity-60">{saving ? 'Saving…' : 'Add Supplier'}</button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Suppliers Manager (shared) */}
+      <SuppliersManager
+        open={showSuppliersModal}
+        onClose={() => setShowSuppliersModal(false)}
+        suppliers={suppliers as NormalizedSupplier[]}
+        fields={[
+          { key: 'name', label: 'Name', required: true, placeholder: 'Supplier name' },
+          { key: 'contactPerson', label: 'Contact Person', placeholder: 'Contact name' },
+          { key: 'email', label: 'Email', placeholder: 'email@example.com' },
+          { key: 'phone', label: 'Phone', placeholder: '+63 9XX XXX XXXX' },
+          { key: 'address', label: 'Address', type: 'textarea', placeholder: 'City, Province' },
+          { key: 'category', label: 'Category', placeholder: 'e.g. Clothing, Footwear' },
+        ]}
+        onCreate={async (payload) => {
+          await createSupplierMutation.mutateAsync(payload);
+        }}
+        onSelectSupplier={(s) => {
+          setPOForm({ ...poForm, supplierId: s.id, supplierName: s.name });
+          setShowSuppliersModal(false);
+          setShowNewPOModal(true);
+        }}
+        selectLabel="Create PO"
+      />
 
       {/* Stats */}
       <div className="grid grid-cols-4 gap-4 mb-6">

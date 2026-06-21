@@ -49,6 +49,11 @@ export class InventoryApiController {
     return this.inventoryApiService.listLocations(request.headers);
   }
 
+  @Post('locations')
+  createLocation(@Req() request: RequestLike, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.createLocation(request.headers, body);
+  }
+
   @Get('categories')
   listCategories(@Req() request: RequestLike, @Query('module') module?: string) {
     return this.inventoryApiService.listCategories(request.headers, module);
@@ -98,6 +103,21 @@ export class InventoryApiController {
     return this.inventoryApiService.listSuppliers(request.headers, query);
   }
 
+  @Post('suppliers')
+  createSupplier(@Req() request: RequestLike, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.createSupplier(request.headers, body);
+  }
+
+  @Patch('suppliers/:id')
+  updateSupplier(@Req() request: RequestLike, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.updateSupplier(request.headers, id, body);
+  }
+
+  @Delete('suppliers/:id')
+  deleteSupplier(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.deleteSupplier(request.headers, id);
+  }
+
   @Get('purchase-orders')
   listPurchaseOrders(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
     return this.inventoryApiService.listPurchaseOrders(request.headers, query);
@@ -106,6 +126,46 @@ export class InventoryApiController {
   @Get('purchase-orders/goods-receipts')
   listGoodsReceipts(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
     return this.inventoryApiService.listGoodsReceipts(request.headers, query);
+  }
+
+  @Post('purchase-orders')
+  createPurchaseOrder(@Req() request: RequestLike, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.createPurchaseOrder(request.headers, body);
+  }
+
+  @Get('purchase-orders/:id')
+  getPurchaseOrder(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.getPurchaseOrder(request.headers, id);
+  }
+
+  @Patch('purchase-orders/:id')
+  updatePurchaseOrder(@Req() request: RequestLike, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.updatePurchaseOrder(request.headers, id, body);
+  }
+
+  @Patch('purchase-orders/:id/submit')
+  submitPurchaseOrder(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.submitPurchaseOrder(request.headers, id);
+  }
+
+  @Patch('purchase-orders/:id/approve')
+  approvePurchaseOrder(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.approvePurchaseOrder(request.headers, id);
+  }
+
+  @Patch('purchase-orders/:id/reject')
+  rejectPurchaseOrder(@Req() request: RequestLike, @Param('id') id: string, @Body() body: { reason?: string }) {
+    return this.inventoryApiService.rejectPurchaseOrder(request.headers, id, body);
+  }
+
+  @Patch('purchase-orders/:id/cancel')
+  cancelPurchaseOrder(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.cancelPurchaseOrder(request.headers, id);
+  }
+
+  @Patch('purchase-orders/:id/receive')
+  receivePurchaseOrder(@Req() request: RequestLike, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.receivePurchaseOrder(request.headers, id, body);
   }
 
   @Get('transfers')
@@ -136,6 +196,50 @@ export class InventoryApiController {
   @Get('adjustments')
   listAdjustments(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
     return this.inventoryApiService.listAdjustments(request.headers, query);
+  }
+
+  @Post('adjustments')
+  createAdjustment(@Req() request: RequestLike, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.createAdjustment(request.headers, body);
+  }
+
+  @Get('adjustments/:id')
+  getAdjustment(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.getAdjustment(request.headers, id);
+  }
+
+  @Patch('adjustments/:id/approve')
+  approveAdjustment(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.approveAdjustment(request.headers, id);
+  }
+
+  @Patch('adjustments/:id/reject')
+  rejectAdjustment(
+    @Req() request: RequestLike,
+    @Param('id') id: string,
+    @Body() body: { reason?: string },
+  ) {
+    return this.inventoryApiService.rejectAdjustment(request.headers, id, body);
+  }
+
+  @Get('notifications')
+  listNotifications(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
+    return this.inventoryApiService.listNotifications(request.headers, query);
+  }
+
+  @Get('notifications/unread-count')
+  countUnreadNotifications(@Req() request: RequestLike) {
+    return this.inventoryApiService.countUnreadNotifications(request.headers);
+  }
+
+  @Patch('notifications/read-all')
+  markAllNotificationsRead(@Req() request: RequestLike) {
+    return this.inventoryApiService.markAllNotificationsRead(request.headers);
+  }
+
+  @Patch('notifications/:id/read')
+  markNotificationRead(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.markNotificationRead(request.headers, id);
   }
 
   @Get('restaurant-settings')

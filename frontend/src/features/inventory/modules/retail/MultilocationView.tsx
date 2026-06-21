@@ -1,5 +1,6 @@
 ﻿import { useState, useMemo } from 'react';
 import { Plus, Edit2, X, Search, MapPin, Package, ArrowRightLeft, ShoppingCart, TrendingUp, TrendingDown, Trash2, Users } from 'lucide-react';
+import { toast } from 'sonner';
 import type { Location, InventoryItem, Transfer, PurchaseOrder } from '../../app/utils/generateSampleData';
 import {
   useCreateRetailLocationMutation,
@@ -41,7 +42,7 @@ export default function MultilocationView() {
 
   const handleAddLocation = async () => {
     if (!locationForm.name || !locationForm.address || !locationForm.manager || !locationForm.phone) {
-      alert('Please fill in all required fields');
+      toast.error('Please fill in all required fields');
       return;
     }
 
@@ -50,13 +51,13 @@ export default function MultilocationView() {
       setLocationForm({ name: '', address: '', manager: '', phone: '' });
       setShowAddModal(false);
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'Failed to create location');
+      toast.error(error instanceof Error ? error.message : 'Failed to create location');
     }
   };
 
   const handleEditLocation = async () => {
     if (!selectedLocation || !locationForm.name || !locationForm.address || !locationForm.manager || !locationForm.phone) {
-      alert('Please fill in all required fields');
+      toast.error('Please fill in all required fields');
       return;
     }
 
@@ -69,7 +70,7 @@ export default function MultilocationView() {
       setSelectedLocation(null);
       setShowEditModal(false);
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'Failed to update location');
+      toast.error(error instanceof Error ? error.message : 'Failed to update location');
     }
   };
 
@@ -78,7 +79,7 @@ export default function MultilocationView() {
     const locationItems = inventory.filter(item => item.location === location?.name);
 
     if (locationItems.length > 0) {
-      alert(`Cannot delete ${location?.name}. There are ${locationItems.length} items at this location. Please transfer or remove items first.`);
+      toast.error(`Cannot delete ${location?.name}. There are ${locationItems.length} items at this location. Please transfer or remove items first.`);
       return;
     }
 
@@ -86,7 +87,7 @@ export default function MultilocationView() {
       try {
         await deleteLocationMutation.mutateAsync(locationId);
       } catch (error) {
-        alert(error instanceof Error ? error.message : 'Failed to delete location');
+        toast.error(error instanceof Error ? error.message : 'Failed to delete location');
       }
     }
   };

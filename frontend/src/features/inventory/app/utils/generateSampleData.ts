@@ -21,6 +21,7 @@ export interface InventoryItem {
   price: number;
   dateAdded: string;
   location: string;
+  isActive?: boolean;
 }
 
 export interface PurchaseOrder {

@@ -14,6 +14,7 @@ import {
   useRestaurantUsersQuery,
   useSaveRestaurantPurchaseOrderMutation,
 } from "../lib/restaurant";
+import { SuppliersManager } from "../shared/suppliers/SuppliersManager";
 
 // Helper function to normalize product names (capitalize first letter of each word, trim)
 const normalizeProductName = (name: string | undefined): string => {
@@ -151,7 +152,6 @@ export function PurchaseOrders() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showViewModal, setShowViewModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
-  const [showSupplierModal, setShowSupplierModal] = useState(false);
   const [showSuppliersListModal, setShowSuppliersListModal] = useState(false);
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [showApprovalModal, setShowApprovalModal] = useState(false);
@@ -173,13 +173,6 @@ export function PurchaseOrders() {
   });
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
   const [currentItem, setCurrentItem] = useState<OrderItemInput>(blankOrderItemInput());
-  const [newSupplier, setNewSupplier] = useState({
-    name: "",
-    contact: "",
-    email: "",
-    phone: "",
-    address: "",
-  });
 
   const { data: globalProducts = [] } = useRestaurantGlobalProductsQuery();
   const { data: orders = [] } = useRestaurantPurchaseOrdersQuery<Order[]>();
@@ -481,12 +474,6 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
     }
   };
 
-  const openRejectOrderModal = (order: Order) => {
-    setRejectingOrder(order);
-    setRejectionNote(order.rejectionNote || "");
-    setShowRejectModal(true);
-  };
-
   const handleRejectOrder = async () => {
     const orderToReject = rejectingOrder || approvingOrder;
     if (!orderToReject) return;
@@ -559,60 +546,6 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to update purchase order");
     }
-  };
-
-  const handleAddSupplier = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    const missingSupplierFields = [
-      ["supplier name", newSupplier.name],
-      ["contact person", newSupplier.contact],
-      ["email", newSupplier.email],
-      ["phone", newSupplier.phone],
-      ["address", newSupplier.address],
-    ].filter(([, value]) => !String(value).trim());
-
-    if (missingSupplierFields.length > 0) {
-      toast.error(`Please complete supplier ${missingSupplierFields.map(([field]) => field).join(", ")}`);
-      return;
-    }
-
-    const supplierToAdd: Supplier = {
-      name: newSupplier.name.trim(),
-      contact: newSupplier.contact.trim(),
-      email: newSupplier.email.trim(),
-      phone: newSupplier.phone.trim(),
-      address: newSupplier.address.trim(),
-      products: [], // New suppliers start with no products
-    };
-
-    try {
-      await addSupplier.mutateAsync({
-        name: supplierToAdd.name,
-        contactPerson: supplierToAdd.contact,
-        email: supplierToAdd.email,
-        phone: supplierToAdd.phone,
-        address: supplierToAdd.address,
-      });
-      setNewOrder({ ...newOrder, supplier: supplierToAdd.name });
-      setNewSupplier({
-        name: "",
-        contact: "",
-        email: "",
-        phone: "",
-        address: "",
-      });
-      setShowSupplierModal(false);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to create supplier");
-    }
-  };
-
-  const handleSupplierInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    setNewSupplier({
-      ...newSupplier,
-      [e.target.name]: e.target.value,
-    });
   };
 
   return (
@@ -795,24 +728,6 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
                       >
                         <Download className="w-4 h-4" />
                       </button>
-                      {order.status === "pending" && userRole === "admin" && (
-                        <>
-                          <button
-                            onClick={() => handleApproveOrder(order)}
-                            className="px-4 py-2 hover:bg-green-50 text-green-700 border border-green-200 rounded-xl transition-colors text-sm font-semibold"
-                            title="Approve and create GRN"
-                          >
-                            Approve
-                          </button>
-                          <button
-                            onClick={() => openRejectOrderModal(order)}
-                            className="px-4 py-2 hover:bg-red-50 text-red-700 border border-red-200 rounded-xl transition-colors text-sm font-semibold"
-                            title="Reject Order"
-                          >
-                            Reject
-                          </button>
-                        </>
-                      )}
                       {order.status === "pending" && userRole !== "admin" && (
                         <button
                           onClick={() => handleCancelOrder(order.id)}
@@ -1291,232 +1206,36 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
         </div>
       )}
 
-      {/* Add Supplier Modal */}
-      {showSupplierModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setShowSupplierModal(false)}>
-          <div className="bg-card rounded-xl shadow-xl max-w-md w-full" onClick={(e) => e.stopPropagation()}>
-            <div className="p-4 border-b border-border flex items-center justify-between sticky top-0 bg-card">
-              <h2 className="text-lg font-bold text-foreground flex items-center gap-2">
-                <Building2 className="w-5 h-5 text-primary" />
-                Add New Supplier
-              </h2>
-              <button
-                onClick={() => setShowSupplierModal(false)}
-                className="p-2 hover:bg-muted rounded-xl transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleAddSupplier} className="p-4 space-y-3 max-h-[70vh] overflow-y-auto">
-              <div>
-                <label htmlFor="supplierName" className="block text-sm mb-1 text-foreground font-medium">
-                  Supplier Name *
-                </label>
-                <input
-                  id="supplierName"
-                  name="name"
-                  type="text"
-                  value={newSupplier.name}
-                  onChange={handleSupplierInputChange}
-                  placeholder="e.g., Fresh Farms Co."
-                  className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
-                  required
-                />
-              </div>
-
-              <div>
-                <label htmlFor="supplierContact" className="block text-sm mb-1 text-foreground font-medium">
-                  Contact Person *
-                </label>
-                <input
-                  id="supplierContact"
-                  name="contact"
-                  type="text"
-                  value={newSupplier.contact}
-                  onChange={handleSupplierInputChange}
-                  placeholder="e.g., John Doe"
-                  className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
-                  required
-                />
-              </div>
-
-              <div>
-                <label htmlFor="supplierEmail" className="block text-sm mb-1 text-foreground font-medium">
-                  Email *
-                </label>
-                <input
-                  id="supplierEmail"
-                  name="email"
-                  type="email"
-                  value={newSupplier.email}
-                  onChange={handleSupplierInputChange}
-                  placeholder="e.g., contact@supplier.com"
-                  className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
-                  required
-                />
-              </div>
-
-              <div>
-                <label htmlFor="supplierPhone" className="block text-sm mb-1 text-foreground font-medium">
-                  Phone *
-                </label>
-                <input
-                  id="supplierPhone"
-                  name="phone"
-                  type="tel"
-                  value={newSupplier.phone}
-                  onChange={handleSupplierInputChange}
-                  placeholder="e.g., +1 234 567 8900"
-                  className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
-                  required
-                />
-              </div>
-
-              <div>
-                <label htmlFor="supplierAddress" className="block text-sm mb-1 text-foreground font-medium">
-                  Address *
-                </label>
-                <textarea
-                  id="supplierAddress"
-                  name="address"
-                  value={newSupplier.address}
-                  onChange={handleSupplierInputChange}
-                  placeholder="e.g., 123 Farm Road, City, State, ZIP"
-                  className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all resize-none"
-                  rows={3}
-                  required
-                />
-              </div>
-
-              <div className="flex gap-3 pt-3">
-                <button
-                  type="submit"
-                  className="flex-1 px-4 py-2 bg-gradient-to-r from-primary to-secondary text-white text-sm rounded-xl hover:shadow-lg hover:shadow-primary/30 transition-all duration-200 flex items-center justify-center gap-2"
-                >
-                  <Save className="w-4 h-4" />
-                  Add Supplier
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowSupplierModal(false);
-                    setNewSupplier({
-                      name: "",
-                      contact: "",
-                      email: "",
-                      phone: "",
-                      address: "",
-                    });
-                  }}
-                  className="flex-1 px-4 py-2 bg-muted text-foreground text-sm rounded-xl hover:bg-muted/80 transition-all duration-200"
-                >
-                  Cancel
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* View Suppliers Modal */}
-      {showSuppliersListModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setShowSuppliersListModal(false)}>
-          <div className="bg-card rounded-2xl shadow-xl border border-border w-full max-w-5xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-            <div className="sticky top-0 bg-card p-6 border-b border-border flex items-center justify-between">
-              <div>
-                <h2 className="text-2xl font-bold text-foreground flex items-center gap-3">
-                  <Users className="w-7 h-7 text-primary" />
-                  Suppliers Directory
-                </h2>
-                <p className="text-sm text-muted-foreground mt-1">All registered suppliers ({suppliers.length})</p>
-              </div>
-              <button
-                onClick={() => setShowSuppliersListModal(false)}
-                className="p-2 hover:bg-muted rounded-xl transition-colors"
-              >
-                <X className="w-6 h-6" />
-              </button>
-            </div>
-
-            <div className="p-6">
-              {suppliers.length > 0 ? (
-                <div className="bg-muted/30 rounded-xl overflow-hidden">
-                  <table className="w-full">
-                    <thead className="bg-muted/50 border-b border-border">
-                      <tr>
-                        <th className="px-4 py-3 text-left text-sm font-medium text-foreground">Supplier Name</th>
-                        <th className="px-4 py-3 text-left text-sm font-medium text-foreground">Contact Person</th>
-                        <th className="px-4 py-3 text-left text-sm font-medium text-foreground">Email</th>
-                        <th className="px-4 py-3 text-left text-sm font-medium text-foreground">Phone</th>
-                        <th className="px-4 py-3 text-left text-sm font-medium text-foreground">Address</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {suppliers.map((supplier, index) => (
-                        <tr key={index} className="hover:bg-muted/20">
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-2">
-                              <div className="w-8 h-8 bg-gradient-to-br from-primary to-secondary rounded-lg flex items-center justify-center text-white font-bold text-sm">
-                                {supplier.name.charAt(0)}
-                              </div>
-                              <span className="font-semibold text-foreground">{supplier.name}</span>
-                            </div>
-                          </td>
-                          <td className="px-4 py-3 text-foreground">{supplier.contact || "N/A"}</td>
-                          <td className="px-4 py-3 text-foreground">
-                            {supplier.email ? (
-                              <a href={`mailto:${supplier.email}`} className="text-primary hover:underline">
-                                {supplier.email}
-                              </a>
-                            ) : (
-                              "N/A"
-                            )}
-                          </td>
-                          <td className="px-4 py-3 text-foreground">
-                            {supplier.phone ? (
-                              <a href={`tel:${supplier.phone}`} className="text-primary hover:underline">
-                                {supplier.phone}
-                              </a>
-                            ) : (
-                              "N/A"
-                            )}
-                          </td>
-                          <td className="px-4 py-3 text-foreground text-sm">{supplier.address || "N/A"}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className="text-center py-12">
-                  <Building2 className="w-16 h-16 text-muted-foreground mx-auto mb-4 opacity-50" />
-                  <p className="text-muted-foreground">No suppliers registered yet</p>
-                </div>
-              )}
-
-              <div className="flex gap-3 pt-6 border-t border-border mt-6">
-                <button
-                  onClick={() => {
-                    setShowSuppliersListModal(false);
-                    setShowSupplierModal(true);
-                  }}
-                  className="flex-1 px-6 py-3 bg-gradient-to-r from-primary to-secondary text-white rounded-xl hover:shadow-lg hover:shadow-primary/30 transition-all duration-200 flex items-center justify-center gap-2"
-                >
-                  <Plus className="w-5 h-5" />
-                  Add New Supplier
-                </button>
-                <button
-                  onClick={() => setShowSuppliersListModal(false)}
-                  className="px-6 py-3 bg-muted text-foreground rounded-xl hover:bg-muted/80 transition-all duration-200"
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Suppliers directory + add form handled by the shared <SuppliersManager/> */}
+      <SuppliersManager
+        open={showSuppliersListModal}
+        onClose={() => setShowSuppliersListModal(false)}
+        suppliers={suppliers.map((s) => ({
+          id: s.backendId ?? s.id,
+          name: s.name,
+          contactPerson: s.contact,
+          email: s.email,
+          phone: s.phone,
+          address: s.address,
+        }))}
+        fields={[
+          { key: 'name', label: 'Supplier Name', required: true, placeholder: 'e.g., Fresh Farms Co.' },
+          { key: 'contactPerson', label: 'Contact Person', required: true, placeholder: 'e.g., John Doe' },
+          { key: 'email', label: 'Email', required: true, placeholder: 'e.g., contact@supplier.com' },
+          { key: 'phone', label: 'Phone', required: true, placeholder: 'e.g., +1 234 567 8900' },
+          { key: 'address', label: 'Address', required: true, type: 'textarea', placeholder: 'e.g., 123 Farm Road, City' },
+        ]}
+        onCreate={async (payload) => {
+          await addSupplier.mutateAsync({
+            name: payload.name,
+            contactPerson: payload.contactPerson,
+            email: payload.email,
+            phone: payload.phone,
+            address: payload.address,
+          });
+          setNewOrder((prev) => ({ ...prev, supplier: payload.name }));
+        }}
+      />
 
       {/* Pending Approval Modal */}
       {showApprovalModal && (

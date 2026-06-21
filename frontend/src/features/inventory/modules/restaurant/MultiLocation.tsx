@@ -1,7 +1,11 @@
 import { useState } from "react";
-import { MapPin, Search, Package, TrendingDown, AlertCircle, Building2, BarChart3, Eye, ArrowLeftRight } from "lucide-react";
+import { MapPin, Search, Package, TrendingDown, AlertCircle, Building2, BarChart3, Eye, ArrowLeftRight, Plus, X } from "lucide-react";
+import { toast } from "sonner";
 import { useRestaurantInventoryQuery, useRestaurantStorageTemperatureOptionsQuery } from "../lib/restaurant";
 import { formatQuantity, getStockStatus, splitCategory, StockStatus } from "../lib/inventoryLogic";
+import { useLocationsQuery, useDomainMutation, domainQueryKeys } from "../lib/domainQueries";
+import { createLocation } from "../../app/api/client";
+import { useSession } from "../../app/hooks/useSession";
 
 type LocationStock = {
   location: string;
@@ -39,6 +43,41 @@ export function MultiLocation() {
   const [selectedStorageTemperature, setSelectedStorageTemperature] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [viewMode, setViewMode] = useState<"products" | "locations">("products");
+
+  const { currentUser } = useSession();
+  const isAdmin = currentUser?.role === "Admin";
+  const { data: apiLocations = [] } = useLocationsQuery();
+  const createLocationMutation = useDomainMutation(createLocation, [domainQueryKeys.locations]);
+
+  const [showAddLocation, setShowAddLocation] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newAddress, setNewAddress] = useState("");
+  const [newManager, setNewManager] = useState("");
+  const [newPhone, setNewPhone] = useState("");
+
+  const handleAddLocation = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newName.trim()) {
+      toast.error("Location name is required.");
+      return;
+    }
+    try {
+      await createLocationMutation.mutateAsync({
+        name: newName.trim(),
+        address: newAddress.trim(),
+        manager: newManager.trim(),
+        phone: newPhone.trim(),
+      });
+      toast.success(`Location "${newName.trim()}" added.`);
+      setShowAddLocation(false);
+      setNewName("");
+      setNewAddress("");
+      setNewManager("");
+      setNewPhone("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to add location.");
+    }
+  };
 
   const sampleLocations: Location[] = [
     { id: "LOC-001", name: "Main Warehouse", type: "warehouse", address: "123 Industrial Ave", manager: "John Smith", totalProducts: 156, lowStockItems: 12, criticalItems: 3, totalValue: 45600 },
@@ -163,6 +202,26 @@ export function MultiLocation() {
     };
   });
 
+  // Merge real locations from the API (so newly added / empty locations appear,
+  // not just those derived from products that reference a location).
+  const derivedLocationNames = new Set(locations.map(loc => loc.name.toLowerCase()));
+  const mergedLocations: Location[] = [
+    ...locations,
+    ...apiLocations
+      .filter(loc => !derivedLocationNames.has((loc.name ?? "").toLowerCase()))
+      .map(loc => ({
+        id: loc.id,
+        name: loc.name,
+        type: "warehouse" as const,
+        address: loc.address || "—",
+        manager: loc.manager || "Unassigned",
+        totalProducts: loc.itemCount ?? 0,
+        lowStockItems: 0,
+        criticalItems: 0,
+        totalValue: 0,
+      })),
+  ];
+
   const filteredProducts = products.filter(product => {
     const matchesSearch = (product.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
                          (product.id || '').toLowerCase().includes(searchQuery.toLowerCase());
@@ -246,7 +305,7 @@ export function MultiLocation() {
   };
 
   const stats = [
-    { label: "Total Locations", value: locations.length, icon: Building2, color: "from-blue-500 to-cyan-500" },
+    { label: "Total Locations", value: mergedLocations.length, icon: Building2, color: "from-blue-500 to-cyan-500" },
     { label: "Total Products", value: products.length, icon: Package, color: "from-purple-500 to-indigo-500" },
     { label: "Critical/Out Alerts", value: locations.reduce((sum, loc) => sum + loc.criticalItems, 0), icon: AlertCircle, color: "from-red-500 to-zinc-800" },
     { label: "Low Stock Items", value: locations.reduce((sum, loc) => sum + loc.lowStockItems, 0), icon: TrendingDown, color: "from-orange-500 to-amber-500" },
@@ -260,6 +319,15 @@ export function MultiLocation() {
           <h1 className="text-3xl font-bold text-foreground mb-1">Multi-Location Tracking</h1>
           <p className="text-muted-foreground">Monitor inventory across all warehouses and stores</p>
         </div>
+        {isAdmin && (
+          <button
+            onClick={() => setShowAddLocation(true)}
+            className="mt-4 md:mt-0 inline-flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-all text-sm font-medium"
+          >
+            <Plus className="w-4 h-4" />
+            Add Location
+          </button>
+        )}
       </div>
 
       {/* Stats */}
@@ -434,7 +502,7 @@ export function MultiLocation() {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {locations.map((location) => (
+          {mergedLocations.map((location) => (
             <div key={location.id} className="bg-card rounded-xl p-4 shadow-sm border border-border hover:shadow-lg transition-all">
               <div className="flex items-start justify-between mb-3">
                 <div className="flex items-center gap-2">
@@ -499,6 +567,43 @@ export function MultiLocation() {
               </button>
             </div>
           ))}
+        </div>
+      )}
+
+      {isAdmin && showAddLocation && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setShowAddLocation(false)}>
+          <div className="w-full max-w-md rounded-2xl bg-card p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-lg font-bold text-foreground">Add Location</h2>
+              <button onClick={() => setShowAddLocation(false)} className="text-muted-foreground hover:text-foreground">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <form onSubmit={handleAddLocation} className="space-y-3">
+              <div>
+                <label className="mb-1 block text-sm font-medium text-foreground">Name<span className="text-red-500"> *</span></label>
+                <input value={newName} onChange={(e) => setNewName(e.target.value)} required placeholder="e.g. Main Warehouse" className="w-full rounded-lg border border-border bg-input-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary" />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-foreground">Address</label>
+                <input value={newAddress} onChange={(e) => setNewAddress(e.target.value)} placeholder="e.g. 123 Main St" className="w-full rounded-lg border border-border bg-input-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary" />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-foreground">Manager</label>
+                <input value={newManager} onChange={(e) => setNewManager(e.target.value)} placeholder="e.g. Jane Doe" className="w-full rounded-lg border border-border bg-input-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary" />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-foreground">Phone</label>
+                <input value={newPhone} onChange={(e) => setNewPhone(e.target.value)} placeholder="e.g. 0917..." className="w-full rounded-lg border border-border bg-input-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary" />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button type="button" onClick={() => setShowAddLocation(false)} className="rounded-lg border border-border px-4 py-2 text-sm">Cancel</button>
+                <button type="submit" disabled={createLocationMutation.isPending} className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary/90 disabled:opacity-60">
+                  {createLocationMutation.isPending ? "Adding..." : "Add Location"}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>

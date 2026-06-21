@@ -7,6 +7,7 @@ import {
   useRestaurantCategoryHierarchyQuery,
   useRestaurantGlobalProductsQuery,
   useRestaurantInventoryQuery,
+  useRestaurantLocationsQuery,
   useRestaurantSuppliersQuery,
   useUpdateRestaurantInventoryMutation,
   useRestaurantProductMergeMetadataQuery,
@@ -15,6 +16,8 @@ import {
 
 type RestaurantInventoryProduct = InventoryProduct & {
   backendId?: string;
+  locationId?: string;
+  condition?: string;
 };
 
 type GlobalProduct = {
@@ -66,6 +69,9 @@ type CatalogProduct = {
   maxStock: number;
   minStock: number;
   reorderPoint: number;
+  price: number;
+  condition: string;
+  locationId: string;
   supplierNames: string[];
 };
 
@@ -96,6 +102,7 @@ export function ProductManagement() {
   const { data: globalProducts = [] } = useRestaurantGlobalProductsQuery() as { data?: GlobalProduct[] };
   const { data: suppliers = [] } = useRestaurantSuppliersQuery() as { data?: Supplier[] };
   const { data: categoryHierarchy = defaultCategoryHierarchy } = useRestaurantCategoryHierarchyQuery();
+  const { data: locations = [] } = useRestaurantLocationsQuery() as { data?: { id: string; name: string }[] };
   const { data: productMetadata = {} } = useRestaurantProductMergeMetadataQuery<ProductMergeMetadata>();
   const updateInventory = useUpdateRestaurantInventoryMutation();
   const saveMetadata = useUpsertRestaurantProductMergeMetadataMutation();
@@ -107,6 +114,9 @@ export function ProductManagement() {
     maxStock: "0",
     minStock: "0",
     reorderPoint: "0",
+    price: "0",
+    condition: "Good",
+    locationId: "",
   });
   const [supplierPrices, setSupplierPrices] = useState<Record<string, string>>({});
 
@@ -141,6 +151,9 @@ export function ProductManagement() {
         maxStock: product.maxStock || 0,
         minStock: product.minStock ?? Math.ceil((product.maxStock || 0) * 0.25),
         reorderPoint: product.reorderPoint ?? Math.ceil((product.maxStock || 0) * 0.3),
+        price: product.price ?? 0,
+        condition: product.condition ?? "Good",
+        locationId: product.locationId ?? "",
         supplierNames: Object.keys(productMetadata.supplierPrices?.[key] ?? {}),
       };
       if (!current.sourceKeys.includes(sourceKey)) current.sourceKeys.push(sourceKey);
@@ -183,6 +196,9 @@ export function ProductManagement() {
       maxStock: String(product.maxStock || 0),
       minStock: String(product.minStock || 0),
       reorderPoint: String(product.reorderPoint || 0),
+      price: String(product.price || 0),
+      condition: product.condition || "Good",
+      locationId: product.locationId || "",
     });
 
     const savedPrices = productMetadata.supplierPrices?.[product.key] ?? {};
@@ -207,6 +223,9 @@ export function ProductManagement() {
       maxStock: Number(form.maxStock) || 0,
       minStock: Number(form.minStock) || 0,
       reorderPoint: Number(form.reorderPoint) || 0,
+      price: Number(form.price) || 0,
+      condition: form.condition,
+      locationId: form.locationId,
     };
     const nextKey = normalizeName(next.name);
     const currentKey = selectedProduct.key;
@@ -256,6 +275,9 @@ export function ProductManagement() {
                 maxStock: next.maxStock,
                 minStock: next.minStock,
                 reorderPoint: next.reorderPoint,
+                price: next.price,
+                condition: next.condition,
+                locationId: next.locationId || undefined,
               },
             }),
           ),
@@ -401,9 +423,29 @@ export function ProductManagement() {
                     {subCategoryOptions.map((subCategory) => <option key={subCategory} value={subCategory}>{subCategory}</option>)}
                   </select>
                 </div>
+                <div>
+                  <label className="mb-1 block text-xs text-foreground">Condition</label>
+                  <select value={form.condition} onChange={(event) => setForm({ ...form, condition: event.target.value })} className="w-full rounded-lg border border-input bg-input-background px-3 py-2 text-sm outline-none focus:border-primary">
+                    <option value="Excellent">Excellent</option>
+                    <option value="Good">Good</option>
+                    <option value="Fair">Fair</option>
+                    <option value="Damaged">Damaged</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs text-foreground">Location</label>
+                  <select value={form.locationId} onChange={(event) => setForm({ ...form, locationId: event.target.value })} className="w-full rounded-lg border border-input bg-input-background px-3 py-2 text-sm outline-none focus:border-primary">
+                    <option value="">— No location assigned —</option>
+                    {locations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}
+                  </select>
+                </div>
               </div>
 
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+                <div>
+                  <label className="mb-1 block text-xs text-foreground">Selling Price</label>
+                  <input type="number" step="0.01" value={form.price} onChange={(event) => setForm({ ...form, price: event.target.value })} className="w-full rounded-lg border border-input bg-input-background px-3 py-2 text-sm outline-none focus:border-primary" />
+                </div>
                 <div>
                   <label className="mb-1 block text-xs text-foreground">Max Stock</label>
                   <input type="number" value={form.maxStock} onChange={(event) => setForm({ ...form, maxStock: event.target.value })} className="w-full rounded-lg border border-input bg-input-background px-3 py-2 text-sm outline-none focus:border-primary" />

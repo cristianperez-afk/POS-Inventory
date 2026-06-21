@@ -94,12 +94,26 @@ export function StockControl() {
     return Math.max(0, wasteQuantity + adjustmentQuantity + posConsumptionQuantity - posVoidQuantity);
   };
 
+  // ABC analysis: rank products by their share of total inventory value (Pareto rule),
+  // not a fixed peso cutoff — A = top ~80% of cumulative value, B = next ~15%, C = the rest.
+  const totalInventoryValue = products.reduce((sum, product) => sum + product.stock * product.price, 0);
+  const classificationBySku = new Map<string, "A" | "B" | "C">();
+  [...products]
+    .sort((a, b) => b.stock * b.price - a.stock * a.price)
+    .reduce((cumulativeValue, product) => {
+      const nextCumulativeValue = cumulativeValue + product.stock * product.price;
+      const cumulativePercent = totalInventoryValue > 0 ? (nextCumulativeValue / totalInventoryValue) * 100 : 100;
+      const classification = cumulativePercent <= 80 ? "A" : cumulativePercent <= 95 ? "B" : "C";
+      classificationBySku.set(product.sku, classification);
+      return nextCumulativeValue;
+    }, 0);
+
   const stockItems: StockItem[] = products.map((product) => {
     const totalValue = product.stock * product.price;
     const effectiveMinStock = product.minStock ?? Math.ceil(product.maxStock * 0.25);
     const effectiveReorderPoint = product.reorderPoint ?? Math.ceil(product.maxStock * 0.3);
     const status = getStockStatus(product.stock, product.maxStock, effectiveMinStock, effectiveReorderPoint);
-    const classification = totalValue >= 500 ? "A" : totalValue >= 150 ? "B" : "C";
+    const classification = classificationBySku.get(product.sku) ?? "C";
     const { main } = splitCategory(product.category);
     const movementQuantity = getRecordedOutflowQuantity(product.name);
     const averageStockEstimate = movementQuantity > 0
