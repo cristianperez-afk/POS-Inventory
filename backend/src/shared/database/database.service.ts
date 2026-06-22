@@ -2466,6 +2466,230 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return rows[0];
   }
 
+  private tableStatus(isShared: boolean, totalSeats: number, occupiedSeats: number) {
+    if (occupiedSeats <= 0) return 'AVAILABLE';
+    if (isShared && occupiedSeats < totalSeats) return 'PARTIALLY_OCCUPIED';
+    return 'OCCUPIED';
+  }
+
+  private async ensureDiningTableSchema(client?: PoolClient) {
+    const run = client ? this.queryWithClient.bind(this, client) : this.query.bind(this);
+    await run(`ALTER TYPE "DiningTableStatus" ADD VALUE IF NOT EXISTS 'PARTIALLY_OCCUPIED'`);
+    await run(`ALTER TABLE "DiningTable" ADD COLUMN IF NOT EXISTS "occupiedSeats" INTEGER NOT NULL DEFAULT 0`);
+    await run(`ALTER TABLE "DiningTable" ADD COLUMN IF NOT EXISTS "isShared" BOOLEAN NOT NULL DEFAULT false`);
+    await run(`UPDATE "DiningTable" SET status = 'AVAILABLE' WHERE status::text IN ('RESERVED', 'CLEANING')`);
+  }
+
+  private async getDiningScope(user: AuthenticatedUser, client?: PoolClient) {
+    const businessId = await this.resolveInventoryBusinessIdForStoreScope(user);
+    if (!businessId) {
+      throw new InternalServerErrorException('Store is not linked to a restaurant business.');
+    }
+
+    const locations = client
+      ? await this.queryWithClient<{ id: string }>(
+          client,
+          `SELECT id FROM "Location" WHERE "businessId" = $1 ORDER BY "createdAt" ASC LIMIT 1`,
+          [businessId],
+        )
+      : await this.query<{ id: string }>(
+          `SELECT id FROM "Location" WHERE "businessId" = $1 ORDER BY "createdAt" ASC LIMIT 1`,
+          [businessId],
+        );
+
+    if (locations[0]) return { businessId, locationId: locations[0].id };
+
+    const createSql = `
+      INSERT INTO "Location" (id, name, address, manager, phone, "businessId", "createdAt", "updatedAt")
+      VALUES ($1, 'Dining Area', '', '', '', $2, NOW(), NOW())
+      RETURNING id
+    `;
+    const created = client
+      ? await this.queryWithClient<{ id: string }>(client, createSql, [randomUUID(), businessId])
+      : await this.query<{ id: string }>(createSql, [randomUUID(), businessId]);
+    return { businessId, locationId: created[0].id };
+  }
+
+  private mapDiningTable(row: any) {
+    const totalSeats = Number(row.capacity ?? 0);
+    const occupiedSeats = Math.max(0, Math.min(totalSeats, Number(row.occupiedSeats ?? 0)));
+    const isShared = Boolean(row.isShared);
+    return {
+      id: row.id,
+      store_id: row.businessId,
+      table_name: row.tableNumber,
+      table_number: row.tableNumber,
+      total_seats: totalSeats,
+      occupied_seats: occupiedSeats,
+      available_seats: Math.max(0, totalSeats - occupiedSeats),
+      is_shared: isShared,
+      status: this.tableStatus(isShared, totalSeats, occupiedSeats),
+      created_at: row.createdAt,
+      updated_at: row.updatedAt,
+    };
+  }
+
+  async listDiningTables(userId: number) {
+    await this.ensureDiningTableSchema();
+    const user = await this.getUserStoreScope(userId);
+    const scope = await this.getDiningScope(user);
+    const rows = await this.query<any>(
+      `
+        SELECT *
+        FROM "DiningTable"
+        WHERE "businessId" = $1 AND "locationId" = $2
+        ORDER BY "tableNumber" ASC
+      `,
+      [scope.businessId, scope.locationId],
+    );
+    return rows.map((row) => this.mapDiningTable(row));
+  }
+
+  async createDiningTable(input: { userId: number; tableNumber: string; totalSeats: number; isShared: boolean }) {
+    await this.ensureDiningTableSchema();
+    const user = await this.getUserStoreScope(input.userId);
+    const scope = await this.getDiningScope(user);
+    const totalSeats = Math.max(1, Math.floor(Number(input.totalSeats) || 1));
+    const rows = await this.query<any>(
+      `
+        INSERT INTO "DiningTable" (
+          id, "tableNumber", capacity, "occupiedSeats", "isShared", status, "locationId", "businessId", "createdAt", "updatedAt"
+        )
+        VALUES ($1, $2, $3, 0, $4, 'AVAILABLE', $5, $6, NOW(), NOW())
+        RETURNING *
+      `,
+      [randomUUID(), input.tableNumber.trim(), totalSeats, input.isShared, scope.locationId, scope.businessId],
+    );
+    return this.mapDiningTable(rows[0]);
+  }
+
+  async updateDiningTable(input: { userId: number; tableId: string; tableNumber: string; totalSeats: number; isShared: boolean }) {
+    await this.ensureDiningTableSchema();
+    const user = await this.getUserStoreScope(input.userId);
+    const scope = await this.getDiningScope(user);
+    const totalSeats = Math.max(1, Math.floor(Number(input.totalSeats) || 1));
+    const currentRows = await this.query<any>(
+      `SELECT * FROM "DiningTable" WHERE id = $1 AND "businessId" = $2 AND "locationId" = $3 LIMIT 1`,
+      [input.tableId, scope.businessId, scope.locationId],
+    );
+    if (!currentRows[0]) throw new NotFoundException('Table not found.');
+
+    const occupiedSeats = Math.min(Number(currentRows[0].occupiedSeats ?? 0), totalSeats);
+    const status = this.tableStatus(input.isShared, totalSeats, occupiedSeats);
+    const rows = await this.query<any>(
+      `
+        UPDATE "DiningTable"
+        SET "tableNumber" = $1, capacity = $2, "occupiedSeats" = $3, "isShared" = $4, status = $5::"DiningTableStatus", "updatedAt" = NOW()
+        WHERE id = $6 AND "businessId" = $7 AND "locationId" = $8
+        RETURNING *
+      `,
+      [input.tableNumber.trim(), totalSeats, occupiedSeats, input.isShared, status, input.tableId, scope.businessId, scope.locationId],
+    );
+    return this.mapDiningTable(rows[0]);
+  }
+
+  async deleteDiningTable(input: { userId: number; tableId: string }) {
+    await this.ensureDiningTableSchema();
+    const user = await this.getUserStoreScope(input.userId);
+    const scope = await this.getDiningScope(user);
+    return this.withTransaction(async (client) => {
+      const tableRows = await this.queryWithClient<any>(
+        client,
+        `SELECT id FROM "DiningTable" WHERE id = $1 AND "businessId" = $2 AND "locationId" = $3 LIMIT 1`,
+        [input.tableId, scope.businessId, scope.locationId],
+      );
+      if (!tableRows[0]) throw new NotFoundException('Table not found.');
+
+      await this.queryWithClient(client, `UPDATE "KitchenOrder" SET "tableId" = NULL WHERE "tableId" = $1`, [input.tableId]);
+      await this.queryWithClient(client, `DELETE FROM "DiningTable" WHERE id = $1`, [input.tableId]);
+      return { ok: true };
+    });
+  }
+
+  async setDiningTableOccupancy(input: { userId: number; tableId: string; occupiedSeats: number }) {
+    await this.ensureDiningTableSchema();
+    const user = await this.getUserStoreScope(input.userId);
+    const scope = await this.getDiningScope(user);
+    const currentRows = await this.query<any>(
+      `SELECT * FROM "DiningTable" WHERE id = $1 AND "businessId" = $2 AND "locationId" = $3 LIMIT 1`,
+      [input.tableId, scope.businessId, scope.locationId],
+    );
+    const table = currentRows[0];
+    if (!table) throw new NotFoundException('Table not found.');
+
+    const totalSeats = Number(table.capacity ?? 0);
+    const isShared = Boolean(table.isShared);
+    const occupiedSeats = Math.max(0, Math.min(totalSeats, Math.floor(Number(input.occupiedSeats) || 0)));
+    const status = this.tableStatus(isShared, totalSeats, occupiedSeats);
+    const rows = await this.query<any>(
+      `
+        UPDATE "DiningTable"
+        SET "occupiedSeats" = $1, status = $2::"DiningTableStatus", "updatedAt" = NOW()
+        WHERE id = $3 AND "businessId" = $4 AND "locationId" = $5
+        RETURNING *
+      `,
+      [occupiedSeats, status, input.tableId, scope.businessId, scope.locationId],
+    );
+    return this.mapDiningTable(rows[0]);
+  }
+
+  private tableNumberFromName(tableName: string | null | undefined) {
+    return String(tableName ?? '').match(/Table\s+([^+]+)/i)?.[1]?.trim() ?? null;
+  }
+
+  private async occupyDiningTable(client: PoolClient, user: AuthenticatedUser, tableName: string | null | undefined, partySize: number) {
+    const tableNumber = this.tableNumberFromName(tableName);
+    if (!tableNumber || partySize <= 0) return;
+    await this.ensureDiningTableSchema(client);
+    const scope = await this.getDiningScope(user, client);
+    const rows = await this.queryWithClient<any>(
+      client,
+      `SELECT * FROM "DiningTable" WHERE "businessId" = $1 AND "locationId" = $2 AND "tableNumber" = $3 FOR UPDATE`,
+      [scope.businessId, scope.locationId, tableNumber],
+    );
+    const table = rows[0];
+    if (!table) throw new NotFoundException('Selected table was not found.');
+
+    const totalSeats = Number(table.capacity ?? 0);
+    const occupiedSeats = Number(table.occupiedSeats ?? 0);
+    const isShared = Boolean(table.isShared);
+    if ((!isShared && table.status !== 'AVAILABLE') || (isShared && totalSeats - occupiedSeats < partySize)) {
+      throw new BadRequestException('Selected table no longer has enough available seats.');
+    }
+
+    const nextOccupied = isShared ? occupiedSeats + partySize : partySize;
+    const status = this.tableStatus(isShared, totalSeats, nextOccupied);
+    await this.queryWithClient(
+      client,
+      `UPDATE "DiningTable" SET "occupiedSeats" = $1, status = $2::"DiningTableStatus", "updatedAt" = NOW() WHERE id = $3`,
+      [nextOccupied, status, table.id],
+    );
+  }
+
+  private async releaseDiningTable(client: PoolClient, user: AuthenticatedUser, tableName: string | null | undefined, partySize: number) {
+    const tableNumber = this.tableNumberFromName(tableName);
+    if (!tableNumber) return;
+    await this.ensureDiningTableSchema(client);
+    const scope = await this.getDiningScope(user, client);
+    const rows = await this.queryWithClient<any>(
+      client,
+      `SELECT * FROM "DiningTable" WHERE "businessId" = $1 AND "locationId" = $2 AND "tableNumber" = $3 FOR UPDATE`,
+      [scope.businessId, scope.locationId, tableNumber],
+    );
+    const table = rows[0];
+    if (!table) return;
+
+    const totalSeats = Number(table.capacity ?? 0);
+    const isShared = Boolean(table.isShared);
+    const nextOccupied = isShared ? Math.max(0, Number(table.occupiedSeats ?? 0) - Math.max(1, partySize)) : 0;
+    const status = this.tableStatus(isShared, totalSeats, nextOccupied);
+    await this.queryWithClient(
+      client,
+      `UPDATE "DiningTable" SET "occupiedSeats" = $1, status = $2::"DiningTableStatus", "updatedAt" = NOW() WHERE id = $3`,
+      [nextOccupied, status, table.id],
+    );
+  }
+
   async createPaidPosOrder(input: any) {
     await this.ensurePosOrderSchema();
     const user = await this.getUserStoreScope(input.userId);
@@ -2583,6 +2807,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         );
       }
 
+      if (input.tableName && !String(input.tableName).toLowerCase().startsWith('queue') && orderStatus !== 'COMPLETED') {
+        await this.occupyDiningTable(client, user, input.tableName, Number.isFinite(partySize) ? partySize : 0);
+      }
+
         return { id: orderId, order_number: orderNumber };
       });
     } catch (error) {
@@ -2660,9 +2888,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
       // Capture the payment status before the update so a void/refund only restocks
       // when the order was actually paid (and so a repeated void is a no-op).
-      const priorRows = await this.queryWithClient<{ payment_status: string | null }>(
+      const priorRows = await this.queryWithClient<{ payment_status: string | null; table_name: string | null; party_size: string | number | null }>(
         client,
-        `SELECT payment_status FROM orders WHERE store_id = $1 AND order_number = $2 LIMIT 1`,
+        `SELECT payment_status, table_name, party_size FROM orders WHERE store_id = $1 AND order_number = $2 LIMIT 1`,
         [user.store_id, input.orderNumber],
       );
       const priorPaymentStatus = priorRows[0]?.payment_status ?? null;
@@ -2731,6 +2959,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         // mirror into the inventory "Sale"/"StockMovement" tables, just like a paid-
         // at-creation order. Guarded so it never double-deducts.
         await this.applyInventoryForPaidPosOrder(client, user, order, input.payment);
+      }
+
+      const nextTableName = input.tableName ?? priorRows[0]?.table_name ?? null;
+      const nextPartySize = Number(input.partySize ?? priorRows[0]?.party_size ?? 0);
+      if (input.tableName && !String(input.tableName).toLowerCase().startsWith('queue') && input.orderStatus !== 'COMPLETED') {
+        await this.occupyDiningTable(client, user, input.tableName, Number.isFinite(nextPartySize) ? nextPartySize : 0);
+      }
+      if ((isPaymentUpdate && priorPaymentStatus !== 'PAID') || input.orderStatus === 'COMPLETED') {
+        await this.releaseDiningTable(client, user, nextTableName, Number.isFinite(nextPartySize) ? nextPartySize : 0);
       }
 
       // Void/refund of a paid order: return the deducted stock and reflect it on the

@@ -751,19 +751,19 @@ async function main() {
     { number: 'T01', capacity: 2, status: 'AVAILABLE', floor: 'Ground Floor' },
     { number: 'T02', capacity: 4, status: 'OCCUPIED',  floor: 'Ground Floor' },
     { number: 'T03', capacity: 4, status: 'AVAILABLE', floor: 'Ground Floor' },
-    { number: 'T04', capacity: 6, status: 'RESERVED',  floor: 'Ground Floor' },
+    { number: 'T04', capacity: 6, status: 'AVAILABLE', floor: 'Ground Floor' },
     { number: 'T05', capacity: 2, status: 'AVAILABLE', floor: 'Ground Floor' },
     { number: 'T06', capacity: 4, status: 'OCCUPIED',  floor: 'Ground Floor' },
     { number: 'T07', capacity: 8, status: 'AVAILABLE', floor: '2nd Floor' },
-    { number: 'T08', capacity: 4, status: 'CLEANING',  floor: '2nd Floor' },
+    { number: 'T08', capacity: 4, status: 'AVAILABLE', floor: '2nd Floor' },
     { number: 'T09', capacity: 2, status: 'AVAILABLE', floor: '2nd Floor' },
     { number: 'T10', capacity: 6, status: 'AVAILABLE', floor: '2nd Floor' },
   ];
   for (const t of tableData) {
     await prisma.diningTable.upsert({
       where: { businessId_locationId_tableNumber: { businessId: restaurantBusiness.id, locationId: diningArea.id, tableNumber: t.number } },
-      update: { capacity: t.capacity, status: t.status as any, floor: t.floor },
-      create: { tableNumber: t.number, capacity: t.capacity, status: t.status as any, floor: t.floor, locationId: diningArea.id, businessId: restaurantBusiness.id },
+      update: { capacity: t.capacity, occupiedSeats: t.status === 'OCCUPIED' ? t.capacity : 0, isShared: false, status: t.status as any, floor: t.floor },
+      create: { tableNumber: t.number, capacity: t.capacity, occupiedSeats: t.status === 'OCCUPIED' ? t.capacity : 0, isShared: false, status: t.status as any, floor: t.floor, locationId: diningArea.id, businessId: restaurantBusiness.id },
     });
   }
 

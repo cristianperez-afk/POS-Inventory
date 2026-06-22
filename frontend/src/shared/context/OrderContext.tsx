@@ -57,7 +57,7 @@ export interface QueuedOrder {
 
 export interface TableStatus {
   number: number;
-  status: 'available' | 'occupied' | 'reserved' | 'maintenance';
+  status: 'available' | 'occupied' | 'partially_occupied';
   orderId?: string;
 }
 

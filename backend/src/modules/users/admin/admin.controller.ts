@@ -342,6 +342,49 @@ export class AdminController {
     return this.adminService.listPosOrders(Number(userId));
   }
 
+  @Get('pos/tables')
+  listDiningTables(@Query('user_id') userId: string) {
+    return this.adminService.listDiningTables(Number(userId));
+  }
+
+  @Post('pos/tables')
+  createDiningTable(@Body() body: any) {
+    return this.adminService.createDiningTable({
+      userId: Number(body.user_id),
+      tableNumber: String(body.table_number ?? body.table_name ?? ''),
+      totalSeats: Number(body.total_seats),
+      isShared: Boolean(body.is_shared),
+    });
+  }
+
+  @Patch('pos/tables/:id')
+  updateDiningTable(@Param('id') id: string, @Body() body: any) {
+    return this.adminService.updateDiningTable({
+      userId: Number(body.user_id),
+      tableId: id,
+      tableNumber: String(body.table_number ?? body.table_name ?? ''),
+      totalSeats: Number(body.total_seats),
+      isShared: Boolean(body.is_shared),
+    });
+  }
+
+  @Delete('pos/tables/:id')
+  deleteDiningTable(@Param('id') id: string, @Query('user_id') userId: string) {
+    return this.adminService.deleteDiningTable({
+      userId: Number(userId),
+      tableId: id,
+    });
+  }
+
+  @Patch('pos/tables/:id/occupancy')
+  setDiningTableOccupancy(@Param('id') id: string, @Body() body: any) {
+    return this.adminService.setDiningTableOccupancy({
+      userId: Number(body.user_id),
+      tableId: id,
+      occupiedSeats: Number(body.occupied_seats),
+    });
+  }
+
   @Get('pos/next-order-number')
   getNextPosOrderNumber(@Query('user_id') userId: string) {
     return this.adminService.getNextPosOrderNumber(Number(userId));

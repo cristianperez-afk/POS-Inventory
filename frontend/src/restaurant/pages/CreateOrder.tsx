@@ -166,11 +166,9 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
   const [changeAmount, setChangeAmount] = useState(0);
   const [successOrderDetails, setSuccessOrderDetails] = useState<any>(null);
   const [showTableSelection, setShowTableSelection] = useState(false);
-  const [selectedTableNumber, setSelectedTableNumber] = useState<number | null>(null);
-  const [selectedTables, setSelectedTables] = useState<number[]>([]);
+  const [selectedTableNumber, setSelectedTableNumber] = useState<string | null>(null);
+  const [selectedTables, setSelectedTables] = useState<string[]>([]);
   const [partySize, setPartySize] = useState<string>('');
-  const [occupancyType, setOccupancyType] = useState<OccupancyType | ''>('');
-  const [billingSetup, setBillingSetup] = useState<BillingSetup>('single-bill');
   const [discountType, setDiscountType] = useState<string>('none');
   const [customDiscountPercent, setCustomDiscountPercent] = useState<number>(0);
   const [discountIdNumber, setDiscountIdNumber] = useState<string>('');
@@ -865,7 +863,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       const party = parseInt(partySize) || 0;
       const totalCapacity = selectedTables.reduce((sum, tableNum) => {
         const table = tables.find(t => t.number === tableNum);
-        return sum + (table?.seats || 0);
+        return sum + (table?.isShared ? table.availableSeats : table?.seats || 0);
       }, 0);
 
       if (party > totalCapacity) {
@@ -914,23 +912,14 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
           frame: '#f7d5bf',
           surface: 'linear-gradient(145deg, #fff9f4 0%, #fff2e8 100%)',
         };
-      case 'reserved':
+      case 'partially_occupied':
         return {
-          accent: '#3b82f6',
-          accentSoft: 'rgba(59, 130, 246, 0.16)',
-          border: 'rgba(59, 130, 246, 0.72)',
-          glow: 'rgba(59, 130, 246, 0.22)',
-          frame: '#c9dbfb',
-          surface: 'linear-gradient(145deg, #f7fbff 0%, #edf5ff 100%)',
-        };
-      case 'maintenance':
-        return {
-          accent: '#6b7280',
-          accentSoft: 'rgba(107, 114, 128, 0.18)',
-          border: 'rgba(107, 114, 128, 0.72)',
-          glow: 'rgba(107, 114, 128, 0.18)',
-          frame: '#d8dee5',
-          surface: 'linear-gradient(145deg, #fbfbfc 0%, #eef1f4 100%)',
+          accent: '#eab308',
+          accentSoft: 'rgba(234, 179, 8, 0.16)',
+          border: 'rgba(234, 179, 8, 0.72)',
+          glow: 'rgba(234, 179, 8, 0.22)',
+          frame: '#f3df8b',
+          surface: 'linear-gradient(145deg, #fffdf2 0%, #fef7d2 100%)',
         };
       default:
         return {
@@ -1084,7 +1073,11 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
     </div>
   );
 
-  const availableTables = tables.filter(t => t.status === 'available');
+  const tableCanSeat = (table: (typeof tables)[number], party: number) =>
+    table.isShared
+      ? table.availableSeats >= party
+      : table.status === 'available' && table.seats >= party;
+  const availableTables = tables.filter(t => tableCanSeat(t, Math.max(1, parseInt(partySize) || 1)));
 
   const dineInItems = cart.filter(item => item.orderType === 'dine-in');
   const takeoutItems = cart.filter(item => item.orderType === 'takeout');
@@ -1257,67 +1250,6 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
         {/* Show party size and table selection when Dine-In is selected */}
         {tableManagementEnabled && diningOption === 'dine-in' && (
           <div className="mb-4 space-y-2">
-            <div>
-              <label className="block text-xs text-muted-foreground mb-1.5">Occupancy Type:</label>
-              <select
-                value={occupancyType}
-                onChange={(e) => {
-                  const nextOccupancyType = e.target.value as OccupancyType | '';
-                  setOccupancyType(nextOccupancyType);
-                  setSelectedTableNumber(null);
-                  setSelectedTables([]);
-                  setIsInQueue(false);
-                  setQueuePosition(null);
-                  if (nextOccupancyType === 'whole-table') {
-                    setBillingSetup('single-bill');
-                  }
-                }}
-                className={`w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary ${
-                  !occupancyType ? 'text-gray-400' : 'bg-white'
-                }`}
-              >
-                <option value="" disabled hidden>Select Occupancy Type</option>
-                <option value="whole-table">Whole Table</option>
-                <option value="per-seat">Per Seat</option>
-              </select>
-            </div>
-
-            <div className="rounded-lg border border-border bg-muted/30 p-3">
-              <label className="block text-xs text-muted-foreground mb-1.5">Billing Setup:</label>
-              {occupancyType === 'whole-table' ? (
-                <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-                  Single Bill only for Whole Table occupancy
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  <button
-                    type="button"
-                    onClick={() => setBillingSetup('single-bill')}
-                    className={`rounded-lg border px-3 py-2 text-sm text-left transition-colors ${
-                      billingSetup === 'single-bill'
-                        ? 'border-primary bg-primary/10 text-primary'
-                        : 'border-border bg-white hover:bg-muted'
-                    }`}
-                  >
-                    <strong>Single Bill</strong>
-                    <p className="mt-1 text-xs text-muted-foreground">Per-seat occupancy, but one customer or group pays for all seats.</p>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setBillingSetup('separate-bills')}
-                    className={`rounded-lg border px-3 py-2 text-sm text-left transition-colors ${
-                      billingSetup === 'separate-bills'
-                        ? 'border-primary bg-primary/10 text-primary'
-                        : 'border-border bg-white hover:bg-muted'
-                    }`}
-                  >
-                    <strong>Separate Bills</strong>
-                    <p className="mt-1 text-xs text-muted-foreground">Each seat or customer can have an individual bill and payment transaction.</p>
-                  </button>
-                </div>
-              )}
-            </div>
-
             <div>
               <label className="block text-xs text-muted-foreground mb-1.5">Number of Customers (Pila mo kabuok?):</label>
               <input
@@ -2439,15 +2371,14 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                         {(() => {
                           const party = parseInt(partySize);
                           const bestTable = availableTables
-                            .filter(t => t.seats >= party)
-                            .sort((a, b) => a.seats - b.seats)[0];
+                            .sort((a, b) => (a.isShared ? a.availableSeats : a.seats) - (b.isShared ? b.availableSeats : b.seats))[0];
 
                           if (bestTable) {
-                            return `Recommended: Table ${bestTable.number} (${bestTable.seats} seats)`;
+                            return `Recommended: Table ${bestTable.number} (${bestTable.isShared ? bestTable.availableSeats : bestTable.seats} seats available)`;
                           } else {
-                            const totalAvailableSeats = availableTables.reduce((sum, t) => sum + t.seats, 0);
+                            const totalAvailableSeats = availableTables.reduce((sum, t) => sum + (t.isShared ? t.availableSeats : t.seats), 0);
                             if (totalAvailableSeats >= party) {
-                              return 'Multiple tables needed - select tables to combine';
+                              return 'Select one table with enough available seats';
                             } else {
                               return 'No available tables can accommodate this party size';
                             }
@@ -2461,7 +2392,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                         <p className="text-lg font-bold text-blue-700">
                           {selectedTables.reduce((sum, tableNum) => {
                             const table = tables.find(t => t.number === tableNum);
-                            return sum + (table?.seats || 0);
+                            return sum + (table?.isShared ? table.availableSeats : table?.seats || 0);
                           }, 0)} seats
                         </p>
                       </div>
@@ -2477,7 +2408,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                     <h3 className="font-medium text-orange-900">No Tables Available</h3>
                   </div>
                   <p className="text-sm text-orange-800">
-                    All tables are currently occupied, reserved, or under maintenance. You can either:
+                    No table has enough available seats. You can either:
                   </p>
                   <ul className="text-sm text-orange-800 mt-2 ml-4 list-disc space-y-1">
                     <li>Wait in the queue and we'll assign you a table when one becomes available</li>
@@ -2490,19 +2421,21 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                 {tables.map(table => {
                   const party = parseInt(partySize) || 0;
                   const isSelected = selectedTables.includes(table.number);
-                  const isBestMatch = table.status === 'available' && table.seats >= party &&
-                    table.seats === availableTables.filter(t => t.seats >= party).sort((a, b) => a.seats - b.seats)[0]?.seats;
+                  const canSeat = tableCanSeat(table, party);
+                  const tableAvailableSeats = table.isShared ? table.availableSeats : table.seats;
+                  const bestTable = [...availableTables].sort((a, b) => (a.isShared ? a.availableSeats : a.seats) - (b.isShared ? b.availableSeats : b.seats))[0];
+                  const isBestMatch = canSeat && bestTable?.id === table.id;
                   const theme = getTableTheme(table.status);
                   const rectangular = table.seats > 4;
                   const chairs = getChairLayout(table.seats, rectangular);
                   const displayedChairs = chairs.slice(0, 8);
                   const statusLabel = table.status === 'available'
                     ? 'Available'
+                    : table.status === 'partially_occupied'
+                    ? 'Partially Occupied'
                     : table.status === 'occupied'
                     ? 'Occupied'
-                    : table.status === 'reserved'
-                    ? 'Reserved'
-                    : 'Maintenance';
+                    : 'Available';
 
                   return (
                     <div
@@ -2533,24 +2466,24 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                           <p className="text-[13px] font-semibold text-slate-800">Table {table.number}</p>
                           <div className="flex items-center gap-1 text-xs text-gray-500 mt-1">
                             <Users className="w-3 h-3" />
-                            <span>{table.seats} seats</span>
+                            <span>{table.isShared ? `${table.availableSeats}/${table.seats} seats available` : `${table.seats} seats`}</span>
                           </div>
                         </div>
                       </div>
 
                       <button
                         onClick={() => {
-                          if (table.status === 'available') {
+                          if (canSeat) {
                             if (isSelected) {
                               setSelectedTables(selectedTables.filter(t => t !== table.number));
                             } else {
-                              setSelectedTables([...selectedTables, table.number]);
+                              setSelectedTables([table.number]);
                             }
                           }
                         }}
-                        disabled={table.status !== 'available'}
+                        disabled={!canSeat}
                         className={`relative h-32 w-full rounded-[18px] focus:outline-none transition-transform ${
-                          table.status === 'available' ? 'cursor-pointer hover:scale-[1.01]' : 'cursor-not-allowed opacity-80'
+                          canSeat ? 'cursor-pointer hover:scale-[1.01]' : 'cursor-not-allowed opacity-80'
                         }`}
                       >
                         {displayedChairs.map((chair, index) =>
@@ -2618,8 +2551,8 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                         </span>
                         <div className={`w-full px-7 pr-8 py-1.5 rounded-xl text-[13px] font-medium border ${
                           table.status === 'available' ? 'border-green-200 bg-green-50/70 text-green-700' :
+                          table.status === 'partially_occupied' ? 'border-yellow-200 bg-yellow-50/80 text-yellow-700' :
                           table.status === 'occupied' ? 'border-orange-200 bg-orange-50/80 text-orange-700' :
-                          table.status === 'reserved' ? 'border-blue-200 bg-blue-50/80 text-blue-700' :
                           'border-gray-200 bg-gray-50 text-gray-700'
                         }`}>
                           {statusLabel}
@@ -2652,21 +2585,12 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white font-bold text-sm shadow-md">
+                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-yellow-400 to-yellow-600 flex items-center justify-center text-white font-bold text-sm shadow-md">
                       #
                     </div>
                     <div>
-                      <p className="text-sm font-medium text-gray-800">Reserved</p>
-                      <p className="text-xs text-gray-500">Booked</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-gray-400 to-gray-600 flex items-center justify-center text-white font-bold text-sm shadow-md">
-                      #
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-gray-800">Maintenance</p>
-                      <p className="text-xs text-gray-500">Out of service</p>
+                      <p className="text-sm font-medium text-gray-800">Partially Occupied</p>
+                      <p className="text-xs text-gray-500">Shared seats open</p>
                     </div>
                   </div>
                 </div>

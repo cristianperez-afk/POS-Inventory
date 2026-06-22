@@ -155,6 +155,8 @@ model DiningTable {
   id            String            @id @default(uuid())
   tableNumber   String
   capacity      Int
+  occupiedSeats Int               @default(0)
+  isShared      Boolean           @default(false)
   status        DiningTableStatus @default(AVAILABLE)
   floor         String?
   notes         String?
@@ -291,9 +293,8 @@ model RecipeIngredient {
 
 enum DiningTableStatus {
   AVAILABLE
+  PARTIALLY_OCCUPIED
   OCCUPIED
-  RESERVED
-  CLEANING
 }
 
 enum KitchenOrderStatus {

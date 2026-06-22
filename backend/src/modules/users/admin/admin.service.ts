@@ -126,4 +126,24 @@ export class AdminService {
   listPosOrders(userId: number) {
     return this.databaseService.listPosOrders(userId);
   }
+
+  listDiningTables(userId: number) {
+    return this.databaseService.listDiningTables(userId);
+  }
+
+  createDiningTable(input: { userId: number; tableNumber: string; totalSeats: number; isShared: boolean }) {
+    return this.databaseService.createDiningTable(input);
+  }
+
+  updateDiningTable(input: { userId: number; tableId: string; tableNumber: string; totalSeats: number; isShared: boolean }) {
+    return this.databaseService.updateDiningTable(input);
+  }
+
+  deleteDiningTable(input: { userId: number; tableId: string }) {
+    return this.databaseService.deleteDiningTable(input);
+  }
+
+  setDiningTableOccupancy(input: { userId: number; tableId: string; occupiedSeats: number }) {
+    return this.databaseService.setDiningTableOccupancy(input);
+  }
 }

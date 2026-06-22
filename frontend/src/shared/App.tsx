@@ -226,7 +226,7 @@ export default function App() {
         <StoreSettingsProvider currentUser={currentUser}>
           <AppAlertProvider>
             <OrderProvider currentUser={currentUser}>
-              <TableProvider>
+              <TableProvider currentUser={currentUser}>
           {currentPage === 'login' && (
             <LoginPage onLogin={handleLogin} />
           )}

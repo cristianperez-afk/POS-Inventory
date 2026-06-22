@@ -63,7 +63,7 @@ export function POSDashboard({ onLogout, onNavigate, isAdmin = false, storeBrand
 
   // Calculate table status breakdown
   const occupiedTables = tables.filter(t => t.status === 'occupied').length;
-  const maintenanceTables = tables.filter(t => t.status === 'maintenance').length;
+  const partiallyOccupiedTables = tables.filter(t => t.status === 'partially_occupied').length;
 
   const salesDataByFilter = {
     week: [
@@ -211,7 +211,7 @@ export function POSDashboard({ onLogout, onNavigate, isAdmin = false, storeBrand
               <p className="text-sm text-muted-foreground mb-1">Available Tables</p>
               <h2 className="text-2xl text-primary">{availableTables} / {totalTables}</h2>
               <p className="text-xs text-muted-foreground mt-1">
-                {occupiedTables} Occupied · {maintenanceTables} Maintenance
+                {occupiedTables} Occupied · {partiallyOccupiedTables} Partially Occupied
               </p>
             </div>
             <div className="bg-card rounded-xl shadow-sm border border-border p-5">
