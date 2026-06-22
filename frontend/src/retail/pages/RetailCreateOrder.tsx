@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { Sidebar } from '../../shared/components/Sidebar';
 import { Page, type StoreBrand } from '../../shared/App';
 import type { StaffType, StoreType } from '../../auth/types/auth';
-import { Minus, Plus, Search, X, AlertCircle, ShoppingBag, Shirt, Barcode, Receipt, Trash2, Printer } from 'lucide-react';
+import { Minus, Plus, Search, X, AlertCircle, ShoppingBag, Barcode, Receipt, Trash2, Printer } from 'lucide-react';
 import { useOrders } from '../context/RetailOrderContext';
 import { ThermalReceipt } from './RetailThermalReceipt';
 import { useStoreSettings } from '../../shared/context/StoreSettingsContext';
@@ -531,8 +531,7 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
       <div className="flex-1 overflow-auto bg-gray-50">
         <div className="p-5">
           <div className="flex items-center gap-2 mb-4">
-            <Shirt className="w-6 h-6 text-primary" />
-            <h2 className="text-lg">Ukay-Ukay Products</h2>
+            <h2 className="text-lg">Product Menu</h2>
           </div>
 
           <div className="mb-4">
