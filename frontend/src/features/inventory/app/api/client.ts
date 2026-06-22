@@ -165,6 +165,65 @@ export function createStockMovement(data: unknown) {
   });
 }
 
+export interface IngredientConsumptionRow {
+  itemId: string;
+  name: string;
+  category: string | null;
+  unit: string | null;
+  totalConsumed: number;
+  movementCount: number;
+  firstConsumedAt: string | null;
+  lastConsumedAt: string | null;
+  currentStock: number | null;
+}
+
+export interface IngredientConsumptionReport {
+  from: string | null;
+  to: string | null;
+  totalIngredients: number;
+  totalQuantityConsumed: number;
+  items: IngredientConsumptionRow[];
+}
+
+export function getIngredientConsumptionReport(params?: { module?: BusinessModule; from?: string; to?: string }) {
+  const query = new URLSearchParams();
+  if (params?.module) query.set('module', params.module);
+  if (params?.from) query.set('from', params.from);
+  if (params?.to) query.set('to', params.to);
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  return request<IngredientConsumptionReport>(`/api/reports/ingredient-consumption${suffix}`);
+}
+
+export interface ItemsSoldRow {
+  itemId: string | null;
+  name: string;
+  category: string | null;
+  unit: string | null;
+  unitsSold: number;
+  revenue: number;
+  salesCount: number;
+  lastSoldAt: string | null;
+  currentStock: number | null;
+}
+
+export interface ItemsSoldReport {
+  from: string | null;
+  to: string | null;
+  totalItems: number;
+  totalUnitsSold: number;
+  totalRevenue: number;
+  items: ItemsSoldRow[];
+}
+
+export function getItemsSoldReport(params?: { module?: BusinessModule; from?: string; to?: string }) {
+  const query = new URLSearchParams();
+  if (params?.module) query.set('module', params.module);
+  if (params?.from) query.set('from', params.from);
+  if (params?.to) query.set('to', params.to);
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  return request<ItemsSoldReport>(`/api/reports/items-sold${suffix}`);
+}
+
 export function getRecipes(params?: { active?: boolean }) {
   const query = new URLSearchParams();
   if (params?.active !== undefined) query.set('active', String(params.active));

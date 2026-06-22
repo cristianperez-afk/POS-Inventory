@@ -1250,6 +1250,100 @@ export class InventoryApiService {
     return this.paged(rows);
   }
 
+  // Summary of ingredients consumed (RECIPE_CONSUMPTION) per item over a date range,
+  // for the restaurant kitchen-usage report. Optional `from`/`to` are inclusive dates
+  // (YYYY-MM-DD); defaults to the trailing 30 days.
+  async ingredientConsumptionReport(headers: HeadersLike, query: Record<string, string | undefined>) {
+    const scope = await this.resolveScope(headers);
+    const from = query.from && /^\d{4}-\d{2}-\d{2}$/.test(query.from) ? query.from : null;
+    const to = query.to && /^\d{4}-\d{2}-\d{2}$/.test(query.to) ? query.to : null;
+
+    const rows = await this.safeQuery<Record<string, unknown>>(
+      `
+        SELECT
+          sm."itemId"                                   AS "itemId",
+          COALESCE(i.name, 'Unknown item')              AS name,
+          i.category                                    AS category,
+          COALESCE(sm.unit, i.unit)                     AS unit,
+          SUM(sm.quantity)                              AS "totalConsumed",
+          COUNT(*)::int                                 AS "movementCount",
+          MIN(sm."createdAt")                           AS "firstConsumedAt",
+          MAX(sm."createdAt")                           AS "lastConsumedAt",
+          i.quantity                                    AS "currentStock"
+        FROM "StockMovement" sm
+        LEFT JOIN "InventoryItem" i ON i.id = sm."itemId"
+        WHERE sm."businessId" = $1
+          AND sm.module = $2::"BusinessModule"
+          AND sm.type = 'RECIPE_CONSUMPTION'::"StockMovementType"
+          AND ($3::date IS NULL OR sm."createdAt" >= $3::date)
+          AND ($4::date IS NULL OR sm."createdAt" < ($4::date + INTERVAL '1 day'))
+        GROUP BY sm."itemId", i.name, i.category, COALESCE(sm.unit, i.unit), i.quantity
+        ORDER BY SUM(sm.quantity) DESC
+      `,
+      [scope.businessId, query.module ?? scope.module, from, to],
+    );
+
+    const items = rows.map((r) => ({ ...r, totalConsumed: Number(r.totalConsumed ?? 0) }));
+    return {
+      from,
+      to,
+      totalIngredients: items.length,
+      totalQuantityConsumed: items.reduce((sum, r) => sum + Number(r.totalConsumed ?? 0), 0),
+      items,
+    };
+  }
+
+  // Summary of goods sold per item over a date range, from completed sales' line
+  // items (excludes voided/refunded sales). Optional `from`/`to` are inclusive dates
+  // (YYYY-MM-DD); defaults to the trailing 30 days. Bundle-ready: if a bundle is sold
+  // as component items, each component appears here; if sold as one bundle line, the
+  // bundle appears by name.
+  async itemsSoldReport(headers: HeadersLike, query: Record<string, string | undefined>) {
+    const scope = await this.resolveScope(headers);
+    const from = query.from && /^\d{4}-\d{2}-\d{2}$/.test(query.from) ? query.from : null;
+    const to = query.to && /^\d{4}-\d{2}-\d{2}$/.test(query.to) ? query.to : null;
+
+    const rows = await this.safeQuery<Record<string, unknown>>(
+      `
+        SELECT
+          si."inventoryItemId"                          AS "itemId",
+          COALESCE(i.name, si.name, 'Unknown item')     AS name,
+          i.category                                    AS category,
+          i.unit                                        AS unit,
+          SUM(si.quantity)                              AS "unitsSold",
+          SUM(si."totalPrice")                          AS revenue,
+          COUNT(DISTINCT si."saleId")::int              AS "salesCount",
+          MAX(s."createdAt")                            AS "lastSoldAt",
+          i.quantity                                    AS "currentStock"
+        FROM "SaleItem" si
+        JOIN "Sale" s ON s.id = si."saleId"
+        LEFT JOIN "InventoryItem" i ON i.id = si."inventoryItemId"
+        WHERE s."businessId" = $1
+          AND s.module = $2::"BusinessModule"
+          AND s.status = 'COMPLETED'
+          AND ($3::date IS NULL OR s."createdAt" >= $3::date)
+          AND ($4::date IS NULL OR s."createdAt" < ($4::date + INTERVAL '1 day'))
+        GROUP BY si."inventoryItemId", COALESCE(i.name, si.name, 'Unknown item'), i.category, i.unit, i.quantity
+        ORDER BY SUM(si."totalPrice") DESC
+      `,
+      [scope.businessId, query.module ?? scope.module, from, to],
+    );
+
+    const items = rows.map((r) => ({
+      ...r,
+      unitsSold: Number(r.unitsSold ?? 0),
+      revenue: Number(r.revenue ?? 0),
+    }));
+    return {
+      from,
+      to,
+      totalItems: items.length,
+      totalUnitsSold: items.reduce((sum, r) => sum + Number(r.unitsSold ?? 0), 0),
+      totalRevenue: items.reduce((sum, r) => sum + Number(r.revenue ?? 0), 0),
+      items,
+    };
+  }
+
   async createStockMovement(headers: HeadersLike, body: Record<string, unknown>) {
     const scope = await this.resolveScope(headers);
     const rows = await this.safeQuery<Record<string, unknown>>(

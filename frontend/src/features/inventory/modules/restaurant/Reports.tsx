@@ -5,6 +5,7 @@ import {
   useRestaurantAdjustmentsQuery,
   useRestaurantGoodsRecordsQuery,
   useRestaurantInventoryMovementsQuery,
+  useRestaurantIngredientConsumptionQuery,
   useRestaurantInventoryQuery,
   useRestaurantKitchenOrdersQuery,
   useRestaurantPurchaseOrdersQuery,
@@ -15,7 +16,7 @@ import {
 import { useSession } from "../../app/hooks/useSession";
 import { defaultCategoryHierarchy, formatCurrency, getInventoryValue, splitCategory } from "../lib/inventoryLogic";
 
-type TabType = 'overview' | 'inventory' | 'orders' | 'operations' | 'audit' | 'financial' | 'confidential';
+type TabType = 'overview' | 'inventory' | 'consumption' | 'orders' | 'operations' | 'audit' | 'financial' | 'confidential';
 
 const COLORS = ["#007A5E", "#009BA5", "#F59E0B", "#DC2626", "#8B5CF6", "#EC4899", "#10b981"];
 
@@ -58,6 +59,13 @@ const normalizeAuditActor = (value: unknown) => String(value ?? '').trim().toLow
 export function Reports() {
   const { currentUser } = useSession();
   const [activeTab, setActiveTab] = useState<TabType>('overview');
+  const [consumptionFrom, setConsumptionFrom] = useState('');
+  const [consumptionTo, setConsumptionTo] = useState('');
+  const consumptionQuery = useRestaurantIngredientConsumptionQuery({
+    from: consumptionFrom || undefined,
+    to: consumptionTo || undefined,
+  });
+  const consumption = consumptionQuery.data;
   const [dateRange, setDateRange] = useState("30days");
   const [selectedMainCategory, setSelectedMainCategory] = useState("all");
   const [selectedSubCategory, setSelectedSubCategory] = useState("all");
@@ -375,6 +383,19 @@ export function Reports() {
       Object.entries(categoryStats).forEach(([cat, d]) => {
         csv += `${cat},${d.quantity},${d.value.toFixed(2)},${d.items}\n`;
       });
+    } else if (activeTab === 'consumption') {
+      csv = 'Ingredient,Category,Total Consumed,Unit,Times Used,Current Stock,Last Used\n';
+      (consumption?.items ?? []).forEach(r => {
+        csv += [
+          r.name,
+          r.category ?? '',
+          r.totalConsumed,
+          r.unit ?? '',
+          r.movementCount,
+          r.currentStock ?? '',
+          formatAuditDate(r.lastConsumedAt ?? undefined),
+        ].map(csvValue).join(',') + '\n';
+      });
     } else if (activeTab === 'orders') {
       csv = 'Date,Supplier,Status,Total\n';
       purchaseOrders.forEach(o => {
@@ -471,6 +492,7 @@ export function Reports() {
       <div className="flex gap-0 mb-6 border-b border-border overflow-x-auto">
         <button onClick={() => setActiveTab('overview')} className={tabCls('overview')}>Overview</button>
         <button onClick={() => setActiveTab('inventory')} className={tabCls('inventory')}>Inventory Report</button>
+        <button onClick={() => setActiveTab('consumption')} className={tabCls('consumption')}>Ingredients Used</button>
         <button onClick={() => setActiveTab('orders')} className={tabCls('orders')}>Purchase Orders</button>
         <button onClick={() => setActiveTab('operations')} className={tabCls('operations')}>Operations Report</button>
         <button onClick={() => setActiveTab('audit')} className={tabCls('audit')}>
@@ -649,6 +671,80 @@ export function Reports() {
                 </div>
               ))}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Ingredients Used (consumption) ─────────────────────────────────────── */}
+      {activeTab === 'consumption' && (
+        <div>
+          <div className="flex flex-wrap items-end justify-between gap-4 mb-4">
+            <div>
+              <h2 className="text-lg font-semibold text-foreground">Ingredients Used</h2>
+              <p className="text-sm text-muted-foreground">
+                Quantity of each ingredient consumed by completed sales{consumption?.from || consumption?.to ? '' : ' (last 30 days)'}.
+              </p>
+            </div>
+            <div className="flex items-end gap-3">
+              <label className="text-xs text-muted-foreground">
+                From
+                <input type="date" value={consumptionFrom} onChange={e => setConsumptionFrom(e.target.value)}
+                  className="block mt-1 px-3 py-2 border border-border rounded-lg text-sm bg-background" />
+              </label>
+              <label className="text-xs text-muted-foreground">
+                To
+                <input type="date" value={consumptionTo} onChange={e => setConsumptionTo(e.target.value)}
+                  className="block mt-1 px-3 py-2 border border-border rounded-lg text-sm bg-background" />
+              </label>
+              {(consumptionFrom || consumptionTo) && (
+                <button onClick={() => { setConsumptionFrom(''); setConsumptionTo(''); }}
+                  className="px-3 py-2 text-sm text-muted-foreground hover:text-foreground">Clear</button>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+            <div className="bg-card border border-border rounded-xl p-4">
+              <p className="text-xs text-muted-foreground">Ingredients used</p>
+              <p className="text-2xl font-semibold text-foreground">{consumption?.totalIngredients ?? 0}</p>
+            </div>
+            <div className="bg-card border border-border rounded-xl p-4">
+              <p className="text-xs text-muted-foreground">Total quantity consumed</p>
+              <p className="text-2xl font-semibold text-foreground">{(consumption?.totalQuantityConsumed ?? 0).toLocaleString()}</p>
+            </div>
+          </div>
+
+          <div className="bg-card border border-border rounded-xl overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 text-muted-foreground">
+                <tr>
+                  <th className="text-left px-4 py-3 font-medium">Ingredient</th>
+                  <th className="text-left px-4 py-3 font-medium">Category</th>
+                  <th className="text-right px-4 py-3 font-medium">Consumed</th>
+                  <th className="text-right px-4 py-3 font-medium">Times used</th>
+                  <th className="text-right px-4 py-3 font-medium">Current stock</th>
+                  <th className="text-left px-4 py-3 font-medium">Last used</th>
+                </tr>
+              </thead>
+              <tbody>
+                {consumptionQuery.isLoading && (
+                  <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">Loading…</td></tr>
+                )}
+                {!consumptionQuery.isLoading && (consumption?.items?.length ?? 0) === 0 && (
+                  <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">No ingredient consumption in this period.</td></tr>
+                )}
+                {consumption?.items?.map(r => (
+                  <tr key={r.itemId} className="border-t border-border">
+                    <td className="px-4 py-3 text-foreground">{r.name}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{r.category ?? '—'}</td>
+                    <td className="px-4 py-3 text-right text-foreground font-medium">{r.totalConsumed.toLocaleString()} {r.unit ?? ''}</td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">{r.movementCount}</td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">{r.currentStock ?? '—'} {r.unit ?? ''}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{formatAuditDate(r.lastConsumedAt ?? undefined)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}

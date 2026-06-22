@@ -7,6 +7,7 @@ import {
   createInventoryItem,
   createStockMovement,
   deleteInventoryItem,
+  getIngredientConsumptionReport,
   getInventory,
   updateInventoryItem,
 } from '../../../app/api/client';
@@ -165,6 +166,13 @@ export function useRestaurantInventoryMovementsQuery() {
     { module: 'RESTAURANT' },
     { select: mapRestaurantInventoryMovements },
   );
+}
+
+export function useRestaurantIngredientConsumptionQuery(range?: { from?: string; to?: string }) {
+  return useQuery({
+    queryKey: ['restaurant', 'ingredient-consumption', range?.from ?? null, range?.to ?? null],
+    queryFn: () => getIngredientConsumptionReport({ module: 'RESTAURANT', from: range?.from, to: range?.to }),
+  });
 }
 
 export function useCreateRestaurantInventoryMutation() {
