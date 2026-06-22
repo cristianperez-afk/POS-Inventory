@@ -575,10 +575,11 @@ export class InventoryApiService {
         ? await this.safeQuery<Record<string, unknown>>(
             `
               WITH scoped_user AS (
-                SELECT store_id
-                FROM users
-                WHERE lower(email) = lower($1)
-                  AND store_type = 'RESTAURANT'
+                SELECT u.store_id
+                FROM users u
+                JOIN stores s ON s.id = u.store_id
+                WHERE lower(u.email) = lower($1)
+                  AND s.store_type = 'RESTAURANT'
                 LIMIT 1
               ),
               pos_orders AS (
@@ -591,7 +592,7 @@ export class InventoryApiService {
                   o.created_at,
                   o.completed_at,
                   p.payment_number,
-                  cashier.name AS cashier_name,
+                  cashier.full_name AS cashier_name,
                   cashier.email AS cashier_email,
                   COUNT(oi.id)::int AS item_count,
                   COALESCE(SUM(oi.quantity), 0)::int AS quantity,
@@ -606,7 +607,7 @@ export class InventoryApiService {
                 WHERE o.store_id = (SELECT store_id FROM scoped_user)
                   AND o.order_status = 'COMPLETED'
                   AND o.payment_status IN ('PAID', 'VOIDED', 'VOID', 'REFUNDED')
-                GROUP BY o.id, p.payment_number, cashier.name, cashier.email
+                GROUP BY o.id, p.payment_number, cashier.full_name, cashier.email
               )
               SELECT
                 CONCAT('pos-order-', id::text) AS id,
@@ -1166,9 +1167,10 @@ export class InventoryApiService {
     const posRows = await this.safeQuery<Record<string, unknown>>(
       `
         WITH scoped_user AS (
-          SELECT store_id, store_type
-          FROM users
-          WHERE lower(email) = lower($1)
+          SELECT u.store_id, s.store_type
+          FROM users u
+          JOIN stores s ON s.id = u.store_id
+          WHERE lower(u.email) = lower($1)
           LIMIT 1
         )
         SELECT
@@ -1189,7 +1191,7 @@ export class InventoryApiService {
             ELSE 'COMPLETED'
           END AS status,
           o.customer_name AS customer,
-          json_build_object('id', cashier.id, 'name', cashier.name) AS cashier,
+          json_build_object('id', cashier.id, 'name', cashier.full_name) AS cashier,
           NULL::json AS location,
           COALESCE(items.items, '[]'::json) AS items
         FROM orders o

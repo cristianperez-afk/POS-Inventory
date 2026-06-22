@@ -11,7 +11,24 @@ import {
 } from '@nestjs/common';
 import { Pool, PoolClient, QueryResultRow } from 'pg';
 import * as bcrypt from 'bcrypt';
+import { randomUUID } from 'crypto';
 import { AuthenticatedUser } from '../common/types';
+
+// Captures one InventoryItem stock change produced by a paid POS order so it can
+// be mirrored into the inventory module's "Sale"/"SaleItem"/"StockMovement" tables.
+type PosSaleMovement = {
+  inventoryItemId: string;
+  businessId: string;
+  locationId: string;
+  module: 'RETAIL' | 'RESTAURANT';
+  unit: string | null;
+  quantity: number;
+  previousQuantity: number;
+  newQuantity: number;
+  movementType: 'SALE' | 'RECIPE_CONSUMPTION';
+  reason: string;
+  saleItem: { name: string; quantity: number; unitPrice: number; totalPrice: number } | null;
+};
 
 type ColumnInfo = {
   column_name: string;
@@ -2495,6 +2512,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ],
         );
         const orderId = orderRows[0].id;
+        const inventorySaleMovements: PosSaleMovement[] = [];
 
       for (const item of input.items ?? []) {
         const itemRows = await this.queryWithClient<{ id: number }>(
@@ -2526,11 +2544,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
         if (isPaid) {
           if (user.store_type === 'RETAIL_STORE') {
-            await this.deductRetailProduct(client, user.store_id!, orderId, orderItemId, item.productId ?? item.id, item.variantId ?? item.variant_id, item.quantity ?? 1);
+            await this.deductRetailProduct(client, user.store_id!, orderId, orderItemId, item, item.productId ?? item.id, item.variantId ?? item.variant_id, item.quantity ?? 1, inventorySaleMovements);
           } else {
-            await this.deductRestaurantIngredients(client, user.store_id!, orderId, orderItemId, item);
+            await this.deductRestaurantIngredients(client, user.store_id!, orderId, orderItemId, item, inventorySaleMovements);
           }
         }
+      }
+
+      if (isPaid) {
+        await this.writeInventorySaleRecords(client, { user, orderNumber, input, movements: inventorySaleMovements });
       }
 
       if (input.payment) {
@@ -2869,7 +2891,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return `${String(productId).padStart(8, '0')}${String(index + 1).padStart(4, '0')}`;
   }
 
-  private async deductRetailProduct(client: PoolClient, storeId: number, orderId: number, orderItemId: number, productId: number, variantId: number, quantity: number) {
+  private async deductRetailProduct(client: PoolClient, storeId: number, orderId: number, orderItemId: number, item: any, productId: number, variantId: number, quantity: number, movements: PosSaleMovement[]) {
     const variantRows = await this.queryWithClient<{ stock_quantity: number; product_id: number; size: string | null; color: string | null; inventory_item_id: string | null }>(
       client,
       `
@@ -2906,16 +2928,46 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     );
 
     if (variant.inventory_item_id) {
-      await this.queryWithClient(
+      const invRows = await this.queryWithClient<{ quantity: string | number; unit: string | null; locationId: string; businessId: string }>(
         client,
-        `
-          UPDATE "InventoryItem"
-          SET quantity = GREATEST(quantity - $1, 0),
-              "updatedAt" = CURRENT_TIMESTAMP
-          WHERE id = $2
-        `,
-        [quantity, variant.inventory_item_id],
+        `SELECT quantity, unit, "locationId", "businessId" FROM "InventoryItem" WHERE id = $1 FOR UPDATE`,
+        [variant.inventory_item_id],
       );
+      const inv = invRows[0];
+      if (inv) {
+        const previousQuantity = Number(inv.quantity ?? 0);
+        const newQuantity = Math.max(previousQuantity - quantity, 0);
+        await this.queryWithClient(
+          client,
+          `
+            UPDATE "InventoryItem"
+            SET quantity = $1,
+                "updatedAt" = CURRENT_TIMESTAMP
+            WHERE id = $2
+          `,
+          [newQuantity, variant.inventory_item_id],
+        );
+
+        const unitPrice = Number(item?.price ?? 0);
+        movements.push({
+          inventoryItemId: variant.inventory_item_id,
+          businessId: inv.businessId,
+          locationId: inv.locationId,
+          module: 'RETAIL',
+          unit: inv.unit,
+          quantity,
+          previousQuantity,
+          newQuantity,
+          movementType: 'SALE',
+          reason: 'POS sale',
+          saleItem: {
+            name: item?.name ?? 'Item',
+            quantity,
+            unitPrice,
+            totalPrice: unitPrice * quantity,
+          },
+        });
+      }
     }
 
     await this.queryWithClient(
@@ -2941,7 +2993,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  private async deductRestaurantIngredients(client: PoolClient, storeId: number, orderId: number, orderItemId: number, item: any) {
+  private async deductRestaurantIngredients(client: PoolClient, storeId: number, orderId: number, orderItemId: number, item: any, movements: PosSaleMovement[]) {
     const itemQuantity = Number(item.quantity ?? 1);
     const ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
     const finiteNumberOrNull = (value: unknown) => {
@@ -3040,16 +3092,40 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       );
 
       if (inventory.inventory_item_id) {
-        await this.queryWithClient(
+        const invRows = await this.queryWithClient<{ quantity: string | number; unit: string | null; locationId: string; businessId: string }>(
           client,
-          `
-            UPDATE "InventoryItem"
-            SET quantity = GREATEST(quantity - $1, 0),
-                "updatedAt" = CURRENT_TIMESTAMP
-            WHERE id = $2
-          `,
-          [quantity, inventory.inventory_item_id],
+          `SELECT quantity, unit, "locationId", "businessId" FROM "InventoryItem" WHERE id = $1 FOR UPDATE`,
+          [inventory.inventory_item_id],
         );
+        const inv = invRows[0];
+        if (inv) {
+          const previousQuantity = Number(inv.quantity ?? 0);
+          const newQuantity = Math.max(previousQuantity - quantity, 0);
+          await this.queryWithClient(
+            client,
+            `
+              UPDATE "InventoryItem"
+              SET quantity = $1,
+                  "updatedAt" = CURRENT_TIMESTAMP
+              WHERE id = $2
+            `,
+            [newQuantity, inventory.inventory_item_id],
+          );
+
+          movements.push({
+            inventoryItemId: inventory.inventory_item_id,
+            businessId: inv.businessId,
+            locationId: inv.locationId,
+            module: 'RESTAURANT',
+            unit: inv.unit ?? ingredient.unit ?? null,
+            quantity,
+            previousQuantity,
+            newQuantity,
+            movementType: 'RECIPE_CONSUMPTION',
+            reason: `Recipe consumption (${ingredient.original_name ?? ingredient.name ?? 'ingredient'})`,
+            saleItem: null,
+          });
+        }
       }
 
       await this.queryWithClient(
@@ -3062,6 +3138,105 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           VALUES ($1, $2, $3, $4, $5, 'RESTAURANT_INGREDIENT_SALE', $6, $7)
         `,
         [storeId, orderId, orderItemId, ingredientId, item.productId ?? item.id ?? null, quantity, ingredient.unit ?? inventory.unit],
+      );
+    }
+  }
+
+  // Mirrors a paid POS order into the inventory module's reporting/ledger tables
+  // so POS sales show up in the inventory "Sale" list and "StockMovement" history.
+  // Retail products become "SaleItem" rows + SALE movements; restaurant orders
+  // record RECIPE_CONSUMPTION movements for each consumed ingredient. Runs inside
+  // the order transaction and no-ops when no inventory-linked items were deducted.
+  private async writeInventorySaleRecords(
+    client: PoolClient,
+    params: { user: AuthenticatedUser; orderNumber: string; input: any; movements: PosSaleMovement[] },
+  ) {
+    const { user, orderNumber, input, movements } = params;
+    if (movements.length === 0) {
+      return;
+    }
+
+    const businessId = movements[0].businessId;
+    const locationId = movements[0].locationId;
+    const module = user.store_type === 'RETAIL_STORE' ? 'RETAIL' : 'RESTAURANT';
+    const total = Number(input.total ?? 0);
+    const paymentMethod = input.payment?.method ?? 'Cash';
+    const amountPaid = Number(input.payment?.amountPaid ?? total);
+    const change = Number(input.payment?.changeAmount ?? 0);
+
+    const saleId = randomUUID();
+    await this.queryWithClient(
+      client,
+      `
+        INSERT INTO "Sale" (
+          id, "transactionNumber", "locationId", "cashierId", subtotal, discount, tax,
+          total, "paymentMethod", "amountPaid", change, customer, status, "businessId",
+          module, "updatedAt"
+        )
+        VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, $8, $9, $10, $11, 'COMPLETED', $12, $13::"BusinessModule", CURRENT_TIMESTAMP)
+      `,
+      [
+        saleId,
+        `POS-${orderNumber}`,
+        locationId,
+        Number(input.subtotal ?? 0),
+        Number(input.discount ?? 0),
+        Number(input.tax ?? 0),
+        total,
+        paymentMethod,
+        amountPaid,
+        change,
+        input.customerName ?? null,
+        businessId,
+        module,
+      ],
+    );
+
+    for (const movement of movements) {
+      if (movement.saleItem) {
+        await this.queryWithClient(
+          client,
+          `
+            INSERT INTO "SaleItem" (id, "saleId", "inventoryItemId", name, quantity, "unitPrice", "totalPrice")
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+          `,
+          [
+            randomUUID(),
+            saleId,
+            movement.inventoryItemId,
+            movement.saleItem.name,
+            movement.saleItem.quantity,
+            movement.saleItem.unitPrice,
+            movement.saleItem.totalPrice,
+          ],
+        );
+      }
+
+      await this.queryWithClient(
+        client,
+        `
+          INSERT INTO "StockMovement" (
+            id, type, quantity, "previousQuantity", "newQuantity", unit, reason,
+            "referenceType", "referenceId", notes, "itemId", "locationId", "businessId",
+            module, "createdById"
+          )
+          VALUES ($1, $2::"StockMovementType", $3, $4, $5, $6, $7, 'POS_SALE', $8, $9, $10, $11, $12, $13::"BusinessModule", NULL)
+        `,
+        [
+          randomUUID(),
+          movement.movementType,
+          movement.quantity,
+          movement.previousQuantity,
+          movement.newQuantity,
+          movement.unit,
+          movement.reason,
+          saleId,
+          `POS order ${orderNumber}`,
+          movement.inventoryItemId,
+          movement.locationId,
+          movement.businessId,
+          movement.module,
+        ],
       );
     }
   }
