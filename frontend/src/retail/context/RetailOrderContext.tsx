@@ -4,6 +4,7 @@ import type { AuthenticatedUser } from '../../auth/types/auth';
 import { getLocalDateKey } from '../../shared/utils/date';
 
 export interface OrderItem {
+  id?: number;
   name: string;
   category: string;
   size?: string;
@@ -59,8 +60,8 @@ interface OrderContextType {
   addOrder: (order: Omit<Order, 'id'>) => void;
   updateOrder: (id: string, updates: Partial<Order>) => void;
   removeOrder: (id: string) => void;
-  refundOrderItems: (orderId: string, itemIndices: number[], refundReason?: string) => void;
-  voidTransaction: (orderId: string, voidReason: string, voidBy?: string) => void;
+  refundOrderItems: (orderId: string, itemIndices: number[], refundReason?: string) => Promise<void>;
+  voidTransaction: (orderId: string, voidReason: string, voidBy?: string) => Promise<void>;
   completePayment: (orderId: string, paymentData: {
     cashReceived: number;
     changeGiven: number;
@@ -120,56 +121,105 @@ export function RetailOrderProvider({ children, currentUser }: { children: React
     setOrders(prev => prev.filter(o => o.id !== id));
   };
 
-  const refundOrderItems = (orderId: string, itemIndices: number[], refundReason?: string) => {
-    setOrders(prev => prev.map(order => {
-      if (order.id !== orderId) return order;
+  const refundOrderItems = async (orderId: string, itemIndices: number[], refundReason?: string) => {
+    const order = orders.find(o => o.id === orderId);
+    if (!order) return;
 
-      const updatedItems = order.items.map((item, index) => {
-        if (itemIndices.includes(index)) {
-          return {
-            ...item,
-            refunded: true,
-            refundedQuantity: item.quantity
-          };
-        }
-        return item;
+    const updatedItems = order.items.map((item, index) =>
+      itemIndices.includes(index)
+        ? { ...item, refunded: true, refundedQuantity: item.quantity }
+        : item
+    );
+    const allRefunded = updatedItems.every(item => item.refunded);
+    const newPaymentStatus = allRefunded ? ('Refunded' as const) : ('Partially Refunded' as const);
+    const reason = refundReason || 'Customer request';
+
+    // Optimistic local update
+    setOrders(prev => prev.map(o =>
+      o.id === orderId
+        ? {
+            ...o,
+            items: updatedItems,
+            paymentStatus: newPaymentStatus,
+            refundDate: getLocalDateKey(),
+            refundReason: reason,
+            refundTransactionId: `REF-${Date.now()}`,
+          }
+        : o
+    ));
+
+    if (!currentUser?.id || !order.transactionNumber) return;
+
+    // Only the items being refunded right now are returned to stock; the backend is
+    // idempotent per item, so refunding more items later won't double-restock.
+    const restockOrderItemIds = itemIndices
+      .map(i => order.items[i]?.id)
+      .filter((id): id is number => typeof id === 'number');
+
+    try {
+      const response = await fetch(`${getApiBaseUrl()}/admin/pos/orders/${encodeURIComponent(order.transactionNumber)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: currentUser.id,
+          paymentStatus: allRefunded ? 'REFUNDED' : 'PARTIALLY_REFUNDED',
+          refundReason: reason,
+          restockOrderItemIds,
+        }),
       });
-
-      // Check if all items are refunded
-      const allRefunded = updatedItems.every(item => item.refunded);
-      const someRefunded = updatedItems.some(item => item.refunded);
-
-      // Determine new payment status
-      let newPaymentStatus = order.paymentStatus;
-      if (allRefunded) {
-        newPaymentStatus = 'Refunded' as const;
-      } else if (someRefunded) {
-        newPaymentStatus = 'Partially Refunded' as const;
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.message ?? 'Unable to process refund.');
       }
-
-      return {
-        ...order,
-        items: updatedItems,
-        paymentStatus: newPaymentStatus,
-        refundDate: getLocalDateKey(),
-        refundReason: refundReason || 'Customer request',
-        refundTransactionId: `REF-${Date.now()}`
-      };
-    }));
+    } catch (error) {
+      setOrders(prev => prev.map(o => (o.id === orderId ? order : o)));
+      throw error;
+    }
   };
 
-  const voidTransaction = (orderId: string, voidReason: string, voidBy?: string) => {
-    setOrders(prev => prev.map(order => {
-      if (order.id !== orderId) return order;
+  const voidTransaction = async (orderId: string, voidReason: string, voidBy?: string) => {
+    const order = orders.find(o => o.id === orderId);
+    if (!order) return;
 
-      return {
-        ...order,
-        paymentStatus: 'Void' as const,
-        voidDate: getLocalDateKey(),
-        voidReason: voidReason || 'Transaction voided',
-        voidBy: voidBy || 'Cashier',
-      };
-    }));
+    // Optimistic local update
+    setOrders(prev => prev.map(o =>
+      o.id === orderId
+        ? {
+            ...o,
+            paymentStatus: 'Void' as const,
+            voidDate: getLocalDateKey(),
+            voidReason: voidReason || 'Transaction voided',
+            voidBy: voidBy || 'Cashier',
+          }
+        : o
+    ));
+
+    if (!currentUser?.id || !order.transactionNumber) return;
+
+    const restockOrderItemIds = order.items
+      .map(it => it.id)
+      .filter((id): id is number => typeof id === 'number');
+
+    try {
+      const response = await fetch(`${getApiBaseUrl()}/admin/pos/orders/${encodeURIComponent(order.transactionNumber)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: currentUser.id,
+          paymentStatus: 'VOIDED',
+          orderStatus: 'COMPLETED',
+          voidReason: voidReason || 'Transaction voided',
+          restockOrderItemIds,
+        }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.message ?? 'Unable to void transaction.');
+      }
+    } catch (error) {
+      setOrders(prev => prev.map(o => (o.id === orderId ? order : o)));
+      throw error;
+    }
   };
 
   const completePayment = (orderId: string, paymentData: {
@@ -284,6 +334,7 @@ function mapDatabaseRetailOrder(row: any): Order {
     date: getLocalDateKey(createdAt),
     time: createdAt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
     items: items.map((item: any) => ({
+      id: item.id !== undefined && item.id !== null ? Number(item.id) : undefined,
       name: item.product_name,
       category: item.category_name ?? 'Uncategorized',
       size: item.size ?? undefined,

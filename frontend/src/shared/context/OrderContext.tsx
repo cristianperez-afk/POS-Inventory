@@ -71,8 +71,8 @@ interface OrderContextType {
   assignQueuedOrderToTable: (id: string, table: string, orderStatus: Order['orderStatus']) => Promise<void>;
   completePayment: (orderId: string, paymentData: { cashReceived: number; changeGiven: number; cashier?: string; paymentId?: string; receiptId?: string }) => Promise<void>;
   completeTableOrder: (orderId: string) => Promise<void>;
-  voidOrder: (orderId: string) => Promise<void>;
-  refundOrder: (orderId: string) => Promise<void>;
+  voidOrder: (orderId: string, restock?: boolean) => Promise<void>;
+  refundOrder: (orderId: string, restock?: boolean) => Promise<void>;
   paymentCompletedSignal: number; // Signal for when payment is completed
 }
 
@@ -139,7 +139,7 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
     setOrders(prev => prev.filter(o => o.id !== id));
   };
 
-  const voidOrder = async (orderId: string) => {
+  const voidOrder = async (orderId: string, restock: boolean = false) => {
     const order = orders.find(o => o.id === orderId);
     if (!order) return;
 
@@ -159,6 +159,7 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
           user_id: currentUser.id,
           paymentStatus: 'VOIDED',
           orderStatus: 'COMPLETED',
+          restock,
         }),
       });
       if (!response.ok) {
@@ -171,7 +172,7 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
     }
   };
 
-  const refundOrder = async (orderId: string) => {
+  const refundOrder = async (orderId: string, restock: boolean = false) => {
     const order = orders.find(o => o.id === orderId);
     if (!order) return;
 
@@ -191,6 +192,7 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
           user_id: currentUser.id,
           paymentStatus: 'REFUNDED',
           orderStatus: 'COMPLETED',
+          restock,
         }),
       });
       if (!response.ok) {

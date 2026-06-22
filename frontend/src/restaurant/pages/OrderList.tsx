@@ -53,6 +53,10 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
   const [refundingOrder, setRefundingOrder] = useState<Order | null>(null);
   const [voidReason, setVoidReason] = useState('');
   const [voidingOrder, setVoidingOrder] = useState<Order | null>(null);
+  // Restaurant default: ingredients are consumed in cooking, so don't restock unless
+  // the staff confirms the order wasn't prepared yet.
+  const [restockOnRefund, setRestockOnRefund] = useState(false);
+  const [restockOnVoid, setRestockOnVoid] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [isCompletingPayment, setIsCompletingPayment] = useState(false);
   const showTableManagementColumns = settings.enable_table_management;
@@ -73,6 +77,8 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
     setChangeAmount(0);
     setRefundReason('');
     setVoidReason('');
+    setRestockOnRefund(false);
+    setRestockOnVoid(false);
   };
 
   const handleConfirmPayment = async () => {
@@ -854,6 +860,19 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                 />
               </div>
 
+              <label className="flex items-start gap-3 cursor-pointer bg-muted rounded-xl p-3">
+                <input
+                  type="checkbox"
+                  checked={restockOnRefund}
+                  onChange={e => setRestockOnRefund(e.target.checked)}
+                  className="mt-0.5 w-4 h-4 accent-red-500"
+                />
+                <span className="text-xs text-gray-600">
+                  <span className="text-gray-800" style={{ fontWeight: 600 }}>Return ingredients to stock</span>
+                  <br />Only if this order was not cooked yet. Leave unchecked if the food was already prepared.
+                </span>
+              </label>
+
               <div className="flex gap-3">
                 <button
                   onClick={closeModal}
@@ -917,6 +936,19 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                 />
               </div>
 
+              <label className="flex items-start gap-3 cursor-pointer bg-muted rounded-xl p-3">
+                <input
+                  type="checkbox"
+                  checked={restockOnVoid}
+                  onChange={e => setRestockOnVoid(e.target.checked)}
+                  className="mt-0.5 w-4 h-4 accent-purple-600"
+                />
+                <span className="text-xs text-gray-600">
+                  <span className="text-gray-800" style={{ fontWeight: 600 }}>Return ingredients to stock</span>
+                  <br />Only if this order was not cooked yet. Leave unchecked if the food was already prepared.
+                </span>
+              </label>
+
               <div className="flex gap-3">
                 <button
                   onClick={closeModal}
@@ -944,7 +976,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
         onCancel={() => setRefundingOrder(null)}
         onConfirm={async () => {
           if (!refundingOrder) return;
-          await refundOrder(refundingOrder.id);
+          await refundOrder(refundingOrder.id, restockOnRefund);
           setRefundingOrder(null);
           closeModal();
         }}
@@ -956,7 +988,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
         onCancel={() => setVoidingOrder(null)}
         onConfirm={() => {
           if (!voidingOrder) return;
-          void voidOrder(voidingOrder.id)
+          void voidOrder(voidingOrder.id, restockOnVoid)
             .then(() => {
               setVoidingOrder(null);
               closeModal();

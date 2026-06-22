@@ -27,6 +27,9 @@ type PosSaleMovement = {
   newQuantity: number;
   movementType: 'SALE' | 'RECIPE_CONSUMPTION';
   reason: string;
+  // When false, this entry only contributes a SaleItem line (no StockMovement) —
+  // used for a restaurant menu dish, which is sold but not itself stock-tracked.
+  emitStockMovement: boolean;
   saleItem: { name: string; quantity: number; unitPrice: number; totalPrice: number } | null;
 };
 
@@ -2641,9 +2644,31 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException('No order updates were provided.');
     }
 
+    const newPaymentStatus = String(input.paymentStatus ?? '');
+    const isVoidOrRefund = ['VOIDED', 'VOID', 'REFUNDED'].includes(newPaymentStatus);
+
     const rows = await this.withTransaction(async (client) => {
+      type UpdatedOrderRow = {
+        id: number;
+        order_number: string;
+        total_amount: string | number;
+        subtotal: string | number;
+        discount_amount: string | number;
+        tax_amount: string | number;
+        customer_name: string | null;
+      };
+
+      // Capture the payment status before the update so a void/refund only restocks
+      // when the order was actually paid (and so a repeated void is a no-op).
+      const priorRows = await this.queryWithClient<{ payment_status: string | null }>(
+        client,
+        `SELECT payment_status FROM orders WHERE store_id = $1 AND order_number = $2 LIMIT 1`,
+        [user.store_id, input.orderNumber],
+      );
+      const priorPaymentStatus = priorRows[0]?.payment_status ?? null;
+
       const updatedRows = updates.length > 0
-        ? await this.queryWithClient<{ id: number; order_number: string; total_amount: string | number }>(
+        ? await this.queryWithClient<UpdatedOrderRow>(
             client,
             `
               UPDATE orders
@@ -2654,14 +2679,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
                   ($${values.length + 1} = 'RETAIL_STORE' AND order_type = 'RETAIL')
                   OR ($${values.length + 1} = 'RESTAURANT' AND order_type <> 'RETAIL')
                 )
-              RETURNING id, order_number, total_amount
+              RETURNING id, order_number, total_amount, subtotal, discount_amount, tax_amount, customer_name
             `,
             [...values, user.store_type],
           )
-        : await this.queryWithClient<{ id: number; order_number: string; total_amount: string | number }>(
+        : await this.queryWithClient<UpdatedOrderRow>(
             client,
             `
-              SELECT id, order_number, total_amount
+              SELECT id, order_number, total_amount, subtotal, discount_amount, tax_amount, customer_name
               FROM orders
               WHERE store_id = $1
                 AND order_number = $2
@@ -2701,6 +2726,42 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             input.payment.changeAmount ?? 0,
           ],
         );
+
+        // Deferred payment (e.g. dine-in / open tab paid later): deduct stock and
+        // mirror into the inventory "Sale"/"StockMovement" tables, just like a paid-
+        // at-creation order. Guarded so it never double-deducts.
+        await this.applyInventoryForPaidPosOrder(client, user, order, input.payment);
+      }
+
+      // Void/refund of a paid order: return the deducted stock and reflect it on the
+      // mirrored inventory Sale.
+      const restockItemIds = Array.isArray(input.restockOrderItemIds)
+        ? input.restockOrderItemIds.map((x: any) => Number(x)).filter((n: number) => Number.isFinite(n))
+        : null;
+      const isPartialRefund = newPaymentStatus === 'PARTIALLY_REFUNDED';
+
+      if (restockItemIds && restockItemIds.length > 0) {
+        // Per-item path (retail partial/whole refund or void with an item list).
+        // Idempotent per item, so it doesn't need the PAID-transition guard.
+        const reason =
+          input.reason ?? input.refundReason ?? input.voidReason ??
+          (isPartialRefund ? 'Partially refunded in POS' : newPaymentStatus === 'VOIDED' ? 'Voided in POS' : 'Refunded in POS');
+        const saleStatus = isPartialRefund ? 'PARTIAL_REFUND' : 'REFUNDED';
+        await this.restockPosOrderItems(client, user, updatedRows[0], restockItemIds, saleStatus, reason);
+      } else if (isVoidOrRefund && priorPaymentStatus === 'PAID') {
+        // Whole-order path (restaurant void/refund, or any void/refund without an item
+        // list). Only fires on a PAID -> void/refund transition, so repeating is a no-op.
+        const reason =
+          input.reason ?? input.voidReason ?? input.refundReason ??
+          (newPaymentStatus === 'REFUNDED' ? 'Refunded in POS' : 'Voided in POS');
+        // Honor an explicit restock choice from the refund/void dialog; otherwise
+        // fall back to the store-type default (retail returns to shelf, restaurant
+        // treats cooked ingredients as a loss).
+        const restock =
+          typeof input.restock === 'boolean'
+            ? input.restock
+            : user.store_type === 'RETAIL_STORE';
+        await this.restockVoidedPosOrder(client, user, updatedRows[0], newPaymentStatus, reason, restock);
       }
 
       return updatedRows;
@@ -2960,6 +3021,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           newQuantity,
           movementType: 'SALE',
           reason: 'POS sale',
+          emitStockMovement: true,
           saleItem: {
             name: item?.name ?? 'Item',
             quantity,
@@ -3000,6 +3062,49 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       const parsed = Number(value);
       return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
     };
+
+    // Record the menu dish itself as a sale line item (the recipe's menu InventoryItem),
+    // so restaurant sales show real items in the inventory Sales report. The dish isn't
+    // stock-tracked — ingredient consumption below handles depletion — so no movement.
+    const dishProductId = Number(item.productId ?? item.id ?? 0);
+    if (dishProductId) {
+      const dishRows = await this.queryWithClient<{ inventory_item_id: string | null }>(
+        client,
+        `SELECT inventory_item_id FROM products WHERE id = $1 AND store_id = $2`,
+        [dishProductId, storeId],
+      );
+      const menuItemId = dishRows[0]?.inventory_item_id ?? null;
+      if (menuItemId) {
+        const menuRows = await this.queryWithClient<{ unit: string | null; locationId: string; businessId: string }>(
+          client,
+          `SELECT unit, "locationId", "businessId" FROM "InventoryItem" WHERE id = $1`,
+          [menuItemId],
+        );
+        const menu = menuRows[0];
+        if (menu) {
+          const unitPrice = Number(item.price ?? item.unit_price ?? 0);
+          movements.push({
+            inventoryItemId: menuItemId,
+            businessId: menu.businessId,
+            locationId: menu.locationId,
+            module: 'RESTAURANT',
+            unit: menu.unit,
+            quantity: itemQuantity,
+            previousQuantity: 0,
+            newQuantity: 0,
+            movementType: 'SALE',
+            reason: 'POS sale',
+            emitStockMovement: false,
+            saleItem: {
+              name: item.name ?? item.product_name ?? 'Menu item',
+              quantity: itemQuantity,
+              unitPrice,
+              totalPrice: unitPrice * itemQuantity,
+            },
+          });
+        }
+      }
+    }
 
     for (const ingredient of ingredients) {
       const originalId = finiteNumberOrNull(ingredient.ingredient_id ?? ingredient.ingredientId);
@@ -3123,6 +3228,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             newQuantity,
             movementType: 'RECIPE_CONSUMPTION',
             reason: `Recipe consumption (${ingredient.original_name ?? ingredient.name ?? 'ingredient'})`,
+            emitStockMovement: true,
             saleItem: null,
           });
         }
@@ -3140,6 +3246,244 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         [storeId, orderId, orderItemId, ingredientId, item.productId ?? item.id ?? null, quantity, ingredient.unit ?? inventory.unit],
       );
     }
+  }
+
+  // Deducts stock and writes the inventory Sale/StockMovement records for an order
+  // that is being paid AFTER creation (the deferred-payment path in updatePosOrder).
+  // Items/ingredients aren't in the payment request, so they are loaded from the DB.
+  // Restaurant deductions use the product's standard recipe (per-order ingredient
+  // customizations made on an unpaid order are not persisted, so cannot be replayed).
+  // Idempotent: skips entirely if this order was already mirrored into "Sale".
+  private async applyInventoryForPaidPosOrder(
+    client: PoolClient,
+    user: AuthenticatedUser,
+    order: { id: number; order_number: string; total_amount: string | number; subtotal: string | number; discount_amount: string | number; tax_amount: string | number; customer_name: string | null },
+    payment: any,
+  ) {
+    if (!user.store_id || !user.store_type) {
+      return;
+    }
+
+    const alreadyMirrored = await this.queryWithClient<{ exists: boolean }>(
+      client,
+      `SELECT EXISTS (SELECT 1 FROM "Sale" WHERE "transactionNumber" = CONCAT('POS-', $1::text)) AS exists`,
+      [order.order_number],
+    );
+    if (alreadyMirrored[0]?.exists) {
+      return;
+    }
+
+    const items = await this.queryWithClient<{ id: number; product_id: number; variant_id: number | null; product_name: string; quantity: number; unit_price: string | number }>(
+      client,
+      `SELECT id, product_id, variant_id, product_name, quantity, unit_price FROM order_items WHERE order_id = $1`,
+      [order.id],
+    );
+
+    const movements: PosSaleMovement[] = [];
+    for (const oi of items) {
+      if (user.store_type === 'RETAIL_STORE') {
+        if (oi.variant_id == null) continue;
+        await this.deductRetailProduct(
+          client,
+          user.store_id,
+          order.id,
+          oi.id,
+          { name: oi.product_name, price: Number(oi.unit_price ?? 0) },
+          oi.product_id,
+          oi.variant_id,
+          Number(oi.quantity ?? 1),
+          movements,
+        );
+      } else {
+        const ingredients = await this.queryWithClient<{ ingredient_id: number; quantity: string | number; unit: string | null }>(
+          client,
+          `SELECT ingredient_id, quantity_required AS quantity, unit FROM product_ingredients WHERE product_id = $1 AND store_id = $2`,
+          [oi.product_id, user.store_id],
+        );
+        await this.deductRestaurantIngredients(
+          client,
+          user.store_id,
+          order.id,
+          oi.id,
+          {
+            productId: oi.product_id,
+            name: oi.product_name,
+            price: Number(oi.unit_price ?? 0),
+            quantity: Number(oi.quantity ?? 1),
+            ingredients: ingredients.map((g) => ({ ingredient_id: g.ingredient_id, quantity: Number(g.quantity ?? 0), unit: g.unit })),
+          },
+          movements,
+        );
+      }
+    }
+
+    await this.writeInventorySaleRecords(client, {
+      user,
+      orderNumber: order.order_number,
+      input: {
+        subtotal: order.subtotal,
+        discount: order.discount_amount,
+        tax: order.tax_amount,
+        total: order.total_amount,
+        customerName: order.customer_name,
+        payment,
+      },
+      movements,
+    });
+  }
+
+  // Returns one deducted line's stock: restores the variant/ingredient + the shared
+  // InventoryItem and writes a VOID_RESTOCK movement tagged with referenceId (which
+  // the caller uses for idempotency). Used by both the whole-order and per-item paths.
+  private async reverseDeduction(
+    client: PoolClient,
+    d: { variant_id: number | null; ingredient_id: number | null; quantity_deducted: string | number; unit: string | null },
+    referenceId: string,
+    reason: string,
+    notes: string,
+    module: 'RETAIL' | 'RESTAURANT',
+  ) {
+    const qty = Number(d.quantity_deducted ?? 0);
+    if (qty <= 0) return;
+
+    let inventoryItemId: string | null = null;
+    if (d.variant_id != null) {
+      await this.queryWithClient(
+        client,
+        `UPDATE product_variants SET stock_quantity = stock_quantity + $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+        [qty, d.variant_id],
+      );
+      const vr = await this.queryWithClient<{ inventory_item_id: string | null }>(
+        client,
+        `SELECT COALESCE(pv.inventory_item_id, p.inventory_item_id) AS inventory_item_id
+         FROM product_variants pv JOIN products p ON p.id = pv.product_id WHERE pv.id = $1`,
+        [d.variant_id],
+      );
+      inventoryItemId = vr[0]?.inventory_item_id ?? null;
+    } else if (d.ingredient_id != null) {
+      await this.queryWithClient(
+        client,
+        `UPDATE ingredients_inventory SET quantity_available = quantity_available + $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+        [qty, d.ingredient_id],
+      );
+      const ir = await this.queryWithClient<{ inventory_item_id: string | null }>(
+        client,
+        `SELECT inventory_item_id FROM ingredients_inventory WHERE id = $1`,
+        [d.ingredient_id],
+      );
+      inventoryItemId = ir[0]?.inventory_item_id ?? null;
+    }
+
+    if (!inventoryItemId) return;
+
+    const invRows = await this.queryWithClient<{ quantity: string | number; unit: string | null; locationId: string; businessId: string }>(
+      client,
+      `SELECT quantity, unit, "locationId", "businessId" FROM "InventoryItem" WHERE id = $1 FOR UPDATE`,
+      [inventoryItemId],
+    );
+    const inv = invRows[0];
+    if (!inv) return;
+
+    const previousQuantity = Number(inv.quantity ?? 0);
+    const newQuantity = previousQuantity + qty;
+    await this.queryWithClient(
+      client,
+      `UPDATE "InventoryItem" SET quantity = $1, "updatedAt" = CURRENT_TIMESTAMP WHERE id = $2`,
+      [newQuantity, inventoryItemId],
+    );
+
+    await this.queryWithClient(
+      client,
+      `
+        INSERT INTO "StockMovement" (
+          id, type, quantity, "previousQuantity", "newQuantity", unit, reason,
+          "referenceType", "referenceId", notes, "itemId", "locationId", "businessId",
+          module, "createdById"
+        )
+        VALUES ($1, 'VOID_RESTOCK', $2, $3, $4, $5, $6, 'POS_VOID', $7, $8, $9, $10, $11, $12::"BusinessModule", NULL)
+      `,
+      [randomUUID(), qty, previousQuantity, newQuantity, inv.unit ?? d.unit, reason, referenceId, notes, inventoryItemId, inv.locationId, inv.businessId, module],
+    );
+  }
+
+  // Reverses the stock deducted by a paid POS order when it is voided/fully refunded:
+  // restores everything in inventory_deductions and marks the mirrored "Sale" REFUNDED.
+  // Caller guards on a PAID transition, so re-running is a no-op.
+  private async restockVoidedPosOrder(
+    client: PoolClient,
+    user: AuthenticatedUser,
+    order: { id: number; order_number: string },
+    newPaymentStatus: string,
+    reason: string,
+    restock: boolean,
+  ) {
+    const module = user.store_type === 'RETAIL_STORE' ? 'RETAIL' : 'RESTAURANT';
+
+    // Whether stock goes back depends on the caller's decision (per-refund choice or
+    // store-type default). When false, the deductions stand as a loss and only the
+    // money is reversed (Sale -> REFUNDED below).
+    const deductions = restock
+      ? await this.queryWithClient<{ variant_id: number | null; ingredient_id: number | null; quantity_deducted: string | number; unit: string | null }>(
+          client,
+          `SELECT variant_id, ingredient_id, quantity_deducted, unit FROM inventory_deductions WHERE order_id = $1`,
+          [order.id],
+        )
+      : [];
+
+    for (const d of deductions) {
+      await this.reverseDeduction(client, d, order.order_number, reason, `POS order ${order.order_number} ${newPaymentStatus}`, module);
+    }
+
+    // Reflect the reversal on the mirrored sale (SaleStatus has no VOID value, so a
+    // POS void and a full refund both map to REFUNDED).
+    await this.queryWithClient(
+      client,
+      `UPDATE "Sale" SET status = 'REFUNDED', "refundReason" = $1, "updatedAt" = CURRENT_TIMESTAMP
+       WHERE "transactionNumber" = CONCAT('POS-', $2::text)`,
+      [reason, order.order_number],
+    );
+  }
+
+  // Restocks specific line items of a paid order (retail partial/whole refund or void).
+  // Idempotent per item via a per-item referenceId, so refunding more items later or
+  // retrying never double-restocks. Always restocks (retail goods are returned).
+  private async restockPosOrderItems(
+    client: PoolClient,
+    user: AuthenticatedUser,
+    order: { id: number; order_number: string },
+    orderItemIds: number[],
+    saleStatus: 'REFUNDED' | 'PARTIAL_REFUND',
+    reason: string,
+  ) {
+    const module = user.store_type === 'RETAIL_STORE' ? 'RETAIL' : 'RESTAURANT';
+
+    for (const orderItemId of orderItemIds) {
+      const referenceId = `POS-${order.order_number}-item-${orderItemId}`;
+      const already = await this.queryWithClient<{ exists: boolean }>(
+        client,
+        `SELECT EXISTS (SELECT 1 FROM "StockMovement" WHERE "referenceType" = 'POS_VOID' AND "referenceId" = $1) AS exists`,
+        [referenceId],
+      );
+      if (already[0]?.exists) continue;
+
+      const deductions = await this.queryWithClient<{ variant_id: number | null; ingredient_id: number | null; quantity_deducted: string | number; unit: string | null }>(
+        client,
+        `SELECT variant_id, ingredient_id, quantity_deducted, unit FROM inventory_deductions WHERE order_id = $1 AND order_item_id = $2`,
+        [order.id, orderItemId],
+      );
+      for (const d of deductions) {
+        await this.reverseDeduction(client, d, referenceId, reason, `POS order ${order.order_number} item ${orderItemId} refunded`, module);
+      }
+    }
+
+    await this.queryWithClient(
+      client,
+      `UPDATE "Sale"
+       SET status = CASE WHEN status = 'REFUNDED' THEN 'REFUNDED' ELSE $1::"SaleStatus" END,
+           "refundReason" = $2, "updatedAt" = CURRENT_TIMESTAMP
+       WHERE "transactionNumber" = CONCAT('POS-', $3::text)`,
+      [saleStatus, reason, order.order_number],
+    );
   }
 
   // Mirrors a paid POS order into the inventory module's reporting/ledger tables
@@ -3210,6 +3554,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             movement.saleItem.totalPrice,
           ],
         );
+      }
+
+      if (!movement.emitStockMovement) {
+        continue;
       }
 
       await this.queryWithClient(

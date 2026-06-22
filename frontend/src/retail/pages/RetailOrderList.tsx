@@ -132,7 +132,7 @@ export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBr
     }));
   };
 
-  const handleRefundConfirm = () => {
+  const handleRefundConfirm = async () => {
     if (!canProcessTransactions) return;
     if (!settings.enable_refund) return;
     if (!orderToRefund) return;
@@ -144,8 +144,13 @@ export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBr
     // Must have at least one item selected
     if (selectedIndices.length === 0) return;
 
-    // Refund selected items
-    refundOrderItems(orderToRefund.id, selectedIndices, refundReason || 'Customer request');
+    try {
+      // Refund selected items (persists + restocks them in the backend)
+      await refundOrderItems(orderToRefund.id, selectedIndices, refundReason || 'Customer request');
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Unable to process refund.');
+      return;
+    }
 
     setShowRefundModal(false);
     setOrderToRefund(null);
@@ -161,12 +166,17 @@ export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBr
     setShowVoidModal(true);
   };
 
-  const handleVoidConfirm = () => {
+  const handleVoidConfirm = async () => {
     if (!canProcessTransactions) return;
     if (!settings.enable_void) return;
     if (!orderToVoid || !voidReason.trim()) return;
 
-    voidTransaction(orderToVoid.id, voidReason, 'Cashier');
+    try {
+      await voidTransaction(orderToVoid.id, voidReason, 'Cashier');
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Unable to void transaction.');
+      return;
+    }
 
     setShowVoidModal(false);
     setOrderToVoid(null);
