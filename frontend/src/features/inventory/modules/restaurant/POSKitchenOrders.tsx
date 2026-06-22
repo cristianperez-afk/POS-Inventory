@@ -387,11 +387,14 @@ export function POSKitchenOrders() {
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      {order.status === "completed" && (
+                      {order.status === "completed" && !order.id.startsWith("pos-order-") && (
                         <button type="button" onClick={() => setVoidingOrderId(order.id)} className="inline-flex items-center gap-1 rounded-lg bg-red-50 px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-100">
                           <RotateCcw className="h-3 w-3" />
                           Void
                         </button>
+                      )}
+                      {order.status === "completed" && order.id.startsWith("pos-order-") && (
+                        <span className="text-xs text-muted-foreground">From POS</span>
                       )}
                       {order.status === "voided" && <span className="text-xs text-muted-foreground">{order.voidReason}</span>}
                     </td>

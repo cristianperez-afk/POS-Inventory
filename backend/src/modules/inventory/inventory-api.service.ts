@@ -569,7 +569,71 @@ export class InventoryApiService {
       `,
       [scope.businessId, query.status ?? null],
     );
-    return this.paged(rows);
+
+    const posRows =
+      scope.module === 'RESTAURANT'
+        ? await this.safeQuery<Record<string, unknown>>(
+            `
+              WITH scoped_user AS (
+                SELECT store_id
+                FROM users
+                WHERE lower(email) = lower($1)
+                  AND store_type = 'RESTAURANT'
+                LIMIT 1
+              ),
+              pos_orders AS (
+                SELECT
+                  o.id,
+                  o.order_number,
+                  o.customer_name,
+                  o.total_amount,
+                  o.payment_status,
+                  o.created_at,
+                  o.completed_at,
+                  p.payment_number,
+                  cashier.name AS cashier_name,
+                  cashier.email AS cashier_email,
+                  COUNT(oi.id)::int AS item_count,
+                  COALESCE(SUM(oi.quantity), 0)::int AS quantity,
+                  CASE
+                    WHEN COUNT(oi.id) = 1 THEN MAX(oi.product_name)
+                    ELSE CONCAT(COUNT(oi.id)::text, ' POS items')
+                  END AS item_summary
+                FROM orders o
+                LEFT JOIN order_items oi ON oi.order_id = o.id
+                LEFT JOIN payments p ON p.order_id = o.id
+                LEFT JOIN users cashier ON cashier.id = o.cashier_id
+                WHERE o.store_id = (SELECT store_id FROM scoped_user)
+                  AND o.order_status = 'COMPLETED'
+                  AND o.payment_status IN ('PAID', 'VOIDED', 'VOID', 'REFUNDED')
+                GROUP BY o.id, p.payment_number, cashier.name, cashier.email
+              )
+              SELECT
+                CONCAT('pos-order-', id::text) AS id,
+                COALESCE(REPLACE(payment_number, 'PAY-', 'REC-'), CONCAT('REC-', order_number)) AS "receiptNo",
+                NULL::text AS "recipeId",
+                quantity,
+                CASE WHEN payment_status IN ('VOIDED', 'VOID', 'REFUNDED') THEN 'VOIDED' ELSE 'COMPLETED' END AS status,
+                COALESCE(completed_at, created_at) AS "createdAt",
+                COALESCE(completed_at, created_at) AS "updatedAt",
+                json_build_object('name', item_summary) AS recipe,
+                json_build_object('name', cashier_name, 'email', cashier_email) AS "completedBy",
+                CONCAT('POS order ', order_number, ' - ', COALESCE(customer_name, 'Walk-in Customer'), ' - Total ', total_amount::text) AS notes,
+                CASE WHEN payment_status = 'REFUNDED' THEN 'Refunded in POS' ELSE NULL END AS "voidReason",
+                NULL::timestamp AS "voidedAt"
+              FROM pos_orders
+              ORDER BY COALESCE(completed_at, created_at) DESC
+            `,
+            [scope.user.email],
+          )
+        : [];
+
+    const combined = [...rows, ...posRows].sort((a, b) => {
+      const aTime = new Date(String(a.createdAt ?? a.created_at ?? 0)).getTime();
+      const bTime = new Date(String(b.createdAt ?? b.created_at ?? 0)).getTime();
+      return bTime - aTime;
+    });
+    return this.paged(combined);
   }
 
   async listSuppliers(headers: HeadersLike, query: Record<string, string | undefined>) {
@@ -1099,7 +1163,66 @@ export class InventoryApiService {
       `,
       [scope.businessId, query.module ?? scope.module],
     );
-    return this.paged(rows);
+    const posRows = await this.safeQuery<Record<string, unknown>>(
+      `
+        WITH scoped_user AS (
+          SELECT store_id, store_type
+          FROM users
+          WHERE lower(email) = lower($1)
+          LIMIT 1
+        )
+        SELECT
+          CONCAT('pos-order-', o.id::text) AS id,
+          o.order_number AS "transactionNumber",
+          COALESCE(o.completed_at, o.created_at) AS "createdAt",
+          COALESCE(o.completed_at, o.created_at) AS "updatedAt",
+          o.total_amount AS total,
+          o.subtotal,
+          o.discount_amount AS discount,
+          o.tax_amount AS tax,
+          COALESCE(p.amount_paid, o.total_amount) AS "amountPaid",
+          COALESCE(p.change_amount, 0) AS change,
+          COALESCE(p.payment_method, 'Cash') AS "paymentMethod",
+          CASE
+            WHEN o.payment_status = 'REFUNDED' THEN 'REFUNDED'
+            WHEN o.payment_status IN ('VOIDED', 'VOID') THEN 'REFUNDED'
+            ELSE 'COMPLETED'
+          END AS status,
+          o.customer_name AS customer,
+          json_build_object('id', cashier.id, 'name', cashier.name) AS cashier,
+          NULL::json AS location,
+          COALESCE(items.items, '[]'::json) AS items
+        FROM orders o
+        JOIN scoped_user su ON su.store_id = o.store_id
+        LEFT JOIN payments p ON p.order_id = o.id
+        LEFT JOIN users cashier ON cashier.id = o.cashier_id
+        LEFT JOIN LATERAL (
+          SELECT json_agg(
+            json_build_object(
+              'id', oi.id::text,
+              'name', oi.product_name,
+              'quantity', oi.quantity,
+              'unitPrice', oi.unit_price,
+              'totalPrice', oi.line_total
+            )
+            ORDER BY oi.id
+          ) AS items
+          FROM order_items oi
+          WHERE oi.order_id = o.id
+        ) items ON TRUE
+        WHERE o.order_status = 'COMPLETED'
+          AND o.payment_status IN ('PAID', 'VOIDED', 'VOID', 'REFUNDED')
+          AND ($2::text IS NULL OR su.store_type = $2)
+        ORDER BY COALESCE(o.completed_at, o.created_at) DESC
+      `,
+      [scope.user.email, query.module ?? scope.module],
+    );
+    const combined = [...rows, ...posRows].sort((a, b) => {
+      const aTime = new Date(String(a.createdAt ?? a.created_at ?? 0)).getTime();
+      const bTime = new Date(String(b.createdAt ?? b.created_at ?? 0)).getTime();
+      return bTime - aTime;
+    });
+    return this.paged(combined);
   }
 
   async listStockMovements(headers: HeadersLike, query: Record<string, string | undefined>) {

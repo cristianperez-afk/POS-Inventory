@@ -40,6 +40,7 @@ export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBr
   const [showVoidModal, setShowVoidModal] = useState(false);
   const [orderToVoid, setOrderToVoid] = useState<Order | null>(null);
   const [voidReason, setVoidReason] = useState('');
+  const canProcessTransactions = !isAdmin && staffType === 'POS_STAFF';
 
   const getTransactionNumber = (order: Order) => {
     if (order.transactionNumber) {
@@ -116,6 +117,7 @@ export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBr
   };
 
   const handleRefundClick = (order: Order) => {
+    if (!canProcessTransactions) return;
     if (!settings.enable_refund) return;
     setOrderToRefund(order);
     setSelectedRefundItems({});
@@ -131,6 +133,7 @@ export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBr
   };
 
   const handleRefundConfirm = () => {
+    if (!canProcessTransactions) return;
     if (!settings.enable_refund) return;
     if (!orderToRefund) return;
 
@@ -151,6 +154,7 @@ export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBr
   };
 
   const handleVoidClick = (order: Order) => {
+    if (!canProcessTransactions) return;
     if (!settings.enable_void) return;
     setOrderToVoid(order);
     setVoidReason('');
@@ -158,6 +162,7 @@ export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBr
   };
 
   const handleVoidConfirm = () => {
+    if (!canProcessTransactions) return;
     if (!settings.enable_void) return;
     if (!orderToVoid || !voidReason.trim()) return;
 
@@ -282,7 +287,7 @@ export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBr
                             <Receipt className="w-3.5 h-3.5" />
                             Receipt
                           </button>
-                          {settings.enable_refund && (order.paymentStatus === 'Paid' || order.paymentStatus === 'Partially Refunded') && !order.items.every(item => item.refunded) && (
+                          {canProcessTransactions && settings.enable_refund && (order.paymentStatus === 'Paid' || order.paymentStatus === 'Partially Refunded') && !order.items.every(item => item.refunded) && (
                             <button
                               onClick={() => handleRefundClick(order)}
                               className="inline-flex items-center gap-1 px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded-lg transition-colors"
@@ -292,7 +297,7 @@ export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBr
                               Refund
                             </button>
                           )}
-                          {settings.enable_void && order.paymentStatus === 'Paid' && (
+                          {canProcessTransactions && settings.enable_void && order.paymentStatus === 'Paid' && (
                             <button
                               onClick={() => handleVoidClick(order)}
                               className="inline-flex items-center gap-1 px-2 py-1 text-xs text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"

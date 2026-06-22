@@ -22,6 +22,12 @@ export function Payment({ currentUser, onNavigate, currentOrder, onLogout, store
   const [isProcessing, setIsProcessing] = useState(false);
 
   const handleProcessPayment = async () => {
+    if (currentUser?.role === 'ADMIN') {
+      alert('Admin accounts can view orders and receipts only. Use a POS Staff/Cashier account to process payment.');
+      onNavigate('order-list');
+      return;
+    }
+
     if (isProcessing) return;
 
     setIsProcessing(true);
@@ -74,6 +80,11 @@ export function Payment({ currentUser, onNavigate, currentOrder, onLogout, store
       <div className="flex-1 overflow-auto bg-background">
         <div className="p-8">
           <h1 className="text-primary mb-6">Payment</h1>
+          {currentUser?.role === 'ADMIN' && (
+            <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+              Admin accounts can view orders and receipts only. Payment processing is restricted to POS Staff/Cashier accounts.
+            </div>
+          )}
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <div>

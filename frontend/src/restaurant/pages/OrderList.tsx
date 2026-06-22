@@ -23,7 +23,7 @@ interface OrderListProps {
 type ActiveModal = 'details' | 'payment' | 'payment-success' | 'receipt' | 'refund' | 'void' | null;
 
 const ORDER_TYPES = ['Dine-In', 'Takeout', 'Mixed'];
-const PAYMENT_STATUSES = ['Paid', 'Not Paid', 'Void'];
+const PAYMENT_STATUSES = ['Paid', 'Not Paid', 'Void', 'Refunded'];
 const ORDERS_PER_PAGE = 10;
 
 function generateId(prefix: string) {
@@ -35,7 +35,7 @@ function normalizeSearchValue(value: string) {
 }
 
 export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, userName, storeType, staffType }: OrderListProps) {
-  const { orders, removeOrder, completePayment, voidOrder } = useOrders();
+  const { orders, completePayment, voidOrder, refundOrder } = useOrders();
   const { settings } = useStoreSettings();
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState('All');
@@ -56,8 +56,10 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
   const [currentPage, setCurrentPage] = useState(1);
   const [isCompletingPayment, setIsCompletingPayment] = useState(false);
   const showTableManagementColumns = settings.enable_table_management;
+  const canProcessTransactions = !isAdmin && staffType === 'POS_STAFF';
 
   const openModal = (order: Order, modal: ActiveModal) => {
+    if (!canProcessTransactions && ['payment', 'refund', 'void'].includes(String(modal))) return;
     if (modal === 'refund' && !settings.enable_refund) return;
     if (modal === 'void' && !settings.enable_void) return;
     setSelectedOrder(order);
@@ -74,6 +76,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
   };
 
   const handleConfirmPayment = async () => {
+    if (!canProcessTransactions) return;
     if (!selectedOrder) return;
     const cash = parseFloat(cashReceived);
     if (cash < selectedOrder.amountNumber) return;
@@ -105,12 +108,14 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
   };
 
   const handleRefundSubmit = () => {
+    if (!canProcessTransactions) return;
     if (!settings.enable_refund) return;
     if (!selectedOrder || !refundReason.trim()) return;
     setRefundingOrder(selectedOrder);
   };
 
   const handleVoidSubmit = () => {
+    if (!canProcessTransactions) return;
     if (!settings.enable_void) return;
     if (!selectedOrder || !voidReason.trim()) return;
     setVoidingOrder(selectedOrder);
@@ -188,6 +193,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
   const getPaymentBadge = (status: string) => {
     if (status === 'Paid') return 'bg-[#dcfce7] text-[#15803d]';
     if (status === 'Void') return 'bg-purple-50 text-purple-700 border-purple-200';
+    if (status === 'Refunded') return 'bg-amber-100 text-amber-800 border-amber-200';
     return 'bg-[#fef2f2] text-[#ef4444]';
   };
 
@@ -369,7 +375,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                         </button>
 
                         {/* Process Payment - only if Not Paid */}
-                        {order.paymentStatus === 'Not Paid' && (
+                        {canProcessTransactions && order.paymentStatus === 'Not Paid' && (
                           <button
                             onClick={() => openModal(order, 'payment')}
                             title="Process Payment"
@@ -393,7 +399,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                         )}
 
                         {/* Refund - only if Paid */}
-                        {settings.enable_refund && order.paymentStatus === 'Paid' && (
+                        {canProcessTransactions && settings.enable_refund && order.paymentStatus === 'Paid' && (
                           <button
                             onClick={() => openModal(order, 'refund')}
                             title="Process Refund"
@@ -404,7 +410,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                           </button>
                         )}
 
-                        {settings.enable_void && order.paymentStatus === 'Paid' && (
+                        {canProcessTransactions && settings.enable_void && order.paymentStatus === 'Paid' && (
                           <button
                             onClick={() => openModal(order, 'void')}
                             title="Void Transaction"
@@ -933,12 +939,12 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
       )}
       <DeleteConfirmDialog
         isOpen={Boolean(refundingOrder)}
-        title="Confirm Delete"
-        description={`Are you sure you want to refund and remove order ${refundingOrder?.id ?? ''}?`}
+        title="Confirm Refund"
+        description={`Are you sure you want to mark order ${refundingOrder?.id ?? ''} as refunded? The receipt will stay in history.`}
         onCancel={() => setRefundingOrder(null)}
-        onConfirm={() => {
+        onConfirm={async () => {
           if (!refundingOrder) return;
-          removeOrder(refundingOrder.id);
+          await refundOrder(refundingOrder.id);
           setRefundingOrder(null);
           closeModal();
         }}

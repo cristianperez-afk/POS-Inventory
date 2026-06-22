@@ -1817,9 +1817,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
               r.category,
               r.instructions,
               r."sellingPrice",
-              r."imageUrl",
+              COALESCE(NULLIF(r."imageUrl", ''), NULLIF(i."imageUrl", '')) AS "imageUrl",
               r."menuItemId",
-              NULL::TEXT AS description,
+              COALESCE(NULLIF(i.description, ''), NULLIF(r.instructions, '')) AS description,
               i.sku,
               i.barcode,
               i.unit,
@@ -2264,7 +2264,24 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const products = await this.query<any>(
       `
         SELECT
-          p.*,
+          p.id,
+          p.store_id,
+          p.store_type,
+          p.category_id,
+          p.name,
+          COALESCE(NULLIF(p.description, ''), NULLIF(menu_item.description, ''), NULLIF(r.instructions, '')) AS description,
+          p.price,
+          COALESCE(NULLIF(p.image_url, ''), NULLIF(menu_item."imageUrl", ''), NULLIF(r."imageUrl", '')) AS image_url,
+          p.sku,
+          p.barcode,
+          p.unit,
+          p.size,
+          p.stock_quantity,
+          p.low_stock_limit,
+          p.inventory_item_id,
+          p.is_available,
+          p.created_at,
+          p.updated_at,
           c.name AS category_name,
           COALESCE(r.modifiers, '[]'::jsonb) AS modifiers,
           CASE
@@ -2276,6 +2293,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         LEFT JOIN "Recipe" r
           ON r."menuItemId" = p.inventory_item_id
          AND COALESCE(r."isActive", TRUE) = TRUE
+        LEFT JOIN "InventoryItem" menu_item
+          ON menu_item.id = p.inventory_item_id
         LEFT JOIN LATERAL (
           SELECT MIN(FLOOR(ii.quantity_available / NULLIF(pi.quantity_required, 0))) AS available_quantity
           FROM product_ingredients pi
@@ -2434,6 +2453,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     if (!user.store_id || !user.store_type) {
       throw new InternalServerErrorException('User account is not linked to a store.');
     }
+    if (user.role === 'ADMIN') {
+      throw new ForbiddenException('Admin accounts can only view orders and receipts. Payment processing is restricted to POS staff.');
+    }
 
     try {
       return await this.withTransaction(async (client) => {
@@ -2568,6 +2590,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     if (!user.store_id || !user.store_type) {
       throw new InternalServerErrorException('User account is not linked to a store.');
+    }
+    const isRestrictedTransactionUpdate =
+      Boolean(input.payment) ||
+      input.paymentStatus === 'PAID' ||
+      input.paymentStatus === 'VOIDED' ||
+      input.paymentStatus === 'REFUNDED';
+    if (user.role === 'ADMIN' && isRestrictedTransactionUpdate) {
+      throw new ForbiddenException('Admin accounts can only view orders and receipts. Payment, refund, and void processing is restricted to POS staff.');
     }
 
     const updates: string[] = [];

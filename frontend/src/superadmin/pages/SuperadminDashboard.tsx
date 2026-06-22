@@ -79,6 +79,7 @@ export function SuperadminDashboard({ currentUser, onLogout }: SuperadminDashboa
   const [formFullName, setFormFullName] = useState('');
   const [formEmail, setFormEmail] = useState('');
   const [formPassword, setFormPassword] = useState('');
+  const [formConfirmPassword, setFormConfirmPassword] = useState('');
   const [formStoreType, setFormStoreType] = useState<'RESTAURANT' | 'RETAIL_STORE'>('RESTAURANT');
   const [storeFilter, setStoreFilter] = useState<StoreFilter>('ALL');
   const [adminFilter, setAdminFilter] = useState<StoreFilter>('ALL');
@@ -157,6 +158,13 @@ export function SuperadminDashboard({ currentUser, onLogout }: SuperadminDashboa
     setCreatedPassword('');
 
     try {
+      if (!editingAdmin && !formPassword.trim()) {
+        throw new Error('Password is required when creating an admin account.');
+      }
+      if (formPassword && formPassword !== formConfirmPassword) {
+        throw new Error('Password and confirm password do not match.');
+      }
+
       const response = await fetch(`${getApiBaseUrl()}/superadmin/admins${editingAdmin ? `/${editingAdmin.id}` : ''}`, {
         method: editingAdmin ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -183,6 +191,7 @@ export function SuperadminDashboard({ currentUser, onLogout }: SuperadminDashboa
       setFormFullName('');
       setFormEmail('');
       setFormPassword('');
+      setFormConfirmPassword('');
       setFormStoreType('RESTAURANT');
       setVisiblePassword(false);
       setAdminModalOpen(false);
@@ -198,6 +207,7 @@ export function SuperadminDashboard({ currentUser, onLogout }: SuperadminDashboa
     setFormFullName(admin.full_name);
     setFormEmail(admin.email);
     setFormPassword('');
+    setFormConfirmPassword('');
     setFormStoreType(admin.store_type === 'RETAIL_STORE' ? 'RETAIL_STORE' : 'RESTAURANT');
     setCreateError('');
     setCreatedPassword('');
@@ -209,6 +219,7 @@ export function SuperadminDashboard({ currentUser, onLogout }: SuperadminDashboa
     setFormFullName('');
     setFormEmail('');
     setFormPassword('');
+    setFormConfirmPassword('');
     setFormStoreType('RESTAURANT');
     setCreateError('');
     setCreatedPassword('');
@@ -221,6 +232,7 @@ export function SuperadminDashboard({ currentUser, onLogout }: SuperadminDashboa
     setFormFullName('');
     setFormEmail('');
     setFormPassword('');
+    setFormConfirmPassword('');
     setFormStoreType('RESTAURANT');
     setCreateError('');
     setVisiblePassword(false);
@@ -379,7 +391,7 @@ export function SuperadminDashboard({ currentUser, onLogout }: SuperadminDashboa
   return (
     <div className="min-h-screen bg-[#f8fafc] text-[#007a5e]">
       <aside
-        className={`fixed inset-y-0 left-0 z-30 flex flex-col text-white transition-[width] duration-300 ease-in-out ${isSidebarCollapsed ? 'w-20 overflow-visible' : 'w-80 overflow-y-auto'}`}
+        className={`fixed inset-y-0 left-0 z-30 flex flex-col text-white transition-[width] duration-300 ease-in-out ${isSidebarCollapsed ? 'w-20 overflow-visible' : 'w-80 overflow-y-auto no-scrollbar'}`}
         style={{ background: 'linear-gradient(180deg, #003534 0%, #007a5e 100%)' }}
       >
         <div className={`relative border-b border-white/10 transition-all duration-300 ease-in-out ${isSidebarCollapsed ? 'px-3 py-4' : 'px-4 pb-4 pt-5'}`}>
@@ -1289,22 +1301,14 @@ export function SuperadminDashboard({ currentUser, onLogout }: SuperadminDashboa
                 />
               </label>
               <label className="block text-xs font-semibold text-slate-600">
-                Username
-                <input
-                  value={formEmail.split('@')[0] ?? ''}
-                  readOnly
-                  placeholder="Enter username"
-                  className="mt-1 h-10 w-full rounded-md border border-slate-200 bg-slate-50 px-3 text-sm font-normal text-slate-500 outline-none"
-                />
-              </label>
-              <label className="block text-xs font-semibold text-slate-600">
-                Password
+                Password {!editingAdmin && <span className="text-red-500">*</span>}
                 <div className="relative mt-1">
                   <input
                     type={visiblePassword ? 'text' : 'password'}
                     value={formPassword}
                     onChange={(event) => setFormPassword(event.target.value)}
                     placeholder={editingAdmin ? 'Leave blank to keep current password' : 'Enter password'}
+                    required={!editingAdmin}
                     className="h-10 w-full rounded-md border border-slate-200 px-3 pr-10 text-sm font-normal text-slate-900 outline-none focus:border-blue-400"
                   />
                   <button
@@ -1316,6 +1320,17 @@ export function SuperadminDashboard({ currentUser, onLogout }: SuperadminDashboa
                     {visiblePassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
                 </div>
+              </label>
+              <label className="block text-xs font-semibold text-slate-600">
+                Confirm Password {!editingAdmin && <span className="text-red-500">*</span>}
+                <input
+                  type={visiblePassword ? 'text' : 'password'}
+                  value={formConfirmPassword}
+                  onChange={(event) => setFormConfirmPassword(event.target.value)}
+                  placeholder={editingAdmin ? 'Repeat new password if changing it' : 'Confirm password'}
+                  required={!editingAdmin || Boolean(formPassword)}
+                  className="mt-1 h-10 w-full rounded-md border border-slate-200 px-3 text-sm font-normal text-slate-900 outline-none focus:border-blue-400"
+                />
               </label>
             </div>
 

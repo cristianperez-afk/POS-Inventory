@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChefHat, Plus, Search, Edit, Trash2, X, Save, Calculator, Scale } from "lucide-react";
+import { ChefHat, Plus, Search, Edit, Trash2, X, Save, Calculator, Scale, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "../../app/hooks/useSession";
 import { InventoryProduct } from "../lib/inventoryLogic";
@@ -36,6 +36,12 @@ type RecipeModifier = {
 type Recipe = {
   id: string;
   name: string;
+  description?: string | null;
+  imageUrl?: string | null;
+  menuItem?: {
+    description?: string | null;
+    imageUrl?: string | null;
+  } | null;
   category: string;
   servings: number;
   yieldPercentage: number;
@@ -105,6 +111,8 @@ export function RecipeBOM() {
 
   const [newRecipe, setNewRecipe] = useState({
     name: "",
+    description: "",
+    imageUrl: "",
     category: "",
     servings: "",
     yieldPercentage: "100",
@@ -386,6 +394,8 @@ export function RecipeBOM() {
         id: editingRecipe?.id,
         data: {
           name: recipeToAdd.name,
+          description: newRecipe.description || null,
+          imageUrl: newRecipe.imageUrl || null,
           category: recipeToAdd.category,
           servings: recipeToAdd.servings,
           yieldPercentage: recipeToAdd.yieldPercentage,
@@ -425,6 +435,8 @@ export function RecipeBOM() {
       setEditingRecipe(null);
       setNewRecipe({
       name: "",
+      description: "",
+      imageUrl: "",
       category: "",
       servings: "",
       yieldPercentage: "100",
@@ -460,6 +472,8 @@ export function RecipeBOM() {
     setEditingRecipe(recipe);
     setNewRecipe({
       name: recipe.name,
+      description: recipe.description ?? recipe.menuItem?.description ?? "",
+      imageUrl: recipe.imageUrl ?? recipe.menuItem?.imageUrl ?? "",
       category: recipe.category,
       servings: recipe.servings.toString(),
       yieldPercentage: recipe.yieldPercentage.toString(),
@@ -507,6 +521,35 @@ export function RecipeBOM() {
       ...newRecipe,
       [e.target.name]: value,
     });
+  };
+
+  const handleRecipeImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please choose an image file.");
+      event.target.value = "";
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error("Image must be 2MB or smaller.");
+      event.target.value = "";
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      setNewRecipe((current) => ({
+        ...current,
+        imageUrl: typeof reader.result === "string" ? reader.result : current.imageUrl,
+      }));
+    };
+    reader.onerror = () => toast.error("Unable to read image file.");
+    reader.readAsDataURL(file);
+  };
+
+  const removeRecipeImage = () => {
+    setNewRecipe((current) => ({ ...current, imageUrl: "" }));
   };
 
   const handleIngredientInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -564,6 +607,8 @@ export function RecipeBOM() {
     });
     setNewRecipe({
       name: "",
+      description: "",
+      imageUrl: "",
       category: "",
       servings: "",
       yieldPercentage: "100",
@@ -656,15 +701,29 @@ export function RecipeBOM() {
           <div key={recipe.id} className="bg-card rounded-2xl p-6 shadow-sm border border-border hover:shadow-md transition-all duration-200">
             <div className="flex items-start justify-between mb-4">
               <div className="flex items-center gap-3">
-                <div className="w-12 h-12 bg-gradient-to-br from-primary to-secondary rounded-xl flex items-center justify-center">
-                  <ChefHat className="w-6 h-6 text-white" />
+                <div className="w-14 h-14 overflow-hidden rounded-xl border border-border bg-muted flex items-center justify-center flex-shrink-0">
+                  {recipe.imageUrl || recipe.menuItem?.imageUrl ? (
+                    <img
+                      src={recipe.imageUrl || recipe.menuItem?.imageUrl || ""}
+                      alt=""
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <ChefHat className="w-6 h-6 text-muted-foreground" />
+                  )}
                 </div>
-                <div>
+                <div className="min-w-0">
                   <h3 className="font-bold text-foreground">{recipe.name}</h3>
                   <p className="text-xs text-muted-foreground">{recipe.id}</p>
                 </div>
               </div>
             </div>
+
+            {(recipe.description || recipe.menuItem?.description) && (
+              <p className="mb-4 line-clamp-2 text-sm text-muted-foreground">
+                {recipe.description || recipe.menuItem?.description}
+              </p>
+            )}
 
             <div className="space-y-3 mb-4">
               <div className="flex items-center justify-between text-sm">
@@ -779,6 +838,38 @@ export function RecipeBOM() {
                 </div>
 
                 <div>
+                  <label className="block text-sm mb-2 text-foreground font-medium">
+                    Picture / Image
+                  </label>
+                  <div className="grid grid-cols-[88px_minmax(0,1fr)_44px] items-center gap-3">
+                    <div className="flex h-14 w-14 sm:h-20 sm:w-20 items-center justify-center overflow-hidden rounded-lg border border-border bg-white p-2">
+                      {newRecipe.imageUrl ? (
+                        <img src={newRecipe.imageUrl} alt="" className="h-full w-full object-cover" />
+                      ) : (
+                        <ChefHat className="h-7 w-7 text-muted-foreground" />
+                      )}
+                    </div>
+                    <label className="flex h-20 min-w-0 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-border bg-muted/20 px-3 text-center transition-colors hover:bg-muted/40">
+                      <Upload className="mb-1 h-4 w-4 text-primary" />
+                      <span className="text-xs font-medium text-primary">Upload picture</span>
+                      <span className="mt-0.5 text-[11px] text-muted-foreground">PNG, JPG or SVG</span>
+                      <input type="file" accept="image/png,image/jpeg,image/svg+xml" onChange={handleRecipeImageUpload} className="hidden" />
+                    </label>
+                    {newRecipe.imageUrl && (
+                      <button
+                        type="button"
+                        onClick={removeRecipeImage}
+                        title="Remove picture"
+                        aria-label="Remove picture"
+                        className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-border text-destructive transition-colors hover:bg-destructive/10"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div>
                   <label htmlFor="category" className="block text-sm mb-2 text-foreground font-medium">
                     Category *
                   </label>
@@ -796,6 +887,21 @@ export function RecipeBOM() {
                     <option value="Dessert">Dessert</option>
                     <option value="Beverage">Beverage</option>
                   </select>
+                </div>
+
+                <div className="col-span-2">
+                  <label htmlFor="description" className="block text-sm mb-2 text-foreground font-medium">
+                    Description
+                  </label>
+                  <textarea
+                    id="description"
+                    name="description"
+                    value={newRecipe.description}
+                    onChange={handleInputChange}
+                    rows={3}
+                    placeholder="Short menu description shown in POS"
+                    className="w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all resize-none"
+                  />
                 </div>
 
                 <div>
