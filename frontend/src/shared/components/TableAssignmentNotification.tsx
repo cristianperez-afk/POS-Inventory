@@ -15,7 +15,8 @@ export function TableAssignmentNotification({
   onCancel,
 }: TableAssignmentNotificationProps) {
   const { availableTable, queuedCustomer } = notification;
-  const canFit = queuedCustomer.partySize <= availableTable.seats;
+  const availableSeats = availableTable.isShared ? availableTable.availableSeats : availableTable.seats;
+  const canFit = queuedCustomer.partySize <= availableSeats;
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[100] p-4">
@@ -43,7 +44,7 @@ export function TableAssignmentNotification({
             <div className="flex items-center justify-between mb-2">
               <h3 className="font-semibold text-green-900">Table {availableTable.number} is now available</h3>
               <div className="bg-green-600 text-white px-3 py-1 rounded-full text-sm font-medium">
-                {availableTable.seats} seats
+                {availableSeats} seats
               </div>
             </div>
           </div>
@@ -83,7 +84,7 @@ export function TableAssignmentNotification({
             ) : (
               <div className="bg-orange-100 border border-orange-300 rounded-lg p-3 mt-3">
                 <p className="text-sm text-orange-800 font-medium">
-                  ⚠ Queue #{queuedCustomer.queuePosition} needs {queuedCustomer.partySize} seats, but Table {availableTable.number} only has {availableTable.seats} seats available.
+                  Queue #{queuedCustomer.queuePosition} needs {queuedCustomer.partySize} seats, but Table {availableTable.number} only has {availableSeats} seats available.
                 </p>
               </div>
             )}
