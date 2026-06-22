@@ -1215,6 +1215,11 @@ export class InventoryApiService {
         WHERE o.order_status = 'COMPLETED'
           AND o.payment_status IN ('PAID', 'VOIDED', 'VOID', 'REFUNDED')
           AND ($2::text IS NULL OR su.store_type = $2)
+          -- Skip POS orders already mirrored into "Sale" so they aren't shown twice.
+          AND NOT EXISTS (
+            SELECT 1 FROM "Sale" sl
+            WHERE sl."transactionNumber" = CONCAT('POS-', o.order_number)
+          )
         ORDER BY COALESCE(o.completed_at, o.created_at) DESC
       `,
       [scope.user.email, query.module ?? scope.module],
