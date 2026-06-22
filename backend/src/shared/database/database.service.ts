@@ -1752,42 +1752,43 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  private async resolveInventoryBusinessIdForStoreScope(user: AuthenticatedUser): Promise<string | null> {
+  private async resolveInventoryBusinessIdForStoreScope(user: AuthenticatedUser, client?: PoolClient): Promise<string | null> {
     if (!user.store_type) {
       return null;
     }
 
     const module = user.store_type === 'RETAIL_STORE' ? 'RETAIL' : 'RESTAURANT';
-    const rows = await this.query<{ id: string }>(
-      `
-        SELECT b.id
-        FROM "Business" b
-        LEFT JOIN "User" matched_user
-          ON matched_user."businessId" = b.id
-         AND lower(matched_user.email) = lower($1)
-        WHERE $2::"BusinessModule" = ANY(b.modules)
-        ORDER BY
-          CASE WHEN matched_user.id IS NOT NULL THEN 0 ELSE 1 END,
-          CASE
-            WHEN $2::text = 'RESTAURANT' THEN (
-              SELECT COUNT(*)
-              FROM "Recipe" r
-              WHERE r."businessId" = b.id
-                AND COALESCE(r."isActive", TRUE) = TRUE
-                AND r."menuItemId" IS NOT NULL
-            )
-            ELSE (
-              SELECT COUNT(*)
-              FROM "InventoryItem" i
-              WHERE i."businessId" = b.id
-                AND i."itemType" = 'RETAIL_ITEM'::"InventoryItemType"
-            )
-          END DESC,
-          b."createdAt" DESC
-        LIMIT 1
-      `,
-      [user.email, module],
-    );
+    const sql = `
+      SELECT b.id
+      FROM "Business" b
+      LEFT JOIN "User" matched_user
+        ON matched_user."businessId" = b.id
+       AND lower(matched_user.email) = lower($1)
+      WHERE $2::"BusinessModule" = ANY(b.modules)
+      ORDER BY
+        CASE WHEN matched_user.id IS NOT NULL THEN 0 ELSE 1 END,
+        CASE
+          WHEN $2::text = 'RESTAURANT' THEN (
+            SELECT COUNT(*)
+            FROM "Recipe" r
+            WHERE r."businessId" = b.id
+              AND COALESCE(r."isActive", TRUE) = TRUE
+              AND r."menuItemId" IS NOT NULL
+          )
+          ELSE (
+            SELECT COUNT(*)
+            FROM "InventoryItem" i
+            WHERE i."businessId" = b.id
+              AND i."itemType" = 'RETAIL_ITEM'::"InventoryItemType"
+          )
+        END DESC,
+        b."createdAt" DESC
+      LIMIT 1
+    `;
+    const params = [user.email, module];
+    const rows = client
+      ? await this.queryWithClient<{ id: string }>(client, sql, params)
+      : await this.query<{ id: string }>(sql, params);
 
     return rows[0]?.id ?? null;
   }
@@ -2474,14 +2475,39 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
   private async ensureDiningTableSchema(client?: PoolClient) {
     const run = client ? this.queryWithClient.bind(this, client) : this.query.bind(this);
+    await run(`
+      DO $$
+      BEGIN
+        CREATE TYPE "DiningTableStatus" AS ENUM ('AVAILABLE', 'PARTIALLY_OCCUPIED', 'OCCUPIED');
+      EXCEPTION
+        WHEN duplicate_object THEN NULL;
+      END $$;
+    `);
     await run(`ALTER TYPE "DiningTableStatus" ADD VALUE IF NOT EXISTS 'PARTIALLY_OCCUPIED'`);
+    await run(`
+      CREATE TABLE IF NOT EXISTS "DiningTable" (
+        id TEXT PRIMARY KEY,
+        "tableNumber" TEXT NOT NULL,
+        capacity INTEGER NOT NULL DEFAULT 1,
+        status "DiningTableStatus" NOT NULL DEFAULT 'AVAILABLE',
+        floor TEXT,
+        notes TEXT,
+        "locationId" TEXT NOT NULL REFERENCES "Location"(id) ON DELETE RESTRICT ON UPDATE CASCADE,
+        "businessId" TEXT NOT NULL REFERENCES "Business"(id) ON DELETE RESTRICT ON UPDATE CASCADE,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
     await run(`ALTER TABLE "DiningTable" ADD COLUMN IF NOT EXISTS "occupiedSeats" INTEGER NOT NULL DEFAULT 0`);
     await run(`ALTER TABLE "DiningTable" ADD COLUMN IF NOT EXISTS "isShared" BOOLEAN NOT NULL DEFAULT false`);
     await run(`UPDATE "DiningTable" SET status = 'AVAILABLE' WHERE status::text IN ('RESERVED', 'CLEANING')`);
+    await run(`CREATE UNIQUE INDEX IF NOT EXISTS "DiningTable_businessId_locationId_tableNumber_key" ON "DiningTable"("businessId", "locationId", "tableNumber")`);
+    await run(`CREATE INDEX IF NOT EXISTS "DiningTable_businessId_status_idx" ON "DiningTable"("businessId", status)`);
+    await run(`CREATE INDEX IF NOT EXISTS "DiningTable_locationId_idx" ON "DiningTable"("locationId")`);
   }
 
   private async getDiningScope(user: AuthenticatedUser, client?: PoolClient) {
-    const businessId = await this.resolveInventoryBusinessIdForStoreScope(user);
+    const businessId = await this.resolveInventoryBusinessIdForStoreScope(user, client);
     if (!businessId) {
       throw new InternalServerErrorException('Store is not linked to a restaurant business.');
     }
@@ -2640,7 +2666,6 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   private async occupyDiningTable(client: PoolClient, user: AuthenticatedUser, tableName: string | null | undefined, partySize: number) {
     const tableNumber = this.tableNumberFromName(tableName);
     if (!tableNumber || partySize <= 0) return;
-    await this.ensureDiningTableSchema(client);
     const scope = await this.getDiningScope(user, client);
     const rows = await this.queryWithClient<any>(
       client,
@@ -2669,7 +2694,6 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   private async releaseDiningTable(client: PoolClient, user: AuthenticatedUser, tableName: string | null | undefined, partySize: number) {
     const tableNumber = this.tableNumberFromName(tableName);
     if (!tableNumber) return;
-    await this.ensureDiningTableSchema(client);
     const scope = await this.getDiningScope(user, client);
     const rows = await this.queryWithClient<any>(
       client,
@@ -2692,6 +2716,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
   async createPaidPosOrder(input: any) {
     await this.ensurePosOrderSchema();
+    if (input.tableName && !String(input.tableName).toLowerCase().startsWith('queue')) {
+      await this.ensureDiningTableSchema();
+    }
     const user = await this.getUserStoreScope(input.userId);
 
     if (!user.store_id || !user.store_type) {
@@ -2839,6 +2866,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
   async updatePosOrder(input: any) {
     await this.ensurePosOrderSchema();
+    if (input.tableName !== undefined || input.orderStatus === 'COMPLETED' || Boolean(input.payment)) {
+      await this.ensureDiningTableSchema();
+    }
     const user = await this.getUserStoreScope(input.userId);
 
     if (!user.store_id || !user.store_type) {
