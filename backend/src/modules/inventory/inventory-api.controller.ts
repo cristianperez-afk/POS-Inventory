@@ -183,6 +183,16 @@ export class InventoryApiController {
     return this.inventoryApiService.listStockMovements(request.headers, query);
   }
 
+  @Get('reports/ingredient-consumption')
+  ingredientConsumptionReport(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
+    return this.inventoryApiService.ingredientConsumptionReport(request.headers, query);
+  }
+
+  @Get('reports/items-sold')
+  itemsSoldReport(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
+    return this.inventoryApiService.itemsSoldReport(request.headers, query);
+  }
+
   @Post('stock-movements')
   createStockMovement(@Req() request: RequestLike, @Body() body: Record<string, unknown>) {
     return this.inventoryApiService.createStockMovement(request.headers, body);

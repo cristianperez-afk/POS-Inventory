@@ -1758,6 +1758,25 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
 
     const module = user.store_type === 'RETAIL_STORE' ? 'RETAIL' : 'RESTAURANT';
+    // 1. Deterministic store -> business link wins, if configured for this store and
+    // the linked business supports the store's module. This removes the guessing.
+    await this.ensureStoreInventoryLink(client);
+    if (user.store_id) {
+      const linkedSql = `SELECT b.id
+         FROM stores s
+         JOIN "Business" b ON b.id = s.inventory_business_id
+         WHERE s.id = $1 AND $2::"BusinessModule" = ANY(b.modules)
+         LIMIT 1`;
+      const linkedParams = [user.store_id, module];
+      const linked = client
+        ? await this.queryWithClient<{ id: string }>(client, linkedSql, linkedParams)
+        : await this.query<{ id: string }>(linkedSql, linkedParams);
+      if (linked[0]?.id) {
+        return linked[0].id;
+      }
+    }
+
+    // 2. Fallback heuristic: email match, then most items, then newest.
     const sql = `
       SELECT b.id
       FROM "Business" b
@@ -4076,6 +4095,18 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ADD COLUMN IF NOT EXISTS party_size INT
       `,
     );
+  }
+
+  // Optional deterministic link from a POS store to a specific inventory Business.
+  // When set, it overrides the email/most-items heuristic used to resolve which
+  // business backs a store's POS catalog and sales.
+  private async ensureStoreInventoryLink(client?: PoolClient) {
+    const sql = `ALTER TABLE stores ADD COLUMN IF NOT EXISTS inventory_business_id TEXT`;
+    if (client) {
+      await this.queryWithClient(client, sql);
+    } else {
+      await this.query(sql);
+    }
   }
 
   private async ensureDefaultDiscountSettings(storeId: number) {

@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
+import { getItemsSoldReport } from '../../app/api/client';
 import { Plus, Edit2, Trash2, Search, ChevronRight, ChevronDown, Folder, FolderOpen, AlertTriangle, Package, PackagePlus, ShoppingCart, PackageCheck, Layers, X, Eye, TrendingUp, TrendingDown, RefreshCw, CheckCircle, Users, ClipboardList } from 'lucide-react';
 import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
 import type {
@@ -42,7 +44,14 @@ export function ReportsView() {
     loadSharedData: true,
     loadUsers: currentUser?.role === 'Admin',
   });
-  const [activeTab, setActiveTab] = useState<'overview' | 'inventory' | 'transfers' | 'financial' | 'operations' | 'audit' | 'confidential'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'inventory' | 'sold' | 'transfers' | 'financial' | 'operations' | 'audit' | 'confidential'>('overview');
+  const [soldFrom, setSoldFrom] = useState('');
+  const [soldTo, setSoldTo] = useState('');
+  const soldQuery = useQuery({
+    queryKey: ['retail', 'items-sold', soldFrom || null, soldTo || null],
+    queryFn: () => getItemsSoldReport({ module: 'RETAIL', from: soldFrom || undefined, to: soldTo || undefined }),
+  });
+  const sold = soldQuery.data;
   const [dateRange, setDateRange] = useState<'7days' | '30days' | '3months' | 'year' | 'all'>('30days');
   const [selectedLocation, setSelectedLocation] = useState<string>('all');
 
@@ -512,6 +521,16 @@ export function ReportsView() {
           Inventory Report
         </button>
         <button
+          onClick={() => setActiveTab('sold')}
+          className={`px-6 py-3 text-[14px] font-medium border-b-2 transition-colors ${
+            activeTab === 'sold'
+              ? 'text-secondary border-secondary'
+              : 'text-muted-foreground border-transparent hover:text-foreground'
+          }`}
+        >
+          Goods Sold
+        </button>
+        <button
           onClick={() => setActiveTab('transfers')}
           className={`px-6 py-3 text-[14px] font-medium border-b-2 transition-colors ${
             activeTab === 'transfers'
@@ -762,6 +781,85 @@ export function ReportsView() {
                 </div>
               ))}
             </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'sold' && (
+        <div>
+          <div className="flex flex-wrap items-end justify-between gap-4 mb-4">
+            <div>
+              <h3 className="text-[20px] font-semibold text-foreground">Goods Sold</h3>
+              <p className="text-[14px] text-muted-foreground">
+                Units sold and revenue per item from completed sales{sold?.from || sold?.to ? '' : ' (last 30 days)'}. Voided/refunded sales are excluded.
+              </p>
+            </div>
+            <div className="flex items-end gap-3">
+              <label className="text-[12px] text-muted-foreground">
+                From
+                <input type="date" value={soldFrom} onChange={e => setSoldFrom(e.target.value)}
+                  className="block mt-1 px-3 py-2 border border-border rounded-[8px] text-[14px] bg-background" />
+              </label>
+              <label className="text-[12px] text-muted-foreground">
+                To
+                <input type="date" value={soldTo} onChange={e => setSoldTo(e.target.value)}
+                  className="block mt-1 px-3 py-2 border border-border rounded-[8px] text-[14px] bg-background" />
+              </label>
+              {(soldFrom || soldTo) && (
+                <button onClick={() => { setSoldFrom(''); setSoldTo(''); }}
+                  className="px-3 py-2 text-[14px] text-muted-foreground hover:text-foreground">Clear</button>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
+            <div className="bg-card border border-border rounded-[12px] p-4">
+              <p className="text-[12px] text-muted-foreground">Distinct items sold</p>
+              <p className="text-[24px] font-semibold text-foreground">{sold?.totalItems ?? 0}</p>
+            </div>
+            <div className="bg-card border border-border rounded-[12px] p-4">
+              <p className="text-[12px] text-muted-foreground">Total units sold</p>
+              <p className="text-[24px] font-semibold text-foreground">{(sold?.totalUnitsSold ?? 0).toLocaleString()}</p>
+            </div>
+            <div className="bg-card border border-border rounded-[12px] p-4">
+              <p className="text-[12px] text-muted-foreground">Total revenue</p>
+              <p className="text-[24px] font-semibold text-foreground">₱{(sold?.totalRevenue ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+            </div>
+          </div>
+
+          <div className="bg-card border border-border rounded-[12px] overflow-hidden">
+            <table className="w-full text-[14px]">
+              <thead className="bg-muted/50 text-muted-foreground">
+                <tr>
+                  <th className="text-left px-4 py-3 font-medium">Item</th>
+                  <th className="text-left px-4 py-3 font-medium">Category</th>
+                  <th className="text-right px-4 py-3 font-medium">Units sold</th>
+                  <th className="text-right px-4 py-3 font-medium">Revenue</th>
+                  <th className="text-right px-4 py-3 font-medium">Sales</th>
+                  <th className="text-right px-4 py-3 font-medium">Current stock</th>
+                  <th className="text-left px-4 py-3 font-medium">Last sold</th>
+                </tr>
+              </thead>
+              <tbody>
+                {soldQuery.isLoading && (
+                  <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">Loading…</td></tr>
+                )}
+                {!soldQuery.isLoading && (sold?.items?.length ?? 0) === 0 && (
+                  <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">No goods sold in this period.</td></tr>
+                )}
+                {sold?.items?.map(r => (
+                  <tr key={r.itemId ?? r.name} className="border-t border-border">
+                    <td className="px-4 py-3 text-foreground">{r.name}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{r.category ?? '—'}</td>
+                    <td className="px-4 py-3 text-right text-foreground font-medium">{r.unitsSold.toLocaleString()} {r.unit ?? ''}</td>
+                    <td className="px-4 py-3 text-right text-foreground">₱{r.revenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">{r.salesCount}</td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">{r.currentStock ?? '—'} {r.unit ?? ''}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{formatAuditDate(r.lastSoldAt ?? undefined)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
