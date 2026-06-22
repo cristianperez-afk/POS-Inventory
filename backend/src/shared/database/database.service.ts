@@ -2636,27 +2636,59 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     await this.ensureDiningTableSchema();
     const user = await this.getUserStoreScope(input.userId);
     const scope = await this.getDiningScope(user);
-    const currentRows = await this.query<any>(
-      `SELECT * FROM "DiningTable" WHERE id = $1 AND "businessId" = $2 AND "locationId" = $3 LIMIT 1`,
-      [input.tableId, scope.businessId, scope.locationId],
-    );
-    const table = currentRows[0];
-    if (!table) throw new NotFoundException('Table not found.');
+    return this.withTransaction(async (client) => {
+      const currentRows = await this.queryWithClient<any>(
+        client,
+        `SELECT * FROM "DiningTable" WHERE id = $1 AND "businessId" = $2 AND "locationId" = $3 FOR UPDATE`,
+        [input.tableId, scope.businessId, scope.locationId],
+      );
+      const table = currentRows[0];
+      if (!table) throw new NotFoundException('Table not found.');
 
-    const totalSeats = Number(table.capacity ?? 0);
-    const isShared = Boolean(table.isShared);
-    const occupiedSeats = Math.max(0, Math.min(totalSeats, Math.floor(Number(input.occupiedSeats) || 0)));
-    const status = this.tableStatus(isShared, totalSeats, occupiedSeats);
-    const rows = await this.query<any>(
-      `
-        UPDATE "DiningTable"
-        SET "occupiedSeats" = $1, status = $2::"DiningTableStatus", "updatedAt" = NOW()
-        WHERE id = $3 AND "businessId" = $4 AND "locationId" = $5
-        RETURNING *
-      `,
-      [occupiedSeats, status, input.tableId, scope.businessId, scope.locationId],
-    );
-    return this.mapDiningTable(rows[0]);
+      const totalSeats = Number(table.capacity ?? 0);
+      const isShared = Boolean(table.isShared);
+      const previousOccupiedSeats = Math.max(0, Number(table.occupiedSeats ?? 0));
+      const occupiedSeats = Math.max(0, Math.min(totalSeats, Math.floor(Number(input.occupiedSeats) || 0)));
+
+      if (occupiedSeats < previousOccupiedSeats) {
+        const tableLabel = `Table ${table.tableNumber}`;
+        const unpaidRows = await this.queryWithClient<{ id: number }>(
+          client,
+          `
+            SELECT o.id
+            FROM orders o
+            WHERE o.store_id = $1
+              AND COALESCE(o.order_status, '') <> 'COMPLETED'
+              AND COALESCE(UPPER(o.payment_status), '') IN ('NOT_PAID', 'UNPAID', 'PENDING')
+              AND o.table_name IS NOT NULL
+              AND EXISTS (
+                SELECT 1
+                FROM regexp_split_to_table(o.table_name, '\\s*\\+\\s*') AS table_label
+                WHERE LOWER(TRIM(table_label)) = LOWER($2)
+              )
+            LIMIT 1
+          `,
+          [user.store_id, tableLabel],
+        );
+
+        if (unpaidRows[0]) {
+          throw new BadRequestException('Cannot release a table with an unpaid or pending Pay Later order.');
+        }
+      }
+
+      const status = this.tableStatus(isShared, totalSeats, occupiedSeats);
+      const rows = await this.queryWithClient<any>(
+        client,
+        `
+          UPDATE "DiningTable"
+          SET "occupiedSeats" = $1, status = $2::"DiningTableStatus", "updatedAt" = NOW()
+          WHERE id = $3 AND "businessId" = $4 AND "locationId" = $5
+          RETURNING *
+        `,
+        [occupiedSeats, status, input.tableId, scope.businessId, scope.locationId],
+      );
+      return this.mapDiningTable(rows[0]);
+    });
   }
 
   private tableNumberFromName(tableName: string | null | undefined) {
@@ -2996,7 +3028,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       if (input.tableName && !String(input.tableName).toLowerCase().startsWith('queue') && input.orderStatus !== 'COMPLETED') {
         await this.occupyDiningTable(client, user, input.tableName, Number.isFinite(nextPartySize) ? nextPartySize : 0);
       }
-      if ((isPaymentUpdate && priorPaymentStatus !== 'PAID') || input.orderStatus === 'COMPLETED') {
+      const hasDiningTable = Boolean(nextTableName && !String(nextTableName).toLowerCase().startsWith('queue'));
+      if (hasDiningTable && input.orderStatus === 'COMPLETED' && !isPaymentUpdate && priorPaymentStatus !== 'PAID') {
+        throw new BadRequestException('Cannot release a Pay Later table before payment is completed.');
+      }
+      if ((isPaymentUpdate && priorPaymentStatus !== 'PAID') || (input.orderStatus === 'COMPLETED' && priorPaymentStatus === 'PAID')) {
         await this.releaseDiningTable(client, user, nextTableName, Number.isFinite(nextPartySize) ? nextPartySize : 0);
       }
 

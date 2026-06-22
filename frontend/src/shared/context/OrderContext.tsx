@@ -170,6 +170,8 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
       setOrders(prev => prev.map(o => o.id === orderId ? order : o));
       throw error;
     }
+
+    setPaymentCompletedSignal(prev => prev + 1);
   };
 
   const refundOrder = async (orderId: string, restock: boolean = false) => {
@@ -203,6 +205,8 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
       setOrders(prev => prev.map(o => o.id === orderId ? order : o));
       throw error;
     }
+
+    setPaymentCompletedSignal(prev => prev + 1);
   };
 
   const removeFromQueue = (id: string) => {
@@ -328,6 +332,8 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
       setOrders(prev => prev.map(o => o.id === orderId ? order : o));
       throw error;
     }
+
+    setPaymentCompletedSignal(prev => prev + 1);
   };
 
   return (

@@ -19,7 +19,7 @@ interface TableManagementProps {
 }
 
 export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand, userName, storeType, staffType }: TableManagementProps) {
-  const { orders, updateOrder, queuedOrders, removeFromQueue, completeTableOrder } = useOrders();
+  const { orders, queuedOrders, removeFromQueue, completeTableOrder } = useOrders();
   const {
     tables: contextTables,
     setTableStatus,
@@ -106,21 +106,40 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
     }
   };
 
+  const isPaidOrder = (order?: Order) => order?.paymentStatus === 'Paid';
+
+  const canManuallyReleaseTable = (table: typeof tables[number]) => {
+    const order = getTableOrder(table);
+    return isPaidOrder(order);
+  };
+
+  const releasePaidTableOrder = async (table: typeof tables[number]) => {
+    const order = getTableOrder(table);
+    if (!order || !isPaidOrder(order)) {
+      alert('Cannot release table: Pay Later orders must be paid first.');
+      return;
+    }
+
+    try {
+      await completeTableOrder(order.id);
+      setSelectedTableId(null);
+      setOpenMenuId(null);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Unable to release table.');
+    }
+  };
+
   const handleStatusChange = async (tableNumber: string, newStatus: 'available' | 'occupied' | 'partially_occupied') => {
     // Check if table has an active order
     const table = tables.find(t => t.number === tableNumber);
     if (table?.orderId && newStatus !== 'occupied') {
       const order = orders.find(o => o.id === table.orderId);
-      if (newStatus === 'available' && order?.paymentStatus === 'Paid') {
-        try {
-          await completeTableOrder(table.orderId);
-        } catch (error) {
-          alert(error instanceof Error ? error.message : 'Unable to release table.');
-        }
+      if (newStatus === 'available' && isPaidOrder(order)) {
+        await releasePaidTableOrder(table);
         return;
       }
 
-      alert('Cannot change status: Table has an active order. Only paid orders can be manually released to available.');
+      alert('Cannot change status: Pay Later orders must be paid before the table can be released.');
       return;
     }
 
@@ -132,15 +151,6 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
 
     if (newStatus === 'available') {
       await setTableStatus(tableNumber, newStatus);
-    }
-  };
-
-  const handlePaymentComplete = (tableId: number) => {
-    const table = tables.find(t => t.id === tableId);
-    if (table?.orderId) {
-      // Update order to paid status
-      updateOrder(table.orderId, { paymentStatus: 'Paid', orderStatus: 'Completed' });
-      setSelectedTableId(null);
     }
   };
 
@@ -420,11 +430,22 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
 
   const handleSharedSeatCountChange = async (table: typeof tables[number], value: string) => {
     const occupiedSeats = Math.max(0, Math.min(table.seats, Number(value) || 0));
+    const order = getTableOrder(table);
+    if (occupiedSeats < table.occupiedSeats && order && !isPaidOrder(order)) {
+      alert('Cannot reduce seats: Pay Later orders must be paid first.');
+      return;
+    }
     const success = await setTableOccupancy(table.id, occupiedSeats);
     if (!success) alert('Unable to update seated persons.');
   };
 
   const handleManualRelease = async (table: typeof tables[number]) => {
+    const order = getTableOrder(table);
+    if (order) {
+      await releasePaidTableOrder(table);
+      return;
+    }
+
     const success = await setTableOccupancy(table.id, 0);
     if (!success) alert('Unable to release table.');
     setOpenMenuId(null);
@@ -507,7 +528,7 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
               <div className="grid grid-cols-1 min-[420px]:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4 mb-6">
                 {tables.map(table => {
                   const order = getTableOrder(table);
-                  const isPaidOccupiedTable = table.status === 'occupied' && order?.paymentStatus === 'Paid';
+                  const isPaidOccupiedTable = table.status !== 'available' && canManuallyReleaseTable(table);
                   const theme = getTableTheme(table.status);
                   const rectangular = table.seats > 4;
                   const chairs = getChairLayout(table.seats, rectangular);
@@ -695,9 +716,14 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
                       {/* Show order info if occupied */}
                       {order && (
                         <div className="relative z-10 w-full text-center text-[10px] text-gray-500 -mt-1">
-                          {order.paymentStatus === 'Paid' && table.status === 'occupied' && (
+                          {order.paymentStatus === 'Paid' && table.status !== 'available' && (
                             <div className="mb-1 inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-emerald-700 ring-1 ring-emerald-200">
                               Already Paid - Set Available
+                            </div>
+                          )}
+                          {order.paymentStatus !== 'Paid' && table.status !== 'available' && (
+                            <div className="mb-1 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-700 ring-1 ring-amber-200">
+                              Pay Later - Release after payment
                             </div>
                           )}
                           <p className="font-medium truncate">{order.customer}</p>
@@ -710,7 +736,7 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
                       )}
                       {isPaidOccupiedTable && (
                         <button
-                          onClick={() => handleStatusChange(table.number, 'available')}
+                          onClick={() => void handleStatusChange(table.number, 'available')}
                           className="relative z-10 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700"
                         >
                           Release Table
@@ -754,12 +780,18 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
                         <span>₱{selectedOrder.amountNumber.toFixed(2)}</span>
                       </div>
                     </div>
-                    <button
-                      onClick={() => handlePaymentComplete(selectedTableId)}
-                      className="w-full bg-green-500 hover:bg-green-600 text-white py-2 rounded-lg transition-colors"
-                    >
-                      Mark as Paid & Free Table
-                    </button>
+                    {selectedOrder.paymentStatus === 'Paid' ? (
+                      <button
+                        onClick={() => selectedTable && void releasePaidTableOrder(selectedTable)}
+                        className="w-full bg-green-500 hover:bg-green-600 text-white py-2 rounded-lg transition-colors"
+                      >
+                        Mark Table Available
+                      </button>
+                    ) : (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                        Pay Later order. Complete payment before this table can be released.
+                      </div>
+                    )}
                   </div>
                 ) : null;
               })()}

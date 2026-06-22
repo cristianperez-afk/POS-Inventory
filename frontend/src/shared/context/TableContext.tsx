@@ -222,7 +222,11 @@ export function TableProvider({ children, currentUser }: { children: ReactNode; 
 
     const newlyAvailable = tables.filter(t => {
       const prev = prevTables.find(p => p.id === t.id);
-      return prev?.status === 'occupied' && t.status === 'available';
+      if (!prev) return false;
+      const wasUnavailable = prev.status === 'occupied' && t.status !== 'occupied';
+      const gainedSharedSeats = t.isShared && t.availableSeats > prev.availableSeats;
+      const becameAvailable = t.status === 'available' && prev.status !== 'available';
+      return wasUnavailable || gainedSharedSeats || becameAvailable;
     });
 
     prevTablesRef.current = tables;
@@ -233,11 +237,16 @@ export function TableProvider({ children, currentUser }: { children: ReactNode; 
     if (assignmentNotificationRef.current) return; // already showing one
 
     const firstInQueue = currentQueued[0];
+    const seatsForQueue = (table: Table) => table.isShared ? table.availableSeats : table.seats;
+    const canSeat = (table: Table, partySize: number) =>
+      table.isShared
+        ? table.availableSeats >= partySize
+        : table.status === 'available' && table.seats >= partySize;
 
     // Find the smallest fitting table among newly freed tables for the first queued customer
     const fittingTable = newlyAvailable
-      .filter(t => t.seats >= (firstInQueue.partySize || 0))
-      .sort((a, b) => a.seats - b.seats)[0];
+      .filter(t => canSeat(t, firstInQueue.partySize || 0))
+      .sort((a, b) => seatsForQueue(a) - seatsForQueue(b))[0];
 
     if (fittingTable) {
       setAssignmentNotification({
@@ -253,7 +262,7 @@ export function TableProvider({ children, currentUser }: { children: ReactNode; 
     } else {
       // First in queue doesn't fit any freed table — find any compatible pair
       for (const table of newlyAvailable) {
-        const compatible = currentQueued.find(o => (o.partySize || 0) <= table.seats);
+        const compatible = currentQueued.find(o => canSeat(table, o.partySize || 0));
         if (compatible) {
           setAssignmentNotification({
             availableTable: table,
@@ -424,11 +433,12 @@ export function TableProvider({ children, currentUser }: { children: ReactNode; 
     dismissAssignmentNotification();
 
     // Try to find next compatible customer
-    const availableTable = tables.find(t => t.status === 'available');
+    const availableTable = tables.find(t => t.status === 'available' || t.status === 'partially_occupied');
     if (availableTable) {
+      const availableSeats = availableTable.isShared ? availableTable.availableSeats : availableTable.seats;
       const nextCompatible = queuedOrders
         .filter(o => o.id !== orderId)
-        .find(o => (o.partySize || 0) <= availableTable.seats);
+        .find(o => (o.partySize || 0) <= availableSeats);
 
       if (nextCompatible) {
         setAssignmentNotification({
