@@ -10,6 +10,11 @@ export class PosController {
     return this.posService.getMenu(Number(userId));
   }
 
+  @Get('pos/ingredients')
+  getIngredients(@Query('user_id') userId: string) {
+    return this.posService.getIngredients(Number(userId));
+  }
+
   @Get('products/:id/recipe')
   getProductRecipe(@Param('id') id: string, @Query('user_id') userId: string) {
     return this.posService.getProductRecipe({

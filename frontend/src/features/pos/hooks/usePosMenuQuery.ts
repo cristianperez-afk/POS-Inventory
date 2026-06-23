@@ -23,6 +23,15 @@ export type PosMenuModifier = {
   itemName?: string;
 };
 
+export type PosIngredient = {
+  id: number;
+  name: string;
+  quantity_available?: number | string | null;
+  unit?: string | null;
+  cost_per_unit?: number | string | null;
+  is_available?: boolean;
+};
+
 export type PosMenuProduct = {
   id: number;
   variant_id?: number;
@@ -53,6 +62,14 @@ export function usePosMenuQuery(userId?: number | string | null) {
     queryKey: ['pos-menu', userId],
     enabled: Boolean(userId),
     queryFn: () => apiClient<PosMenuProduct[]>(`/pos/menu?user_id=${userId}`),
+  });
+}
+
+export function usePosIngredientsQuery(userId?: number | string | null) {
+  return useQuery({
+    queryKey: ['pos-ingredients', userId],
+    enabled: Boolean(userId),
+    queryFn: () => apiClient<PosIngredient[]>(`/pos/ingredients?user_id=${userId}`),
   });
 }
 

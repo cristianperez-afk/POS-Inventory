@@ -9,6 +9,10 @@ export class PosService {
     return this.databaseService.listPosProducts(userId);
   }
 
+  getIngredients(userId: number) {
+    return this.databaseService.listPosIngredients(userId);
+  }
+
   getProductRecipe(input: { userId: number; productId: number }) {
     return this.databaseService.getPosProductRecipe(input);
   }

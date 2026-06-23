@@ -11,7 +11,7 @@ import { DeleteConfirmDialog } from '../../shared/components/DeleteConfirmDialog
 import { getApiBaseUrl } from '../../auth/services/auth';
 import type { AuthenticatedUser } from '../../auth/types/auth';
 import { getLocalDateKey } from '../../shared/utils/date';
-import { useCompletePaymentMutation, usePosMenuQuery } from '../../features/pos/hooks/usePosMenuQuery';
+import { useCompletePaymentMutation, usePosIngredientsQuery, usePosMenuQuery, useProductRecipeQuery } from '../../features/pos/hooks/usePosMenuQuery';
 
 interface CreateOrderProps {
   currentUser: AuthenticatedUser | null;
@@ -138,6 +138,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
   const { tables } = useTables();
   const { settings, discounts } = useStoreSettings();
   const posMenuQuery = usePosMenuQuery(currentUser?.id);
+  const posIngredientsQuery = usePosIngredientsQuery(currentUser?.id);
   const completePaymentMutation = useCompletePaymentMutation();
   const tableManagementEnabled = settings.enable_table_management;
   const customerRecommendationEnabled = settings.enable_customer_recommendation;
@@ -155,6 +156,8 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
   const [diningOption, setDiningOption] = useState<'' | 'dine-in' | 'takeout'>('');
   const [searchQuery, setSearchQuery] = useState('');
   const [customizeItemIndex, setCustomizeItemIndex] = useState<number | null>(null);
+  const [showAddIngredient, setShowAddIngredient] = useState(false);
+  const [addIngredientName, setAddIngredientName] = useState('');
   const [showPreview, setShowPreview] = useState(false);
   const [showTakeoutMode, setShowTakeoutMode] = useState(false);
   const [showPayment, setShowPayment] = useState(false);
@@ -179,6 +182,8 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
   const receiptRef = useRef<HTMLDivElement>(null);
   const [isInQueue, setIsInQueue] = useState(false);
   const [queuePosition, setQueuePosition] = useState<number | null>(null);
+  const customizeProductId = customizeItemIndex !== null ? cart[customizeItemIndex]?.id : null;
+  const productRecipeQuery = useProductRecipeQuery(currentUser?.id, customizeProductId);
   const enabledPaymentMethods = settings.enabled_payment_methods.length > 0 ? settings.enabled_payment_methods : ['Cash'];
   const posProducts = useMemo<MenuProduct[]>(() => {
     return (posMenuQuery.data ?? []).map((product: any) => ({
@@ -251,6 +256,59 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
 
     void loadNextOrderNumber();
   }, [currentUser?.id]);
+
+  useEffect(() => {
+    const ingredients = Array.isArray((productRecipeQuery.data as any)?.ingredients)
+      ? (productRecipeQuery.data as any).ingredients
+      : [];
+    const modifiers = Array.isArray((productRecipeQuery.data as any)?.modifiers)
+      ? (productRecipeQuery.data as any).modifiers
+      : [];
+
+    if (customizeItemIndex === null || (ingredients.length === 0 && modifiers.length === 0)) return;
+
+    setCart((items) => items.map((item, index) => {
+      if (index !== customizeItemIndex) return item;
+
+      const currentByIngredientId = new Map(
+        item.ingredients.map((ingredient) => [Number(ingredient.ingredient_id ?? ingredient.replacement_ingredient_id ?? ingredient.id), ingredient]),
+      );
+      const nextIngredients = ingredients.map((ingredient: any) => {
+        const ingredientId = Number(ingredient.ingredient_id);
+        const current = currentByIngredientId.get(ingredientId);
+        return current ?? {
+          id: Number(ingredient.id),
+          itemId: ingredient.inventory_item_id ?? ingredient.itemId,
+          inventory_item_id: ingredient.inventory_item_id,
+          product_ingredient_id: Number(ingredient.id),
+          ingredient_id: ingredientId,
+          name: ingredient.name,
+          quantity: Number(ingredient.quantity ?? 0),
+          original_quantity: Number(ingredient.quantity ?? 0),
+          unit: ingredient.unit,
+          is_removable: ingredient.is_removable,
+          alternatives: ingredient.alternatives ?? [],
+        };
+      });
+
+      return {
+        ...item,
+        ingredients: nextIngredients.length > 0
+          ? [...nextIngredients, ...item.ingredients.filter((ingredient) => ingredient.customization_type === 'ADD')]
+          : item.ingredients,
+        originalIngredients: nextIngredients.length > 0 ? nextIngredients : item.originalIngredients,
+        modifiers: modifiers.length > 0
+          ? modifiers.map((modifier: any): Modifier => ({
+              id: String(modifier.id),
+              name: String(modifier.name),
+              type: 'remove',
+              itemId: modifier.itemId,
+              itemName: modifier.itemName,
+            }))
+          : item.modifiers,
+      };
+    }));
+  }, [customizeItemIndex, productRecipeQuery.data]);
 
   // Autocomplete for customer name
   const [showCustomerSuggestions, setShowCustomerSuggestions] = useState(false);
@@ -510,14 +568,47 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
     }));
   };
 
+  const addIngredient = (index: number) => {
+    const name = addIngredientName.trim().toLowerCase();
+    const ingredient = (posIngredientsQuery.data ?? []).find((item) => item.name.toLowerCase() === name);
+    if (!ingredient) return;
+
+    setCart(cart.map((item, i) => {
+      if (i !== index || item.ingredients.some((ing) => Number(ing.ingredient_id ?? ing.replacement_ingredient_id) === Number(ingredient.id))) {
+        return item;
+      }
+
+      return {
+        ...item,
+        ingredients: [
+          ...item.ingredients,
+          {
+            name: ingredient.name,
+            quantity: 1,
+            original_quantity: 0,
+            unit: ingredient.unit ?? 'pcs',
+            replacement_ingredient_id: Number(ingredient.id),
+            replacement_name: ingredient.name,
+            additional_price: 0,
+            customization_type: 'ADD',
+          },
+        ],
+      };
+    }));
+    setAddIngredientName('');
+    setShowAddIngredient(false);
+  };
+
   const deleteIngredient = (index: number, ingredientName: string) => {
     setCart(cart.map((item, i) => {
       if (i === index) {
         return {
           ...item,
-          ingredients: item.ingredients.map(ing =>
-            ing.name === ingredientName ? { ...ing, quantity: 0, removed: true, customization_type: 'REMOVE' } : ing
-          )
+          ingredients: item.ingredients
+            .filter((ing) => !(ing.name === ingredientName && ing.customization_type === 'ADD'))
+            .map(ing =>
+              ing.name === ingredientName ? { ...ing, quantity: 0, removed: true, customization_type: 'REMOVE' } : ing
+            )
         };
       }
       return item;
@@ -567,6 +658,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       const original = item.originalIngredients.find((originalIngredient) => originalIngredient.name === ingredient.name);
       return (
         ingredient.removed ||
+        ingredient.customization_type === 'ADD' ||
         ingredient.replacement_name ||
         !original ||
         Number(ingredient.quantity) !== Number(original.quantity)
@@ -574,8 +666,9 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
     });
 
     return {
+      addedIngredients: changedIngredients.filter((ingredient) => ingredient.customization_type === 'ADD' && !ingredient.removed),
       removedIngredients: changedIngredients.filter((ingredient) => ingredient.removed || Number(ingredient.quantity) <= 0),
-      replacedIngredients: changedIngredients.filter((ingredient) => ingredient.replacement_name && !ingredient.removed),
+      replacedIngredients: changedIngredients.filter((ingredient) => ingredient.customization_type !== 'ADD' && ingredient.replacement_name && !ingredient.removed),
       quantityChanges: changedIngredients.filter((ingredient) => {
         const original = item.originalIngredients.find((originalIngredient) => originalIngredient.name === ingredient.name);
         return original && !ingredient.removed && !ingredient.replacement_name && Number(ingredient.quantity) !== Number(original.quantity);
@@ -1562,8 +1655,8 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                   <h3 className="text-sm font-medium mb-2 text-primary">Dine-In Orders:</h3>
                   <div className="space-y-2">
                     {dineInItems.map((item, index) => {
-                      const { removedIngredients, replacedIngredients, quantityChanges, selectedModifiers } = getIngredientChanges(item);
-                      const hasCustomization = item.notes || selectedModifiers.length > 0 || removedIngredients.length > 0 || replacedIngredients.length > 0 || quantityChanges.length > 0;
+                      const { addedIngredients, removedIngredients, replacedIngredients, quantityChanges, selectedModifiers } = getIngredientChanges(item);
+                      const hasCustomization = item.notes || selectedModifiers.length > 0 || addedIngredients.length > 0 || removedIngredients.length > 0 || replacedIngredients.length > 0 || quantityChanges.length > 0;
 
                       return (
                         <div key={`preview-dinein-${index}`} className="border border-border rounded-lg p-3 bg-primary/5">
@@ -1576,6 +1669,11 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                               {removedIngredients.length > 0 && (
                                 <p className="text-xs text-red-600">
                                   ❌ No: {removedIngredients.map(ing => ing.name).join(', ')}
+                                </p>
+                              )}
+                              {addedIngredients.length > 0 && (
+                                <p className="text-xs text-green-700">
+                                  Add: {addedIngredients.map(ing => `${ing.name} ${ing.quantity}${ing.unit ? ` ${ing.unit}` : ''}`).join(', ')}
                                 </p>
                               )}
                               {replacedIngredients.length > 0 && (
@@ -1616,8 +1714,8 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                   <h3 className="text-sm font-medium mb-2 text-secondary">Takeout Orders:</h3>
                   <div className="space-y-2">
                     {takeoutItems.map((item, index) => {
-                      const { removedIngredients, replacedIngredients, quantityChanges, selectedModifiers } = getIngredientChanges(item);
-                      const hasCustomization = item.notes || selectedModifiers.length > 0 || removedIngredients.length > 0 || replacedIngredients.length > 0 || quantityChanges.length > 0;
+                      const { addedIngredients, removedIngredients, replacedIngredients, quantityChanges, selectedModifiers } = getIngredientChanges(item);
+                      const hasCustomization = item.notes || selectedModifiers.length > 0 || addedIngredients.length > 0 || removedIngredients.length > 0 || replacedIngredients.length > 0 || quantityChanges.length > 0;
 
                       return (
                         <div key={`preview-takeout-${index}`} className="border border-border rounded-lg p-3 bg-secondary/5">
@@ -1630,6 +1728,11 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                               {removedIngredients.length > 0 && (
                                 <p className="text-xs text-red-600">
                                   ❌ No: {removedIngredients.map(ing => ing.name).join(', ')}
+                                </p>
+                              )}
+                              {addedIngredients.length > 0 && (
+                                <p className="text-xs text-green-700">
+                                  Add: {addedIngredients.map(ing => `${ing.name} ${ing.quantity}${ing.unit ? ` ${ing.unit}` : ''}`).join(', ')}
                                 </p>
                               )}
                               {replacedIngredients.length > 0 && (
@@ -1737,7 +1840,43 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                 </div>
               )}
               <div className="mb-4">
-                <label className="block text-xs text-muted-foreground mb-2">Ingredients:</label>
+                <div className="mb-2 flex items-center justify-between">
+                  <label className="block text-xs text-muted-foreground">Ingredients:</label>
+                  <button
+                    type="button"
+                    title="add ingredient"
+                    onClick={() => setShowAddIngredient((open) => !open)}
+                    className="w-7 h-7 rounded bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-primary"
+                  >
+                    <Plus className="w-4 h-4" />
+                  </button>
+                </div>
+                {showAddIngredient && (
+                  <div className="mb-2 flex gap-2">
+                    <input
+                      list="pos-available-ingredients"
+                      value={addIngredientName}
+                      onChange={(event) => setAddIngredientName(event.target.value)}
+                      placeholder="Search ingredient"
+                      className="min-w-0 flex-1 rounded-lg border border-border bg-input-background px-3 py-2 text-xs"
+                    />
+                    <datalist id="pos-available-ingredients">
+                      {(posIngredientsQuery.data ?? []).map((ingredient) => (
+                        <option key={ingredient.id} value={ingredient.name}>
+                          {Number(ingredient.quantity_available ?? 0)} {ingredient.unit ?? 'pcs'}
+                        </option>
+                      ))}
+                    </datalist>
+                    <button
+                      type="button"
+                      onClick={() => addIngredient(customizeItemIndex)}
+                      disabled={!addIngredientName.trim()}
+                      className="px-3 py-2 rounded-lg bg-primary text-primary-foreground text-xs disabled:opacity-50"
+                    >
+                      Add
+                    </button>
+                  </div>
+                )}
                 <div className="space-y-2">
                   {cart[customizeItemIndex].ingredients.map((ingredient, ingIndex) => (
                     <div key={`ing-${ingIndex}-${ingredient.name}`} className="p-2 border border-border rounded-lg">

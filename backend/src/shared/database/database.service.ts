@@ -2443,6 +2443,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           p.name AS product_name,
           p.store_id,
           p.store_type,
+          COALESCE(r.modifiers, '[]'::jsonb) AS modifiers,
           COALESCE(
             json_agg(
               json_build_object(
@@ -2470,6 +2471,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             '[]'::json
           ) AS ingredients
         FROM products p
+        LEFT JOIN "Recipe" r
+          ON r."menuItemId" = p.inventory_item_id
+         AND COALESCE(r."isActive", TRUE) = TRUE
         LEFT JOIN product_ingredients pi
           ON pi.product_id = p.id
          AND pi.store_id = p.store_id
@@ -2478,7 +2482,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
          AND ii.store_id = p.store_id
         WHERE p.id = $1
           AND p.store_id = $2
-        GROUP BY p.id, p.name, p.store_id, p.store_type
+        GROUP BY p.id, p.name, p.store_id, p.store_type, r.modifiers
         LIMIT 1
       `,
       [input.productId, user.store_id],
@@ -2488,7 +2492,63 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       throw new NotFoundException('Product was not found for this store.');
     }
 
+    if (user.store_type === 'RESTAURANT') {
+      const recipeRows = await this.query<any>(
+        `
+          SELECT
+            pi.id,
+            pi.product_id,
+            pi.ingredient_id,
+            ii.inventory_item_id,
+            COALESCE(ii.ingredient_name, pi.ingredient_name) AS name,
+            pi.quantity_required AS quantity,
+            pi.unit,
+            pi.additional_cost,
+            pi.is_required,
+            pi.is_removable,
+            ii.quantity_available,
+            COALESCE(ii.is_available, TRUE) AS is_available
+          FROM product_ingredients pi
+          LEFT JOIN ingredients_inventory ii
+            ON ii.id = pi.ingredient_id
+           AND ii.store_id = pi.store_id
+          WHERE pi.product_id = $1
+            AND pi.store_id = $2
+          ORDER BY pi.id ASC
+        `,
+        [input.productId, user.store_id],
+      );
+
+      rows[0].ingredients = recipeRows;
+    }
+
     return rows[0];
+  }
+
+  async listPosIngredients(userId: number) {
+    const user = await this.getUserStoreScope(userId);
+
+    if (!user.store_id || user.store_type !== 'RESTAURANT') {
+      return [];
+    }
+
+    return this.query(
+      `
+        SELECT
+          id,
+          ingredient_name AS name,
+          quantity_available,
+          unit,
+          cost_per_unit,
+          is_available
+        FROM ingredients_inventory
+        WHERE store_id = $1
+          AND COALESCE(is_available, TRUE) = TRUE
+          AND quantity_available > 0
+        ORDER BY ingredient_name ASC
+      `,
+      [user.store_id],
+    );
   }
 
   private tableStatus(isShared: boolean, totalSeats: number, occupiedSeats: number) {
