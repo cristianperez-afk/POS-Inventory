@@ -4,7 +4,9 @@ import { IsArray, IsBoolean, IsEmail, IsIn, IsNumber, IsOptional, IsString, MinL
 import { AdminService } from './admin.service';
 
 const STAFF_TYPES = ['POS_STAFF', 'INVENTORY_STAFF', 'MANAGER'] as const;
+const STAFF_ROLES = ['STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN'] as const;
 type StaffType = (typeof STAFF_TYPES)[number];
+type StaffRole = (typeof STAFF_ROLES)[number];
 
 class CreateStaffDto {
   @Type(() => Number)
@@ -23,6 +25,10 @@ class CreateStaffDto {
 
   @IsIn(STAFF_TYPES)
   staff_type!: StaffType;
+
+  @IsOptional()
+  @IsIn(STAFF_ROLES)
+  role?: StaffRole;
 }
 
 class UpdateStaffDto {
@@ -43,6 +49,10 @@ class UpdateStaffDto {
 
   @IsIn(STAFF_TYPES)
   staff_type!: StaffType;
+
+  @IsOptional()
+  @IsIn(STAFF_ROLES)
+  role?: StaffRole;
 }
 
 class UpdateStoreInformationDto {
@@ -208,6 +218,7 @@ export class AdminController {
       email: body.email,
       password: body.password,
       staffType: body.staff_type,
+      role: body.role,
     });
   }
 
@@ -220,6 +231,7 @@ export class AdminController {
       email: body.email,
       password: body.password,
       staffType: body.staff_type,
+      role: body.role,
     });
   }
 

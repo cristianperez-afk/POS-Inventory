@@ -62,6 +62,7 @@ type StoreInformation = {
 };
 
 type StaffType = 'POS_STAFF' | 'INVENTORY_STAFF' | 'MANAGER';
+type StaffRole = 'STAFF' | 'POS_ADMIN' | 'INVENTORY_ADMIN';
 
 @Injectable()
 export class DatabaseService implements OnModuleInit, OnModuleDestroy {
@@ -71,6 +72,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
    * more raw pg queries here. Existing methods will be migrated module by module.
    */
   private readonly pool: Pool;
+  private isPoolClosed = false;
   private schemaColumns: SchemaColumns | null = null;
 
   constructor() {
@@ -80,7 +82,6 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       max: Number.isFinite(maxPoolConnections) && maxPoolConnections > 0 ? maxPoolConnections : 3,
       idleTimeoutMillis: Number(process.env.DB_POOL_IDLE_TIMEOUT_MS ?? 10000),
       connectionTimeoutMillis: Number(process.env.DB_POOL_CONNECTION_TIMEOUT_MS ?? 20000),
-      allowExitOnIdle: true,
     };
 
     this.pool = connectionString
@@ -100,10 +101,19 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy() {
+    if (this.isPoolClosed) {
+      return;
+    }
+
+    this.isPoolClosed = true;
     await this.pool.end();
   }
 
   async query<T extends QueryResultRow>(sql: string, params: unknown[] = []): Promise<T[]> {
+    if (this.isPoolClosed) {
+      throw new ServiceUnavailableException('PostgreSQL connection pool has already been closed. Restart the backend process.');
+    }
+
     try {
       const result = await this.pool.query<T>(sql, params);
       return result.rows;
@@ -121,6 +131,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   }
 
   async withTransaction<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {
+    if (this.isPoolClosed) {
+      throw new ServiceUnavailableException('PostgreSQL connection pool has already been closed. Restart the backend process.');
+    }
+
     let client: PoolClient;
 
     try {
@@ -550,7 +564,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ${userColumns.statusColumn ? `u.${this.quoteIdentifier(userColumns.statusColumn)} AS status` : `'ACTIVE' AS status`}
         FROM users u
         ${storeJoin}
-        WHERE u.${this.quoteIdentifier(userColumns.roleColumn)} = 'STAFF'
+        WHERE u.${this.quoteIdentifier(userColumns.roleColumn)} IN ('STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN')
           AND u.${this.quoteIdentifier(userColumns.storeIdColumn)} = $1
         ORDER BY u.id ASC
       `,
@@ -564,6 +578,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     email: string;
     password: string;
     staffType: StaffType;
+    role?: StaffRole;
   }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
@@ -579,6 +594,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
 
     const passwordHash = await bcrypt.hash(input.password, 10);
+    const role = input.role ?? 'STAFF';
+    const staffType = this.staffTypeForRole(role, input.staffType);
 
     const rows = await this.query<AuthenticatedUser>(
       `
@@ -590,7 +607,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ${this.quoteIdentifier(userColumns.storeIdColumn)},
           ${this.quoteIdentifier(userColumns.staffTypeColumn)}
         )
-        VALUES ($1, $2, 'STAFF', $3, $4, $5)
+        VALUES ($1, $2, $6, $3, $4, $5)
         RETURNING
           id,
           ${this.quoteIdentifier(userColumns.fullNameColumn)} AS full_name,
@@ -598,11 +615,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ${this.quoteIdentifier(userColumns.roleColumn)} AS role,
           ${this.quoteIdentifier(userColumns.storeIdColumn)} AS store_id,
           ${this.quoteIdentifier(userColumns.staffTypeColumn)} AS staff_type,
-          $6::text AS store_type,
-          $7::text AS store_name,
+          $7::text AS store_type,
+          $8::text AS store_name,
           ${userColumns.statusColumn ? `${this.quoteIdentifier(userColumns.statusColumn)} AS status` : `'ACTIVE' AS status`}
       `,
-      [input.fullName, input.email, passwordHash, admin.store_id, input.staffType, admin.store_type, admin.store_name],
+      [input.fullName, input.email, passwordHash, admin.store_id, staffType, role, admin.store_type, admin.store_name],
     );
 
     return rows[0];
@@ -615,6 +632,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     email: string;
     password?: string;
     staffType: StaffType;
+    role?: StaffRole;
   }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
@@ -634,8 +652,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       `${this.quoteIdentifier(userColumns.fullNameColumn)} = $1`,
       `email = $2`,
       `${this.quoteIdentifier(userColumns.staffTypeColumn)} = $3`,
+      `${this.quoteIdentifier(userColumns.roleColumn)} = $4`,
     ];
-    const values: unknown[] = [input.fullName, input.email, input.staffType];
+    const role = input.role ?? 'STAFF';
+    const values: unknown[] = [input.fullName, input.email, this.staffTypeForRole(role, input.staffType), role];
 
     if (input.password?.trim()) {
       if (!userColumns.passwordColumn) {
@@ -661,7 +681,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             UPDATE users
             SET ${updates.join(', ')}
             WHERE id = ${staffIdParam}
-              AND ${this.quoteIdentifier(userColumns.roleColumn)} = 'STAFF'
+              AND ${this.quoteIdentifier(userColumns.roleColumn)} IN ('STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN')
               AND ${this.quoteIdentifier(userColumns.storeIdColumn)} = ${storeIdParam}
             RETURNING *
           )
@@ -729,7 +749,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
 
     try {
-      const rows = await this.hardDeleteUserByRole(input.staffUserId, 'STAFF', admin.store_id, userColumns);
+      const rows = await this.hardDeleteStoreUser(input.staffUserId, admin.store_id, userColumns);
 
       if (rows.length === 0) {
         throw new NotFoundException('Staff account was not found for this store.');
@@ -768,7 +788,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
 
     try {
-      const rows = await this.hardDeleteUserByRole(input.staffUserId, 'STAFF', admin.store_id, userColumns);
+      const rows = await this.hardDeleteStoreUser(input.staffUserId, admin.store_id, userColumns);
 
       if (rows.length === 0) {
         throw new NotFoundException('Staff account was not found for this store.');
@@ -814,7 +834,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async getStoreInformationForAdmin(adminUserId: number): Promise<StoreInformation> {
     const user = await this.getUserStoreScope(adminUserId);
 
-    if (!['ADMIN', 'STAFF'].includes(String(user.role)) || !user.store_id) {
+    if (!['ADMIN', 'STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN'].includes(String(user.role)) || !user.store_id) {
       throw new InternalServerErrorException('Only store users can view store information.');
     }
 
@@ -4431,7 +4451,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           SET ${statusColumn} = 'INACTIVE'
           WHERE (
             (id = $1 AND ${roleColumn} = 'ADMIN')
-            OR (${roleColumn} = 'STAFF' AND ${storeIdColumn} = $2)
+            OR (${roleColumn} IN ('STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN') AND ${storeIdColumn} = $2)
           )
           RETURNING id
         `,
@@ -4483,7 +4503,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           SET ${statusColumn} = 'ACTIVE'
           WHERE (
             (id = $1 AND ${roleColumn} = 'ADMIN')
-            OR (${roleColumn} = 'STAFF' AND ${storeIdColumn} = $2)
+            OR (${roleColumn} IN ('STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN') AND ${storeIdColumn} = $2)
           )
           RETURNING id
         `,
@@ -4533,7 +4553,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         UPDATE users
         SET ${statusColumn} = 'INACTIVE'
         WHERE id = $1
-          AND ${roleColumn} = 'STAFF'
+          AND ${roleColumn} IN ('STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN')
           AND ${storeIdColumn} = $2
         RETURNING id
       `,
@@ -4559,7 +4579,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         UPDATE users
         SET ${statusColumn} = 'ACTIVE'
         WHERE id = $1
-          AND ${roleColumn} = 'STAFF'
+          AND ${roleColumn} IN ('STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN')
           AND ${storeIdColumn} = $2
         RETURNING id
       `,
@@ -4602,6 +4622,37 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     } catch (error) {
       this.handleDatabaseWriteError(error, 'Unable to remove user account.');
     }
+  }
+
+  private async hardDeleteStoreUser(
+    userId: number,
+    storeId: number,
+    userColumns: ReturnType<DatabaseService['resolveUserColumns']>,
+  ) {
+    if (!userColumns.roleColumn || !userColumns.storeIdColumn) {
+      throw new InternalServerErrorException('Store user deletion requires role and store columns.');
+    }
+
+    try {
+      return await this.query<{ id: number }>(
+        `
+          DELETE FROM users
+          WHERE id = $1
+            AND ${this.quoteIdentifier(userColumns.roleColumn)} IN ('STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN')
+            AND ${this.quoteIdentifier(userColumns.storeIdColumn)} = $2
+          RETURNING id
+        `,
+        [userId, storeId],
+      );
+    } catch (error) {
+      this.handleDatabaseWriteError(error, 'Unable to remove user account.');
+    }
+  }
+
+  private staffTypeForRole(role: StaffRole, staffType: StaffType): StaffType {
+    if (role === 'POS_ADMIN') return 'POS_STAFF';
+    if (role === 'INVENTORY_ADMIN') return 'INVENTORY_STAFF';
+    return staffType;
   }
 
   private resolveStoreColumns(columns: Set<string>) {
