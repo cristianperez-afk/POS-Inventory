@@ -33,6 +33,8 @@ const DEMO_ACCOUNT_GROUPS = [
     label: 'Retail Accounts',
     accounts: [
       { role: 'Admin', email: 'retailadmin@gmail.com', pwd: 'retailadmin123', color: '#005656' },
+      { role: 'POS Admin', email: 'retailposadmin@example.com', pwd: 'password123', color: '#047857' },
+      { role: 'Inventory Admin', email: 'retailinventoryadmin@example.com', pwd: 'password123', color: '#1d4ed8' },
       { role: 'POS Staff', email: 'retailstaff@pos.com', pwd: 'retailstaffpos123', color: '#0f766e' },
       { role: 'Inventory Staff', email: 'retailstaff@inventory.com', pwd: 'retailstaffinventory123', color: '#2563eb' },
       { role: 'Manager', email: 'retailstaff@manager.com', pwd: 'retailstaffmanager123', color: '#7c3aed' },

@@ -33,6 +33,22 @@ const demoAccounts = [
     store: 'restaurant',
     staffType: 'INVENTORY_STAFF',
   },
+  {
+    fullName: 'Retail POS Admin',
+    email: 'retailposadmin@example.com',
+    password: 'password123',
+    role: 'POS_ADMIN',
+    store: 'retail',
+    staffType: 'POS_STAFF',
+  },
+  {
+    fullName: 'Retail Inventory Admin',
+    email: 'retailinventoryadmin@example.com',
+    password: 'password123',
+    role: 'INVENTORY_ADMIN',
+    store: 'retail',
+    staffType: 'INVENTORY_STAFF',
+  },
 ];
 
 const pool = new Pool({
