@@ -9,6 +9,7 @@ import {
   getBundles,
   getGoodsReceipts,
   getInventory,
+  getItemCostHistory,
   getKitchenOrders,
   getLocations,
   getNotifications,
@@ -120,6 +121,14 @@ export function useInventoryQuery<TData = ApiInventoryItem[]>(
     queryKey: [...domainQueryKeys.inventory, params ?? {}],
     queryFn: () => getInventory(params),
     ...options,
+  });
+}
+
+export function useItemCostHistoryQuery(itemId: string | null | undefined, enabled = true) {
+  return useQuery({
+    queryKey: [...domainQueryKeys.inventory, 'cost-history', itemId ?? null],
+    queryFn: () => getItemCostHistory(itemId as string),
+    enabled: enabled && Boolean(itemId),
   });
 }
 

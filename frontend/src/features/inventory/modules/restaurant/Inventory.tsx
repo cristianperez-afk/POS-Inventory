@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { Search, Edit, Archive, ArchiveRestore, AlertCircle, X, Save, ChevronRight, ChevronDown, Folder, FolderOpen, Package, PlusCircle } from "lucide-react";
+import { Search, Edit, Archive, ArchiveRestore, AlertCircle, X, Save, ChevronRight, ChevronDown, Folder, FolderOpen, Package, PlusCircle, History, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "../../app/hooks/useSession";
 import { formatQuantity } from "../lib/inventoryLogic";
+import { CostHistoryModal } from "../shared/costing/CostHistoryModal";
 import {
   useRestaurantCategoryHierarchyQuery,
   useRestaurantInventoryQuery,
@@ -29,6 +30,7 @@ type Product = {
   unit: string;
   storageTemperature?: string;
   isActive?: boolean;
+  isRecent?: boolean;
 };
 
 export function Inventory() {
@@ -42,6 +44,7 @@ export function Inventory() {
   const [showInitialStockModal, setShowInitialStockModal] = useState(false);
   const [pendingDeactivateId, setPendingDeactivateId] = useState<number | null>(null);
   const [showArchived, setShowArchived] = useState(false);
+  const [costHistoryItem, setCostHistoryItem] = useState<{ id: string; name: string } | null>(null);
 
   // Hierarchical category structure — read from persisted backend settings so
   // categories added via Initial Stock Setup appear here immediately.
@@ -196,7 +199,15 @@ export function Inventory() {
     <div className="p-8">
       {/* Header */}
       <div className="mb-8 flex items-center justify-between">
-        <h1 className="text-3xl font-bold text-foreground">Inventory</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-3xl font-bold text-foreground">Inventory</h1>
+          {products.filter((p) => p.isRecent).length > 0 && (
+            <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-medium bg-primary/10 text-primary">
+              <Sparkles className="w-4 h-4" />
+              {products.filter((p) => p.isRecent).length} recently added
+            </span>
+          )}
+        </div>
         {userRole === "admin" && (
           <button
             onClick={() => setShowInitialStockModal(true)}
@@ -340,7 +351,15 @@ export function Inventory() {
 
                                   <div className="flex-1 grid grid-cols-6 gap-2 items-center">
                                     <div className="col-span-2">
-                                      <p className="font-medium text-foreground text-sm truncate">{product.name}</p>
+                                      <div className="flex items-center gap-2">
+                                        <p className="font-medium text-foreground text-sm truncate">{product.name}</p>
+                                        {product.isRecent && (
+                                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-primary/10 text-primary flex-shrink-0">
+                                            <Sparkles className="w-3 h-3" />
+                                            New
+                                          </span>
+                                        )}
+                                      </div>
                                       <p className="text-xs text-muted-foreground truncate">{product.sku}</p>
                                     </div>
 
@@ -375,6 +394,13 @@ export function Inventory() {
                                   </div>
 
                                   <div className="flex items-center gap-1 flex-shrink-0">
+                                    <button
+                                      onClick={() => setCostHistoryItem({ id: product.backendId ?? String(product.id), name: product.name })}
+                                      className="p-1.5 hover:bg-emerald-50 text-emerald-600 rounded-lg transition-colors"
+                                      title="View cost history"
+                                    >
+                                      <History className="w-5 h-5" />
+                                    </button>
                                     <button
                                       onClick={() => handleEdit(product)}
                                       className="p-1.5 hover:bg-green-50 text-green-600 rounded-lg transition-colors"
@@ -424,6 +450,15 @@ export function Inventory() {
           </div>
         )}
       </div>
+
+      {/* Cost History Modal */}
+      {costHistoryItem && (
+        <CostHistoryModal
+          itemId={costHistoryItem.id}
+          itemName={costHistoryItem.name}
+          onClose={() => setCostHistoryItem(null)}
+        />
+      )}
 
       {/* Edit Modal */}
       {showEditModal && editingProduct && (

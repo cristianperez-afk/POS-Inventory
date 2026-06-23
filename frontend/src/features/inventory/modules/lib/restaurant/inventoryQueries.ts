@@ -16,6 +16,7 @@ import {
   useDomainMutation,
   useStockMovementsQuery,
 } from '../domainQueries';
+import { isRecentlyAdded } from '../../../app/utils/format';
 
 const toDateInput = (value?: string | null) => {
   if (!value) return '';
@@ -56,6 +57,7 @@ export function mapRestaurantInventory(items: ApiInventoryItem[]) {
     unit: item.unit ?? 'pcs',
     storageTemperature: item.storageTemperature ?? 'Dry Storage',
     isActive: item.isActive ?? true,
+    isRecent: isRecentlyAdded(item.createdAt ?? item.dateAdded),
   }));
 }
 

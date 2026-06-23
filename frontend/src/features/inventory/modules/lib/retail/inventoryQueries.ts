@@ -6,6 +6,7 @@ import {
   deleteInventoryItem,
   updateInventoryItem,
 } from '../../../app/api/client';
+import { isRecentlyAdded } from '../../../app/utils/format';
 import { useInventoryQuery, useStockMovementsQuery } from '../domainQueries';
 import { formatDate, mapItems, retailQueryKeys, useRetailMutation } from './shared';
 
@@ -26,6 +27,7 @@ export const mapRetailInventory = (item: ApiInventoryItem): RetailInventoryItem 
   location: item.location?.name ?? 'Unknown Location',
   locationId: item.locationId,
   isActive: item.isActive ?? true,
+  isRecent: isRecentlyAdded(item.createdAt ?? item.dateAdded),
 });
 
 export const mapRetailInventoryRecord = (item: ApiInventoryItem): RetailInventoryRecord => ({

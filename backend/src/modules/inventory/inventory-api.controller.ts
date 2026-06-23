@@ -34,6 +34,11 @@ export class InventoryApiController {
     return this.inventoryApiService.createInventoryItem(request.headers, body);
   }
 
+  @Get('inventory/:id/cost-history')
+  getItemCostHistory(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.getItemCostHistory(request.headers, id);
+  }
+
   @Patch('inventory/:id')
   updateInventoryItem(@Param('id') id: string, @Body() body: Record<string, unknown>) {
     return this.inventoryApiService.updateInventoryItem(id, body);

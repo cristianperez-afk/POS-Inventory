@@ -197,6 +197,85 @@ export class InventoryApiService {
     return rows[0];
   }
 
+  // Detailed receiving/cost history for a single inventory item, sourced from the
+  // goods-receipt records each receive writes. Returns one row per received batch
+  // (quantity received, unit cost from the PO line, total cost, date received) plus
+  // the weighted-average cost used as the default inventory cost display.
+  async getItemCostHistory(headers: HeadersLike, id: string) {
+    const scope = await this.resolveScope(headers);
+
+    const itemRows = await this.safeQuery<{
+      id: string;
+      name: string;
+      unit: string | null;
+      price: number;
+      costPrice: number | null;
+      quantity: number;
+    }>(
+      `
+        SELECT id, name, unit, price, "costPrice", quantity
+        FROM "InventoryItem"
+        WHERE id = $1 AND "businessId" = $2
+        LIMIT 1
+      `,
+      [id, scope.businessId],
+    );
+    const item = itemRows[0];
+    if (!item) throw new NotFoundException('Inventory item was not found.');
+
+    const entries = await this.safeQuery<Record<string, unknown>>(
+      `
+        SELECT
+          gri.id                                  AS id,
+          gri."receivedQty"                       AS "quantityReceived",
+          poi."unitPrice"                         AS "unitCost",
+          (gri."receivedQty" * poi."unitPrice")   AS "totalCost",
+          gr."createdAt"                          AS "dateReceived",
+          gr."receiptNumber"                      AS "receiptNumber",
+          po."orderNumber"                        AS "orderNumber",
+          s.name                                  AS "supplierName"
+        FROM "GoodsReceiptItem" gri
+        JOIN "GoodsReceipt" gr ON gr.id = gri."goodsReceiptId"
+        JOIN "PurchaseOrderItem" poi ON poi.id = gri."purchaseOrderItemId"
+        JOIN "PurchaseOrder" po ON po.id = gr."purchaseOrderId"
+        LEFT JOIN "Supplier" s ON s.id = po."supplierId"
+        WHERE gri."inventoryItemId" = $1
+          AND gr."businessId" = $2
+          AND gri."receivedQty" > 0
+        ORDER BY gr."createdAt" DESC
+      `,
+      [id, scope.businessId],
+    );
+
+    const normalized = entries.map((e) => ({
+      ...e,
+      quantityReceived: Number(e.quantityReceived ?? 0),
+      unitCost: Number(e.unitCost ?? 0),
+      totalCost: Number(e.totalCost ?? 0),
+    }));
+
+    const totalQuantityReceived = normalized.reduce((sum, e) => sum + e.quantityReceived, 0);
+    const totalCost = normalized.reduce((sum, e) => sum + e.totalCost, 0);
+    // Prefer a true weighted-average over received batches; fall back to the stored
+    // cost/price when the item has no recorded receipts yet.
+    const weightedAverageCost =
+      totalQuantityReceived > 0
+        ? totalCost / totalQuantityReceived
+        : Number(item.costPrice ?? item.price ?? 0);
+
+    return {
+      itemId: item.id,
+      name: item.name,
+      unit: item.unit,
+      currentStock: Number(item.quantity ?? 0),
+      weightedAverageCost,
+      totalReceipts: normalized.length,
+      totalQuantityReceived,
+      totalCost,
+      entries: normalized,
+    };
+  }
+
   async listLocations(headers: HeadersLike) {
     const scope = await this.resolveScope(headers);
     const rows = await this.safeQuery<Record<string, unknown>>(

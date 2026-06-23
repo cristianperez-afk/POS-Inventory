@@ -15,6 +15,8 @@ import { categorySubcategories, CHART_COLORS } from '../../app/utils/constants';
 import { autoSortItem } from '../../app/utils/autoSortingRules';
 import { useRetailWorkspace } from '../lib/retail';
 import { useSession } from '../../app/hooks/useSession';
+import { CostHistoryModal } from '../shared/costing/CostHistoryModal';
+import { History, Sparkles } from 'lucide-react';
 
 export function InventoryView() {
   const {
@@ -42,6 +44,13 @@ export function InventoryView() {
   const isAdmin = currentUser?.role === 'Admin';
   const [showInitialStockModal, setShowInitialStockModal] = useState(false);
   const [activeCategory, setActiveCategory] = useState<string>('');
+  const [costHistoryItem, setCostHistoryItem] = useState<{ id: string; name: string } | null>(null);
+
+  // Items added within the last week — surfaces a "New" indicator in the list.
+  const recentlyAddedCount = useMemo(
+    () => inventory.filter((item: InventoryItem) => item.isRecent).length,
+    [inventory],
+  );
 
   // Group items by category -> subcategory (matches the restaurant inventory layout)
   const groupedInventory = useMemo(() => {
@@ -79,7 +88,15 @@ export function InventoryView() {
       <div className="flex flex-wrap items-start justify-between gap-4 mb-6">
         <div>
           <h2 className="text-[30px] font-bold text-[#323B42]">Inventory</h2>
-          <p className="text-[#323B42] text-[14px] mt-1">{totalItems} items total</p>
+          <div className="flex items-center gap-3 mt-1">
+            <p className="text-[#323B42] text-[14px]">{totalItems} items total</p>
+            {recentlyAddedCount > 0 && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[12px] font-medium bg-[#E0F5F1] text-[#007A5E]">
+                <Sparkles className="size-3.5" />
+                {recentlyAddedCount} recently added
+              </span>
+            )}
+          </div>
           <p className="text-[#6b7280] text-[12px] mt-0.5">Edit item details in Product Management • adjust stock in Stock Adjustments • move stock in Transfers.</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -194,7 +211,15 @@ export function InventoryView() {
                           >
                             <div className="flex-1 grid grid-cols-6 gap-4 items-center">
                               <div className="col-span-2">
-                                <p className="text-[14px] font-medium text-[#323B42]">{item.name}</p>
+                                <div className="flex items-center gap-2">
+                                  <p className="text-[14px] font-medium text-[#323B42]">{item.name}</p>
+                                  {item.isRecent && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-[#E0F5F1] text-[#007A5E]">
+                                      <Sparkles className="size-3" />
+                                      New
+                                    </span>
+                                  )}
+                                </div>
                                 <p className="text-[12px] text-[#6b7280]">{item.location}</p>
                               </div>
                               <div className="text-[13px] text-[#323B42]">
@@ -222,6 +247,13 @@ export function InventoryView() {
                                 <span className="text-[#323B42] font-semibold">₱{item.price}</span>
                               </div>
                               <div className="flex items-center gap-1 justify-end">
+                                <button
+                                  onClick={() => setCostHistoryItem({ id: item.id, name: item.name })}
+                                  className="p-2 hover:bg-[#E0F5F1] rounded-[6px] text-[#007A5E] transition-colors"
+                                  title="View cost history"
+                                >
+                                  <History className="size-4" />
+                                </button>
                                 {item.isActive === false ? (
                                   <button
                                     onClick={() => onReactivate(item.id)}
@@ -251,6 +283,15 @@ export function InventoryView() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Cost History Modal */}
+      {costHistoryItem && (
+        <CostHistoryModal
+          itemId={costHistoryItem.id}
+          itemName={costHistoryItem.name}
+          onClose={() => setCostHistoryItem(null)}
+        />
       )}
 
       {/* Initial Stock Setup Modal */}
