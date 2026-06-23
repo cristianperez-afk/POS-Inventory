@@ -75,11 +75,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
   constructor() {
     const connectionString = process.env.DATABASE_URL;
-    const maxPoolConnections = Number(process.env.DB_POOL_MAX ?? 1);
+    const maxPoolConnections = Number(process.env.DB_POOL_MAX ?? 3);
     const poolOptions = {
-      max: Number.isFinite(maxPoolConnections) && maxPoolConnections > 0 ? maxPoolConnections : 1,
+      max: Number.isFinite(maxPoolConnections) && maxPoolConnections > 0 ? maxPoolConnections : 3,
       idleTimeoutMillis: Number(process.env.DB_POOL_IDLE_TIMEOUT_MS ?? 10000),
-      connectionTimeoutMillis: Number(process.env.DB_POOL_CONNECTION_TIMEOUT_MS ?? 10000),
+      connectionTimeoutMillis: Number(process.env.DB_POOL_CONNECTION_TIMEOUT_MS ?? 20000),
       allowExitOnIdle: true,
     };
 
@@ -163,10 +163,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   }
 
   private isDatabaseConnectivityError(error: unknown): boolean {
-    const databaseError = error as { code?: string };
+    const databaseError = error as { code?: string; message?: string };
     const connectionErrorCodes = new Set(['EACCES', 'ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'ECONNRESET', '28P01', '3D000', 'XX000']);
+    const message = databaseError.message ?? '';
 
-    return Boolean(databaseError.code && connectionErrorCodes.has(databaseError.code));
+    return (
+      Boolean(databaseError.code && connectionErrorCodes.has(databaseError.code)) ||
+      message.includes('timeout exceeded when trying to connect') ||
+      message.includes('Connection terminated unexpectedly')
+    );
   }
 
   async getLoginUserByEmail(email: string): Promise<AuthenticatedUser & { password_hash: string } | null> {
