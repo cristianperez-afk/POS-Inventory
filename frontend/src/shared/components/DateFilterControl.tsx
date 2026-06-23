@@ -1,21 +1,25 @@
 import { useRef } from 'react';
 import { Calendar } from 'lucide-react';
 
-export type DateFilterMode = 'all' | 'today' | 'date' | 'week' | 'month' | 'year';
+export type DateFilterMode = 'all' | 'today' | 'date' | 'range' | 'week' | 'month' | 'year';
 
 interface DateFilterControlProps {
   mode: DateFilterMode;
   selectedDate: string;
+  selectedEndDate?: string;
   onModeChange: (mode: DateFilterMode) => void;
   onDateChange: (date: string) => void;
+  onEndDateChange?: (date: string) => void;
   className?: string;
 }
 
 export function DateFilterControl({
   mode,
   selectedDate,
+  selectedEndDate = '',
   onModeChange,
   onDateChange,
+  onEndDateChange,
   className = '',
 }: DateFilterControlProps) {
   const dateInputRef = useRef<HTMLInputElement>(null);
@@ -57,10 +61,30 @@ export function DateFilterControl({
         {mode === 'date' && selectedDate && <option value="date">{selectedDate}</option>}
         <option value="all">All</option>
         <option value="today">Today</option>
+        <option value="range">Custom Range</option>
         <option value="week">This Week</option>
         <option value="month">This Month</option>
         <option value="year">This Year</option>
       </select>
+      {mode === 'range' && (
+        <div className="ml-2 inline-flex items-center gap-2">
+          <input
+            type="date"
+            value={selectedDate}
+            onChange={(event) => onDateChange(event.target.value)}
+            className={className}
+            aria-label="Start date"
+          />
+          <span className="text-sm text-muted-foreground">to</span>
+          <input
+            type="date"
+            value={selectedEndDate}
+            onChange={(event) => onEndDateChange?.(event.target.value)}
+            className={className}
+            aria-label="End date"
+          />
+        </div>
+      )}
       <input
         ref={dateInputRef}
         type="date"

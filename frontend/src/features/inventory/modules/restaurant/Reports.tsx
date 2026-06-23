@@ -66,7 +66,6 @@ export function Reports() {
     to: consumptionTo || undefined,
   });
   const consumption = consumptionQuery.data;
-  const [dateRange, setDateRange] = useState("30days");
   const [selectedMainCategory, setSelectedMainCategory] = useState("all");
   const [selectedSubCategory, setSelectedSubCategory] = useState("all");
 
@@ -467,17 +466,20 @@ export function Reports() {
           <p className="text-sm text-muted-foreground">Comprehensive restaurant reports and insights</p>
         </div>
         <div className="flex gap-3">
-          <select
-            value={dateRange}
-            onChange={e => setDateRange(e.target.value)}
-            className="bg-card border border-border rounded-xl px-4 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
-          >
-            <option value="7days">Last 7 Days</option>
-            <option value="30days">Last 30 Days</option>
-            <option value="3months">Last 3 Months</option>
-            <option value="year">This Year</option>
-            <option value="all">All Time</option>
-          </select>
+          <label className="text-xs text-muted-foreground">
+            From
+            <input type="date" value={consumptionFrom} onChange={e => setConsumptionFrom(e.target.value)}
+              className="block mt-1 bg-card border border-border rounded-xl px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50" />
+          </label>
+          <label className="text-xs text-muted-foreground">
+            To
+            <input type="date" value={consumptionTo} onChange={e => setConsumptionTo(e.target.value)}
+              className="block mt-1 bg-card border border-border rounded-xl px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50" />
+          </label>
+          {(consumptionFrom || consumptionTo) && (
+            <button onClick={() => { setConsumptionFrom(''); setConsumptionTo(''); }}
+              className="self-end px-3 py-2 text-sm text-muted-foreground hover:text-foreground">Clear</button>
+          )}
           <button
             onClick={handleExport}
             className="bg-primary text-primary-foreground px-4 py-2 rounded-xl text-sm font-medium hover:opacity-90 transition-opacity flex items-center gap-2"
