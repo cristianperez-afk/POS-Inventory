@@ -199,6 +199,7 @@ export class InventoryApiService {
 
   async listLocations(headers: HeadersLike) {
     const scope = await this.resolveScope(headers);
+    const posUserId = this.headerValue(headers['x-pos-user-id']);
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
         SELECT l.*, json_build_object('items', COUNT(i.id)::int) AS "_count"
@@ -552,6 +553,7 @@ export class InventoryApiService {
 
   async listKitchenOrders(headers: HeadersLike, query: Record<string, string | undefined>) {
     const scope = await this.resolveScope(headers);
+    const posUserId = this.headerValue(headers['x-pos-user-id']);
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
         SELECT
@@ -578,7 +580,7 @@ export class InventoryApiService {
                 SELECT u.store_id
                 FROM users u
                 JOIN stores s ON s.id = u.store_id
-                WHERE lower(u.email) = lower($1)
+                WHERE (u.id::text = $1 OR lower(u.email) = lower($2))
                   AND s.store_type = 'RESTAURANT'
                 LIMIT 1
               ),
@@ -587,6 +589,9 @@ export class InventoryApiService {
                   o.id,
                   o.order_number,
                   o.customer_name,
+                  o.order_type,
+                  o.table_name,
+                  o.order_status,
                   o.total_amount,
                   o.payment_status,
                   o.created_at,
@@ -596,45 +601,143 @@ export class InventoryApiService {
                   cashier.email AS cashier_email,
                   COUNT(oi.id)::int AS item_count,
                   COALESCE(SUM(oi.quantity), 0)::int AS quantity,
+                  COALESCE(
+                    json_agg(
+                      json_build_object(
+                        'id', oi.id,
+                        'name', oi.product_name,
+                        'quantity', oi.quantity,
+                        'notes', oi.notes,
+                        'addedIngredients', COALESCE(customizations.added, '[]'::json),
+                        'removedIngredients', COALESCE(customizations.removed, '[]'::json),
+                        'modifiers', COALESCE(customizations.modifiers, '[]'::json),
+                        'specialInstructions', COALESCE(customizations.instructions, '[]'::json)
+                      )
+                      ORDER BY oi.id ASC
+                    ) FILTER (WHERE oi.id IS NOT NULL),
+                    '[]'::json
+                  ) AS items,
                   CASE
                     WHEN COUNT(oi.id) = 1 THEN MAX(oi.product_name)
                     ELSE CONCAT(COUNT(oi.id)::text, ' POS items')
                   END AS item_summary
                 FROM orders o
                 LEFT JOIN order_items oi ON oi.order_id = o.id
+                LEFT JOIN LATERAL (
+                  SELECT
+                    COALESCE(json_agg(DISTINCT COALESCE(oic.replacement_ingredient_name, oic.original_ingredient_name, oic.notes)) FILTER (
+                      WHERE oic.customization_type IN ('ADD', 'EXTRA', 'REPLACE')
+                    ), '[]'::json) AS added,
+                    COALESCE(json_agg(DISTINCT COALESCE(oic.original_ingredient_name, oic.notes)) FILTER (
+                      WHERE oic.customization_type = 'REMOVE'
+                    ), '[]'::json) AS removed,
+                    COALESCE(json_agg(DISTINCT oic.notes) FILTER (
+                      WHERE oic.notes IS NOT NULL AND oic.customization_type IN ('REMOVE', 'ADD', 'EXTRA', 'CHANGE_QUANTITY', 'QUANTITY_CHANGE', 'REPLACE')
+                    ), '[]'::json) AS modifiers,
+                    COALESCE(json_agg(DISTINCT oic.notes) FILTER (
+                      WHERE oic.notes IS NOT NULL AND oic.customization_type = 'NOTE'
+                    ), '[]'::json) AS instructions
+                  FROM order_item_customizations oic
+                  WHERE oic.order_item_id = oi.id
+                ) customizations ON TRUE
                 LEFT JOIN payments p ON p.order_id = o.id
                 LEFT JOIN users cashier ON cashier.id = o.cashier_id
                 WHERE o.store_id = (SELECT store_id FROM scoped_user)
-                  AND o.order_status = 'COMPLETED'
-                  AND o.payment_status IN ('PAID', 'VOIDED', 'VOID', 'REFUNDED')
+                  AND o.order_status IN ('PENDING', 'PREPARING', 'READY', 'SERVED', 'COMPLETED', 'CANCELLED')
+                  AND o.payment_status IN ('NOT_PAID', 'PAID', 'VOIDED', 'VOID', 'REFUNDED', 'PARTIALLY_REFUNDED')
                 GROUP BY o.id, p.payment_number, cashier.full_name, cashier.email
               )
               SELECT
                 CONCAT('pos-order-', id::text) AS id,
+                order_number AS "orderNumber",
                 COALESCE(REPLACE(payment_number, 'PAY-', 'REC-'), CONCAT('REC-', order_number)) AS "receiptNo",
+                customer_name AS "customerName",
+                order_type AS "orderType",
+                table_name AS "tableNumber",
+                item_count AS "itemCount",
                 NULL::text AS "recipeId",
                 quantity,
-                CASE WHEN payment_status IN ('VOIDED', 'VOID', 'REFUNDED') THEN 'VOIDED' ELSE 'COMPLETED' END AS status,
-                COALESCE(completed_at, created_at) AS "createdAt",
+                CASE
+                  WHEN payment_status IN ('VOIDED', 'VOID', 'REFUNDED') OR order_status = 'CANCELLED' THEN 'CANCELLED'
+                  WHEN order_status = 'SERVED' THEN 'COMPLETED'
+                  ELSE order_status
+                END AS status,
+                created_at AS "createdAt",
                 COALESCE(completed_at, created_at) AS "updatedAt",
                 json_build_object('name', item_summary) AS recipe,
                 json_build_object('name', cashier_name, 'email', cashier_email) AS "completedBy",
+                items,
                 CONCAT('POS order ', order_number, ' - ', COALESCE(customer_name, 'Walk-in Customer'), ' - Total ', total_amount::text) AS notes,
                 CASE WHEN payment_status = 'REFUNDED' THEN 'Refunded in POS' ELSE NULL END AS "voidReason",
                 NULL::timestamp AS "voidedAt"
               FROM pos_orders
               ORDER BY COALESCE(completed_at, created_at) DESC
             `,
-            [scope.user.email],
+            [posUserId ?? '', scope.user.email],
           )
         : [];
 
-    const combined = [...rows, ...posRows].sort((a, b) => {
+    const combined = (scope.module === 'RESTAURANT' ? posRows : rows).sort((a, b) => {
       const aTime = new Date(String(a.createdAt ?? a.created_at ?? 0)).getTime();
       const bTime = new Date(String(b.createdAt ?? b.created_at ?? 0)).getTime();
       return bTime - aTime;
     });
     return this.paged(combined);
+  }
+
+  async updateKitchenOrderStatus(headers: HeadersLike, id: string, body: { status?: string }) {
+    const scope = await this.resolveScope(headers);
+    const posUserId = this.headerValue(headers['x-pos-user-id']);
+    const nextStatus = String(body?.status ?? '').toUpperCase();
+    const allowed = new Set(['PENDING', 'PREPARING', 'READY', 'COMPLETED', 'CANCELLED']);
+    if (!allowed.has(nextStatus)) {
+      throw new BadRequestException('Status must be Pending, Preparing, Ready, Completed, or Cancelled.');
+    }
+
+    if (id.startsWith('pos-order-')) {
+      const orderId = Number(id.replace('pos-order-', ''));
+      if (!Number.isFinite(orderId)) throw new BadRequestException('Invalid POS order id.');
+
+      const posStatus = nextStatus === 'COMPLETED' ? 'COMPLETED' : nextStatus;
+      const rows = await this.safeQuery<Record<string, unknown>>(
+        `
+          WITH scoped_user AS (
+            SELECT u.store_id
+            FROM users u
+            JOIN stores s ON s.id = u.store_id
+            WHERE (u.id::text = $1 OR lower(u.email) = lower($2))
+              AND s.store_type = 'RESTAURANT'
+            LIMIT 1
+          )
+          UPDATE orders
+          SET order_status = $3::varchar,
+              completed_at = CASE WHEN $3::varchar = 'COMPLETED' THEN COALESCE(completed_at, CURRENT_TIMESTAMP) ELSE completed_at END,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = $4
+            AND store_id = (SELECT store_id FROM scoped_user)
+            AND order_type <> 'RETAIL'
+          RETURNING id
+        `,
+        [posUserId ?? '', scope.user.email, posStatus, orderId],
+      );
+      if (!rows[0]) throw new NotFoundException('POS kitchen order not found.');
+      return { id, status: nextStatus };
+    }
+
+    const kitchenStatus = nextStatus === 'CANCELLED' ? 'VOIDED' : nextStatus;
+    const rows = await this.safeQuery<Record<string, unknown>>(
+      `
+        UPDATE "KitchenOrder"
+        SET status = $1::"KitchenOrderStatus",
+            "updatedAt" = CURRENT_TIMESTAMP
+        WHERE id = $2
+          AND "businessId" = $3
+        RETURNING *
+      `,
+      [kitchenStatus, id, scope.businessId],
+    );
+    if (!rows[0]) throw new NotFoundException('Kitchen order not found.');
+    return rows[0];
   }
 
   async listSuppliers(headers: HeadersLike, query: Record<string, string | undefined>) {

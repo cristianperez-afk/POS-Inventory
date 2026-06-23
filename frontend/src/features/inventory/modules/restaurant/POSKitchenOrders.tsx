@@ -1,216 +1,132 @@
 import { useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle, ClipboardList, PackageMinus, ReceiptText, RotateCcw, Search, XCircle } from "lucide-react";
-import { InventoryProduct } from "../lib/inventoryLogic";
+import { CheckCircle2, ClipboardCheck, ClipboardList, Eye, Play, ReceiptText, Search, X } from "lucide-react";
 import {
-  useCompleteRestaurantKitchenOrderMutation,
-  useRestaurantInventoryQuery,
   useRestaurantKitchenOrdersQuery,
-  useRestaurantRecipesQuery,
-  useVoidRestaurantKitchenOrderMutation,
+  useUpdateRestaurantKitchenOrderStatusMutation,
 } from "../lib/restaurant";
 
-type Ingredient = {
+type KitchenStatus = "pending" | "preparing" | "ready" | "completed" | "cancelled";
+
+type KitchenOrderItem = {
   id: string;
-  backendItemId?: string;
-  itemBackendId?: string;
-  productId?: number | string;
-  productSku?: string;
   name: string;
   quantity: number;
-  unit: string;
-  inventoryQuantity?: number;
-  inventoryUnit?: string;
-  unitCost: number;
-  totalCost: number;
-};
-
-type RecipeModifier = {
-  id: string;
-  name: string;
-  type: "remove";
-  itemId?: string;
-  itemName?: string;
-  productId?: number | string;
-};
-
-type Recipe = {
-  id: string;
-  name: string;
-  category: string;
-  servings: number;
-  isActive?: boolean;
-  modifiers?: RecipeModifier[];
-  ingredients: Ingredient[];
-};
-
-type POSOrder = {
-  id: string;
-  receiptNo: string;
-  recipeId: string;
-  recipeName: string;
-  quantity: number;
+  notes?: string;
+  addedIngredients?: string[];
+  removedIngredients?: string[];
   modifiers?: string[];
-  status: "completed" | "voided" | "pending" | "preparing" | "ready";
+  specialInstructions?: string[];
+};
+
+type KitchenOrder = {
+  id: string;
+  orderNumber: string;
+  receiptNo: string;
+  customerName: string;
+  orderType: string;
+  tableNumber?: string;
+  itemCount: number;
+  status: KitchenStatus;
   orderedAt: string;
-  completedBy: string;
-  notes: string;
-  voidReason?: string;
-  voidedAt?: string;
+  items: KitchenOrderItem[];
 };
 
-const normalizeName = (value: string | undefined) => (value || '').trim().toLowerCase();
+const STATUS_STYLES: Record<KitchenStatus, string> = {
+  pending: "border-slate-300 bg-slate-50 text-slate-700",
+  preparing: "border-amber-300 bg-amber-50 text-amber-700",
+  ready: "border-emerald-300 bg-emerald-50 text-emerald-700",
+  completed: "border-blue-300 bg-blue-50 text-blue-700",
+  cancelled: "border-red-300 bg-red-50 text-red-700",
+};
 
-const reportSyncError = (error: unknown) => {
-  window.dispatchEvent(
-    new CustomEvent("restaurant-sync-error", {
-      detail: {
-        key: "pos.orders",
-        message: error instanceof Error ? error.message : String(error),
-      },
-    }),
+const STATUS_LABELS: Record<KitchenStatus, string> = {
+  pending: "Pending",
+  preparing: "Preparing",
+  ready: "Ready",
+  completed: "Completed",
+  cancelled: "Cancelled",
+};
+
+const API_STATUS: Record<KitchenStatus, "PENDING" | "PREPARING" | "READY" | "COMPLETED" | "CANCELLED"> = {
+  pending: "PENDING",
+  preparing: "PREPARING",
+  ready: "READY",
+  completed: "COMPLETED",
+  cancelled: "CANCELLED",
+};
+
+const formatOrderType = (value: string) => {
+  const normalized = value.replace(/_/g, "-").toLowerCase();
+  if (normalized === "dine-in") return "Dine-In";
+  if (normalized === "takeout") return "Takeout";
+  if (normalized === "delivery") return "Delivery";
+  if (normalized === "mixed") return "Mixed";
+  return value || "-";
+};
+
+const formatDateTime = (value: string) =>
+  new Intl.DateTimeFormat("en-PH", {
+    month: "short",
+    day: "2-digit",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(value));
+
+const cleanList = (items?: string[]) =>
+  Array.from(new Set((items ?? []).map((item) => String(item ?? "").trim()).filter(Boolean)));
+
+function DetailList({ label, values }: { label: string; values?: string[] }) {
+  const cleanValues = cleanList(values);
+  if (cleanValues.length === 0) return null;
+
+  return (
+    <div>
+      <p className="text-[12px] font-semibold text-foreground">{label}</p>
+      <div className="mt-1 flex flex-wrap gap-1.5">
+        {cleanValues.map((value) => (
+          <span key={value} className="rounded border border-border bg-muted/40 px-2 py-1 text-[12px] text-muted-foreground">
+            {value}
+          </span>
+        ))}
+      </div>
+    </div>
   );
-};
+}
+
+function nextAction(status: KitchenStatus) {
+  if (status === "pending") return { label: "Start Preparing", next: "preparing" as KitchenStatus, icon: Play };
+  if (status === "preparing") return { label: "Mark Ready", next: "ready" as KitchenStatus, icon: CheckCircle2 };
+  if (status === "ready") return { label: "Complete", next: "completed" as KitchenStatus, icon: ClipboardCheck };
+  return null;
+}
 
 export function POSKitchenOrders() {
   const [searchQuery, setSearchQuery] = useState("");
-  const [receiptNo, setReceiptNo] = useState("");
-  const [recipeId, setRecipeId] = useState("");
-  const [quantity, setQuantity] = useState("1");
-  const [notes, setNotes] = useState("");
-  const [voidReason, setVoidReason] = useState("");
-  const [voidingOrderId, setVoidingOrderId] = useState("");
-  const [isCompleting, setIsCompleting] = useState(false);
-  const [isVoiding, setIsVoiding] = useState(false);
-  const [excludedIngredientIds, setExcludedIngredientIds] = useState<Set<string>>(new Set());
+  const [selectedOrder, setSelectedOrder] = useState<KitchenOrder | null>(null);
+  const { data: orderRecords = [], isLoading } = useRestaurantKitchenOrdersQuery();
+  const updateStatus = useUpdateRestaurantKitchenOrderStatusMutation();
+  const orders = orderRecords as KitchenOrder[];
 
-  const { data: orderRecords = [] } = useRestaurantKitchenOrdersQuery();
-  const orders = orderRecords as POSOrder[];
-  const { data: recipeRecords = [] } = useRestaurantRecipesQuery();
-  const recipes = recipeRecords as Recipe[];
-  const activeRecipes = recipes.filter((recipe) => recipe.isActive ?? true);
-  const { data: inventory = [] } = useRestaurantInventoryQuery<(InventoryProduct & { backendId?: string })[]>();
-  const completeKitchenOrder = useCompleteRestaurantKitchenOrderMutation();
-  const voidKitchenOrder = useVoidRestaurantKitchenOrderMutation();
+  const filteredOrders = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return orders;
 
-  const selectedRecipe = activeRecipes.find((recipe) => recipe.id === recipeId);
-
-  const ingredientPreview = useMemo(() => {
-    const orderQty = Number(quantity) || 0;
-    if (!selectedRecipe || orderQty <= 0) return [];
-
-    return selectedRecipe.ingredients.map((ingredient) => {
-      const product = inventory.find((item) =>
-        ingredient.backendItemId
-          ? item.backendId === ingredient.backendItemId
-          : ingredient.productId
-            ? String(item.id) === String(ingredient.productId) || item.backendId === ingredient.productId
-            : normalizeName(item.name) === normalizeName(ingredient.name)
-      );
-      const servingFactor = orderQty / Math.max(selectedRecipe.servings || 1, 1);
-      const required = (ingredient.inventoryQuantity ?? ingredient.quantity) * servingFactor;
-      const deductionUnit = ingredient.inventoryUnit || ingredient.unit;
-      const unitMatches = product ? (product.unit || deductionUnit) === deductionUnit : false;
-
-      return {
-        ...ingredient,
-        required,
-        deductionUnit,
-        product,
-        unitMatches,
-        hasEnoughStock: Boolean(product && unitMatches && product.stock >= required),
-      };
+    return orders.filter((order) => {
+      const haystack = [
+        order.orderNumber,
+        order.receiptNo,
+        order.customerName,
+        order.orderType,
+        order.tableNumber,
+        STATUS_LABELS[order.status],
+        ...order.items.map((item) => item.name),
+      ].join(" ").toLowerCase();
+      return haystack.includes(query);
     });
-  }, [inventory, quantity, selectedRecipe]);
+  }, [orders, searchQuery]);
 
-  const filteredOrders = orders.filter((order) => {
-    const query = searchQuery.toLowerCase();
-    return (
-      (order.receiptNo || '').toLowerCase().includes(query) ||
-      (order.recipeName || '').toLowerCase().includes(query) ||
-      (order.status || '').toLowerCase().includes(query)
-    );
-  });
-
-  const selectedIngredientPreview = ingredientPreview.filter((item) => !excludedIngredientIds.has(item.id));
-  const menuModifierOptions = (selectedRecipe?.modifiers ?? [])
-    .map((modifier) => {
-      const ingredient = ingredientPreview.find((item) =>
-        (modifier.itemId && (item.backendItemId === modifier.itemId || item.itemBackendId === modifier.itemId)) ||
-        (modifier.productId && item.productId === modifier.productId)
-      );
-      return ingredient ? { ...modifier, ingredientId: ingredient.id } : null;
-    })
-    .filter((modifier): modifier is RecipeModifier & { ingredientId: string } => Boolean(modifier));
-  const selectedModifiers = menuModifierOptions
-    .filter((modifier) => excludedIngredientIds.has(modifier.ingredientId))
-    .map((modifier) => modifier.name);
-
-  const canCompleteOrder = Boolean(
-    receiptNo.trim() &&
-      selectedRecipe &&
-      Number(quantity) > 0 &&
-      selectedIngredientPreview.length > 0 &&
-      selectedIngredientPreview.every((item) => item.product && item.unitMatches && item.hasEnoughStock)
-  );
-
-  const handleRecipeChange = (nextRecipeId: string) => {
-    setRecipeId(nextRecipeId);
-    setExcludedIngredientIds(new Set());
-  };
-
-  const toggleIngredientIncluded = (ingredientId: string) => {
-    const nextExcluded = new Set(excludedIngredientIds);
-    if (nextExcluded.has(ingredientId)) {
-      nextExcluded.delete(ingredientId);
-    } else {
-      nextExcluded.add(ingredientId);
-    }
-    setExcludedIngredientIds(nextExcluded);
-  };
-
-  const completeOrder = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!selectedRecipe || !canCompleteOrder || isCompleting) return;
-
-    const orderQty = Number(quantity) || 1;
-    const orderNotes = selectedModifiers.length
-      ? [notes, `Modifiers: ${selectedModifiers.join(", ")}`].filter(Boolean).join(" | ")
-      : notes;
-
-    setIsCompleting(true);
-    try {
-      await completeKitchenOrder.mutateAsync({
-        receiptNo: receiptNo.trim(),
-        recipeId: selectedRecipe.id,
-        quantity: orderQty,
-        notes: orderNotes,
-        excludedIngredientIds: Array.from(excludedIngredientIds),
-      });
-      setReceiptNo("");
-      setRecipeId("");
-      setExcludedIngredientIds(new Set());
-      setQuantity("1");
-      setNotes("");
-    } catch (error) {
-      reportSyncError(error);
-    } finally {
-      setIsCompleting(false);
-    }
-  };
-
-  const voidOrder = async (order: POSOrder) => {
-    if (!voidReason.trim() || isVoiding) return;
-
-    setIsVoiding(true);
-    try {
-      await voidKitchenOrder.mutateAsync({ id: order.id, reason: voidReason.trim() });
-      setVoidingOrderId("");
-      setVoidReason("");
-    } catch (error) {
-      reportSyncError(error);
-    } finally {
-      setIsVoiding(false);
-    }
+  const handleStatus = async (order: KitchenOrder, nextStatus: KitchenStatus) => {
+    await updateStatus.mutateAsync({ id: order.id, status: API_STATUS[nextStatus] });
   };
 
   return (
@@ -220,208 +136,193 @@ export function POSKitchenOrders() {
         <p className="text-muted-foreground">Record kitchen receipts and deduct ingredients from inventory via Recipe &amp; BOM.</p>
       </div>
 
-      <div className="mb-6 rounded-xl border border-accent/50 bg-accent/10 p-4 text-primary">
-        <div className="flex items-center gap-2 font-semibold mb-1">
-          <ReceiptText className="h-5 w-5" />
-          Separate from Goods Received
+      <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
+        <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-center gap-2">
+            <ClipboardList className="h-5 w-5 text-primary" />
+            <h2 className="text-xl font-semibold text-foreground">Kitchen Receipt History</h2>
+          </div>
+          <div className="relative w-full lg:w-72">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <input
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search receipts..."
+              className="w-full rounded-lg border border-input bg-input-background py-2 pl-9 pr-3 text-sm outline-none focus:border-primary"
+            />
+          </div>
         </div>
-        <p className="text-sm opacity-80">Use this for completed kitchen receipts. Ingredients are auto-deducted based on Recipe &amp; BOM. Supplier deliveries belong in Goods Received.</p>
-      </div>
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[420px_1fr]">
-        <form onSubmit={completeOrder} className="rounded-xl border border-border bg-card p-5 shadow-sm">
-          <div className="mb-4 flex items-center gap-2">
-            <PackageMinus className="h-5 w-5 text-primary" />
-            <h2 className="font-semibold text-foreground">Complete Kitchen Receipt</h2>
-          </div>
+      <div className="overflow-hidden rounded-lg border border-border">
+        <table className="w-full">
+          <thead className="bg-muted/50">
+            <tr>
+              <th className="w-10 px-3 py-3" />
+              <th className="px-3 py-3 text-left text-xs font-medium text-foreground">Order #</th>
+              <th className="px-3 py-3 text-left text-xs font-medium text-foreground">Receipt #</th>
+              <th className="px-3 py-3 text-left text-xs font-medium text-foreground">Customer Name</th>
+              <th className="px-3 py-3 text-left text-xs font-medium text-foreground">Order Type</th>
+              <th className="px-3 py-3 text-left text-xs font-medium text-foreground">Table Number</th>
+              <th className="px-3 py-3 text-left text-xs font-medium text-foreground">Order Time</th>
+              <th className="px-3 py-3 text-center text-xs font-medium text-foreground">Total Items</th>
+              <th className="px-3 py-3 text-left text-xs font-medium text-foreground">Status</th>
+              <th className="px-3 py-3 text-left text-xs font-medium text-foreground">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {filteredOrders.map((order) => {
+              const action = nextAction(order.status);
+              const ActionIcon = action?.icon;
 
-          <div className="space-y-4">
-            <div>
-              <label className="mb-1 block text-xs text-foreground">POS / Kitchen Receipt No.</label>
-              <input value={receiptNo} onChange={(event) => setReceiptNo(event.target.value)} className="w-full rounded-lg border border-input bg-input-background px-3 py-2 text-sm outline-none focus:border-primary" required />
-            </div>
-
-            <div>
-              <label className="mb-1 block text-xs text-foreground">Menu Item / Recipe</label>
-              <select value={recipeId} onChange={(event) => handleRecipeChange(event.target.value)} className="w-full rounded-lg border border-input bg-input-background px-3 py-2 text-sm outline-none focus:border-primary" required>
-                <option value="">Select recipe</option>
-                {activeRecipes.map((recipe) => (
-                  <option key={recipe.id} value={recipe.id}>{recipe.name}</option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="mb-1 block text-xs text-foreground">Quantity Ordered</label>
-              <input type="number" min="1" value={quantity} onChange={(event) => setQuantity(event.target.value)} className="w-full rounded-lg border border-input bg-input-background px-3 py-2 text-sm outline-none focus:border-primary" required />
-            </div>
-
-            <div className="rounded-lg border border-border p-3">
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <label className="block text-xs text-foreground">Menu Modifiers</label>
-                {selectedModifiers.length > 0 && (
-                  <span className="rounded-full bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary">
-                    {selectedModifiers.length} selected
-                  </span>
-                )}
-              </div>
-              {!selectedRecipe ? (
-                <p className="text-xs text-muted-foreground">Select a menu item to view available modifiers.</p>
-              ) : menuModifierOptions.length === 0 ? (
-                <p className="text-xs text-muted-foreground">No modifiers configured for this menu item in Recipe &amp; BOM.</p>
-              ) : (
-                <div className="grid grid-cols-1 gap-2">
-                  {menuModifierOptions.map((modifier) => {
-                    const isExcluded = excludedIngredientIds.has(modifier.ingredientId);
-                    return (
-                      <label key={modifier.id} className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${isExcluded ? "border-primary bg-primary/10 text-primary" : "border-border bg-muted/20 text-foreground"}`}>
-                        <input
-                          type="checkbox"
-                          checked={isExcluded}
-                          onChange={() => toggleIngredientIncluded(modifier.ingredientId)}
-                          className="h-4 w-4 rounded border-muted-foreground text-primary focus:ring-primary"
-                        />
-                        {modifier.name}
-                      </label>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            <div>
-              <label className="mb-1 block text-xs text-foreground">Notes</label>
-              <textarea value={notes} onChange={(event) => setNotes(event.target.value)} className="min-h-20 w-full rounded-lg border border-input bg-input-background px-3 py-2 text-sm outline-none focus:border-primary" />
-            </div>
-          </div>
-
-          <div className="mt-5 rounded-lg border border-border p-3">
-            <h3 className="mb-3 text-sm font-semibold text-foreground">Ingredient Deduction Preview</h3>
-            {ingredientPreview.length === 0 ? (
-              <p className="text-sm text-muted-foreground">Select a recipe to preview stock deductions.</p>
-            ) : (
-              <div className="space-y-2">
-                {ingredientPreview.map((item) => {
-                  const isIncluded = !excludedIngredientIds.has(item.id);
-
-                  return (
-                  <div key={item.id} className={`flex items-center justify-between gap-3 rounded p-2 text-sm ${isIncluded ? "bg-muted/40" : "bg-muted/20 opacity-70"}`}>
-                    <div className="flex items-start gap-2">
-                      <input
-                        type="checkbox"
-                        checked={isIncluded}
-                        onChange={() => toggleIngredientIncluded(item.id)}
-                        className="mt-1 h-4 w-4 rounded border-muted-foreground text-primary focus:ring-primary"
-                        aria-label={`Include ${item.name} in stock deduction`}
-                      />
-                      <div>
-                      <p className="font-medium text-foreground">{item.name}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {isIncluded ? "Deduct" : "Skipped"} {item.required} {item.deductionUnit} | Stock {item.product?.stock ?? "missing"} {item.product?.unit || ""}
-                      </p>
-                      </div>
-                    </div>
-                    {!isIncluded ? (
-                      <span className="rounded-full border border-border px-2 py-1 text-xs text-muted-foreground">Skipped</span>
-                    ) : item.hasEnoughStock ? (
-                      <CheckCircle className="h-5 w-5" style={{ color: "#008967" }} />
-                    ) : (
-                      <AlertTriangle className="h-5 w-5" style={{ color: "#DC2626" }} />
-                    )}
-                  </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          <button type="submit" disabled={!canCompleteOrder || isCompleting} className="mt-5 w-full rounded-lg bg-primary px-4 py-3 text-sm font-medium text-white hover:bg-primary/90 disabled:opacity-50">
-            {isCompleting ? "Completing..." : "Complete Receipt"}
-          </button>
-        </form>
-
-        <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <ClipboardList className="h-5 w-5 text-primary" />
-              <h2 className="font-semibold text-foreground">Kitchen Receipt History</h2>
-            </div>
-            <div className="relative w-72">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search receipts..." className="w-full rounded-lg border border-input bg-input-background py-2 pl-9 pr-3 text-sm outline-none focus:border-primary" />
-            </div>
-          </div>
-
-          <div className="overflow-hidden rounded-lg border border-border">
-            <table className="w-full">
-              <thead className="bg-muted/50">
-                <tr>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-foreground">Receipt</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-foreground">Recipe</th>
-                  <th className="px-4 py-3 text-center text-xs font-medium text-foreground">Qty</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-foreground">Modifiers</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-foreground">Status</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-foreground">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {filteredOrders.map((order) => (
-                  <tr key={order.id}>
-                    <td className="px-4 py-3 text-sm font-medium text-primary">{order.receiptNo}</td>
-                    <td className="px-4 py-3 text-sm text-foreground">{order.recipeName}</td>
-                    <td className="px-4 py-3 text-center text-sm text-foreground">{order.quantity}</td>
-                    <td className="px-4 py-3 text-xs text-muted-foreground">
-                      {order.modifiers?.length ? order.modifiers.join(", ") : "-"}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span
-                        className="inline-flex items-center gap-1 rounded-full border px-2 py-1 text-xs font-medium"
-                        style={
-                          order.status === "completed"
-                            ? { borderColor: "#008967", backgroundColor: "#D1F2E8", color: "#007A5E" }
-                            : { borderColor: "#FCA5A5", backgroundColor: "#FEE2E2", color: "#991B1B" }
-                        }
-                      >
-                        {order.status === "completed" ? <CheckCircle className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
-                        {order.status}
+              return (
+                  <tr key={order.id} className="align-top">
+                    <td className="px-3 py-3" />
+                    <td className="px-3 py-3 text-sm font-semibold text-primary">{order.orderNumber}</td>
+                    <td className="px-3 py-3 text-sm text-foreground">{order.receiptNo}</td>
+                    <td className="px-3 py-3 text-sm text-foreground">{order.customerName || "Walk-in Customer"}</td>
+                    <td className="px-3 py-3 text-sm text-foreground">{formatOrderType(order.orderType)}</td>
+                    <td className="px-3 py-3 text-sm text-foreground">{order.tableNumber || "-"}</td>
+                    <td className="px-3 py-3 text-sm text-muted-foreground">{formatDateTime(order.orderedAt)}</td>
+                    <td className="px-3 py-3 text-center text-sm text-foreground">{order.itemCount}</td>
+                    <td className="px-3 py-3">
+                      <span className={`inline-flex rounded-full border px-2 py-1 text-xs font-medium ${STATUS_STYLES[order.status]}`}>
+                        {STATUS_LABELS[order.status]}
                       </span>
                     </td>
-                    <td className="px-4 py-3">
-                      {order.status === "completed" && !order.id.startsWith("pos-order-") && (
-                        <button type="button" onClick={() => setVoidingOrderId(order.id)} className="inline-flex items-center gap-1 rounded-lg bg-red-50 px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-100">
-                          <RotateCcw className="h-3 w-3" />
-                          Void
+                    <td className="px-3 py-3">
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedOrder(order)}
+                          className="inline-flex items-center gap-1 rounded border border-border bg-card px-2.5 py-1.5 text-xs font-medium text-foreground hover:bg-muted"
+                        >
+                          <Eye className="h-3.5 w-3.5" />
+                          View
                         </button>
-                      )}
-                      {order.status === "completed" && order.id.startsWith("pos-order-") && (
-                        <span className="text-xs text-muted-foreground">From POS</span>
-                      )}
-                      {order.status === "voided" && <span className="text-xs text-muted-foreground">{order.voidReason}</span>}
+                        {action && ActionIcon && (
+                          <button
+                            type="button"
+                            onClick={() => handleStatus(order, action.next)}
+                            disabled={updateStatus.isPending}
+                            className="inline-flex items-center gap-1 rounded bg-primary px-2.5 py-1.5 text-xs font-medium text-white hover:bg-primary/90 disabled:opacity-50"
+                          >
+                            <ActionIcon className="h-3.5 w-3.5" />
+                            {action.label}
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
-                ))}
-                {filteredOrders.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="px-4 py-10 text-center text-sm text-muted-foreground">No POS kitchen receipts yet</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
+              );
+            })}
+            {!isLoading && filteredOrders.length === 0 && (
+              <tr>
+                <td colSpan={10} className="px-4 py-12 text-center text-sm text-muted-foreground">
+                  No kitchen orders found.
+                </td>
+              </tr>
+            )}
+            {isLoading && (
+              <tr>
+                <td colSpan={10} className="px-4 py-12 text-center text-sm text-muted-foreground">
+                  Loading kitchen orders...
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
       </div>
 
-      {voidingOrderId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <div className="w-full max-w-md rounded-xl border border-border bg-card p-5 shadow-xl">
-            <h2 className="text-lg font-bold text-foreground">Void Kitchen Receipt</h2>
-            <p className="mt-2 text-sm text-muted-foreground">Voiding will restore the deducted ingredients and record a reversal movement.</p>
-            <textarea value={voidReason} onChange={(event) => setVoidReason(event.target.value)} placeholder="Required void reason" className="mt-4 min-h-24 w-full rounded-lg border border-input bg-input-background px-3 py-2 text-sm outline-none focus:border-primary" />
-            <div className="mt-4 flex gap-3">
-              <button type="button" onClick={() => { setVoidingOrderId(""); setVoidReason(""); }} className="flex-1 rounded-lg bg-muted px-4 py-3 text-sm text-foreground">Cancel</button>
-              <button type="button" onClick={() => voidOrder(orders.find((order) => order.id === voidingOrderId)!)} disabled={!voidReason.trim() || isVoiding} className="flex-1 rounded-lg bg-red-600 px-4 py-3 text-sm font-medium text-white disabled:opacity-50">
-                {isVoiding ? "Voiding..." : "Void & Restore Stock"}
+      {selectedOrder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
+          <div className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-xl border border-border bg-card shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-border px-8 py-6">
+              <div>
+                <h2 className="text-3xl font-bold text-foreground">Kitchen Order Details</h2>
+                <p className="mt-1 text-sm text-muted-foreground">{selectedOrder.id}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedOrder(null)}
+                className="rounded p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
+                aria-label="Close kitchen order details"
+              >
+                <X className="h-6 w-6" />
               </button>
+            </div>
+
+            <div className="px-8 py-6">
+              <div className="grid gap-x-20 gap-y-6 md:grid-cols-2">
+                <div>
+                  <p className="text-sm text-muted-foreground">Order Number</p>
+                  <p className="mt-1 text-lg font-semibold text-foreground">{selectedOrder.orderNumber}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Status</p>
+                  <span className={`mt-2 inline-flex rounded-full border px-3 py-1 text-sm font-medium ${STATUS_STYLES[selectedOrder.status]}`}>
+                    {STATUS_LABELS[selectedOrder.status]}
+                  </span>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Receipt Number</p>
+                  <p className="mt-1 text-lg text-foreground">{selectedOrder.receiptNo}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Total Items</p>
+                  <p className="mt-1 text-lg text-foreground">{selectedOrder.itemCount} items</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Customer Name</p>
+                  <p className="mt-1 text-lg text-foreground">{selectedOrder.customerName || "Walk-in Customer"}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Order Type</p>
+                  <p className="mt-1 text-lg text-foreground">{formatOrderType(selectedOrder.orderType)}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Table Number</p>
+                  <p className="mt-1 text-lg text-foreground">{selectedOrder.tableNumber || "-"}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Order Time</p>
+                  <p className="mt-1 text-lg text-foreground">{formatDateTime(selectedOrder.orderedAt)}</p>
+                </div>
+              </div>
+
+              <div className="mt-8 border-t border-border pt-6">
+                <div className="mb-4 flex items-center gap-2">
+                  <ReceiptText className="h-5 w-5 text-primary" />
+                  <h3 className="text-xl font-bold text-foreground">Ordered Items</h3>
+                </div>
+                <div className="overflow-hidden rounded-xl border border-border">
+                  <table className="w-full">
+                    <thead className="bg-muted/50">
+                      <tr>
+                        <th className="px-4 py-3 text-left text-sm font-medium text-foreground">Menu Item Name</th>
+                        <th className="px-4 py-3 text-center text-sm font-medium text-foreground">Quantity</th>
+                        <th className="px-4 py-3 text-left text-sm font-medium text-foreground">Details</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {selectedOrder.items.map((item) => (
+                        <tr key={item.id} className="align-top">
+                          <td className="px-4 py-4 text-sm font-medium text-foreground">{item.name}</td>
+                          <td className="px-4 py-4 text-center text-sm text-foreground">{item.quantity}</td>
+                          <td className="px-4 py-4">
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <DetailList label="Added Ingredients" values={item.addedIngredients} />
+                              <DetailList label="Removed Ingredients" values={item.removedIngredients} />
+                              <DetailList label="Modifiers" values={item.modifiers} />
+                              <DetailList label="Special Instructions / Notes" values={[...(item.specialInstructions ?? []), item.notes ?? ""]} />
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
           </div>
         </div>
