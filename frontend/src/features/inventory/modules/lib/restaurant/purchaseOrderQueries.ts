@@ -28,6 +28,7 @@ import {
   useSuppliersQuery,
 } from '../domainQueries';
 import { useRestaurantProductMergeMetadataQuery } from './shared';
+import { toDateTimeLocalInput } from '../purchaseOrderDelivery';
 
 type RestaurantProductMergeMetadata = {
   aliases?: Record<string, string>;
@@ -95,7 +96,7 @@ export function mapRestaurantPurchaseOrders(orders: ApiPurchaseOrder[]) {
         REJECTED: 'rejected',
         CANCELLED: 'cancelled',
       } as Record<string, string>)[order.status] ?? order.status.toLowerCase(),
-    expectedDelivery: toDateInput(order.expectedDelivery),
+    expectedDelivery: toDateTimeLocalInput(order.expectedDelivery),
     createdBy: order.createdBy?.email ?? order.createdBy?.name ?? '',
     createdAt: order.createdAt,
     rejectionNote: order.rejectionReason,
@@ -409,7 +410,7 @@ export function useSaveRestaurantPurchaseOrderMutation() {
       const payload = {
         supplierId,
         expectedDelivery: expectedDelivery
-          ? new Date(`${expectedDelivery}T00:00:00`).toISOString()
+          ? new Date(expectedDelivery).toISOString()
           : undefined,
         items: apiItems,
         module: 'RESTAURANT',

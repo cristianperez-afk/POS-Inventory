@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { Plus, X, Search, Package, ShoppingCart, CheckCircle, XCircle, Clock, Eye, Users, Trash2 } from 'lucide-react';
 import {
@@ -16,6 +16,11 @@ import {
 } from '../lib/retail';
 import { categorySubcategories, generalMerchandiseSubcategories } from '../../app/utils/constants';
 import { SuppliersManager, type NormalizedSupplier } from '../shared/suppliers/SuppliersManager';
+import {
+  formatExpectedDelivery,
+  getDeliveryDelayLabel,
+  isPurchaseOrderDelayed,
+} from '../lib/purchaseOrderDelivery';
 
 const STATUS_LABEL: Record<string, string> = {
   DRAFT: 'Draft',
@@ -119,6 +124,12 @@ export default function PurchaseOrdersView({
   const [selectedPOForAction, setSelectedPOForAction] = useState<string | null>(null);
   const [rejectionRemarks, setRejectionRemarks] = useState('');
   const [saving, setSaving] = useState(false);
+  const [now, setNow] = useState(() => new Date());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const [poForm, setPOForm] = useState({
     supplierId: '' as string | undefined,
@@ -359,6 +370,17 @@ export default function PurchaseOrdersView({
   const submittedPOs = orders.filter(o => o.status === 'SUBMITTED');
   const isAdmin = currentUser?.role === 'Admin' || currentUser?.role === 'Manager';
 
+  const getDeliveryDelayBadge = (order: { expectedDelivery?: string | null; status: string }) => {
+    if (!isPurchaseOrderDelayed(order.expectedDelivery, order.status, now)) return null;
+    const delayLabel = getDeliveryDelayLabel(order.expectedDelivery, now);
+
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full border border-[#DC2626] bg-[#FEE2E2] px-2 py-1 text-[11px] font-semibold text-[#991B1B]">
+        Delayed: {delayLabel}
+      </span>
+    );
+  };
+
   const stats = {
     total: orders.length,
     pending: orders.filter(o => ['DRAFT', 'SUBMITTED'].includes(o.status)).length,
@@ -478,9 +500,9 @@ export default function PurchaseOrdersView({
               )}
 
               <div>
-                <label className="block text-[12px] font-medium text-[#323b42] mb-2">Expected Delivery Date</label>
+                <label className="block text-[12px] font-medium text-[#323b42] mb-2">Expected Delivery Date and Time</label>
                 <input
-                  type="date"
+                  type="datetime-local"
                   value={poForm.expectedDelivery}
                   onChange={(e) => setPOForm({ ...poForm, expectedDelivery: e.target.value })}
                   className="w-full px-[12.8px] py-[8.8px] bg-white border-[0.8px] border-transparent rounded-[10px] text-[14px] focus:outline-none focus:border-[#007A5E]"
@@ -957,9 +979,11 @@ export default function PurchaseOrdersView({
                   <span className={`px-2 py-1 rounded text-[12px] font-semibold ${STATUS_CLASS[order.status] ?? 'bg-[#f3f4f6] text-[#6b7280]'}`}>
                     {STATUS_LABEL[order.status] ?? order.status}
                   </span>
+                  {getDeliveryDelayBadge(order)}
                 </div>
                 <p className="text-[14px] text-[#323B42]">Supplier: <span className="font-medium">{order.supplier?.name ?? '—'}</span></p>
                 <p className="text-[14px] text-[#323B42]">Date: {new Date(order.createdAt).toLocaleDateString()}</p>
+                <p className="text-[14px] text-[#323B42]">Expected Delivery: {formatExpectedDelivery(order.expectedDelivery)}</p>
                 {order.paymentMethod && <p className="text-[14px] text-[#323B42]">Payment: {order.paymentMethod}</p>}
               </div>
               <div className="text-right">
@@ -1043,6 +1067,8 @@ export default function PurchaseOrdersView({
                         <h4 className="text-[18px] font-semibold text-[#323B42]">{po.orderNumber}</h4>
                         <p className="text-[14px] text-[#6b7280]">Supplier: {po.supplier?.name ?? '—'}</p>
                         <p className="text-[14px] text-[#6b7280]">Date: {new Date(po.createdAt).toLocaleDateString()}</p>
+                        <p className="text-[14px] text-[#6b7280]">Expected Delivery: {formatExpectedDelivery(po.expectedDelivery)}</p>
+                        <div className="mt-2">{getDeliveryDelayBadge(po)}</div>
                       </div>
                       <div className="text-right">
                         <p className="text-[20px] font-bold text-[#007A5E]">₱{po.totalAmount.toLocaleString()}</p>
