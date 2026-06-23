@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell } from "recharts";
-import { Download, TrendingUp, PhilippinePeso, ShoppingCart, Eye, AlertTriangle, ClipboardList } from "lucide-react";
+import { ChevronDown, ChevronRight, Clock, Download, TrendingUp, PhilippinePeso, ShoppingCart, Eye, AlertTriangle, ClipboardList } from "lucide-react";
 import {
   useRestaurantAdjustmentsQuery,
   useRestaurantGoodsRecordsQuery,
@@ -55,10 +55,45 @@ const formatAuditDate = (value?: string) => {
 
 const csvValue = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
 const normalizeAuditActor = (value: unknown) => String(value ?? '').trim().toLowerCase();
+const cleanList = (items?: unknown[]) =>
+  Array.from(new Set((items ?? []).map((item) => String(item ?? '').trim()).filter(Boolean)));
+const formatDuration = (start?: string, end?: string) => {
+  if (!start) return '0 mins';
+  const startTime = new Date(start).getTime();
+  const endTime = end ? new Date(end).getTime() : Date.now();
+  if (Number.isNaN(startTime) || Number.isNaN(endTime)) return '0 mins';
+  const minutes = Math.max(0, Math.round((endTime - startTime) / 60000));
+  if (minutes < 60) return `${minutes} min${minutes === 1 ? '' : 's'}`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return `${hours} hr${hours === 1 ? '' : 's'}${rest ? ` ${rest} mins` : ''}`;
+};
+const normalizeOrderStatus = (value?: string) =>
+  String(value ?? 'pending').replace(/_/g, ' ').toLowerCase();
+
+function DetailValues({ label, values, warning = false }: { label: string; values: string[]; warning?: boolean }) {
+  return (
+    <div>
+      <p className={`text-xs font-semibold ${warning && values.length > 0 ? 'text-amber-700' : 'text-foreground'}`}>{label}</p>
+      {values.length === 0 ? (
+        <p className="mt-1 text-xs text-muted-foreground">None</p>
+      ) : (
+        <div className="mt-1 flex flex-wrap gap-1.5">
+          {values.map((value) => (
+            <span key={value} className={`rounded border px-2 py-1 text-xs ${warning ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-border bg-muted/40 text-muted-foreground'}`}>
+              {value}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function Reports() {
   const { currentUser } = useSession();
   const [activeTab, setActiveTab] = useState<TabType>('overview');
+  const [expandedPosTransactions, setExpandedPosTransactions] = useState<Record<string, boolean>>({});
   const [consumptionFrom, setConsumptionFrom] = useState('');
   const [consumptionTo, setConsumptionTo] = useState('');
   const consumptionQuery = useRestaurantIngredientConsumptionQuery({
@@ -164,6 +199,40 @@ export function Reports() {
   const receiptTrendData = useMemo(() =>
     receivedPOs.map((o, i) => ({ date: o.date || `PO ${i + 1}`, value: o.total })),
     [receivedPOs],
+  );
+
+  const posTransactions = useMemo(() =>
+    (posOrders as any[]).map((order) => {
+      const items = Array.isArray(order.items) ? order.items : [];
+      const orderedAt = order.orderedAt ?? order.createdAt ?? '';
+      const completedAt = ['completed', 'cancelled'].includes(String(order.status ?? '').toLowerCase())
+        ? order.completedAt ?? order.tableEndedAt ?? order.updatedAt ?? orderedAt
+        : undefined;
+      const tableStartedAt = order.tableStartedAt ?? undefined;
+      const tableEndedAt = order.tableEndedAt ?? completedAt;
+      return {
+        id: order.id,
+        orderNumber: order.orderNumber ?? order.receiptNo ?? order.id,
+        customerName: order.customerName ?? 'Walk-in Customer',
+        orderType: order.orderType ?? 'Takeout',
+        tableNumber: order.tableNumber || 'No table selected',
+        paymentMethod: order.paymentMethod ?? 'POS',
+        paymentStatus: String(order.paymentStatus ?? 'NOT_PAID').replace(/_/g, ' '),
+        orderStatus: normalizeOrderStatus(order.status),
+        totalAmount: Number(order.totalAmount ?? 0),
+        orderedAt,
+        completedAt,
+        paymentAt: order.paymentAt ?? undefined,
+        preparingStartedAt: order.preparingStartedAt ?? undefined,
+        readyAt: order.readyAt ?? undefined,
+        tableStartedAt,
+        tableEndedAt,
+        runningTime: formatDuration(orderedAt, completedAt),
+        customerStayDuration: tableStartedAt ? formatDuration(tableStartedAt, tableEndedAt) : 'No table selected',
+        items,
+      };
+    }),
+    [posOrders],
   );
 
   // ── Operations ──────────────────────────────────────────────────────────────
@@ -396,7 +465,25 @@ export function Reports() {
         ].map(csvValue).join(',') + '\n';
       });
     } else if (activeTab === 'orders') {
-      csv = 'Date,Supplier,Status,Total\n';
+      csv = 'Type,Order Number,Customer,Order Type,Table,Payment Method,Payment Status,Order Status,Total,Time Ordered,Time Completed,Running Time,Customer Stay Duration\n';
+      posTransactions.forEach(order => {
+        csv += [
+          'POS Transaction',
+          order.orderNumber,
+          order.customerName,
+          order.orderType,
+          order.tableNumber,
+          order.paymentMethod,
+          order.paymentStatus,
+          order.orderStatus,
+          order.totalAmount.toFixed(2),
+          formatAuditDate(order.orderedAt),
+          order.completedAt ? formatAuditDate(order.completedAt) : '',
+          order.runningTime,
+          order.customerStayDuration,
+        ].map(csvValue).join(',') + '\n';
+      });
+      csv += '\nPurchase Date,Supplier,Status,Total\n';
       purchaseOrders.forEach(o => {
         csv += `${o.date || ''},${o.supplier || ''},${o.status || ''},${(o.total || 0).toFixed(2)}\n`;
       });
@@ -776,6 +863,118 @@ export function Reports() {
                 {formatCurrency(receivedPOs.reduce((s, o) => s + o.total, 0))}
               </p>
             </div>
+          </div>
+
+          <div className="bg-card border border-border rounded-2xl p-6 mb-4">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <h4 className="text-base font-semibold text-foreground">POS Transaction History</h4>
+                <p className="text-xs text-muted-foreground">Expandable order details with products, ingredients, modifiers, payment status, running time, and stay duration.</p>
+              </div>
+              <span className="rounded-full border border-border bg-muted/40 px-3 py-1 text-xs font-medium text-muted-foreground">
+                {posTransactions.length} transaction{posTransactions.length === 1 ? '' : 's'}
+              </span>
+            </div>
+
+            {posTransactions.length === 0 ? (
+              <p className="py-8 text-center text-sm text-muted-foreground">No POS transactions found</p>
+            ) : (
+              <div className="space-y-3">
+                {posTransactions.slice(0, 100).map((order) => {
+                  const isExpanded = expandedPosTransactions[order.id] ?? false;
+
+                  return (
+                    <div key={order.id} className="rounded-xl border border-border bg-card">
+                      <button
+                        type="button"
+                        onClick={() => setExpandedPosTransactions((current) => ({ ...current, [order.id]: !isExpanded }))}
+                        className="flex w-full flex-col gap-3 px-4 py-4 text-left transition hover:bg-muted/30 lg:flex-row lg:items-center lg:justify-between"
+                      >
+                        <div className="flex min-w-0 items-start gap-2">
+                          {isExpanded ? <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" /> : <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />}
+                          <div className="min-w-0">
+                            <p className="font-semibold text-foreground">Transaction #{order.orderNumber}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {order.customerName} - {order.orderType} - {order.tableNumber}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2 lg:min-w-[520px] lg:grid-cols-5">
+                          <span>{formatAuditDate(order.orderedAt)}</span>
+                          <span className={`rounded-full px-2 py-1 text-center font-medium capitalize ${statusPill(order.paymentStatus)}`}>{order.paymentStatus}</span>
+                          <span className={`rounded-full px-2 py-1 text-center font-medium capitalize ${statusPill(order.orderStatus)}`}>{order.orderStatus}</span>
+                          <span className="font-semibold text-foreground">{formatCurrency(order.totalAmount)}</span>
+                          <span className="inline-flex items-center gap-1"><Clock className="h-3.5 w-3.5" /> {order.runningTime}</span>
+                        </div>
+                      </button>
+
+                      {isExpanded && (
+                        <div className="border-t border-border px-4 py-4">
+                          <div className="mb-4 grid gap-3 md:grid-cols-4">
+                            <div className="rounded-lg bg-muted/30 p-3">
+                              <p className="text-xs text-muted-foreground">Payment Method</p>
+                              <p className="text-sm font-semibold text-foreground">{order.paymentMethod}</p>
+                            </div>
+                            <div className="rounded-lg bg-muted/30 p-3">
+                              <p className="text-xs text-muted-foreground">Completed Time</p>
+                              <p className="text-sm font-semibold text-foreground">{order.completedAt ? formatAuditDate(order.completedAt) : 'In progress'}</p>
+                            </div>
+                            <div className="rounded-lg bg-muted/30 p-3">
+                              <p className="text-xs text-muted-foreground">Payment Time</p>
+                              <p className="text-sm font-semibold text-foreground">{order.paymentAt ? formatAuditDate(order.paymentAt) : '-'}</p>
+                            </div>
+                            <div className="rounded-lg bg-muted/30 p-3">
+                              <p className="text-xs text-muted-foreground">Preparing Start</p>
+                              <p className="text-sm font-semibold text-foreground">{order.preparingStartedAt ? formatAuditDate(order.preparingStartedAt) : '-'}</p>
+                            </div>
+                            <div className="rounded-lg bg-muted/30 p-3">
+                              <p className="text-xs text-muted-foreground">Ready to Serve</p>
+                              <p className="text-sm font-semibold text-foreground">{order.readyAt ? formatAuditDate(order.readyAt) : '-'}</p>
+                            </div>
+                            <div className="rounded-lg bg-muted/30 p-3">
+                              <p className="text-xs text-muted-foreground">Running Time</p>
+                              <p className="text-sm font-semibold text-foreground">{order.runningTime}</p>
+                            </div>
+                            <div className="rounded-lg bg-muted/30 p-3">
+                              <p className="text-xs text-muted-foreground">Customer Stay Duration</p>
+                              <p className="text-sm font-semibold text-foreground">{order.customerStayDuration}</p>
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            {order.items.length === 0 ? (
+                              <p className="rounded-lg border border-dashed border-border px-3 py-6 text-center text-sm text-muted-foreground">No product details saved for this transaction</p>
+                            ) : order.items.map((item: any) => {
+                              const ingredients = cleanList(item.ingredients);
+                              const removed = cleanList(item.removedIngredients);
+                              const added = cleanList(item.addedIngredients);
+                              const replaced = cleanList(item.replacedIngredients);
+                              const notes = cleanList([...(item.specialInstructions ?? []), item.notes ?? '', ...(item.modifiers ?? [])]);
+
+                              return (
+                                <div key={String(item.id)} className="rounded-lg border border-border p-3">
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <p className="font-semibold text-foreground">{item.name} x{item.quantity}</p>
+                                    <p className="text-sm text-muted-foreground">{formatCurrency(Number(item.price ?? 0))} - {Number(item.prepTimeMinutes ?? 0)} mins</p>
+                                  </div>
+                                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                    <DetailValues label="Ingredients" values={ingredients} />
+                                    <DetailValues label="Removed" values={removed} warning />
+                                    <DetailValues label="Added" values={added} warning />
+                                    <DetailValues label="Replaced" values={replaced} warning />
+                                    <DetailValues label="Special Notes" values={notes} />
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           <div className="bg-card border border-border rounded-2xl p-6 mb-4">

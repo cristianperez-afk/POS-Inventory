@@ -30,6 +30,15 @@ export interface Order {
   orderStatus: 'Pending' | 'Preparing' | 'Ready' | 'Served' | 'Completed';
   date: string;
   time: string;
+  createdAt?: string;
+  paymentAt?: string;
+  preparingStartedAt?: string;
+  readyAt?: string;
+  completedAt?: string;
+  tableStartedAt?: string;
+  tableEndedAt?: string;
+  runningTimeMinutes?: number;
+  customerStayMinutes?: number;
   items: OrderItem[];
   paymentId?: string;
   receiptId?: string;
@@ -366,6 +375,14 @@ export function useOrders() {
 
 function mapDatabaseRestaurantOrder(row: any): Order {
   const createdAt = row.created_at ? new Date(row.created_at) : new Date();
+  const completedAt = row.completed_at ? new Date(row.completed_at) : null;
+  const tableStartedAt = row.table_started_at ? new Date(row.table_started_at) : null;
+  const tableEndedAt = row.table_ended_at ? new Date(row.table_ended_at) : null;
+  const minutesBetween = (start: Date | null, end: Date | null) => {
+    if (!start) return undefined;
+    const endTime = end ?? new Date();
+    return Math.max(0, Math.round((endTime.getTime() - start.getTime()) / 60000));
+  };
   const items = Array.isArray(row.items) ? row.items : [];
   const tableName = row.table_name ? String(row.table_name) : '-';
   const queueMatch = tableName.match(/^Queue(?:\s*#?(\d+))?/i);
@@ -407,6 +424,15 @@ function mapDatabaseRestaurantOrder(row: any): Order {
     orderStatus,
     date: getLocalDateKey(createdAt),
     time: createdAt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+    createdAt: row.created_at ?? undefined,
+    paymentAt: row.payment_at ?? undefined,
+    preparingStartedAt: row.preparing_started_at ?? undefined,
+    readyAt: row.ready_at ?? undefined,
+    completedAt: row.completed_at ?? undefined,
+    tableStartedAt: row.table_started_at ?? undefined,
+    tableEndedAt: row.table_ended_at ?? undefined,
+    runningTimeMinutes: minutesBetween(createdAt, completedAt),
+    customerStayMinutes: tableStartedAt ? minutesBetween(tableStartedAt, tableEndedAt ?? completedAt) : undefined,
     items: items.map((item: any) => ({
       name: item.product_name,
       quantity: Number(item.quantity ?? 0),

@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "start": "node dist/main.js",
-    "start:dev": "npm run build && node dist/main.js",
+    "start:dev": "node scripts/ensure-port-free.js && npm run build && node dist/main.js",
     "build": "tsc -p tsconfig.build.json",
     "format": "prettier --write \"src/**/*.ts\"",
     "db:generate": "prisma generate",

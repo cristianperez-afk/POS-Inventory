@@ -80,6 +80,10 @@ interface CartItem {
 }
 
 // Customer history is now derived from actual orders
+const finiteNumberOrUndefined = (value: unknown) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+};
 
 function toOrderListFormat(order: any, paid: boolean) {
   const hasDineIn = order.items.some((i: CartItem) => i.orderType === 'dine-in');
@@ -196,11 +200,11 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       image: product.image_url || storeBrand?.logo || '',
       availableQuantity: Number(product.available_quantity ?? 0),
       ingredients: (product.ingredients ?? []).map((ingredient: any) => ({
-        id: Number(ingredient.id),
+        id: finiteNumberOrUndefined(ingredient.id) ?? finiteNumberOrUndefined(ingredient.product_ingredient_id) ?? finiteNumberOrUndefined(ingredient.ingredient_id) ?? 0,
         itemId: ingredient.inventory_item_id ?? ingredient.itemId,
         inventory_item_id: ingredient.inventory_item_id,
-        product_ingredient_id: Number(ingredient.id),
-        ingredient_id: Number(ingredient.ingredient_id),
+        product_ingredient_id: finiteNumberOrUndefined(ingredient.product_ingredient_id ?? ingredient.id),
+        ingredient_id: finiteNumberOrUndefined(ingredient.ingredient_id),
         name: ingredient.name,
         quantity: Number(ingredient.quantity ?? 0),
         original_quantity: Number(ingredient.quantity ?? 0),
@@ -277,11 +281,11 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
         const ingredientId = Number(ingredient.ingredient_id);
         const current = currentByIngredientId.get(ingredientId);
         return current ?? {
-          id: Number(ingredient.id),
+          id: finiteNumberOrUndefined(ingredient.id) ?? finiteNumberOrUndefined(ingredient.product_ingredient_id) ?? finiteNumberOrUndefined(ingredient.ingredient_id) ?? 0,
           itemId: ingredient.inventory_item_id ?? ingredient.itemId,
           inventory_item_id: ingredient.inventory_item_id,
-          product_ingredient_id: Number(ingredient.id),
-          ingredient_id: ingredientId,
+          product_ingredient_id: finiteNumberOrUndefined(ingredient.product_ingredient_id ?? ingredient.id),
+          ingredient_id: finiteNumberOrUndefined(ingredientId),
           name: ingredient.name,
           quantity: Number(ingredient.quantity ?? 0),
           original_quantity: Number(ingredient.quantity ?? 0),
@@ -697,13 +701,13 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
   const serializeIngredientForOrder = (ingredient: Ingredient) => ({
     id: ingredient.id,
     itemId: ingredient.itemId ?? ingredient.inventory_item_id,
-    ingredient_id: ingredient.ingredient_id,
-    product_ingredient_id: ingredient.product_ingredient_id,
+    ingredient_id: finiteNumberOrUndefined(ingredient.ingredient_id),
+    product_ingredient_id: finiteNumberOrUndefined(ingredient.product_ingredient_id),
     original_quantity: ingredient.original_quantity,
     name: ingredient.name,
     quantity: ingredient.quantity,
     unit: ingredient.unit,
-    replacement_ingredient_id: ingredient.replacement_ingredient_id,
+    replacement_ingredient_id: finiteNumberOrUndefined(ingredient.replacement_ingredient_id),
     replacement_name: ingredient.replacement_name,
     additional_price: ingredient.additional_price,
     customization_type: ingredient.customization_type,

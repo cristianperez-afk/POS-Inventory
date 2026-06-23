@@ -2877,9 +2877,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             INSERT INTO orders (
               store_id, cashier_id, order_number, customer_name, order_type, table_name,
               party_size, subtotal, discount_amount, discount_type, tax_amount, service_charge,
-              total_amount, order_status, payment_status, completed_at
+              total_amount, order_status, payment_status, payment_at, completed_at,
+              table_started_at, preparing_started_at, ready_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
             RETURNING id
           `,
           [
@@ -2899,6 +2900,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             orderStatus,
             paymentStatus,
             isPaid ? new Date() : null,
+            isPaid ? new Date() : null,
+            input.tableName && !String(input.tableName).toLowerCase().startsWith('queue') ? new Date() : null,
+            orderStatus === 'PREPARING' ? new Date() : null,
+            orderStatus === 'READY' ? new Date() : null,
           ],
         );
         const orderId = orderRows[0].id;
@@ -3032,7 +3037,12 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     if (input.orderStatus !== undefined) addUpdate('order_status', input.orderStatus);
     if (input.paymentStatus !== undefined) addUpdate('payment_status', input.paymentStatus);
     if (isPaymentUpdate && input.paymentStatus === undefined) addUpdate('payment_status', 'PAID');
+    if (isPaymentUpdate || input.paymentStatus === 'PAID') addUpdate('payment_at', new Date());
+    if (input.orderStatus === 'PREPARING') addUpdate('preparing_started_at', new Date());
+    if (input.orderStatus === 'READY') addUpdate('ready_at', new Date());
     if (input.orderStatus === 'COMPLETED') addUpdate('completed_at', new Date());
+    if (input.orderStatus === 'COMPLETED') addUpdate('table_ended_at', new Date());
+    if (input.tableName !== undefined && input.tableName && !String(input.tableName).toLowerCase().startsWith('queue')) addUpdate('table_started_at', new Date());
 
     if (updates.length === 0 && !isPaymentUpdate) {
       throw new BadRequestException('No order updates were provided.');
@@ -3208,6 +3218,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           o.payment_status,
           o.created_at,
           o.completed_at,
+          o.payment_at,
+          o.preparing_started_at,
+          o.ready_at,
+          o.table_started_at,
+          o.table_ended_at,
           p.payment_number,
           p.payment_method,
           p.amount_paid,
@@ -3516,7 +3531,22 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     for (const ingredient of ingredients) {
       const originalId = finiteNumberOrNull(ingredient.ingredient_id ?? ingredient.ingredientId);
       const replacementId = finiteNumberOrNull(ingredient.replacement_ingredient_id ?? ingredient.replacementIngredientId);
-      const productIngredientId = finiteNumberOrNull(ingredient.product_ingredient_id ?? ingredient.productIngredientId ?? (originalId ? ingredient.id : null));
+      let productIngredientId = finiteNumberOrNull(ingredient.product_ingredient_id ?? ingredient.productIngredientId ?? (originalId ? ingredient.id : null));
+      if (!productIngredientId && originalId) {
+        const linkedRows = await this.queryWithClient<{ id: number }>(
+          client,
+          `
+            SELECT id
+            FROM product_ingredients
+            WHERE store_id = $1
+              AND product_id = $2
+              AND ingredient_id = $3
+            LIMIT 1
+          `,
+          [storeId, item.productId ?? item.id ?? null, originalId],
+        );
+        productIngredientId = linkedRows[0]?.id ?? null;
+      }
       const ingredientId = replacementId ?? originalId;
       const removed = ingredient.removed === true || Number(ingredient.quantity ?? 0) <= 0;
       const quantity = removed ? 0 : Number(ingredient.quantity ?? ingredient.quantity_required ?? 0) * itemQuantity;
@@ -4251,6 +4281,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ADD COLUMN IF NOT EXISTS tax_amount DECIMAL(10,2) DEFAULT 0,
           ADD COLUMN IF NOT EXISTS service_charge DECIMAL(10,2) DEFAULT 0,
           ADD COLUMN IF NOT EXISTS total_amount DECIMAL(10,2) DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS payment_at TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS preparing_started_at TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS ready_at TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS table_started_at TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS table_ended_at TIMESTAMP,
           ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP,
           ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       `,
@@ -4307,6 +4342,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       `,
     );
+    await this.query(`ALTER TABLE order_item_customizations ALTER COLUMN product_ingredient_id DROP NOT NULL`);
+    await this.query(`ALTER TABLE order_item_customizations ALTER COLUMN ingredient_alternative_id DROP NOT NULL`);
+    await this.query(`ALTER TABLE order_item_customizations ALTER COLUMN original_ingredient_id DROP NOT NULL`);
+    await this.query(`ALTER TABLE order_item_customizations ALTER COLUMN replacement_ingredient_id DROP NOT NULL`);
   }
 
   // Optional deterministic link from a POS store to a specific inventory Business.
