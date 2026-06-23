@@ -1,11 +1,12 @@
 import { useMemo, useState } from "react";
-import { CheckCircle2, ClipboardCheck, ClipboardList, Eye, Play, ReceiptText, Search, X } from "lucide-react";
+import { CheckCircle2, ClipboardCheck, ClipboardList, Eye, Filter, Play, ReceiptText, Search, X } from "lucide-react";
 import {
   useRestaurantKitchenOrdersQuery,
   useUpdateRestaurantKitchenOrderStatusMutation,
 } from "../lib/restaurant";
 
 type KitchenStatus = "pending" | "preparing" | "ready" | "completed" | "cancelled";
+type StatusFilter = "all" | KitchenStatus;
 
 type KitchenOrderItem = {
   id: string;
@@ -46,6 +47,15 @@ const STATUS_LABELS: Record<KitchenStatus, string> = {
   completed: "Completed",
   cancelled: "Cancelled",
 };
+
+const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
+  { value: "all", label: "All Status" },
+  { value: "pending", label: "Pending" },
+  { value: "preparing", label: "Preparing" },
+  { value: "ready", label: "Ready" },
+  { value: "completed", label: "Completed" },
+  { value: "cancelled", label: "Cancelled" },
+];
 
 const API_STATUS: Record<KitchenStatus, "PENDING" | "PREPARING" | "READY" | "COMPLETED" | "CANCELLED"> = {
   pending: "PENDING",
@@ -100,18 +110,45 @@ function nextAction(status: KitchenStatus) {
   return null;
 }
 
+function canCancel(status: KitchenStatus) {
+  return status !== "completed" && status !== "cancelled";
+}
+
 export function POSKitchenOrders() {
   const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [selectedOrder, setSelectedOrder] = useState<KitchenOrder | null>(null);
   const { data: orderRecords = [], isLoading } = useRestaurantKitchenOrdersQuery();
   const updateStatus = useUpdateRestaurantKitchenOrderStatusMutation();
   const orders = orderRecords as KitchenOrder[];
 
+  const orderStats = useMemo(() => {
+    const counts = orders.reduce<Record<KitchenStatus, number>>(
+      (acc, order) => {
+        acc[order.status] += 1;
+        return acc;
+      },
+      { pending: 0, preparing: 0, ready: 0, completed: 0, cancelled: 0 },
+    );
+
+    return [
+      { label: "Total Orders", value: orders.length, filter: "all" as StatusFilter, icon: ReceiptText, color: "from-teal-500 to-cyan-500" },
+      { label: "Pending", value: counts.pending, filter: "pending" as StatusFilter, icon: ClipboardList, color: "from-slate-500 to-slate-600" },
+      { label: "Preparing", value: counts.preparing, filter: "preparing" as StatusFilter, icon: Play, color: "from-amber-500 to-orange-500" },
+      { label: "Ready", value: counts.ready, filter: "ready" as StatusFilter, icon: CheckCircle2, color: "from-emerald-500 to-green-500" },
+      { label: "Completed", value: counts.completed, filter: "completed" as StatusFilter, icon: ClipboardCheck, color: "from-blue-500 to-sky-500" },
+      { label: "Cancelled", value: counts.cancelled, filter: "cancelled" as StatusFilter, icon: X, color: "from-red-500 to-rose-500" },
+    ];
+  }, [orders]);
+
   const filteredOrders = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
-    if (!query) return orders;
 
     return orders.filter((order) => {
+      const matchesStatus = statusFilter === "all" || order.status === statusFilter;
+      if (!matchesStatus) return false;
+      if (!query) return true;
+
       const haystack = [
         order.orderNumber,
         order.receiptNo,
@@ -123,7 +160,7 @@ export function POSKitchenOrders() {
       ].join(" ").toLowerCase();
       return haystack.includes(query);
     });
-  }, [orders, searchQuery]);
+  }, [orders, searchQuery, statusFilter]);
 
   const handleStatus = async (order: KitchenOrder, nextStatus: KitchenStatus) => {
     await updateStatus.mutateAsync({ id: order.id, status: API_STATUS[nextStatus] });
@@ -136,20 +173,63 @@ export function POSKitchenOrders() {
         <p className="text-muted-foreground">Record kitchen receipts and deduct ingredients from inventory via Recipe &amp; BOM.</p>
       </div>
 
+      <div className="mb-8 grid grid-cols-1 gap-4 md:grid-cols-3 xl:grid-cols-6">
+        {orderStats.map((stat) => {
+          const Icon = stat.icon;
+          const isActive = statusFilter === stat.filter;
+
+          return (
+            <button
+              key={stat.label}
+              type="button"
+              onClick={() => setStatusFilter(stat.filter)}
+              className={`rounded-2xl border border-border bg-card p-5 text-left shadow-sm transition-all duration-200 hover:shadow-md ${
+                isActive ? "ring-2 ring-primary/40" : ""
+              }`}
+            >
+              <div className="mb-4 flex items-center justify-between">
+                <div className={`flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br ${stat.color} shadow-lg`}>
+                  <Icon className="h-5 w-5 text-white" />
+                </div>
+                <span className="text-xs font-medium text-muted-foreground">Live</span>
+              </div>
+              <p className="mb-1 text-sm text-muted-foreground">{stat.label}</p>
+              <p className="text-2xl font-bold text-foreground">{stat.value}</p>
+            </button>
+          );
+        })}
+      </div>
+
       <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
         <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-2">
             <ClipboardList className="h-5 w-5 text-primary" />
             <h2 className="text-xl font-semibold text-foreground">Kitchen Receipt History</h2>
           </div>
-          <div className="relative w-full lg:w-72">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <input
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Search receipts..."
-              className="w-full rounded-lg border border-input bg-input-background py-2 pl-9 pr-3 text-sm outline-none focus:border-primary"
-            />
+          <div className="flex w-full flex-col gap-3 sm:flex-row lg:w-auto">
+            <div className="relative w-full lg:w-72">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <input
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Search receipts..."
+                className="w-full rounded-lg border border-input bg-input-background py-2 pl-9 pr-3 text-sm outline-none focus:border-primary"
+              />
+            </div>
+            <div className="relative w-full sm:w-48">
+              <Filter className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <select
+                value={statusFilter}
+                onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
+                className="w-full appearance-none rounded-lg border border-input bg-input-background py-2 pl-9 pr-8 text-sm outline-none focus:border-primary"
+              >
+                {STATUS_FILTERS.map((filter) => (
+                  <option key={filter.value} value={filter.value}>
+                    {filter.label}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
 
@@ -173,6 +253,7 @@ export function POSKitchenOrders() {
             {filteredOrders.map((order) => {
               const action = nextAction(order.status);
               const ActionIcon = action?.icon;
+              const showCancelAction = canCancel(order.status);
 
               return (
                   <tr key={order.id} className="align-top">
@@ -208,6 +289,17 @@ export function POSKitchenOrders() {
                           >
                             <ActionIcon className="h-3.5 w-3.5" />
                             {action.label}
+                          </button>
+                        )}
+                        {showCancelAction && (
+                          <button
+                            type="button"
+                            onClick={() => handleStatus(order, "cancelled")}
+                            disabled={updateStatus.isPending}
+                            className="inline-flex items-center gap-1 rounded border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                            Cancel
                           </button>
                         )}
                       </div>
