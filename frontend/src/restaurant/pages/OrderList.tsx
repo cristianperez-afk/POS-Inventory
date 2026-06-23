@@ -35,7 +35,7 @@ function normalizeSearchValue(value: string) {
 }
 
 export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, userName, storeType, staffType }: OrderListProps) {
-  const { orders, completePayment, voidOrder, refundOrder } = useOrders();
+  const { orders, completePayment, voidOrder, refundOrder, reloadOrders } = useOrders();
   const { settings } = useStoreSettings();
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState('All');
@@ -61,6 +61,10 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
   const [isCompletingPayment, setIsCompletingPayment] = useState(false);
   const showTableManagementColumns = settings.enable_table_management;
   const canProcessTransactions = !isAdmin && staffType === 'POS_STAFF';
+
+  useEffect(() => {
+    void reloadOrders();
+  }, [reloadOrders]);
 
   const openModal = (order: Order, modal: ActiveModal) => {
     if (!canProcessTransactions && ['payment', 'refund', 'void'].includes(String(modal))) return;

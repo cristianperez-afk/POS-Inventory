@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, useRef, ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useState, useRef, ReactNode } from 'react';
 import { getApiBaseUrl } from '../../auth/services/auth';
 import type { AuthenticatedUser } from '../../auth/types/auth';
 import { getLocalDateKey } from '../utils/date';
@@ -73,6 +73,7 @@ interface OrderContextType {
   completeTableOrder: (orderId: string) => Promise<void>;
   voidOrder: (orderId: string, restock?: boolean) => Promise<void>;
   refundOrder: (orderId: string, restock?: boolean) => Promise<void>;
+  reloadOrders: () => Promise<void>;
   paymentCompletedSignal: number; // Signal for when payment is completed
 }
 
@@ -83,31 +84,31 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
   const nextId = useRef(1);
   const [paymentCompletedSignal, setPaymentCompletedSignal] = useState(0);
 
-  useEffect(() => {
-    const loadOrders = async () => {
-      if (!currentUser?.id || currentUser.store_type !== 'RESTAURANT') {
+  const reloadOrders = useCallback(async () => {
+    if (!currentUser?.id || currentUser.store_type !== 'RESTAURANT') {
+      setOrders([]);
+      return;
+    }
+
+    try {
+      const response = await fetch(`${getApiBaseUrl()}/admin/pos/orders?user_id=${currentUser.id}`);
+      const data = await response.json();
+      if (!response.ok || !Array.isArray(data)) {
         setOrders([]);
         return;
       }
 
-      try {
-        const response = await fetch(`${getApiBaseUrl()}/admin/pos/orders?user_id=${currentUser.id}`);
-        const data = await response.json();
-        if (!response.ok || !Array.isArray(data)) {
-          setOrders([]);
-          return;
-        }
-
-        const mapped = data.map(mapDatabaseRestaurantOrder);
-        setOrders(mapped);
-        nextId.current = mapped.length + 1;
-      } catch {
-        setOrders([]);
-      }
-    };
-
-    void loadOrders();
+      const mapped = data.map(mapDatabaseRestaurantOrder);
+      setOrders(mapped);
+      nextId.current = mapped.length + 1;
+    } catch {
+      setOrders([]);
+    }
   }, [currentUser?.id, currentUser?.store_type]);
+
+  useEffect(() => {
+    void reloadOrders();
+  }, [reloadOrders]);
 
   // Derive queued orders from orders with isQueued = true
   const queuedOrders: QueuedOrder[] = orders
@@ -349,6 +350,7 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
       completeTableOrder,
       voidOrder,
       refundOrder,
+      reloadOrders,
       paymentCompletedSignal,
     }}>
       {children}

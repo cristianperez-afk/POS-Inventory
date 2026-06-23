@@ -4091,8 +4091,135 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   private async ensurePosOrderSchema() {
     await this.query(
       `
+        CREATE TABLE IF NOT EXISTS ingredients_inventory (
+          id BIGSERIAL PRIMARY KEY,
+          store_id BIGINT REFERENCES stores(id) ON DELETE CASCADE,
+          ingredient_name VARCHAR(150) NOT NULL,
+          quantity_available DECIMAL(12,3) NOT NULL DEFAULT 0,
+          unit VARCHAR(50) NOT NULL DEFAULT 'pcs',
+          low_stock_limit DECIMAL(12,3) DEFAULT 0,
+          cost_per_unit DECIMAL(10,2) DEFAULT 0,
+          is_available BOOLEAN DEFAULT TRUE,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `,
+    );
+    await this.query(
+      `
+        CREATE TABLE IF NOT EXISTS product_ingredients (
+          id BIGSERIAL PRIMARY KEY,
+          store_id BIGINT REFERENCES stores(id) ON DELETE CASCADE,
+          product_id BIGINT REFERENCES products(id) ON DELETE CASCADE,
+          ingredient_id BIGINT REFERENCES ingredients_inventory(id) ON DELETE SET NULL,
+          ingredient_name VARCHAR(150) NOT NULL,
+          quantity_required DECIMAL(10,3) DEFAULT 0,
+          default_quantity DECIMAL(10,2) NOT NULL DEFAULT 0,
+          unit VARCHAR(50) NOT NULL DEFAULT 'pcs',
+          additional_cost DECIMAL(10,2) DEFAULT 0,
+          is_required BOOLEAN DEFAULT TRUE,
+          is_removable BOOLEAN DEFAULT TRUE,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `,
+    );
+    await this.query(
+      `
+        CREATE TABLE IF NOT EXISTS ingredient_alternatives (
+          id BIGSERIAL PRIMARY KEY,
+          store_id BIGINT REFERENCES stores(id) ON DELETE CASCADE,
+          product_ingredient_id BIGINT REFERENCES product_ingredients(id) ON DELETE CASCADE,
+          parent_ingredient_id BIGINT REFERENCES ingredients_inventory(id) ON DELETE CASCADE,
+          alternative_ingredient_id BIGINT REFERENCES ingredients_inventory(id) ON DELETE CASCADE,
+          alternative_name VARCHAR(150) NOT NULL DEFAULT '',
+          default_quantity DECIMAL(10,2),
+          unit VARCHAR(50),
+          additional_cost DECIMAL(10,2) DEFAULT 0,
+          is_available BOOLEAN DEFAULT TRUE,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `,
+    );
+    await this.query(
+      `
+        ALTER TABLE product_ingredients
+          ADD COLUMN IF NOT EXISTS ingredient_id BIGINT,
+          ADD COLUMN IF NOT EXISTS quantity_required DECIMAL(10,3) DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS default_quantity DECIMAL(10,2) DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS unit VARCHAR(50) DEFAULT 'pcs',
+          ADD COLUMN IF NOT EXISTS additional_cost DECIMAL(10,2) DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS is_required BOOLEAN DEFAULT TRUE,
+          ADD COLUMN IF NOT EXISTS is_removable BOOLEAN DEFAULT TRUE,
+          ADD COLUMN IF NOT EXISTS recipe_ingredient_id TEXT
+      `,
+    );
+    await this.query(
+      `
         ALTER TABLE orders
-          ADD COLUMN IF NOT EXISTS party_size INT
+          ADD COLUMN IF NOT EXISTS party_size INT,
+          ADD COLUMN IF NOT EXISTS table_name VARCHAR(50),
+          ADD COLUMN IF NOT EXISTS subtotal DECIMAL(10,2) DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS discount_amount DECIMAL(10,2) DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS discount_type VARCHAR(100),
+          ADD COLUMN IF NOT EXISTS tax_amount DECIMAL(10,2) DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS service_charge DECIMAL(10,2) DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS total_amount DECIMAL(10,2) DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      `,
+    );
+    await this.query(
+      `
+        ALTER TABLE order_items
+          ADD COLUMN IF NOT EXISTS variant_id BIGINT,
+          ADD COLUMN IF NOT EXISTS category_name VARCHAR(100),
+          ADD COLUMN IF NOT EXISTS size VARCHAR(50),
+          ADD COLUMN IF NOT EXISTS color VARCHAR(50),
+          ADD COLUMN IF NOT EXISTS item_type VARCHAR(50),
+          ADD COLUMN IF NOT EXISTS notes TEXT,
+          ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      `,
+    );
+    await this.query(
+      `
+        CREATE TABLE IF NOT EXISTS order_item_customizations (
+          id BIGSERIAL PRIMARY KEY,
+          store_id BIGINT REFERENCES stores(id) ON DELETE CASCADE,
+          order_item_id BIGINT REFERENCES order_items(id) ON DELETE CASCADE,
+          product_ingredient_id BIGINT REFERENCES product_ingredients(id) ON DELETE SET NULL,
+          ingredient_alternative_id BIGINT REFERENCES ingredient_alternatives(id) ON DELETE SET NULL,
+          original_ingredient_id BIGINT REFERENCES ingredients_inventory(id) ON DELETE SET NULL,
+          replacement_ingredient_id BIGINT REFERENCES ingredients_inventory(id) ON DELETE SET NULL,
+          customization_type VARCHAR(50) NOT NULL,
+          original_ingredient_name VARCHAR(150),
+          replacement_ingredient_name VARCHAR(150),
+          original_quantity DECIMAL(10,2),
+          new_quantity DECIMAL(10,2),
+          unit VARCHAR(50),
+          additional_cost DECIMAL(10,2) DEFAULT 0,
+          notes TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `,
+    );
+    await this.query(
+      `
+        ALTER TABLE order_item_customizations
+          ADD COLUMN IF NOT EXISTS store_id BIGINT,
+          ADD COLUMN IF NOT EXISTS product_ingredient_id BIGINT,
+          ADD COLUMN IF NOT EXISTS ingredient_alternative_id BIGINT,
+          ADD COLUMN IF NOT EXISTS original_ingredient_id BIGINT,
+          ADD COLUMN IF NOT EXISTS replacement_ingredient_id BIGINT,
+          ADD COLUMN IF NOT EXISTS original_ingredient_name VARCHAR(150),
+          ADD COLUMN IF NOT EXISTS replacement_ingredient_name VARCHAR(150),
+          ADD COLUMN IF NOT EXISTS original_quantity DECIMAL(10,2),
+          ADD COLUMN IF NOT EXISTS new_quantity DECIMAL(10,2),
+          ADD COLUMN IF NOT EXISTS unit VARCHAR(50),
+          ADD COLUMN IF NOT EXISTS additional_cost DECIMAL(10,2) DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS notes TEXT,
+          ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       `,
     );
   }
@@ -4461,7 +4588,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       throw new InternalServerErrorException(databaseError.detail ?? databaseError.message ?? fallbackMessage);
     }
 
-    throw error;
+    if (databaseError.message) {
+      throw new InternalServerErrorException(`${fallbackMessage} ${databaseError.message}`);
+    }
+
+    throw new InternalServerErrorException(fallbackMessage);
   }
 
   private generateTemporaryPassword() {

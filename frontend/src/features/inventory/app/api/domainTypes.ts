@@ -302,11 +302,28 @@ export type KitchenOrderStatus =
   | 'PREPARING'
   | 'READY'
   | 'COMPLETED'
-  | 'VOIDED';
+  | 'VOIDED'
+  | 'CANCELLED';
+
+export interface ApiKitchenOrderItem {
+  id: string | number;
+  name: string;
+  quantity: number;
+  notes?: string | null;
+  addedIngredients?: string[];
+  removedIngredients?: string[];
+  modifiers?: string[];
+  specialInstructions?: string[];
+}
 
 export interface ApiKitchenOrder {
   id: string;
+  orderNumber?: string | null;
   receiptNo: string;
+  customerName?: string | null;
+  orderType?: string | null;
+  tableNumber?: string | null;
+  itemCount?: number | null;
   quantity: number;
   status: KitchenOrderStatus;
   notes?: string | null;
@@ -320,6 +337,7 @@ export interface ApiKitchenOrder {
   table?: { id: string; tableNumber: string } | null;
   saleId?: string | null;
   sale?: { id: string; transactionNumber: string } | null;
+  items?: ApiKitchenOrderItem[];
   completedBy?: ApiActor | null;
   createdAt: string;
   updatedAt?: string;

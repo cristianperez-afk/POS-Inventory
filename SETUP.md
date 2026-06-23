@@ -53,7 +53,7 @@ npm run db:fix-sequences
 npm run dev
 ```
 
-Frontend: `http://localhost:5173`
+Frontend: `http://localhost:3003`
 
 Backend: `http://localhost:3000`
 

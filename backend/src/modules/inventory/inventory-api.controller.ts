@@ -98,6 +98,15 @@ export class InventoryApiController {
     return this.inventoryApiService.listKitchenOrders(request.headers, query);
   }
 
+  @Patch('kitchen-orders/:id/status')
+  updateKitchenOrderStatus(
+    @Req() request: RequestLike,
+    @Param('id') id: string,
+    @Body() body: { status?: string },
+  ) {
+    return this.inventoryApiService.updateKitchenOrderStatus(request.headers, id, body);
+  }
+
   @Get('suppliers')
   listSuppliers(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
     return this.inventoryApiService.listSuppliers(request.headers, query);

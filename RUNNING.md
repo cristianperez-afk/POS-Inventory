@@ -8,7 +8,7 @@ Run only these two services:
 
 ```text
 POS backend:  http://localhost:3000
-Frontend:     http://127.0.0.1:5173
+Frontend:     http://127.0.0.1:3003
 ```
 
 ```powershell
@@ -24,7 +24,7 @@ npm.cmd run dev -- --host 127.0.0.1
 Open:
 
 ```text
-http://127.0.0.1:5173
+http://127.0.0.1:3003
 ```
 
 ## Before Starting
