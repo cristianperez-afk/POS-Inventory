@@ -20,6 +20,35 @@ function getStaffTypeLabel(staffType: StaffType, storeType?: string | null) {
   return getStaffTypeOptions(storeType).find((option) => option.value === staffType)?.label ?? 'POS Staff';
 }
 
+type AccessRole = 'POS_ADMIN' | 'INVENTORY_ADMIN' | 'POS_STAFF' | 'INVENTORY_STAFF' | 'MANAGER';
+
+function getAccessRoleOptions(storeType?: string | null): Array<{ value: AccessRole; label: string }> {
+  const storeLabel = storeType === 'RESTAURANT' ? 'Restaurant' : 'Retail';
+
+  return [
+    { value: 'POS_ADMIN', label: `${storeLabel} POS Admin` },
+    { value: 'INVENTORY_ADMIN', label: `${storeLabel} Inventory Admin` },
+    { value: 'POS_STAFF', label: `${storeLabel} POS Staff` },
+    { value: 'INVENTORY_STAFF', label: `${storeLabel} Inventory Staff` },
+    { value: 'MANAGER', label: `${storeLabel} Manager` },
+  ];
+}
+
+function getAccessRolePayload(accessRole: AccessRole) {
+  if (accessRole === 'POS_ADMIN') return { role: 'POS_ADMIN', staff_type: 'POS_STAFF' };
+  if (accessRole === 'INVENTORY_ADMIN') return { role: 'INVENTORY_ADMIN', staff_type: 'INVENTORY_STAFF' };
+  return { role: 'STAFF', staff_type: accessRole };
+}
+
+function getAccessRoleFromUser(user: StaffUser): AccessRole {
+  if (user.role === 'POS_ADMIN' || user.role === 'INVENTORY_ADMIN') return user.role;
+  return user.staff_type ?? 'POS_STAFF';
+}
+
+function getAccessRoleLabel(user: StaffUser, storeType?: string | null) {
+  return getAccessRoleOptions(storeType).find((option) => option.value === getAccessRoleFromUser(user))?.label ?? user.role;
+}
+
 interface StaffUser {
   id: number;
   full_name: string;
@@ -50,12 +79,12 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
   const [deactivatingUser, setDeactivatingUser] = useState<StaffUser | null>(null);
   const [activatingUser, setActivatingUser] = useState<StaffUser | null>(null);
   const [deletingUser, setDeletingUser] = useState<StaffUser | null>(null);
-  const staffTypeOptions = getStaffTypeOptions(currentUser?.store_type);
+  const accessRoleOptions = getAccessRoleOptions(currentUser?.store_type);
 
   const [formName, setFormName] = useState('');
   const [formEmail, setFormEmail] = useState('');
   const [formPassword, setFormPassword] = useState('');
-  const [formStaffType, setFormStaffType] = useState<Exclude<StaffType, null>>('POS_STAFF');
+  const [formAccessRole, setFormAccessRole] = useState<AccessRole>('POS_STAFF');
   const [showPassword, setShowPassword] = useState(false);
   useEffect(() => {
     const loadStaff = async () => {
@@ -89,7 +118,7 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
     setFormName('');
     setFormEmail('');
     setFormPassword('');
-    setFormStaffType('POS_STAFF');
+    setFormAccessRole('POS_STAFF');
     setShowPassword(false);
     setError('');
     setShowModal(true);
@@ -100,7 +129,7 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
     setFormName(user.full_name);
     setFormEmail(user.email);
     setFormPassword('');
-    setFormStaffType(user.staff_type ?? 'POS_STAFF');
+    setFormAccessRole(getAccessRoleFromUser(user));
     setShowPassword(false);
     setError('');
     setShowModal(true);
@@ -118,6 +147,7 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
     setError('');
 
     try {
+      const accessRolePayload = getAccessRolePayload(formAccessRole);
       const response = await fetch(`${getApiBaseUrl()}/admin/staff${editingUser ? `/${editingUser.id}` : ''}`, {
         method: editingUser ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -126,7 +156,8 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
           full_name: formName,
           email: formEmail,
           password: formPassword || undefined,
-          staff_type: formStaffType,
+          staff_type: accessRolePayload.staff_type,
+          role: accessRolePayload.role,
         }),
       });
       const data = await response.json();
@@ -235,7 +266,7 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
 
   return (
     <div className="flex h-screen">
-      <Sidebar currentPage="admin-dashboard" onNavigate={onNavigate} onLogout={onLogout} isAdmin storeBrand={storeBrand} userName={currentUser?.full_name} storeType={currentUser?.store_type} />
+      <Sidebar currentPage="admin-dashboard" onNavigate={onNavigate} onLogout={onLogout} isAdmin storeBrand={storeBrand} userName={currentUser?.full_name} userRole={currentUser?.role} storeType={currentUser?.store_type} />
 
       <div className="flex-1 overflow-auto bg-background">
         <div className="p-8">
@@ -292,7 +323,7 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
                       <td className="px-6 py-4">{user.id}</td>
                       <td className="px-6 py-4">{user.full_name}</td>
                       <td className="px-6 py-4">{user.email}</td>
-                      <td className="px-6 py-4">{user.role}</td>
+                      <td className="px-6 py-4">{getAccessRoleLabel(user, user.store_type ?? currentUser?.store_type)}</td>
                       <td className="px-6 py-4">{getStaffTypeLabel(user.staff_type, user.store_type ?? currentUser?.store_type)}</td>
                       <td className="px-6 py-4">{user.store_id}</td>
                       <td className="px-6 py-4">{statusBadge(user)}</td>
@@ -424,14 +455,14 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
                 </div>
               </div>
               <div>
-                <label className="block mb-2 font-medium">Staff Type <span className="text-red-500">*</span></label>
+                <label className="block mb-2 font-medium">Role <span className="text-red-500">*</span></label>
                 <select
-                  value={formStaffType}
-                  onChange={(event) => setFormStaffType(event.target.value as Exclude<StaffType, null>)}
+                  value={formAccessRole}
+                  onChange={(event) => setFormAccessRole(event.target.value as AccessRole)}
                   required
                   className="w-full rounded-lg border border-border bg-input-background px-4 py-2 focus:outline-none focus:ring-2 focus:ring-primary"
                 >
-                  {staffTypeOptions.map((option) => (
+                  {accessRoleOptions.map((option) => (
                     <option key={option.value} value={option.value}>
                       {option.label}
                     </option>

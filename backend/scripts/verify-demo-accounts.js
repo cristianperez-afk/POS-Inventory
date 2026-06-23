@@ -13,6 +13,8 @@ const demoAccounts = [
   ['retailstaff@pos.com', 'retailstaffpos123'],
   ['retailstaff@inventory.com', 'retailstaffinventory123'],
   ['retailstaff@manager.com', 'retailstaffmanager123'],
+  ['posadmin@example.com', 'password123'],
+  ['inventoryadmin@example.com', 'password123'],
 ];
 
 const pool = new Pool({

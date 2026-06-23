@@ -13,6 +13,7 @@ interface SidebarProps {
   isAdmin?: boolean;
   storeBrand?: StoreBrand;
   userName?: string | null;
+  userRole?: string | null;
   storeType?: 'RESTAURANT' | 'RETAIL_STORE' | string | null;
   staffType?: StaffType;
   inventoryEnabled?: boolean;
@@ -29,7 +30,7 @@ type MenuItem = {
   }>;
 };
 
-export function Sidebar({ currentPage, onNavigate, onLogout, isAdmin = false, storeBrand, userName, storeType = 'RESTAURANT', staffType = 'POS_STAFF', inventoryEnabled = true }: SidebarProps) {
+export function Sidebar({ currentPage, onNavigate, onLogout, isAdmin = false, storeBrand, userName, userRole, storeType = 'RESTAURANT', staffType = 'POS_STAFF', inventoryEnabled = true }: SidebarProps) {
   const SIDEBAR_COLLAPSED_STORAGE_KEY = 'bukolabs-pos-sidebar-collapsed';
   const isRetail = storeType === 'RETAIL_STORE';
   const { settings } = useStoreSettings();
@@ -103,7 +104,7 @@ export function Sidebar({ currentPage, onNavigate, onLogout, isAdmin = false, st
   const defaultTitle = isRetail ? 'Retail Store' : 'The Restaurant';
   const headerTitle = storeBrand?.name || defaultTitle;
   const defaultLogo = getDefaultStoreLogo(storeType);
-  const userRoleLabel = isAdmin ? 'Admin' : getStaffTypeLabel(staffType);
+  const userRoleLabel = getUserRoleLabel(userRole, isAdmin, staffType);
   const closeManagementGroups = () => {
     setOpenGroups({
       Store: false,
@@ -365,6 +366,13 @@ function getStaffTypeLabel(staffType: StaffType) {
   if (staffType === 'INVENTORY_STAFF') return 'Inventory Staff';
   if (staffType === 'MANAGER') return 'Manager';
   return 'POS Staff';
+}
+
+function getUserRoleLabel(role: string | null | undefined, isAdmin: boolean, staffType: StaffType) {
+  if (role === 'POS_ADMIN') return 'POS Admin';
+  if (role === 'INVENTORY_ADMIN') return 'Inventory Admin';
+  if (isAdmin) return 'Admin';
+  return getStaffTypeLabel(staffType);
 }
 
 function getInventoryItems(isRetail: boolean, canManageUsers: boolean): MenuItem['children'] {

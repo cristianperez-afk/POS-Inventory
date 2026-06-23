@@ -160,6 +160,16 @@ export default function App() {
       return;
     }
 
+    if (user.role === 'POS_ADMIN') {
+      navigateTo(getDefaultPageForUser(user));
+      return;
+    }
+
+    if (user.role === 'INVENTORY_ADMIN') {
+      navigateTo(getDefaultPageForUser(user));
+      return;
+    }
+
     if (user.role === 'STAFF' && user.store_type === 'RETAIL_STORE') {
       navigateTo(getDefaultPageForUser(user));
       return;
@@ -189,6 +199,10 @@ export default function App() {
 
     if (isInventoryPage(page) && !INVENTORY_MODULES_ENABLED) {
       page = currentUser ? getDefaultPageForUser(currentUser) : 'login';
+    }
+
+    if (currentUser && page !== 'login' && !canAccessPage(currentUser, page)) {
+      page = getDefaultPageForUser(currentUser);
     }
 
     if (page === 'login') {
@@ -338,6 +352,7 @@ export default function App() {
                   onNavigate={navigateTo}
                   isAdmin={currentUser?.role === 'ADMIN'}
                   userName={currentUser?.full_name}
+                  userRole={currentUser?.role}
                   storeType={currentUser?.store_type}
                   staffType={currentUser?.staff_type}
                   inventoryEnabled={INVENTORY_MODULES_ENABLED}
@@ -357,6 +372,9 @@ export default function App() {
 
 function getDefaultPageForUser(user: AuthenticatedUser): Page {
   if (user.role === 'SUPERADMIN') return 'superadmin-dashboard';
+  if (user.role === 'INVENTORY_ADMIN') return INVENTORY_MODULES_ENABLED ? 'inventory-dashboard' : 'login';
+  if (user.role === 'POS_ADMIN' && user.store_type === 'RETAIL_STORE') return 'retail-pos-dashboard';
+  if (user.role === 'POS_ADMIN' && user.store_type === 'RESTAURANT') return 'pos-dashboard';
   if (INVENTORY_MODULES_ENABLED && user.role === 'STAFF' && user.staff_type === 'INVENTORY_STAFF') return 'inventory-dashboard';
   if (INVENTORY_MODULES_ENABLED && user.role === 'STAFF' && user.staff_type === 'MANAGER') return 'inventory-dashboard';
   if (user.store_type === 'RETAIL_STORE') return 'retail-pos-dashboard';
@@ -379,6 +397,14 @@ function canAccessPage(user: AuthenticatedUser, page: Page) {
 
   if (page === 'login') return true;
   if (user.role === 'SUPERADMIN') return page === 'superadmin-dashboard';
+  if (user.role === 'POS_ADMIN') {
+    return isPosPage(page);
+  }
+
+  if (user.role === 'INVENTORY_ADMIN') {
+    return isInventoryPage(page);
+  }
+
   if (user.role === 'ADMIN') {
     return [
       'admin-dashboard',

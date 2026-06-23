@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { DatabaseService } from '../../../shared/database/database.service';
 
 type StaffType = 'POS_STAFF' | 'INVENTORY_STAFF' | 'MANAGER';
+type StaffRole = 'STAFF' | 'POS_ADMIN' | 'INVENTORY_ADMIN';
 
 @Injectable()
 export class AdminService {
@@ -17,6 +18,7 @@ export class AdminService {
     email: string;
     password: string;
     staffType: StaffType;
+    role?: StaffRole;
   }) {
     return this.databaseService.createStaffAccount(input);
   }
@@ -28,6 +30,7 @@ export class AdminService {
     email: string;
     password?: string;
     staffType: StaffType;
+    role?: StaffRole;
   }) {
     return this.databaseService.updateStaffAccountForAdmin(input);
   }

@@ -1,6 +1,8 @@
 require('dotenv').config();
 
 const bcrypt = require('bcrypt');
+const fs = require('fs');
+const path = require('path');
 const { Pool } = require('pg');
 
 const demoStores = {
@@ -16,76 +18,20 @@ const demoStores = {
 
 const demoAccounts = [
   {
-    fullName: 'Demo Superadmin',
-    email: 'superadmin@gmail.com',
-    password: 'superadmin123',
-    role: 'SUPERADMIN',
-    store: null,
-    staffType: null,
-  },
-  {
-    fullName: 'Restaurant Admin',
-    email: 'restaurantadmin@gmail.com',
-    password: 'restaurantadmin123',
-    role: 'ADMIN',
-    store: 'restaurant',
-    staffType: null,
-  },
-  {
-    fullName: 'Restaurant POS Staff',
-    email: 'resstaff@pos.com',
-    password: 'resstaffpos123',
-    role: 'STAFF',
+    fullName: 'POS Admin',
+    email: 'posadmin@example.com',
+    password: 'password123',
+    role: 'POS_ADMIN',
     store: 'restaurant',
     staffType: 'POS_STAFF',
   },
   {
-    fullName: 'Restaurant Inventory Staff',
-    email: 'resstaff@inventory.com',
-    password: 'resstaffinventory123',
-    role: 'STAFF',
+    fullName: 'Inventory Admin',
+    email: 'inventoryadmin@example.com',
+    password: 'password123',
+    role: 'INVENTORY_ADMIN',
     store: 'restaurant',
     staffType: 'INVENTORY_STAFF',
-  },
-  {
-    fullName: 'Restaurant Manager',
-    email: 'resstaff@manager.com',
-    password: 'resstaffmanager123',
-    role: 'STAFF',
-    store: 'restaurant',
-    staffType: 'MANAGER',
-  },
-  {
-    fullName: 'Retail Admin',
-    email: 'retailadmin@gmail.com',
-    password: 'retailadmin123',
-    role: 'ADMIN',
-    store: 'retail',
-    staffType: null,
-  },
-  {
-    fullName: 'Retail POS Staff',
-    email: 'retailstaff@pos.com',
-    password: 'retailstaffpos123',
-    role: 'STAFF',
-    store: 'retail',
-    staffType: 'POS_STAFF',
-  },
-  {
-    fullName: 'Retail Inventory Staff',
-    email: 'retailstaff@inventory.com',
-    password: 'retailstaffinventory123',
-    role: 'STAFF',
-    store: 'retail',
-    staffType: 'INVENTORY_STAFF',
-  },
-  {
-    fullName: 'Retail Manager',
-    email: 'retailstaff@manager.com',
-    password: 'retailstaffmanager123',
-    role: 'STAFF',
-    store: 'retail',
-    staffType: 'MANAGER',
   },
 ];
 
@@ -128,15 +74,17 @@ async function main() {
 
   try {
     await client.query('BEGIN');
+    await ensureRoleConstraint(client);
 
-    const storeIds = {
-      restaurant: await ensureStore(client, storeColumns, demoStores.restaurant),
-      retail: await ensureStore(client, storeColumns, demoStores.retail),
-    };
+    const storeIds = {};
 
     for (const account of demoAccounts) {
+      if (account.store && !storeIds[account.store]) {
+        storeIds[account.store] = await ensureStore(client, storeColumns, demoStores[account.store]);
+      }
+
       const storeId = account.store ? storeIds[account.store] : null;
-      await upsertUser(client, userColumns, account, storeId);
+      await insertMissingUser(client, userColumns, account, storeId);
     }
 
     await client.query('COMMIT');
@@ -147,7 +95,12 @@ async function main() {
     client.release();
   }
 
-  console.log(`Seeded ${demoAccounts.length} demo accounts.`);
+  console.log(`Ensured ${demoAccounts.length} missing role demo accounts.`);
+}
+
+async function ensureRoleConstraint(client) {
+  const sqlPath = path.join(__dirname, '..', 'sql', 'pos-inventory-admin-roles.sql');
+  await client.query(fs.readFileSync(sqlPath, 'utf8'));
 }
 
 async function getSchema() {
@@ -234,39 +187,14 @@ async function ensureStore(client, storeColumns, store) {
   return inserted.rows[0].id;
 }
 
-async function upsertUser(client, userColumns, account, storeId) {
-  const passwordHash = await bcrypt.hash(account.password, 10);
+async function insertMissingUser(client, userColumns, account, storeId) {
   const existing = await client.query('SELECT id FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1', [account.email]);
 
   if (existing.rows[0]?.id) {
-    const updates = [
-      `${quote(userColumns.fullName)} = $1`,
-      `email = $2`,
-      `${quote(userColumns.role)} = $3`,
-      `${quote(userColumns.password)} = $4`,
-    ];
-    const values = [account.fullName, account.email, account.role, passwordHash];
-
-    if (userColumns.storeId) {
-      values.push(storeId);
-      updates.push(`${quote(userColumns.storeId)} = $${values.length}`);
-    }
-
-    if (userColumns.staffType) {
-      values.push(account.staffType);
-      updates.push(`${quote(userColumns.staffType)} = $${values.length}`);
-    }
-
-    if (userColumns.status) {
-      values.push('ACTIVE');
-      updates.push(`${quote(userColumns.status)} = $${values.length}`);
-    }
-
-    values.push(existing.rows[0].id);
-    await client.query(`UPDATE users SET ${updates.join(', ')} WHERE id = $${values.length}`, values);
     return;
   }
 
+  const passwordHash = await bcrypt.hash(account.password, 10);
   const insertColumns = ['email', quote(userColumns.fullName), quote(userColumns.role), quote(userColumns.password)];
   const values = [account.email, account.fullName, account.role, passwordHash];
   const placeholders = ['$1', '$2', '$3', '$4'];

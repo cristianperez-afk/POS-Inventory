@@ -136,7 +136,7 @@ function toInventoryUser(user: AuthenticatedUser | null): InventoryUser | null {
     id: String(user.id),
     name: user.full_name,
     email: user.email,
-    role: user.role === 'ADMIN' ? 'Admin' : user.staff_type === 'MANAGER' ? 'Manager' : 'Staff',
+    role: user.role === 'ADMIN' || user.role === 'INVENTORY_ADMIN' ? 'Admin' : user.staff_type === 'MANAGER' ? 'Manager' : 'Staff',
     status: 'Active',
     businessId: String(user.store_id ?? user.id),
     modules: user.store_type === 'RESTAURANT' ? ['RESTAURANT'] : ['RETAIL'],
