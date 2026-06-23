@@ -120,7 +120,7 @@ Run normal POS work with the POS backend only:
 
 ```text
 POS backend:       http://localhost:3000
-POS frontend:      http://127.0.0.1:5173
+POS frontend:      http://127.0.0.1:3003
 ```
 
 The POS frontend sends:

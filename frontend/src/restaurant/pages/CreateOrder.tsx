@@ -134,7 +134,7 @@ function toOrderListFormat(order: any, paid: boolean) {
 }
 
 export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout, storeBrand, userName, storeType, staffType }: CreateOrderProps) {
-  const { addOrder, orders, queuedOrders } = useOrders();
+  const { addOrder, orders, queuedOrders, reloadOrders } = useOrders();
   const { tables } = useTables();
   const { settings, discounts } = useStoreSettings();
   const posMenuQuery = usePosMenuQuery(currentUser?.id);
@@ -211,14 +211,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
             itemId: modifier.itemId,
             itemName: modifier.itemName,
           }))
-        // ponytail: fallback choices until POS reliably receives saved recipe modifiers.
-        : (product.ingredients ?? []).map((ingredient: any): Modifier => ({
-            id: `less-${ingredient.id}`,
-            name: `Less ${ingredient.name}`,
-            type: 'remove',
-            itemId: ingredient.inventory_item_id ?? ingredient.itemId,
-            itemName: ingredient.name,
-          })),
+        : [],
     }));
   }, [posMenuQuery.data, storeBrand?.logo]);
   const dynamicMenuCategories = useMemo(
@@ -622,6 +615,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
     additional_price: ingredient.additional_price,
     customization_type: ingredient.customization_type,
     removed: ingredient.removed,
+    notes: ingredient.notes,
   });
   const serializeItemForOrder = (item: CartItem) => ({
     id: item.id,
@@ -662,9 +656,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       serviceFee: orderDetails.serviceFee,
       tax: orderDetails.tax,
       total: orderDetails.total,
-      orderStatus: paid && !orderDetails.isQueued
-        ? (orderDetails.tableNumber || (Array.isArray(orderDetails.tableNumbers) && orderDetails.tableNumbers.length > 0) ? 'SERVED' : 'COMPLETED')
-        : 'PENDING',
+      orderStatus: 'PENDING',
       paymentStatus: paid ? 'PAID' : 'NOT_PAID',
       items: orderDetails.items.map(serializeItemForOrder),
       payment: paid && payment ? {
@@ -784,6 +776,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       } else {
         addOrder(orderForList);
       }
+      await reloadOrders();
       onOrderCreated(savedOrderDetails);
       setSuccessOrderDetails(savedOrderDetails);
       setShowPaymentChoice(false);
@@ -822,6 +815,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
           return;
         }
         addOrder({ ...toOrderListFormat(paidOrder, true), cashReceived: amountPaid, changeGiven: change });
+        await reloadOrders();
         onOrderCreated(paidOrder);
         setSuccessOrderDetails(paidOrder);
       }

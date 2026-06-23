@@ -35,6 +35,7 @@ declare global {
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const bridgeHeaders: Record<string, string> = {};
   if (typeof window !== 'undefined' && window.__POS_INVENTORY_USER__) {
+    bridgeHeaders['x-pos-user-id'] = window.__POS_INVENTORY_USER__.id;
     bridgeHeaders['x-pos-bridge-email'] = window.__POS_INVENTORY_USER__.email;
     bridgeHeaders['x-pos-store-type'] = window.__POS_STORE_TYPE__ ?? '';
   }

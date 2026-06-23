@@ -7,6 +7,7 @@ import {
   createRecipe,
   deleteRecipe,
   updateRecipe,
+  updateKitchenOrderStatus,
   voidKitchenOrder,
 } from '../../../app/api/client';
 import {
@@ -85,15 +86,41 @@ export function useRestaurantKitchenOrdersQuery() {
     select: (orders) =>
       orders.map((order: ApiKitchenOrder) => ({
         id: order.id,
+        orderNumber: order.orderNumber ?? order.sale?.transactionNumber ?? order.receiptNo,
         receiptNo: order.receiptNo,
+        customerName: order.customerName ?? 'Walk-in Customer',
+        orderType: order.orderType ?? 'DINE_IN',
+        tableNumber: order.tableNumber ?? order.table?.tableNumber ?? '',
+        itemCount: order.itemCount ?? order.items?.reduce((sum, item) => sum + Number(item.quantity ?? 0), 0) ?? order.quantity,
         recipeId: order.recipeId,
         recipeName: order.recipe?.name ?? 'Recipe',
         quantity: order.quantity,
-        status: order.status.toLowerCase(),
+        status: order.status === 'VOIDED' ? 'cancelled' : order.status.toLowerCase(),
         orderedAt: order.createdAt,
         completedBy: order.completedBy?.email ?? 'shared-backend',
         notes: order.notes ?? '',
         modifiers: parseOrderModifiers(order.notes),
+        items: order.items?.length
+          ? order.items.map((item) => ({
+              id: String(item.id),
+              name: item.name,
+              quantity: Number(item.quantity ?? 0),
+              notes: item.notes ?? '',
+              addedIngredients: item.addedIngredients ?? [],
+              removedIngredients: item.removedIngredients ?? [],
+              modifiers: item.modifiers ?? [],
+              specialInstructions: item.specialInstructions ?? [],
+            }))
+          : [{
+              id: order.id,
+              name: order.recipe?.name ?? 'Recipe',
+              quantity: Number(order.quantity ?? 0),
+              notes: order.notes ?? '',
+              addedIngredients: [],
+              removedIngredients: [],
+              modifiers: parseOrderModifiers(order.notes),
+              specialInstructions: order.notes ? [order.notes] : [],
+            }],
         voidReason: order.voidReason,
         voidedAt: order.voidedAt,
       })),
@@ -140,5 +167,13 @@ export function useVoidRestaurantKitchenOrderMutation() {
       domainQueryKeys.inventory,
       domainQueryKeys.stockMovements,
     ],
+  );
+}
+
+export function useUpdateRestaurantKitchenOrderStatusMutation() {
+  return useDomainMutation(
+    ({ id, status }: { id: string; status: ApiKitchenOrder['status'] }) =>
+      updateKitchenOrderStatus(id, status),
+    [domainQueryKeys.kitchenOrders],
   );
 }
