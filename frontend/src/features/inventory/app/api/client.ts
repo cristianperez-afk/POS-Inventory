@@ -140,6 +140,33 @@ export function deleteInventoryItem(id: string) {
   });
 }
 
+export interface CostHistoryEntry {
+  id: string;
+  quantityReceived: number;
+  unitCost: number;
+  totalCost: number;
+  dateReceived: string;
+  receiptNumber: string | null;
+  orderNumber: string | null;
+  supplierName: string | null;
+}
+
+export interface ItemCostHistory {
+  itemId: string;
+  name: string;
+  unit: string | null;
+  currentStock: number;
+  weightedAverageCost: number;
+  totalReceipts: number;
+  totalQuantityReceived: number;
+  totalCost: number;
+  entries: CostHistoryEntry[];
+}
+
+export function getItemCostHistory(id: string) {
+  return request<ItemCostHistory>(`/api/inventory/${id}/cost-history`);
+}
+
 export function getStockMovements(params?: {
   module?: BusinessModule;
   itemId?: string;
