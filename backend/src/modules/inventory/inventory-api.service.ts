@@ -675,6 +675,11 @@ export class InventoryApiService {
                   o.payment_status,
                   o.created_at,
                   o.completed_at,
+                  o.payment_at,
+                  o.preparing_started_at,
+                  o.ready_at,
+                  o.table_started_at,
+                  o.table_ended_at,
                   p.payment_number,
                   cashier.full_name AS cashier_name,
                   cashier.email AS cashier_email,
@@ -686,9 +691,13 @@ export class InventoryApiService {
                         'id', oi.id,
                         'name', oi.product_name,
                         'quantity', oi.quantity,
+                        'price', oi.unit_price,
+                        'prepTimeMinutes', COALESCE(prod.preparation_time_minutes, 0),
+                        'ingredients', COALESCE(default_ingredients.items, '[]'::json),
                         'notes', oi.notes,
                         'addedIngredients', COALESCE(customizations.added, '[]'::json),
                         'removedIngredients', COALESCE(customizations.removed, '[]'::json),
+                        'replacedIngredients', COALESCE(customizations.replaced, '[]'::json),
                         'modifiers', COALESCE(customizations.modifiers, '[]'::json),
                         'specialInstructions', COALESCE(customizations.instructions, '[]'::json)
                       )
@@ -710,6 +719,9 @@ export class InventoryApiService {
                     COALESCE(json_agg(DISTINCT COALESCE(oic.original_ingredient_name, oic.notes)) FILTER (
                       WHERE oic.customization_type = 'REMOVE'
                     ), '[]'::json) AS removed,
+                    COALESCE(json_agg(DISTINCT CONCAT(COALESCE(oic.original_ingredient_name, 'Ingredient'), ' -> ', COALESCE(oic.replacement_ingredient_name, 'Replacement'))) FILTER (
+                      WHERE oic.customization_type = 'REPLACE'
+                    ), '[]'::json) AS replaced,
                     COALESCE(json_agg(DISTINCT oic.notes) FILTER (
                       WHERE oic.notes IS NOT NULL AND oic.customization_type IN ('REMOVE', 'ADD', 'EXTRA', 'CHANGE_QUANTITY', 'QUANTITY_CHANGE', 'REPLACE')
                     ), '[]'::json) AS modifiers,
@@ -719,6 +731,14 @@ export class InventoryApiService {
                   FROM order_item_customizations oic
                   WHERE oic.order_item_id = oi.id
                 ) customizations ON TRUE
+                LEFT JOIN products prod ON prod.id = oi.product_id
+                LEFT JOIN LATERAL (
+                  SELECT COALESCE(json_agg(DISTINCT ii.ingredient_name) FILTER (WHERE ii.ingredient_name IS NOT NULL), '[]'::json) AS items
+                  FROM product_ingredients pi
+                  JOIN ingredients_inventory ii ON ii.id = pi.ingredient_id
+                  WHERE pi.product_id = oi.product_id
+                    AND pi.store_id = o.store_id
+                ) default_ingredients ON TRUE
                 LEFT JOIN payments p ON p.order_id = o.id
                 LEFT JOIN users cashier ON cashier.id = o.cashier_id
                 WHERE o.store_id = (SELECT store_id FROM scoped_user)
@@ -736,6 +756,8 @@ export class InventoryApiService {
                 item_count AS "itemCount",
                 NULL::text AS "recipeId",
                 quantity,
+                total_amount AS "totalAmount",
+                payment_status AS "paymentStatus",
                 CASE
                   WHEN payment_status IN ('VOIDED', 'VOID', 'REFUNDED') OR order_status = 'CANCELLED' THEN 'CANCELLED'
                   WHEN order_status = 'SERVED' THEN 'COMPLETED'
@@ -743,6 +765,12 @@ export class InventoryApiService {
                 END AS status,
                 created_at AS "createdAt",
                 COALESCE(completed_at, created_at) AS "updatedAt",
+                payment_at AS "paymentAt",
+                preparing_started_at AS "preparingStartedAt",
+                ready_at AS "readyAt",
+                completed_at AS "completedAt",
+                table_started_at AS "tableStartedAt",
+                table_ended_at AS "tableEndedAt",
                 json_build_object('name', item_summary) AS recipe,
                 json_build_object('name', cashier_name, 'email', cashier_email) AS "completedBy",
                 items,
@@ -790,7 +818,10 @@ export class InventoryApiService {
           )
           UPDATE orders
           SET order_status = $3::varchar,
+              preparing_started_at = CASE WHEN $3::varchar = 'PREPARING' THEN COALESCE(preparing_started_at, CURRENT_TIMESTAMP) ELSE preparing_started_at END,
+              ready_at = CASE WHEN $3::varchar = 'READY' THEN COALESCE(ready_at, CURRENT_TIMESTAMP) ELSE ready_at END,
               completed_at = CASE WHEN $3::varchar = 'COMPLETED' THEN COALESCE(completed_at, CURRENT_TIMESTAMP) ELSE completed_at END,
+              table_ended_at = CASE WHEN $3::varchar IN ('COMPLETED', 'CANCELLED') THEN COALESCE(table_ended_at, CURRENT_TIMESTAMP) ELSE table_ended_at END,
               updated_at = CURRENT_TIMESTAMP
           WHERE id = $4
             AND store_id = (SELECT store_id FROM scoped_user)

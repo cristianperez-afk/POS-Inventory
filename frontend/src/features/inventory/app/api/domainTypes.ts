@@ -309,6 +309,10 @@ export interface ApiKitchenOrderItem {
   id: string | number;
   name: string;
   quantity: number;
+  price?: number;
+  prepTimeMinutes?: number;
+  ingredients?: string[];
+  replacedIngredients?: string[];
   notes?: string | null;
   addedIngredients?: string[];
   removedIngredients?: string[];
@@ -326,6 +330,8 @@ export interface ApiKitchenOrder {
   itemCount?: number | null;
   quantity: number;
   status: KitchenOrderStatus;
+  paymentStatus?: string | null;
+  totalAmount?: number | string | null;
   notes?: string | null;
   voidReason?: string | null;
   voidedAt?: string | null;
@@ -341,6 +347,12 @@ export interface ApiKitchenOrder {
   completedBy?: ApiActor | null;
   createdAt: string;
   updatedAt?: string;
+  paymentAt?: string | null;
+  preparingStartedAt?: string | null;
+  readyAt?: string | null;
+  completedAt?: string | null;
+  tableStartedAt?: string | null;
+  tableEndedAt?: string | null;
 }
 
 export interface ApiCategory {

@@ -268,9 +268,21 @@ CREATE TABLE IF NOT EXISTS orders (
   payment_status VARCHAR(50) DEFAULT 'NOT_PAID'
     CHECK (payment_status IN ('NOT_PAID', 'PAID', 'REFUNDED', 'PARTIALLY_REFUNDED', 'VOIDED')),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  payment_at TIMESTAMP,
+  preparing_started_at TIMESTAMP,
+  ready_at TIMESTAMP,
+  table_started_at TIMESTAMP,
+  table_ended_at TIMESTAMP,
   completed_at TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE orders
+  ADD COLUMN IF NOT EXISTS payment_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS preparing_started_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS ready_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS table_started_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS table_ended_at TIMESTAMP;
 
 CREATE TABLE IF NOT EXISTS order_items (
   id BIGSERIAL PRIMARY KEY,
@@ -316,6 +328,12 @@ ALTER TABLE order_item_customizations
   ADD COLUMN IF NOT EXISTS store_id BIGINT REFERENCES stores(id) ON DELETE CASCADE,
   ADD COLUMN IF NOT EXISTS original_ingredient_id BIGINT REFERENCES ingredients_inventory(id) ON DELETE SET NULL,
   ADD COLUMN IF NOT EXISTS replacement_ingredient_id BIGINT REFERENCES ingredients_inventory(id) ON DELETE SET NULL;
+
+ALTER TABLE order_item_customizations
+  ALTER COLUMN product_ingredient_id DROP NOT NULL,
+  ALTER COLUMN ingredient_alternative_id DROP NOT NULL,
+  ALTER COLUMN original_ingredient_id DROP NOT NULL,
+  ALTER COLUMN replacement_ingredient_id DROP NOT NULL;
 
 CREATE TABLE IF NOT EXISTS inventory_deductions (
   id BIGSERIAL PRIMARY KEY,
