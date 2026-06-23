@@ -87,18 +87,21 @@ const cleanList = (items?: string[]) =>
 
 function DetailList({ label, values }: { label: string; values?: string[] }) {
   const cleanValues = cleanList(values);
-  if (cleanValues.length === 0) return null;
 
   return (
     <div>
       <p className="text-[12px] font-semibold text-foreground">{label}</p>
-      <div className="mt-1 flex flex-wrap gap-1.5">
-        {cleanValues.map((value) => (
-          <span key={value} className="rounded border border-border bg-muted/40 px-2 py-1 text-[12px] text-muted-foreground">
-            {value}
-          </span>
-        ))}
-      </div>
+      {cleanValues.length > 0 ? (
+        <div className="mt-1 flex flex-wrap gap-1.5">
+          {cleanValues.map((value) => (
+            <span key={value} className="rounded border border-border bg-muted/40 px-2 py-1 text-[12px] text-muted-foreground">
+              {value}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-1 text-[12px] text-muted-foreground">None</p>
+      )}
     </div>
   );
 }
@@ -233,20 +236,20 @@ export function POSKitchenOrders() {
           </div>
         </div>
 
-      <div className="overflow-hidden rounded-lg border border-border">
-        <table className="w-full">
+      <div className="overflow-x-auto rounded-lg border border-border">
+        <table className="min-w-[1260px] w-full">
           <thead className="bg-muted/50">
             <tr>
               <th className="w-10 px-3 py-3" />
-              <th className="px-3 py-3 text-left text-xs font-medium text-foreground">Order #</th>
-              <th className="px-3 py-3 text-left text-xs font-medium text-foreground">Receipt #</th>
-              <th className="px-3 py-3 text-left text-xs font-medium text-foreground">Customer Name</th>
-              <th className="px-3 py-3 text-left text-xs font-medium text-foreground">Order Type</th>
-              <th className="px-3 py-3 text-left text-xs font-medium text-foreground">Table Number</th>
-              <th className="px-3 py-3 text-left text-xs font-medium text-foreground">Order Time</th>
-              <th className="px-3 py-3 text-center text-xs font-medium text-foreground">Total Items</th>
-              <th className="px-3 py-3 text-left text-xs font-medium text-foreground">Status</th>
-              <th className="px-3 py-3 text-left text-xs font-medium text-foreground">Actions</th>
+              <th className="w-[105px] px-3 py-3 text-left text-xs font-medium text-foreground">Order #</th>
+              <th className="w-[120px] px-3 py-3 text-left text-xs font-medium text-foreground">Receipt #</th>
+              <th className="w-[170px] px-3 py-3 text-left text-xs font-medium text-foreground">Customer Name</th>
+              <th className="w-[105px] px-3 py-3 text-left text-xs font-medium text-foreground">Order Type</th>
+              <th className="w-[120px] px-3 py-3 text-left text-xs font-medium text-foreground">Table Number</th>
+              <th className="w-[165px] px-3 py-3 text-left text-xs font-medium text-foreground">Order Time</th>
+              <th className="w-[95px] px-3 py-3 text-center text-xs font-medium text-foreground">Total Items</th>
+              <th className="w-[140px] px-3 py-3 text-left text-xs font-medium text-foreground">Status</th>
+              <th className="min-w-[260px] px-3 py-3 text-left text-xs font-medium text-foreground">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
@@ -263,7 +266,7 @@ export function POSKitchenOrders() {
                     <td className="px-3 py-3 text-sm text-foreground">{order.customerName || "Walk-in Customer"}</td>
                     <td className="px-3 py-3 text-sm text-foreground">{formatOrderType(order.orderType)}</td>
                     <td className="px-3 py-3 text-sm text-foreground">{order.tableNumber || "-"}</td>
-                    <td className="px-3 py-3 text-sm text-muted-foreground">{formatDateTime(order.orderedAt)}</td>
+                    <td className="whitespace-nowrap px-3 py-3 text-sm text-muted-foreground">{formatDateTime(order.orderedAt)}</td>
                     <td className="px-3 py-3 text-center text-sm text-foreground">{order.itemCount}</td>
                     <td className="px-3 py-3">
                       <span className={`inline-flex rounded-full border px-2 py-1 text-xs font-medium ${STATUS_STYLES[order.status]}`}>
@@ -271,11 +274,11 @@ export function POSKitchenOrders() {
                       </span>
                     </td>
                     <td className="px-3 py-3">
-                      <div className="flex flex-wrap gap-2">
+                      <div className="flex min-w-[250px] items-center gap-2">
                         <button
                           type="button"
                           onClick={() => setSelectedOrder(order)}
-                          className="inline-flex items-center gap-1 rounded border border-border bg-card px-2.5 py-1.5 text-xs font-medium text-foreground hover:bg-muted"
+                          className="inline-flex h-9 items-center gap-1 rounded border border-border bg-card px-3 text-xs font-medium text-foreground hover:bg-muted"
                         >
                           <Eye className="h-3.5 w-3.5" />
                           View
@@ -285,7 +288,7 @@ export function POSKitchenOrders() {
                             type="button"
                             onClick={() => handleStatus(order, action.next)}
                             disabled={updateStatus.isPending}
-                            className="inline-flex items-center gap-1 rounded bg-primary px-2.5 py-1.5 text-xs font-medium text-white hover:bg-primary/90 disabled:opacity-50"
+                            className="inline-flex h-9 items-center gap-1 rounded bg-primary px-3 text-xs font-medium text-white hover:bg-primary/90 disabled:opacity-50"
                           >
                             <ActionIcon className="h-3.5 w-3.5" />
                             {action.label}
@@ -296,7 +299,7 @@ export function POSKitchenOrders() {
                             type="button"
                             onClick={() => handleStatus(order, "cancelled")}
                             disabled={updateStatus.isPending}
-                            className="inline-flex items-center gap-1 rounded border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
+                            className="inline-flex h-9 items-center gap-1 rounded border border-red-200 bg-red-50 px-3 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
                           >
                             <X className="h-3.5 w-3.5" />
                             Cancel

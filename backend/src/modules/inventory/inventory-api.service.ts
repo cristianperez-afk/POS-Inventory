@@ -43,12 +43,19 @@ type LowStockCandidate = {
 export class InventoryApiService {
   constructor(private readonly databaseService: DatabaseService) {}
 
+  private async ensureInventoryItemOperationalColumns() {
+    await this.safeQuery(
+      `ALTER TABLE "InventoryItem" ADD COLUMN IF NOT EXISTS "expiryPeriod" TEXT`,
+    );
+  }
+
   async getCurrentUser(headers: HeadersLike) {
     const scope = await this.resolveScope(headers);
     return { user: scope.user };
   }
 
   async listInventory(headers: HeadersLike, query: Record<string, string | undefined>) {
+    await this.ensureInventoryItemOperationalColumns();
     const scope = await this.resolveScope(headers);
     const where = ['i."businessId" = $1'];
     const params: unknown[] = [scope.businessId];
@@ -70,7 +77,7 @@ export class InventoryApiService {
           i."targetCustomer", i.subcategory, i.size, i.condition,
           i.quantity, i.price, i."costPrice", i."imageUrl", i.unit,
           i."minStock", i."maxStock", i."reorderPoint", i."expiryDate",
-          i."storageTemperature", i."dateAdded", i."locationId",
+          i."expiryPeriod", i."storageTemperature", i."dateAdded", i."locationId",
           i."createdAt", i."updatedAt",
           json_build_object(
             'id', l.id,
@@ -92,6 +99,7 @@ export class InventoryApiService {
   }
 
   async createInventoryItem(headers: HeadersLike, body: Record<string, unknown>) {
+    await this.ensureInventoryItemOperationalColumns();
     const scope = await this.resolveScope(headers);
     const locationId = String(body.locationId ?? (await this.getDefaultLocationId(scope.businessId)));
     const id = randomUUID();
@@ -102,13 +110,13 @@ export class InventoryApiService {
           id, name, description, "itemType", sku, barcode, category, "targetCustomer",
           subcategory, size, condition, quantity, price, "costPrice",
           "imageUrl", unit, "minStock", "maxStock", "reorderPoint",
-          "expiryDate", "storageTemperature", "locationId", "businessId"
+          "expiryDate", "expiryPeriod", "storageTemperature", "locationId", "businessId"
         )
         VALUES (
           $1, $2, $3, $4::"InventoryItemType", $5, $6, $7, $8,
           $9, $10, $11, $12, $13, $14,
           $15, $16, $17, $18, $19,
-          $20, $21, $22, $23
+          $20, $21, $22, $23, $24
         )
         RETURNING *
       `,
@@ -133,6 +141,7 @@ export class InventoryApiService {
         body.maxStock === undefined ? null : Number(body.maxStock),
         body.reorderPoint === undefined ? null : Number(body.reorderPoint),
         body.expiryDate ?? null,
+        body.expiryPeriod ?? null,
         body.storageTemperature ?? null,
         locationId,
         scope.businessId,
@@ -143,6 +152,7 @@ export class InventoryApiService {
   }
 
   async updateInventoryItem(id: string, body: Record<string, unknown>) {
+    await this.ensureInventoryItemOperationalColumns();
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
         UPDATE "InventoryItem"
@@ -165,6 +175,9 @@ export class InventoryApiService {
           size = COALESCE($17, size),
           condition = COALESCE($18, condition),
           "locationId" = COALESCE($19, "locationId"),
+          "expiryDate" = COALESCE($20, "expiryDate"),
+          "expiryPeriod" = COALESCE($21, "expiryPeriod"),
+          "storageTemperature" = COALESCE($22, "storageTemperature"),
           "updatedAt" = CURRENT_TIMESTAMP
         WHERE id = $1
         RETURNING *
@@ -189,6 +202,9 @@ export class InventoryApiService {
         body.size ?? null,
         body.condition ?? null,
         body.locationId ?? null,
+        body.expiryDate ?? null,
+        body.expiryPeriod ?? null,
+        body.storageTemperature ?? null,
       ],
     );
 
@@ -939,11 +955,46 @@ export class InventoryApiService {
     const scope = await this.resolveScope(headers);
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
-        SELECT gr.*, COALESCE(items.items, '[]'::json) AS items
+        SELECT
+          gr.id,
+          gr."receiptNumber",
+          gr."purchaseOrderId",
+          gr."receivedById",
+          gr.notes,
+          gr."businessId",
+          gr.module,
+          to_char(gr."createdAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "createdAt",
+          json_build_object(
+            'id', po.id,
+            'orderNumber', po."orderNumber",
+            'supplier', row_to_json(s.*)
+          ) AS "purchaseOrder",
+          row_to_json(u.*) AS "receivedBy",
+          COALESCE(items.items, '[]'::json) AS items
         FROM "GoodsReceipt" gr
+        LEFT JOIN "PurchaseOrder" po ON po.id = gr."purchaseOrderId"
+        LEFT JOIN "Supplier" s ON s.id = po."supplierId"
+        LEFT JOIN "User" u ON u.id = gr."receivedById"
         LEFT JOIN LATERAL (
-          SELECT json_agg(gri.* ORDER BY gri."createdAt") AS items
+          SELECT json_agg(
+            json_build_object(
+              'id', gri.id,
+              'purchaseOrderItemId', gri."purchaseOrderItemId",
+              'inventoryItemId', gri."inventoryItemId",
+              'category', ii.category,
+              'receivedQty', gri."receivedQty",
+              'rejectedQty', gri."rejectedQty",
+              'condition', gri.condition,
+              'notes', gri.notes,
+              'createdAt', to_char(gri."createdAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+              'purchaseOrderItem', row_to_json(poi.*),
+              'inventoryItem', row_to_json(ii.*)
+            )
+            ORDER BY gri."createdAt"
+          ) AS items
           FROM "GoodsReceiptItem" gri
+          LEFT JOIN "PurchaseOrderItem" poi ON poi.id = gri."purchaseOrderItemId"
+          LEFT JOIN "InventoryItem" ii ON ii.id = gri."inventoryItemId"
           WHERE gri."goodsReceiptId" = gr.id
         ) items ON TRUE
         WHERE gr."businessId" = $1
@@ -1152,6 +1203,7 @@ export class InventoryApiService {
   // Receive (full or partial): adds accepted qty to stock with weighted-average
   // costing, writes a GoodsReceipt + StockMovements, and advances PO status.
   async receivePurchaseOrder(headers: HeadersLike, id: string, body: Record<string, unknown>) {
+    await this.ensureInventoryItemOperationalColumns();
     const scope = await this.resolveScope(headers);
     const dtoItems = Array.isArray(body.items) ? (body.items as Record<string, unknown>[]) : [];
 
@@ -1225,14 +1277,16 @@ export class InventoryApiService {
               UPDATE "InventoryItem"
               SET quantity = $1, price = $2,
                   "expiryDate" = COALESCE($3, "expiryDate"),
-                  "storageTemperature" = COALESCE($4, "storageTemperature"),
+                  "expiryPeriod" = COALESCE($4, "expiryPeriod"),
+                  "storageTemperature" = COALESCE($5, "storageTemperature"),
                   "updatedAt" = CURRENT_TIMESTAMP
-              WHERE id = $5
+              WHERE id = $6
             `,
             [
               newQuantity,
               wacPrice,
               ri.expiryDate ? new Date(String(ri.expiryDate)) : null,
+              ri.expiryPeriod ?? null,
               ri.storageTemperature ?? null,
               poItem.inventoryItemId,
             ],
@@ -1930,8 +1984,8 @@ export class InventoryApiService {
     const scope = await this.resolveScope(headers);
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
-        INSERT INTO "RestaurantSetting" (id, key, value, "businessId")
-        VALUES ($1, $2, $3::jsonb, $4)
+        INSERT INTO "RestaurantSetting" (id, key, value, "businessId", "updatedAt")
+        VALUES ($1, $2, $3::jsonb, $4, CURRENT_TIMESTAMP)
         ON CONFLICT ("businessId", key)
         DO UPDATE SET value = EXCLUDED.value, "updatedAt" = CURRENT_TIMESTAMP
         RETURNING key, value

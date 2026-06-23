@@ -77,11 +77,12 @@ export function InventoryModulePage({
   useEffect(() => {
     window.__POS_INVENTORY_USER__ = inventoryUser;
     window.__POS_STORE_TYPE__ = currentUser?.store_type ?? null;
+    appQueryClient.clear();
     return () => {
       window.__POS_INVENTORY_USER__ = null;
       window.__POS_STORE_TYPE__ = null;
     };
-  }, [currentUser?.store_type, inventoryUser]);
+  }, [currentUser?.store_type, inventoryUser?.id, inventoryUser?.email, inventoryUser?.businessId]);
 
   useEffect(() => {
     const handleApiError = (event: Event) => {

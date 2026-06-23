@@ -53,6 +53,7 @@ export function mapRestaurantInventory(items: ApiInventoryItem[]) {
     price: item.price ?? 0,
     condition: item.condition ?? 'Good',
     expiry: toDateInput(item.expiryDate),
+    expiryPeriod: item.expiryPeriod ?? '',
     location: item.location?.name ?? 'Unassigned',
     unit: item.unit ?? 'pcs',
     storageTemperature: item.storageTemperature ?? 'Dry Storage',

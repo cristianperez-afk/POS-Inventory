@@ -34,11 +34,19 @@ type StoredProduct = {
   reorderPoint?: number;
   price: number;
   expiry: string;
+  expiryPeriod?: string;
   location?: string;
   unit: string;
   storageTemperature?: string;
 };
 
+const EXPIRY_PERIOD_OPTIONS = [
+  "Early Morning",
+  "Morning",
+  "Afternoon",
+  "Evening",
+  "Midnight",
+];
 
 export function AddProduct({ onClose }: { onClose?: () => void } = {}) {
   const { currentUser } = useSession();
@@ -73,6 +81,7 @@ export function AddProduct({ onClose }: { onClose?: () => void } = {}) {
     maxStock: "",
     reorderPoint: "",
     expiryDate: "",
+    expiryPeriod: "",
     storageTemp: "",
     unit: "",
   });
@@ -100,6 +109,7 @@ export function AddProduct({ onClose }: { onClose?: () => void } = {}) {
         maxStock: product.maxStock,
         reorderPoint: product.reorderPoint,
         expiryDate: product.expiry ? new Date(`${product.expiry}T00:00:00`).toISOString() : undefined,
+        expiryPeriod: product.expiryPeriod || undefined,
         storageTemperature: product.storageTemperature || undefined,
         locationId: locations[0].id,
       });
@@ -127,6 +137,7 @@ export function AddProduct({ onClose }: { onClose?: () => void } = {}) {
       reorderPoint,
       price: Number(formData.price) || 0,
       expiry: formData.expiryDate,
+      expiryPeriod: formData.expiryPeriod,
       location: "Unassigned",
       unit: formData.unit || "pcs",
       storageTemperature: formData.storageTemp,
@@ -361,6 +372,25 @@ export function AddProduct({ onClose }: { onClose?: () => void } = {}) {
                       <Plus className="w-4 h-4" />
                     </button>
                   </div>
+                </div>
+
+                <div>
+                  <label htmlFor="expiryPeriod" className="block text-sm mb-2 text-foreground">
+                    Expiry Period *
+                  </label>
+                  <select
+                    id="expiryPeriod"
+                    name="expiryPeriod"
+                    value={formData.expiryPeriod}
+                    onChange={handleChange}
+                    className="w-full px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all appearance-none cursor-pointer"
+                    required
+                  >
+                    <option value="">Select expiry period</option>
+                    {EXPIRY_PERIOD_OPTIONS.map((option) => (
+                      <option key={option} value={option}>{option}</option>
+                    ))}
+                  </select>
                 </div>
 
               </div>

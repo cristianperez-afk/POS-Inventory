@@ -75,6 +75,18 @@ export function SessionProvider({ children }: PropsWithChildren) {
     };
   }, []);
 
+  useEffect(() => {
+    const bridgedUser = window.__POS_INVENTORY_USER__ ?? null;
+    if (!bridgedUser) return;
+
+    applyUser(bridgedUser);
+    setIsRestoringSession(false);
+  }, [
+    window.__POS_INVENTORY_USER__?.id,
+    window.__POS_INVENTORY_USER__?.email,
+    window.__POS_INVENTORY_USER__?.businessId,
+  ]);
+
   const login = async (email: string, password: string) => {
     try {
       const response = await loginUser(email, password);

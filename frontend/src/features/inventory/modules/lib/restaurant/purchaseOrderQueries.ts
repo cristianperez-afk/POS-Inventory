@@ -45,6 +45,10 @@ type RestaurantProductMergeMetadata = {
 
 type ReceiptItemQualityMetadata = {
   remarks?: string;
+  expiryDate?: string;
+  expiryPeriod?: string;
+  storageTemperature?: string;
+  qualityCriteria?: Array<{ key: string; label: string }>;
   qualityScores?: Record<string, { passed: number; total: number; remarks?: string }>;
 };
 
@@ -64,6 +68,9 @@ const toDateInput = (value?: string | null) => {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
 };
+
+const formatActorName = (actor: any) =>
+  actor?.name ?? actor?.full_name ?? actor?.fullName ?? actor?.email ?? '';
 
 export function mapRestaurantPurchaseOrders(orders: ApiPurchaseOrder[]) {
   return orders.map((order) => ({
@@ -236,12 +243,22 @@ export function useRestaurantGoodsRecordsQuery() {
         getGoodsReceipts({ module: 'RESTAURANT' }),
         getPurchaseOrders({ module: 'RESTAURANT' }),
       ]);
+      const purchaseOrderNumberById = new Map(orders.map((order) => [order.id, order.orderNumber]));
+      const purchaseOrderById = new Map(orders.map((order) => [order.id, order]));
+      const purchaseOrderItemNameById = new Map(
+        orders.flatMap((order) => (order.items ?? []).map((item) => [item.id, item.name] as const)),
+      );
       const received = receipts.map((receipt) => ({
         id: receipt.receiptNumber,
         backendId: receipt.id,
         poId: receipt.purchaseOrderId,
-        supplier: receipt.purchaseOrder?.supplier?.name ?? '',
+        poNumber: purchaseOrderNumberById.get(receipt.purchaseOrderId) ?? receipt.purchaseOrder?.orderNumber ?? receipt.purchaseOrderId,
+        supplier:
+          receipt.purchaseOrder?.supplier?.name ??
+          purchaseOrderById.get(receipt.purchaseOrderId)?.supplier?.name ??
+          '',
         receivedDate: toDateInput(receipt.createdAt),
+        receivedAt: receipt.createdAt,
         items: receipt.items?.length ?? 0,
         receivedItems: (receipt.items ?? []).map((line) => {
           const quality = parseReceiptItemNotes(line.notes);
@@ -250,16 +267,24 @@ export function useRestaurantGoodsRecordsQuery() {
             productName:
               line.purchaseOrderItem?.name ??
               line.inventoryItem?.name ??
+              purchaseOrderItemNameById.get(line.purchaseOrderItemId) ??
               'Item',
+            category:
+              line.category ??
+              line.inventoryItem?.category ??
+              line.purchaseOrderItem?.category ??
+              '',
             quantity: line.receivedQty + line.rejectedQty,
             acceptedQuantity: line.receivedQty,
             rejectedQuantity: line.rejectedQty,
             unit: line.inventoryItem?.unit ?? 'pcs',
             unitPrice: line.purchaseOrderItem?.unitPrice ?? 0,
-            expiryDate: toDateInput(line.inventoryItem?.expiryDate),
-            storageTemperature: line.inventoryItem?.storageTemperature ?? '',
+            expiryDate: toDateInput(quality.expiryDate ?? line.inventoryItem?.expiryDate),
+            expiryPeriod: quality.expiryPeriod ?? '',
+            storageTemperature: quality.storageTemperature ?? line.inventoryItem?.storageTemperature ?? '',
             condition: line.condition ?? 'Inspected',
             qualityRemarks: quality.remarks ?? '',
+            qualityCriteria: quality.qualityCriteria,
             qualityScores: quality.qualityScores,
             qualityStatus:
               line.receivedQty <= 0
@@ -275,8 +300,7 @@ export function useRestaurantGoodsRecordsQuery() {
             line.receivedQty * (line.purchaseOrderItem?.unitPrice ?? 0),
           0,
         ),
-        receivedBy:
-          receipt.receivedBy?.email ?? receipt.receivedBy?.name ?? '',
+        receivedBy: formatActorName(receipt.receivedBy),
         status: (receipt.items ?? []).some((line) => line.rejectedQty > 0)
           ? 'partial'
           : 'verified',

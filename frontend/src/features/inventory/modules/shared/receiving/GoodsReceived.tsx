@@ -33,6 +33,7 @@ export type PendingReceipt = {
 export type ReceiptRecord = {
   id: string;
   orderNumber: string;
+  purchaseOrderNumber?: string;
   supplier: string;
   receivedDate: string;
   receivedBy: string;
@@ -57,6 +58,7 @@ export type ReceiveItemInput = {
   condition?: string;
   notes?: string;
   expiryDate?: string;
+  expiryPeriod?: string;
   storageTemperature?: string;
 };
 
@@ -102,6 +104,7 @@ export type ResolvedReceivingConfig = {
 
   historyStatusClass?: (status: string) => string;
   renderHistoryDetails?: (record: ReceiptRecord) => React.ReactNode;
+  headerActions?: React.ReactNode;
 };
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -120,6 +123,7 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
     receive,
     historyStatusClass,
     renderHistoryDetails,
+    headerActions,
   } = config;
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -130,6 +134,21 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [viewRecord, setViewRecord] = useState<ReceiptRecord | null>(null);
+
+  const formatReceivedDateTime = (record: ReceiptRecord) => {
+    const value = record.receivedAt || record.receivedDate;
+    if (!value) return 'N/A';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return record.receivedDate || value;
+    return date.toLocaleString('en-PH', {
+      timeZone: 'Asia/Manila',
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  };
 
   const stats = useMemo(
     () => ({
@@ -144,7 +163,9 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
   const filteredHistory = history.filter((r) => {
     const q = searchQuery.toLowerCase();
     const matchesSearch =
-      r.orderNumber.toLowerCase().includes(q) || r.supplier.toLowerCase().includes(q);
+      r.orderNumber.toLowerCase().includes(q) ||
+      (r.purchaseOrderNumber ?? '').toLowerCase().includes(q) ||
+      r.supplier.toLowerCase().includes(q);
 
     const matchesOutcome =
       outcomeFilter === 'all'
@@ -285,15 +306,18 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
           <h2 className="text-[30px] font-bold text-[#323B42]">{labels.title}</h2>
           <p className="text-[#323B42] text-[14px] mt-1">{labels.subtitle}</p>
         </div>
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[#323B42] size-4" />
-          <input
-            type="text"
-            placeholder="Search receipts..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-9 pr-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] w-[260px] text-[14px] focus:outline-none focus:border-[#007A5E]"
-          />
+        <div className="flex items-center gap-3">
+          {headerActions}
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[#323B42] size-4" />
+            <input
+              type="text"
+              placeholder="Search receipts..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9 pr-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] w-[260px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+            />
+          </div>
         </div>
       </div>
 
@@ -436,7 +460,7 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
                   <p className="text-[14px] text-[#323B42]">
                     Supplier: <span className="font-medium">{r.supplier || 'N/A'}</span>
                   </p>
-                  <p className="text-[14px] text-[#323B42]">Date Received: {r.receivedDate || 'N/A'}</p>
+                  <p className="text-[14px] text-[#323B42]">Date Received: {formatReceivedDateTime(r)}</p>
                   <p className="text-[14px] text-[#323B42]">Received By: {r.receivedBy || 'N/A'}</p>
                 </div>
                 <div className="flex items-start gap-2">
@@ -613,11 +637,16 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
       {/* History details modal (module-provided) */}
       {viewRecord && renderHistoryDetails && (
         <div className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white rounded-[14px] p-6 max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-[14px] p-6 max-w-7xl w-[94vw] max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
-              <h3 className="text-[24px] font-bold text-[#323B42]">
-                Goods Received — {viewRecord.orderNumber}
-              </h3>
+              <div>
+                <h3 className="text-[24px] font-bold text-[#323B42]">
+                  Goods Received — {viewRecord.orderNumber}
+                </h3>
+                <p className="mt-1 text-[14px] text-[#323B42]">
+                  PO Number: <span className="font-semibold">{viewRecord.purchaseOrderNumber || 'N/A'}</span>
+                </p>
+              </div>
               <button onClick={() => setViewRecord(null)} className="p-2 hover:bg-[#F8FAFB] rounded">
                 <X className="size-5 text-[#323B42]" />
               </button>
