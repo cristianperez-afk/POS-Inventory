@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { QueryClientProvider } from '@tanstack/react-query';
+import { Loader2 } from 'lucide-react';
 import { LoginPage } from '../auth/pages/LoginPage';
 import { AdminDashboard } from './components/AdminDashboard';
 import { SuperadminDashboard } from '../superadmin/pages/SuperadminDashboard';
@@ -23,7 +24,7 @@ import { Sidebar } from './components/Sidebar';
 import { OrderProvider } from './context/OrderContext';
 import { TableProvider } from './context/TableContext';
 import { StoreSettingsProvider, useStoreSettings } from './context/StoreSettingsContext';
-import { getApiBaseUrl } from '../auth/services/auth';
+import { getApiBaseUrl, getCurrentSession, logout as logoutSession } from '../auth/services/auth';
 import type { AuthenticatedUser } from '../auth/types/auth';
 import { getDefaultStoreLogo } from './utils/defaultStoreLogo';
 import { AppAlertProvider } from './components/AppAlertProvider';
@@ -83,20 +84,38 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<AuthenticatedUser | null>(null);
   const [currentOrder, setCurrentOrder] = useState<any>(null);
   const [storeBrand, setStoreBrand] = useState<StoreBrand>({ name: null, logo: null });
+  const [authRestoring, setAuthRestoring] = useState(true);
 
   useEffect(() => {
     const savedUser = window.sessionStorage.getItem(SESSION_USER_KEY);
-    if (!savedUser) return;
+    const restore = async () => {
+      try {
+        const user = await getCurrentSession();
+        const savedPage = window.sessionStorage.getItem(SESSION_PAGE_KEY) as Page | null;
+        setCurrentUser(user);
+        window.sessionStorage.setItem(SESSION_USER_KEY, JSON.stringify(user));
+        setCurrentPage(savedPage && savedPage !== 'login' && canAccessPage(user, savedPage) ? savedPage : getDefaultPageForUser(user));
+      } catch {
+        window.sessionStorage.removeItem(SESSION_USER_KEY);
+        window.sessionStorage.removeItem(SESSION_PAGE_KEY);
+        if (savedUser) {
+          setCurrentUser(null);
+          setCurrentPage('login');
+        }
+      } finally {
+        setAuthRestoring(false);
+      }
+    };
 
-    try {
-      const parsedUser = JSON.parse(savedUser) as AuthenticatedUser;
-      const savedPage = window.sessionStorage.getItem(SESSION_PAGE_KEY) as Page | null;
-      setCurrentUser(parsedUser);
-      setCurrentPage(savedPage && savedPage !== 'login' && canAccessPage(parsedUser, savedPage) ? savedPage : getDefaultPageForUser(parsedUser));
-    } catch {
-      window.sessionStorage.removeItem(SESSION_USER_KEY);
-      window.sessionStorage.removeItem(SESSION_PAGE_KEY);
-    }
+    void restore();
+  }, []);
+
+  useEffect(() => {
+    const handleExpired = () => {
+      handleLogout();
+    };
+    window.addEventListener('auth-session-expired', handleExpired);
+    return () => window.removeEventListener('auth-session-expired', handleExpired);
   }, []);
 
   useEffect(() => {
@@ -174,12 +193,14 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    void logoutSession();
     window.sessionStorage.removeItem(SESSION_USER_KEY);
     window.sessionStorage.removeItem(SESSION_PAGE_KEY);
     setCurrentUser(null);
     setCurrentPage('login');
     setCurrentOrder(null);
     setStoreBrand({ name: null, logo: null });
+    setAuthRestoring(false);
   };
 
   const navigateTo = (page: Page) => {
@@ -223,6 +244,9 @@ export default function App() {
   return (
     <QueryClientProvider client={appQueryClient}>
       <div className="size-full bg-background">
+        {authRestoring ? (
+          <AuthRestoringScreen />
+        ) : (
         <StoreSettingsProvider currentUser={currentUser}>
           <AppAlertProvider>
             <OrderProvider currentUser={currentUser}>
@@ -350,8 +374,20 @@ export default function App() {
             </OrderProvider>
           </AppAlertProvider>
         </StoreSettingsProvider>
+        )}
       </div>
     </QueryClientProvider>
+  );
+}
+
+function AuthRestoringScreen() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-background">
+      <div className="flex items-center gap-3 rounded-md border border-border bg-card px-4 py-3 text-sm text-muted-foreground shadow-sm">
+        <Loader2 className="size-4 animate-spin text-primary" />
+        <span>Restoring session...</span>
+      </div>
+    </div>
   );
 }
 

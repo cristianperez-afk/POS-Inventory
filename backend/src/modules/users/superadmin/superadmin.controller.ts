@@ -1,5 +1,8 @@
-import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { IsEmail, IsIn, IsOptional, IsString, MinLength } from 'class-validator';
+import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
+import { Roles } from '../../auth/roles.decorator';
+import { RolesGuard } from '../../auth/roles.guard';
 import { SuperadminService } from './superadmin.service';
 
 class CreateAdminDto {
@@ -31,6 +34,8 @@ class CreateAdminDto {
 class UpdateAdminDto extends CreateAdminDto {}
 
 @Controller('superadmin')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('SUPERADMIN')
 export class SuperadminController {
   constructor(private readonly superadminService: SuperadminService) {}
 

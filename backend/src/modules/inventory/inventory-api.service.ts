@@ -1,25 +1,14 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { QueryResultRow } from 'pg';
+import { AuthenticatedUser } from '../../shared/common/types';
 import { DatabaseService } from '../../shared/database/database.service';
+import { InventoryIdentityService, type InventoryScope } from './inventory-identity.service';
 
-type HeadersLike = Record<string, string | string[] | undefined>;
+type HeadersLike = AuthenticatedUser;
 type BusinessModule = 'RETAIL' | 'RESTAURANT';
 
-type Scope = {
-  businessId: string;
-  module: BusinessModule;
-  user: {
-    id: string;
-    name: string;
-    email: string;
-    role: string;
-    status: string;
-    businessId: string;
-    modules: string[];
-    lastLogin: string;
-  };
-};
+type Scope = InventoryScope;
 
 type Paged<T> = {
   data: T[];
@@ -41,7 +30,10 @@ type LowStockCandidate = {
 
 @Injectable()
 export class InventoryApiService {
-  constructor(private readonly databaseService: DatabaseService) {}
+  constructor(
+    private readonly databaseService: DatabaseService,
+    private readonly inventoryIdentityService: InventoryIdentityService,
+  ) {}
 
   async getCurrentUser(headers: HeadersLike) {
     const scope = await this.resolveScope(headers);
@@ -142,7 +134,8 @@ export class InventoryApiService {
     return rows[0];
   }
 
-  async updateInventoryItem(id: string, body: Record<string, unknown>) {
+  async updateInventoryItem(headers: HeadersLike, id: string, body: Record<string, unknown>) {
+    const scope = await this.resolveScope(headers);
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
         UPDATE "InventoryItem"
@@ -167,6 +160,7 @@ export class InventoryApiService {
           "locationId" = COALESCE($19, "locationId"),
           "updatedAt" = CURRENT_TIMESTAMP
         WHERE id = $1
+          AND "businessId" = $20
         RETURNING *
       `,
       [
@@ -189,11 +183,22 @@ export class InventoryApiService {
         body.size ?? null,
         body.condition ?? null,
         body.locationId ?? null,
+        scope.businessId,
       ],
     );
 
     if (!rows[0]) throw new NotFoundException('Inventory item was not found.');
     await this.syncInventoryItemToPos(id);
+    return rows[0];
+  }
+
+  async deleteInventoryItem(headers: HeadersLike, id: string) {
+    const scope = await this.resolveScope(headers);
+    const rows = await this.safeQuery<Record<string, unknown>>(
+      `DELETE FROM "InventoryItem" WHERE id = $1 AND "businessId" = $2 RETURNING *`,
+      [id, scope.businessId],
+    );
+    if (!rows[0]) throw new NotFoundException('Inventory item was not found.');
     return rows[0];
   }
 
@@ -1689,96 +1694,8 @@ export class InventoryApiService {
     return rows[0].id;
   }
 
-  private async resolveScope(headers: HeadersLike): Promise<Scope> {
-    const storeType = this.headerValue(headers['x-pos-store-type']);
-    const module: BusinessModule = storeType === 'RESTAURANT' ? 'RESTAURANT' : 'RETAIL';
-    const bridgedEmail = this.headerValue(headers['x-pos-bridge-email']);
-    const fallbackEmail = module === 'RESTAURANT' ? 'admin@restaurant.com' : 'admin@retail.com';
-    const email = bridgedEmail || fallbackEmail;
-
-    const userRows = await this.safeQuery<{
-      id: string;
-      name: string;
-      email: string;
-      role: string;
-      status: string;
-      businessId: string;
-      modules: BusinessModule[];
-      lastLogin: string;
-    }>(
-      `
-        SELECT
-          u.id, u.name, u.email, u.role, u.status,
-          u."businessId" AS "businessId",
-          b.modules,
-          u."lastLogin" AS "lastLogin"
-        FROM "User" u
-        JOIN "Business" b ON b.id = u."businessId"
-        WHERE lower(u.email) = lower($1)
-          AND u.status = 'Active'
-        LIMIT 1
-      `,
-      [email],
-    );
-
-    let user = userRows[0];
-    if (!user && email !== fallbackEmail) {
-      const fallbackRows = await this.safeQuery<typeof userRows[number]>(
-        `
-          SELECT
-            u.id, u.name, u.email, u.role, u.status,
-            u."businessId" AS "businessId",
-            b.modules,
-            u."lastLogin" AS "lastLogin"
-          FROM "User" u
-          JOIN "Business" b ON b.id = u."businessId"
-          WHERE lower(u.email) = lower($1)
-            AND u.status = 'Active'
-          LIMIT 1
-        `,
-        [fallbackEmail],
-      );
-      user = fallbackRows[0];
-    }
-
-    if (user) {
-      return {
-        businessId: user.businessId,
-        module,
-        user: {
-          ...user,
-          modules: user.modules ?? [module],
-        },
-      };
-    }
-
-    const businessRows = await this.safeQuery<{ id: string; modules: BusinessModule[] }>(
-      `
-        SELECT id, modules
-        FROM "Business"
-        WHERE $1::"BusinessModule" = ANY(modules)
-        ORDER BY "createdAt" ASC
-        LIMIT 1
-      `,
-      [module],
-    );
-    const business = businessRows[0];
-    if (!business) throw new NotFoundException('No inventory business exists for this POS store type.');
-
-    return {
-      businessId: business.id,
-      module,
-      user: {
-        id: 'pos-bridge',
-        name: 'POS Bridge',
-        email,
-        role: 'Admin',
-        status: 'Active',
-        businessId: business.id,
-        modules: business.modules ?? [module],
-        lastLogin: new Date().toISOString(),
-      },
-    };
+  private async resolveScope(user: HeadersLike): Promise<Scope> {
+    return this.inventoryIdentityService.resolveScope(user);
   }
 
   private async safeQuery<T extends QueryResultRow>(sql: string, params: unknown[] = []): Promise<T[]> {

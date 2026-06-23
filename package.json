@@ -10,7 +10,8 @@
     "build:backend": "npm --prefix backend run build",
     "db:local": "npm --prefix backend run db:local",
     "db:supabase": "npm --prefix backend run db:supabase",
-    "db:fix-sequences": "npm --prefix backend run db:fix-sequences"
+    "db:fix-sequences": "npm --prefix backend run db:fix-sequences",
+    "db:repair-identity-links": "npm --prefix backend run db:repair-identity-links"
   },
   "devDependencies": {
     "concurrently": "^10.0.3"

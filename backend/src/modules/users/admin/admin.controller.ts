@@ -1,15 +1,21 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { Type } from 'class-transformer';
 import { IsArray, IsBoolean, IsEmail, IsIn, IsNumber, IsOptional, IsString, MinLength } from 'class-validator';
+import { AuthenticatedUser } from '../../../shared/common/types';
+import { CurrentUser } from '../../auth/current-user.decorator';
+import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
+import { Roles } from '../../auth/roles.decorator';
+import { RolesGuard } from '../../auth/roles.guard';
 import { AdminService } from './admin.service';
 
 const STAFF_TYPES = ['POS_STAFF', 'INVENTORY_STAFF', 'MANAGER'] as const;
 type StaffType = (typeof STAFF_TYPES)[number];
 
 class CreateStaffDto {
+  @IsOptional()
   @Type(() => Number)
   @IsNumber()
-  admin_user_id!: number;
+  admin_user_id?: number;
 
   @IsString()
   full_name!: string;
@@ -26,9 +32,10 @@ class CreateStaffDto {
 }
 
 class UpdateStaffDto {
+  @IsOptional()
   @Type(() => Number)
   @IsNumber()
-  admin_user_id!: number;
+  admin_user_id?: number;
 
   @IsString()
   full_name!: string;
@@ -46,9 +53,10 @@ class UpdateStaffDto {
 }
 
 class UpdateStoreInformationDto {
+  @IsOptional()
   @Type(() => Number)
   @IsNumber()
-  admin_user_id!: number;
+  admin_user_id?: number;
 
   @IsString()
   business_name!: string;
@@ -105,9 +113,10 @@ class UpdateStoreInformationDto {
 }
 
 class UpdateStoreSettingsDto {
+  @IsOptional()
   @Type(() => Number)
   @IsNumber()
-  admin_user_id!: number;
+  admin_user_id?: number;
 
   @IsOptional()
   @IsBoolean()
@@ -175,9 +184,10 @@ class UpdateStoreSettingsDto {
 }
 
 class DiscountSettingDto {
+  @IsOptional()
   @Type(() => Number)
   @IsNumber()
-  admin_user_id!: number;
+  admin_user_id?: number;
 
   @IsString()
   discount_name!: string;
@@ -192,18 +202,20 @@ class DiscountSettingDto {
 }
 
 @Controller('admin')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('ADMIN')
 export class AdminController {
   constructor(private readonly adminService: AdminService) {}
 
   @Get('staff')
-  listStaff(@Query('admin_user_id') adminUserId: string) {
-    return this.adminService.listStaff(Number(adminUserId));
+  listStaff(@CurrentUser() user: AuthenticatedUser) {
+    return this.adminService.listStaff(user.id);
   }
 
   @Post('staff')
-  createStaff(@Body() body: CreateStaffDto) {
+  createStaff(@Body() body: CreateStaffDto, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.createStaff({
-      adminUserId: Number(body.admin_user_id),
+      adminUserId: user.id,
       fullName: body.full_name,
       email: body.email,
       password: body.password,
@@ -212,9 +224,9 @@ export class AdminController {
   }
 
   @Patch('staff/:id')
-  updateStaff(@Param('id') id: string, @Body() body: UpdateStaffDto) {
+  updateStaff(@Param('id') id: string, @Body() body: UpdateStaffDto, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.updateStaff({
-      adminUserId: Number(body.admin_user_id),
+      adminUserId: user.id,
       staffUserId: Number(id),
       fullName: body.full_name,
       email: body.email,
@@ -224,38 +236,38 @@ export class AdminController {
   }
 
   @Delete('staff/:id')
-  deleteStaff(@Param('id') id: string, @Query('admin_user_id') adminUserId: string) {
+  deleteStaff(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.deleteStaff({
-      adminUserId: Number(adminUserId),
+      adminUserId: user.id,
       staffUserId: Number(id),
     });
   }
 
   @Delete('staff/:id/permanent')
-  permanentlyDeleteStaff(@Param('id') id: string, @Query('admin_user_id') adminUserId: string) {
+  permanentlyDeleteStaff(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.permanentlyDeleteStaff({
-      adminUserId: Number(adminUserId),
+      adminUserId: user.id,
       staffUserId: Number(id),
     });
   }
 
   @Patch('staff/:id/activate')
-  activateStaff(@Param('id') id: string, @Query('admin_user_id') adminUserId: string) {
+  activateStaff(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.activateStaff({
-      adminUserId: Number(adminUserId),
+      adminUserId: user.id,
       staffUserId: Number(id),
     });
   }
 
   @Get('store-information')
-  getStoreInformation(@Query('admin_user_id') adminUserId: string) {
-    return this.adminService.getStoreInformation(Number(adminUserId));
+  getStoreInformation(@CurrentUser() user: AuthenticatedUser) {
+    return this.adminService.getStoreInformation(user.id);
   }
 
   @Post('store-information')
-  updateStoreInformation(@Body() body: UpdateStoreInformationDto) {
+  updateStoreInformation(@Body() body: UpdateStoreInformationDto, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.updateStoreInformation({
-      adminUserId: Number(body.admin_user_id),
+      adminUserId: user.id,
       businessName: body.business_name,
       businessDescription: body.business_description ?? null,
       address: body.address ?? null,
@@ -273,14 +285,14 @@ export class AdminController {
   }
 
   @Get('store-settings')
-  getStoreSettings(@Query('admin_user_id') adminUserId: string) {
-    return this.adminService.getStoreSettings(Number(adminUserId));
+  getStoreSettings(@CurrentUser() user: AuthenticatedUser) {
+    return this.adminService.getStoreSettings(user.id);
   }
 
   @Post('store-settings')
-  updateStoreSettings(@Body() body: UpdateStoreSettingsDto) {
+  updateStoreSettings(@Body() body: UpdateStoreSettingsDto, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.updateStoreSettings({
-      adminUserId: Number(body.admin_user_id),
+      adminUserId: user.id,
       enableCustomerRecommendation: body.enable_customer_recommendation,
       enableTableManagement: body.enable_table_management,
       enableRefund: body.enable_refund,
@@ -299,14 +311,14 @@ export class AdminController {
   }
 
   @Get('discount-settings')
-  listDiscountSettings(@Query('admin_user_id') adminUserId: string) {
-    return this.adminService.listDiscountSettings(Number(adminUserId));
+  listDiscountSettings(@CurrentUser() user: AuthenticatedUser) {
+    return this.adminService.listDiscountSettings(user.id);
   }
 
   @Post('discount-settings')
-  createDiscountSetting(@Body() body: DiscountSettingDto) {
+  createDiscountSetting(@Body() body: DiscountSettingDto, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.createDiscountSetting({
-      adminUserId: Number(body.admin_user_id),
+      adminUserId: user.id,
       discountName: body.discount_name,
       discountRate: body.discount_rate,
       isEnabled: body.is_enabled ?? true,
@@ -314,9 +326,9 @@ export class AdminController {
   }
 
   @Patch('discount-settings/:id')
-  updateDiscountSetting(@Param('id') id: string, @Body() body: DiscountSettingDto) {
+  updateDiscountSetting(@Param('id') id: string, @Body() body: DiscountSettingDto, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.updateDiscountSetting({
-      adminUserId: Number(body.admin_user_id),
+      adminUserId: user.id,
       discountId: Number(id),
       discountName: body.discount_name,
       discountRate: body.discount_rate,
@@ -325,42 +337,42 @@ export class AdminController {
   }
 
   @Delete('discount-settings/:id')
-  deleteDiscountSetting(@Param('id') id: string, @Query('admin_user_id') adminUserId: string) {
+  deleteDiscountSetting(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.deleteDiscountSetting({
-      adminUserId: Number(adminUserId),
+      adminUserId: user.id,
       discountId: Number(id),
     });
   }
 
   @Get('pos/products')
-  listPosProducts(@Query('user_id') userId: string) {
-    return this.adminService.listPosProducts(Number(userId));
+  listPosProducts(@CurrentUser() user: AuthenticatedUser) {
+    return this.adminService.listPosProducts(user.id);
   }
 
   @Get('pos/orders')
-  listPosOrders(@Query('user_id') userId: string) {
-    return this.adminService.listPosOrders(Number(userId));
+  listPosOrders(@CurrentUser() user: AuthenticatedUser) {
+    return this.adminService.listPosOrders(user.id);
   }
 
   @Get('pos/next-order-number')
-  getNextPosOrderNumber(@Query('user_id') userId: string) {
-    return this.adminService.getNextPosOrderNumber(Number(userId));
+  getNextPosOrderNumber(@CurrentUser() user: AuthenticatedUser) {
+    return this.adminService.getNextPosOrderNumber(user.id);
   }
 
   @Post('pos/orders')
-  createPaidPosOrder(@Body() body: any) {
+  createPaidPosOrder(@Body() body: any, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.createPaidPosOrder({
       ...body,
-      userId: Number(body.user_id),
+      userId: user.id,
     });
   }
 
   @Patch('pos/orders/:orderNumber')
-  updatePosOrder(@Param('orderNumber') orderNumber: string, @Body() body: any) {
+  updatePosOrder(@Param('orderNumber') orderNumber: string, @Body() body: any, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.updatePosOrder({
       ...body,
       orderNumber,
-      userId: Number(body.user_id),
+      userId: user.id,
     });
   }
 }

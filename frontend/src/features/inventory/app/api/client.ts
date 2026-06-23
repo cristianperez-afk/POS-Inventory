@@ -94,19 +94,19 @@ export function clearStoredToken() {
 }
 
 export function loginUser(email: string, password: string) {
-  return request<AuthResponse>('/api/auth/login', {
+  return request<AuthResponse>('/auth/login', {
     method: 'POST',
     body: JSON.stringify({ email, password }),
   });
 }
 
 export function logoutUser() {
-  return request<{ message: string }>('/api/auth/logout', { method: 'POST' });
+  return request<{ message: string }>('/auth/logout', { method: 'POST' });
 }
 
 // Re-hydrate the session from the HttpOnly cookie (used on app load / refresh).
 export function getCurrentUser() {
-  return request<{ user: AuthUser }>('/api/auth/me');
+  return request<{ user: AuthUser }>('/auth/me');
 }
 
 export const getCurrentSession = getCurrentUser;

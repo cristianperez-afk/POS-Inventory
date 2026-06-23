@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Eye, EyeOff, Mail, Lock, Tag, DollarSign, TrendingUp, ArrowLeft, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
 import type { AuthenticatedUser } from '../types/auth';
-import { login } from '../services/auth';
+import { forgotPassword, login } from '../services/auth';
 import logoImage from '../../imports/ims-logo.png';
 import centerLogoImage from '../../imports/ims-logo-nobg.png';
 
@@ -77,7 +77,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
 
     try {
       setLoading(true);
-      const user = await login(email.trim(), password);
+      const user = await login(email.trim(), password, rememberMe);
 
       if (rememberMe) {
         localStorage.setItem(REMEMBERED_EMAIL_KEY, email.trim());
@@ -95,10 +95,16 @@ export function LoginPage({ onLogin }: LoginPageProps) {
 
   const handleForgotPassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
-    await new Promise((r) => setTimeout(r, 1000));
-    setLoading(false);
-    setView('forgotSent');
+    setError('');
+    try {
+      setLoading(true);
+      await forgotPassword(forgotEmail.trim());
+      setView('forgotSent');
+    } catch (forgotError) {
+      setError(forgotError instanceof Error ? forgotError.message : 'Unable to send reset link');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (

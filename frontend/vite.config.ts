@@ -50,6 +50,26 @@ export default defineConfig({
         target: process.env.VITE_INVENTORY_API_BASE_URL ?? process.env.VITE_API_BASE_URL ?? 'http://localhost:3000',
         changeOrigin: true,
       },
+      '/auth': {
+        target: process.env.VITE_API_BASE_URL ?? 'http://localhost:3000',
+        changeOrigin: true,
+      },
+      '/admin': {
+        target: process.env.VITE_API_BASE_URL ?? 'http://localhost:3000',
+        changeOrigin: true,
+      },
+      '/pos': {
+        target: process.env.VITE_API_BASE_URL ?? 'http://localhost:3000',
+        changeOrigin: true,
+      },
+      '/products': {
+        target: process.env.VITE_API_BASE_URL ?? 'http://localhost:3000',
+        changeOrigin: true,
+      },
+      '/superadmin': {
+        target: process.env.VITE_API_BASE_URL ?? 'http://localhost:3000',
+        changeOrigin: true,
+      },
     },
   },
 
