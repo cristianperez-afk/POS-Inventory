@@ -14,6 +14,9 @@ export interface StoreSettingValues {
   enable_tax: boolean;
   tax_rate: number;
   enable_discount: boolean;
+  enable_estimated_prep_time: boolean;
+  prep_time_strategy: 'parallel' | 'sequential';
+  customization_prep_time_minutes: number;
   enabled_payment_methods: string[];
   payment_method_accounts: Record<string, PaymentMethodAccount>;
   theme_color: string;
@@ -53,6 +56,9 @@ export const defaultStoreSettings: StoreSettingValues = {
   enable_tax: true,
   tax_rate: 0,
   enable_discount: true,
+  enable_estimated_prep_time: true,
+  prep_time_strategy: 'parallel',
+  customization_prep_time_minutes: 2,
   enabled_payment_methods: ['Cash', 'GCash', 'Maya', 'Bank Transfer'],
   payment_method_accounts: {},
   theme_color: '#008967',
@@ -129,6 +135,9 @@ export function normalizeStoreSettings(data: any): StoreSettingValues {
     enable_tax: data?.enable_tax ?? true,
     tax_rate: Number(data?.tax_rate ?? 0),
     enable_discount: data?.enable_discount ?? true,
+    enable_estimated_prep_time: data?.enable_estimated_prep_time ?? true,
+    prep_time_strategy: data?.prep_time_strategy === 'sequential' ? 'sequential' : 'parallel',
+    customization_prep_time_minutes: Number(data?.customization_prep_time_minutes ?? 2),
     enabled_payment_methods: normalizePaymentMethods(data?.enabled_payment_methods),
     payment_method_accounts: normalizePaymentMethodAccounts(data?.payment_method_accounts),
     theme_color: isHexColor(data?.theme_color) ? data.theme_color : defaultStoreSettings.theme_color,
