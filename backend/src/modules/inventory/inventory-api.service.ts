@@ -718,6 +718,7 @@ export class InventoryApiService {
   }
 
   async listKitchenOrders(headers: HeadersLike, query: Record<string, string | undefined>) {
+    await this.ensurePosKitchenEstimateColumns();
     const scope = await this.resolveScope(headers);
     const posUserId = this.headerValue(headers['x-pos-user-id']);
     const rows = await this.safeQuery<Record<string, unknown>>(
@@ -765,6 +766,8 @@ export class InventoryApiService {
                   o.payment_at,
                   o.preparing_started_at,
                   o.ready_at,
+                  o.estimated_prep_minutes,
+                  o.estimated_ready_at,
                   o.table_started_at,
                   o.table_ended_at,
                   p.payment_number,
@@ -779,7 +782,7 @@ export class InventoryApiService {
                         'name', oi.product_name,
                         'quantity', oi.quantity,
                         'price', oi.unit_price,
-                        'prepTimeMinutes', COALESCE(prod.preparation_time_minutes, 0),
+                        'prepTimeMinutes', COALESCE(oi.prep_time_minutes, prod.preparation_time_minutes, 0),
                         'ingredients', COALESCE(default_ingredients.items, '[]'::json),
                         'notes', oi.notes,
                         'addedIngredients', COALESCE(customizations.added, '[]'::json),
@@ -866,6 +869,8 @@ export class InventoryApiService {
                 payment_at AS "paymentAt",
                 preparing_started_at AS "preparingStartedAt",
                 ready_at AS "readyAt",
+                estimated_prep_minutes AS "estimatedPrepMinutes",
+                estimated_ready_at AS "estimatedReadyAt",
                 completed_at AS "completedAt",
                 table_started_at AS "tableStartedAt",
                 table_ended_at AS "tableEndedAt",
@@ -2339,6 +2344,19 @@ export class InventoryApiService {
     );
     if (!rows[0]) throw new NotFoundException('No inventory location exists for this business.');
     return rows[0].id;
+  }
+
+  private async ensurePosKitchenEstimateColumns() {
+    await this.safeQuery(`
+      ALTER TABLE orders
+        ADD COLUMN IF NOT EXISTS estimated_prep_minutes INT,
+        ADD COLUMN IF NOT EXISTS estimated_ready_at TIMESTAMP
+    `);
+    await this.safeQuery(`
+      ALTER TABLE order_items
+        ADD COLUMN IF NOT EXISTS prep_time_minutes INT,
+        ADD COLUMN IF NOT EXISTS customization_prep_minutes INT DEFAULT 0
+    `);
   }
 
   private async resolveScope(headers: HeadersLike): Promise<Scope> {

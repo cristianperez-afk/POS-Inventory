@@ -73,6 +73,8 @@ interface CartItem {
   price: number;
   quantity: number;
   image: string;
+  prepTimeMinutes?: number;
+  customizationPrepMinutes?: number;
   orderType: 'dine-in' | 'takeout';
   notes: string;
   ingredients: Ingredient[];
@@ -135,12 +137,16 @@ function toOrderListFormat(order: any, paid: boolean) {
       itemType: item.orderType,
       notes: item.notes,
       ingredients: item.ingredients,
+      prepTimeMinutes: item.prepTimeMinutes,
+      customizationPrepMinutes: item.customizationPrepMinutes,
     })),
     isQueued: order.isQueued || false,
     queuePosition: order.queuePosition,
     partySize: order.partySize,
     tableNumbers: order.tableNumbers,
     table: tableLabel,
+    estimatedPrepMinutes: order.estimatedPrepMinutes,
+    estimatedReadyAt: order.estimatedReadyAt,
   };
 }
 
@@ -471,6 +477,8 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       price: product.price,
       image: product.image,
       quantity: 1,
+      prepTimeMinutes: product.prepTimeMinutes ?? 0,
+      customizationPrepMinutes: 0,
       orderType: typeToUse,
       notes: '',
       ingredients: JSON.parse(JSON.stringify(product.ingredients)),
@@ -673,6 +681,47 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       selectedModifiers: (item.modifiers ?? []).filter((modifier) => (item.selectedModifierIds ?? []).includes(modifier.id)),
     };
   };
+  const hasItemCustomization = (item: CartItem) => {
+    const { addedIngredients, removedIngredients, replacedIngredients, quantityChanges, selectedModifiers } = getIngredientChanges(item);
+    return Boolean(item.notes?.trim()) ||
+      selectedModifiers.length > 0 ||
+      addedIngredients.length > 0 ||
+      removedIngredients.length > 0 ||
+      replacedIngredients.length > 0 ||
+      quantityChanges.length > 0;
+  };
+  const estimateItemMinutes = (item: CartItem) => {
+    const baseMinutes = Math.max(0, Number(item.prepTimeMinutes ?? 0));
+    const customizationMinutes = hasItemCustomization(item)
+      ? Math.max(0, Number(settings.customization_prep_time_minutes ?? 0))
+      : 0;
+    const lineMinutes = baseMinutes + customizationMinutes;
+    return settings.prep_time_strategy === 'sequential'
+      ? lineMinutes * Math.max(1, Number(item.quantity ?? 1))
+      : lineMinutes;
+  };
+  const cartPrepMinutes = settings.prep_time_strategy === 'sequential'
+    ? cart.reduce((sum, item) => sum + estimateItemMinutes(item), 0)
+    : cart.reduce((max, item) => Math.max(max, estimateItemMinutes(item)), 0);
+  const activeKitchenWorkloadMinutes = settings.enable_estimated_prep_time
+    ? orders
+        .filter((order) => order.orderStatus !== 'Completed' && order.orderStatus !== 'Ready')
+        .reduce((sum, order) => {
+          const estimate = Number(order.estimatedPrepMinutes ?? 0);
+          if (!Number.isFinite(estimate) || estimate <= 0) return sum;
+          const elapsed = order.runningTimeMinutes ?? 0;
+          return sum + Math.max(0, estimate - elapsed);
+        }, 0)
+    : 0;
+  const estimatedWaitingMinutes = settings.enable_estimated_prep_time
+    ? Math.max(0, Math.ceil(cartPrepMinutes + activeKitchenWorkloadMinutes))
+    : 0;
+  const estimatedReadyAt = settings.enable_estimated_prep_time && estimatedWaitingMinutes > 0
+    ? new Date(Date.now() + estimatedWaitingMinutes * 60000)
+    : null;
+  const estimatedReadyTimeLabel = estimatedReadyAt
+    ? estimatedReadyAt.toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })
+    : '';
   const subtotal = cart.reduce((sum, item) => sum + itemLineTotal(item), 0);
   const serviceFee = settings.enable_service_charge ? subtotal * (settings.service_charge_rate / 100) : 0;
   const tax = 0;
@@ -718,6 +767,8 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
     notes: item.notes,
     modifiers: (item.modifiers ?? []).filter((modifier) => (item.selectedModifierIds ?? []).includes(modifier.id)),
     ingredients: applySelectedModifiers(item).map(serializeIngredientForOrder),
+    prepTimeMinutes: item.prepTimeMinutes ?? 0,
+    customizationPrepMinutes: hasItemCustomization(item) ? settings.customization_prep_time_minutes : 0,
   });
 
   const persistRestaurantOrder = async (
@@ -746,6 +797,8 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       serviceFee: orderDetails.serviceFee,
       tax: orderDetails.tax,
       total: orderDetails.total,
+      estimatedPrepMinutes: orderDetails.estimatedPrepMinutes ?? null,
+      estimatedReadyAt: orderDetails.estimatedReadyAt ?? null,
       orderStatus: 'PENDING',
       paymentStatus: paid ? 'PAID' : 'NOT_PAID',
       items: orderDetails.items.map(serializeItemForOrder),
@@ -823,6 +876,8 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       partySize: parseInt(partySize) || undefined,
       isQueued: isInQueue,
       queuePosition,
+      estimatedPrepMinutes: settings.enable_estimated_prep_time ? estimatedWaitingMinutes : undefined,
+      estimatedReadyAt: estimatedReadyAt?.toISOString(),
     };
 
     console.log('Order data:', order); // Debug log
@@ -1643,6 +1698,12 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
             <span>TOTAL:</span>
             <span className="text-primary">₱ {total.toFixed(2)}</span>
           </div>
+          {settings.enable_estimated_prep_time && cart.length > 0 && (
+            <div className="rounded-lg border border-primary/20 bg-primary/5 p-2 text-primary">
+              <p className="font-medium">Estimated waiting time: {estimatedWaitingMinutes} minutes</p>
+              {estimatedReadyTimeLabel && <p className="text-[11px] text-muted-foreground">Approx. ready by {estimatedReadyTimeLabel}</p>}
+            </div>
+          )}
         </div>
 
         {validationError && (
@@ -1700,6 +1761,12 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                   </p>
                 )}
                 {isInQueue && <p className="text-sm"><strong>Queue Position:</strong> #{queuePosition}</p>}
+                {settings.enable_estimated_prep_time && (
+                  <p className="text-sm">
+                    <strong>Estimated preparation time:</strong> {estimatedWaitingMinutes} minutes
+                    {estimatedReadyTimeLabel ? ` (ready around ${estimatedReadyTimeLabel})` : ''}
+                  </p>
+                )}
               </div>
 
               {/* Dine-In Order List */}
@@ -2093,6 +2160,11 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                 <p className="mt-2 text-sm text-muted-foreground">
                   Choose Pay Later if the table should stay occupied until the customer pays.
                 </p>
+                {settings.enable_estimated_prep_time && (
+                  <p className="mt-2 text-sm font-medium text-primary">
+                    Estimated preparation time: {successOrderDetails.estimatedPrepMinutes ?? estimatedWaitingMinutes} minutes
+                  </p>
+                )}
               </div>
               <div className="grid gap-3">
                 <button
@@ -2138,6 +2210,9 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
               <div className="mb-4">
                 <p className="text-sm mb-2"><strong>Order Number:</strong> {currentOrderNumber}</p>
                 <p className="text-sm mb-2"><strong>Customer:</strong> {customerName}</p>
+                {settings.enable_estimated_prep_time && (
+                  <p className="text-sm mb-2"><strong>Estimated waiting time:</strong> {estimatedWaitingMinutes} minutes</p>
+                )}
                 <div className="bg-muted rounded-lg p-3 mb-3">
                   <h4 className="text-xs font-medium mb-2">Ordered Items:</h4>
                   <div className="space-y-1">
@@ -2287,6 +2362,12 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                   }
                 </p>
                 <p className="text-sm mb-2"><strong>Total Amount:</strong> ₱{successOrderDetails.total?.toFixed(2)}</p>
+                {settings.enable_estimated_prep_time && successOrderDetails.estimatedPrepMinutes !== undefined && (
+                  <p className="text-sm mb-2">
+                    <strong>Estimated Ready:</strong> {successOrderDetails.estimatedPrepMinutes} minutes
+                    {successOrderDetails.estimatedReadyAt ? ` (${new Date(successOrderDetails.estimatedReadyAt).toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })})` : ''}
+                  </p>
+                )}
                 <p className="text-sm mb-2">
                   <strong>Payment Status:</strong>{' '}
                   <span className={successOrderDetails.paid ? 'text-green-600' : 'text-orange-600'}>
@@ -2874,6 +2955,8 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                 total={successOrderDetails.total}
                 cashReceived={successOrderDetails.cashReceived}
                 changeGiven={successOrderDetails.changeGiven}
+                estimatedPrepMinutes={successOrderDetails.estimatedPrepMinutes}
+                estimatedReadyAt={successOrderDetails.estimatedReadyAt}
                 cashier={successOrderDetails.cashier || userName || 'Staff'}
                 storeBrand={storeBrand}
               />

@@ -40,6 +40,8 @@ type KitchenOrder = {
   paymentAt?: string | null;
   preparingStartedAt?: string | null;
   readyAt?: string | null;
+  estimatedPrepMinutes?: number;
+  estimatedReadyAt?: string | null;
   completedAt?: string | null;
   tableStartedAt?: string | null;
   tableEndedAt?: string | null;
@@ -163,6 +165,7 @@ function hasModifications(item: KitchenOrderItem) {
 }
 
 function getEstimatedPrepTime(order: KitchenOrder) {
+  if (Number(order.estimatedPrepMinutes ?? 0) > 0) return Number(order.estimatedPrepMinutes);
   const itemPrepTimes = order.items.map((item) => Number(item.prepTimeMinutes ?? 0) * Math.max(Number(item.quantity ?? 1), 1));
   const maxPrepTime = Math.max(0, ...itemPrepTimes);
   if (maxPrepTime > 0) return maxPrepTime;
@@ -311,6 +314,7 @@ export function POSKitchenOrders() {
       `Payment Status: ${formatPaymentStatus(order.paymentStatus)}`,
       `Time Ordered: ${formatDateTime(order.orderedAt)}`,
       `Estimated Prep Time: ${formatPrepTime(getEstimatedPrepTime(order))}`,
+      order.estimatedReadyAt ? `Estimated Ready: ${formatDateTime(order.estimatedReadyAt)}` : "",
       "",
       "Products:",
       ...order.items.flatMap((item) => [
@@ -500,6 +504,9 @@ export function POSKitchenOrders() {
                               <span>{formatDateTime(order.orderedAt)}</span>
                             </div>
                             <div className="font-medium text-foreground">Estimated Prep Time: {formatPrepTime(getEstimatedPrepTime(order))}</div>
+                            {order.estimatedReadyAt && (
+                              <div className="font-medium text-primary">Ready Around: {formatDateTime(order.estimatedReadyAt)}</div>
+                            )}
                             <div className="flex items-center justify-between gap-2">
                               <span>Running: {getRunningTime(order)}</span>
                               <span>Stay: {getCustomerStayDuration(order)}</span>
@@ -635,6 +642,10 @@ export function POSKitchenOrders() {
                 <div>
                   <p className="text-sm text-muted-foreground">Estimated Prep Time</p>
                   <p className="mt-1 text-lg text-foreground">{formatPrepTime(getEstimatedPrepTime(selectedOrder))}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Estimated Ready Around</p>
+                  <p className="mt-1 text-lg text-foreground">{selectedOrder.estimatedReadyAt ? formatDateTime(selectedOrder.estimatedReadyAt) : "-"}</p>
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Running Time</p>

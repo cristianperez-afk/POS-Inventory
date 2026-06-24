@@ -28,6 +28,7 @@ const restaurantSettings: Array<[keyof StoreSettingValues, string, string]> = [
   ['enable_service_charge', 'Service Charge', 'Service charge line and calculation in order totals.'],
   ['enable_tax', 'VAT', 'VAT line and calculation in order totals.'],
   ['enable_discount', 'Discounts', 'Discount management and staff discount selection.'],
+  ['enable_estimated_prep_time', 'Estimated Preparation Time', 'Show estimated waiting time in cart, checkout, receipt, kitchen, and order history.'],
 ];
 
 const retailSettings: Array<[keyof StoreSettingValues, string, string]> = [
@@ -143,6 +144,9 @@ export function StoreSettings({ currentUser, storeBrand, onLogout, onNavigate }:
           enable_tax: settings.enable_tax,
           tax_rate: settings.tax_rate,
           enable_discount: settings.enable_discount,
+          enable_estimated_prep_time: settings.enable_estimated_prep_time,
+          prep_time_strategy: settings.prep_time_strategy,
+          customization_prep_time_minutes: settings.customization_prep_time_minutes,
           enabled_payment_methods: settings.enabled_payment_methods.length > 0 ? settings.enabled_payment_methods : ['Cash'],
           payment_method_accounts: settings.payment_method_accounts,
         }),
@@ -340,6 +344,32 @@ export function StoreSettings({ currentUser, storeBrand, onLogout, onNavigate }:
                           />
                         </label>
                       )}
+                    </div>
+                  )}
+
+                  {isRestaurant && settings.enable_estimated_prep_time && (
+                    <div className="grid gap-4 md:grid-cols-2 lg:col-span-2">
+                      <label className="block rounded-lg border border-border p-4">
+                        <span className="mb-2 block font-medium">Prep Time Calculation</span>
+                        <select
+                          value={settings.prep_time_strategy}
+                          onChange={(event) => setSettings((current) => ({ ...current, prep_time_strategy: event.target.value === 'sequential' ? 'sequential' : 'parallel' }))}
+                          className="w-full rounded-lg border border-border bg-input-background px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                        >
+                          <option value="parallel">Parallel - use longest item time</option>
+                          <option value="sequential">Sequential - sum item times</option>
+                        </select>
+                      </label>
+                      <label className="block rounded-lg border border-border p-4">
+                        <span className="mb-2 block font-medium">Extra Minutes Per Modified Item</span>
+                        <input
+                          type="number"
+                          value={settings.customization_prep_time_minutes}
+                          onChange={(event) => setSettings((current) => ({ ...current, customization_prep_time_minutes: Math.max(0, Number(event.target.value) || 0) }))}
+                          className="w-full rounded-lg border border-border bg-input-background px-4 py-2 focus:outline-none focus:ring-2 focus:ring-primary"
+                          min="0"
+                        />
+                      </label>
                     </div>
                   )}
 
