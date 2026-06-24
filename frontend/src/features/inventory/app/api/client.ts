@@ -461,19 +461,35 @@ export function receivePurchaseOrder(
     condition?: string;
     notes?: string;
     expiryDate?: string;
+    expiryPeriod?: string;
     storageTemperature?: string;
   }[],
   notes?: string,
   module?: BusinessModule,
+  proofImages?: string[],
 ) {
   return request<ApiPurchaseOrder>(`/api/purchase-orders/${id}/receive${moduleSuffix(module)}`, {
     method: 'PATCH',
-    body: JSON.stringify({ items, notes }),
+    body: JSON.stringify({ items, notes, proofImages }),
   });
 }
 
 export function cancelPurchaseOrder(id: string, module?: BusinessModule) {
   return request<ApiPurchaseOrder>(`/api/purchase-orders/${id}/cancel${moduleSuffix(module)}`, { method: 'PATCH' });
+}
+
+export function rejectGoodsReceipt(id: string, reason: string, proofImages: string[] = [], module?: BusinessModule) {
+  return request<ApiPurchaseOrder>(`/api/purchase-orders/${id}/goods-receipt/reject${moduleSuffix(module)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ reason, proofImages }),
+  });
+}
+
+export function cancelGoodsReceipt(id: string, reason: string, proofImages: string[] = [], module?: BusinessModule) {
+  return request<ApiPurchaseOrder>(`/api/purchase-orders/${id}/goods-receipt/cancel${moduleSuffix(module)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ reason, proofImages }),
+  });
 }
 
 // ─── Transfers ───────────────────────────────────────────────────────────────

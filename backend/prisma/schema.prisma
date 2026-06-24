@@ -413,6 +413,12 @@ enum PurchaseOrderStatus {
   CANCELLED
 }
 
+enum GoodsReceiptStatus {
+  RECEIVED
+  REJECTED
+  CANCELLED
+}
+
 model PurchaseOrder {
   id               String              @id @default(uuid())
   orderNumber      String
@@ -471,7 +477,10 @@ model GoodsReceipt {
   purchaseOrder   PurchaseOrder      @relation(fields: [purchaseOrderId], references: [id])
   receivedById    String?
   receivedBy      User?              @relation(fields: [receivedById], references: [id])
+  status          GoodsReceiptStatus @default(RECEIVED)
   notes           String?
+  actionReason    String?
+  proofImages     String[]           @default([])
   businessId      String
   business        Business           @relation(fields: [businessId], references: [id])
   module          BusinessModule     @default(RETAIL)
@@ -481,6 +490,7 @@ model GoodsReceipt {
   @@unique([businessId, receiptNumber])
   @@index([businessId, createdAt])
   @@index([purchaseOrderId])
+  @@index([businessId, status])
   @@index([businessId, module, createdAt])
 }
 

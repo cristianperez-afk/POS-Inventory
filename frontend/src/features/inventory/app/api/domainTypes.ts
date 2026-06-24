@@ -137,8 +137,11 @@ export interface ApiGoodsReceipt {
   purchaseOrderId: string;
   purchaseOrder?: ApiPurchaseOrder;
   module: BusinessModule;
+  status?: 'RECEIVED' | 'REJECTED' | 'CANCELLED';
   receivedBy?: ApiActor | null;
   notes?: string | null;
+  actionReason?: string | null;
+  proofImages?: string[];
   items: ApiGoodsReceiptItem[];
   createdAt: string;
 }

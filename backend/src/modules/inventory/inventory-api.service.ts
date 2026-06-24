@@ -1041,7 +1041,10 @@ export class InventoryApiService {
           gr."receiptNumber",
           gr."purchaseOrderId",
           gr."receivedById",
+          gr.status,
           gr.notes,
+          gr."actionReason",
+          gr."proofImages",
           gr."businessId",
           gr.module,
           to_char(gr."createdAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "createdAt",
@@ -1281,6 +1284,134 @@ export class InventoryApiService {
     return this.getPurchaseOrderRow(scope, id);
   }
 
+  private normalizeProofImages(value: unknown) {
+    if (!Array.isArray(value)) return [];
+    return value
+      .filter((item): item is string => typeof item === 'string')
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0)
+      .slice(0, 6);
+  }
+
+  async quickActionGoodsReceipt(
+    headers: HeadersLike,
+    id: string,
+    body: Record<string, unknown>,
+    action: 'reject' | 'cancel',
+  ) {
+    const scope = await this.resolveScope(headers);
+    const reason = String(body.reason ?? body.notes ?? '').trim();
+    if (!reason) {
+      throw new BadRequestException(`A ${action === 'reject' ? 'rejection' : 'cancellation'} reason is required.`);
+    }
+    const proofImages = this.normalizeProofImages(body.proofImages);
+    const receiptStatus = action === 'reject' ? 'REJECTED' : 'CANCELLED';
+    const nextOrderStatus = action === 'reject' ? 'REJECTED' : 'CANCELLED';
+
+    await this.databaseService.withTransaction(async (client) => {
+      const poRows = await client.query<{ id: string; status: string; orderNumber: string }>(
+        `SELECT id, status, "orderNumber"
+         FROM "PurchaseOrder"
+         WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule"
+         FOR UPDATE`,
+        [id, scope.businessId, scope.module],
+      );
+      const po = poRows.rows[0];
+      if (!po) throw new NotFoundException(`Purchase order #${id} not found`);
+      if (!['APPROVED', 'PARTIALLY_RECEIVED'].includes(po.status)) {
+        throw new BadRequestException('Only APPROVED or PARTIALLY_RECEIVED orders can be rejected or cancelled from Goods Received.');
+      }
+
+      const poItemRows = await client.query<{
+        id: string;
+        quantity: number;
+        receivedQty: number;
+        rejectedQty: number;
+        inventoryItemId: string | null;
+      }>(
+        `SELECT id, quantity, "receivedQty", "rejectedQty", "inventoryItemId"
+         FROM "PurchaseOrderItem"
+         WHERE "purchaseOrderId" = $1
+         ORDER BY "createdAt"`,
+        [id],
+      );
+      const openItems = poItemRows.rows
+        .map((item) => ({
+          ...item,
+          remainingQty: Math.max(0, Number(item.quantity) - Number(item.receivedQty) - Number(item.rejectedQty)),
+        }))
+        .filter((item) => item.remainingQty > 0);
+
+      if (openItems.length === 0) {
+        throw new BadRequestException('This purchase order has no remaining goods to reject or cancel.');
+      }
+
+      const receiptId = randomUUID();
+      const receiptNumber = `GR-${Date.now()}`;
+      await client.query(
+        `INSERT INTO "GoodsReceipt" (
+           id, "receiptNumber", "purchaseOrderId", "receivedById", status,
+           notes, "actionReason", "proofImages", "businessId", module
+         )
+         VALUES ($1, $2, $3, $4, $5::"GoodsReceiptStatus", $6, $7, $8, $9, $10::"BusinessModule")`,
+        [
+          receiptId,
+          receiptNumber,
+          po.id,
+          scope.user.id,
+          receiptStatus,
+          reason,
+          reason,
+          proofImages,
+          scope.businessId,
+          scope.module,
+        ],
+      );
+
+      for (const item of openItems) {
+        const rejectedQty = action === 'reject' ? item.remainingQty : 0;
+        if (rejectedQty > 0) {
+          await client.query(
+            `UPDATE "PurchaseOrderItem"
+             SET "rejectedQty" = "rejectedQty" + $1, "updatedAt" = CURRENT_TIMESTAMP
+             WHERE id = $2`,
+            [rejectedQty, item.id],
+          );
+        }
+        await client.query(
+          `INSERT INTO "GoodsReceiptItem" (
+             id, "goodsReceiptId", "purchaseOrderItemId", "inventoryItemId",
+             "receivedQty", "rejectedQty", condition, notes
+           )
+           VALUES ($1, $2, $3, $4, 0, $5, $6, $7)`,
+          [
+            randomUUID(),
+            receiptId,
+            item.id,
+            item.inventoryItemId,
+            rejectedQty,
+            receiptStatus,
+            reason,
+          ],
+        );
+      }
+
+      await client.query(
+        `UPDATE "PurchaseOrder"
+         SET status = $1::"PurchaseOrderStatus",
+             "rejectionReason" = CASE WHEN $1 = 'REJECTED' THEN $2 ELSE "rejectionReason" END,
+             "rejectedAt" = CASE WHEN $1 = 'REJECTED' THEN CURRENT_TIMESTAMP ELSE "rejectedAt" END,
+             "receivedById" = $3,
+             "receivedAt" = CURRENT_TIMESTAMP,
+             "updatedAt" = CURRENT_TIMESTAMP
+         WHERE id = $4`,
+        [nextOrderStatus, reason, scope.user.id, po.id],
+      );
+    });
+
+    return this.getPurchaseOrderRow(scope, id);
+  }
+
   // Receive (full or partial): adds accepted qty to stock with weighted-average
   // costing, writes a GoodsReceipt + StockMovements, and advances PO status.
   async receivePurchaseOrder(headers: HeadersLike, id: string, body: Record<string, unknown>) {
@@ -1418,9 +1549,9 @@ export class InventoryApiService {
       }
 
       await client.query(
-        `INSERT INTO "GoodsReceipt" (id, "receiptNumber", "purchaseOrderId", "receivedById", notes, "businessId", module)
-         VALUES ($1, $2, $3, $4, $5, $6, $7::"BusinessModule")`,
-        [receiptId, receiptNumber, po.id, scope.user.id, body.notes ?? null, scope.businessId, scope.module],
+        `INSERT INTO "GoodsReceipt" (id, "receiptNumber", "purchaseOrderId", "receivedById", status, notes, "proofImages", "businessId", module)
+         VALUES ($1, $2, $3, $4, 'RECEIVED', $5, $6, $7, $8::"BusinessModule")`,
+        [receiptId, receiptNumber, po.id, scope.user.id, body.notes ?? null, this.normalizeProofImages(body.proofImages), scope.businessId, scope.module],
       );
       for (const it of receiptItems) {
         await client.query(

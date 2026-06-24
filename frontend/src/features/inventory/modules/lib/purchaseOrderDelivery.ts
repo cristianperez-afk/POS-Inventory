@@ -8,6 +8,10 @@ const CLOSED_STATUSES = new Set([
 ]);
 
 const pad = (value: number) => String(value).padStart(2, '0');
+const DELIVERY_START_MINUTES = 8 * 60;
+const DELIVERY_END_MINUTES = 18 * 60;
+
+export const EXPECTED_DELIVERY_TIME_WINDOW_LABEL = '8:00 AM to 6:00 PM';
 
 export function toDateTimeLocalInput(value?: string | null) {
   if (!value) return '';
@@ -29,6 +33,19 @@ export function formatExpectedDelivery(value?: string | null) {
     hour: 'numeric',
     minute: '2-digit',
   });
+}
+
+export function getExpectedDeliveryTimeWindowError(value?: string | null) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Select a valid expected delivery date and time.';
+
+  const minutes = date.getHours() * 60 + date.getMinutes();
+  if (minutes < DELIVERY_START_MINUTES || minutes > DELIVERY_END_MINUTES) {
+    return `Expected delivery time must be between ${EXPECTED_DELIVERY_TIME_WINDOW_LABEL}.`;
+  }
+
+  return null;
 }
 
 export function getDeliveryDelayLabel(

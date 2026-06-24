@@ -1,7 +1,10 @@
 import {
+  useCancelRetailGoodsReceiptMutation,
   useReceiveRetailPurchaseOrderMutation,
+  useRejectRetailGoodsReceiptMutation,
   useRetailPurchaseOrderRecordsQuery,
 } from '../lib/retail';
+import { useGoodsReceiptsQuery } from '../lib/domainQueries';
 import { autoSortItem } from '../../app/utils/autoSortingRules';
 import type {
   NormalizedLine,
@@ -14,12 +17,14 @@ import type {
 export function useRetailReceivingConfig(): ResolvedReceivingConfig {
   const approvedQuery = useRetailPurchaseOrderRecordsQuery({ status: 'APPROVED' });
   const partialQuery = useRetailPurchaseOrderRecordsQuery({ status: 'PARTIALLY_RECEIVED' });
-  const receivedQuery = useRetailPurchaseOrderRecordsQuery({ status: 'RECEIVED' });
+  const goodsReceiptsQuery = useGoodsReceiptsQuery({ module: 'RETAIL' });
   const receiveMutation = useReceiveRetailPurchaseOrderMutation();
+  const rejectMutation = useRejectRetailGoodsReceiptMutation();
+  const cancelMutation = useCancelRetailGoodsReceiptMutation();
 
   const approved = approvedQuery.data ?? [];
   const partial = partialQuery.data ?? [];
-  const received = receivedQuery.data ?? [];
+  const receipts = goodsReceiptsQuery.data ?? [];
 
   const pending: PendingReceipt[] = [...approved, ...partial].map((po) => ({
     id: po.id,
@@ -39,23 +44,34 @@ export function useRetailReceivingConfig(): ResolvedReceivingConfig {
       .filter((line: NormalizedLine) => line.orderedQty > 0),
   }));
 
-  const history: ReceiptRecord[] = received.map((po) => {
-    const lines = (po.items ?? []).map((item: any) => ({
-      name: item.name,
-      orderedQty: item.quantity,
+  const history: ReceiptRecord[] = receipts.map((receipt: any) => {
+    const lines = (receipt.items ?? []).map((item: any) => ({
+      name: item.purchaseOrderItem?.name ?? item.inventoryItem?.name ?? 'Item',
+      orderedQty: item.purchaseOrderItem?.quantity ?? item.receivedQty + item.rejectedQty,
       acceptedQty: item.receivedQty,
       rejectedQty: item.rejectedQty,
     }));
     const totalAccepted = lines.reduce((s, l) => s + l.acceptedQty, 0);
     const totalRejected = lines.reduce((s, l) => s + l.rejectedQty, 0);
+    const status =
+      receipt.status === 'REJECTED'
+        ? 'Rejected'
+        : receipt.status === 'CANCELLED'
+          ? 'Cancelled'
+          : totalRejected > 0
+            ? 'Partially Accepted'
+            : 'Fully Accepted';
     return {
-      id: po.id,
-      orderNumber: po.orderNumber,
-      supplier: po.supplier?.name ?? '',
-      receivedDate: po.receivedAt ? new Date(po.receivedAt).toLocaleDateString() : '',
-      receivedAt: po.receivedAt ?? undefined,
-      receivedBy: po.receivedBy?.name ?? '',
-      status: totalRejected > 0 ? 'Partially Accepted' : 'Fully Accepted',
+      id: receipt.id,
+      orderNumber: receipt.receiptNumber,
+      purchaseOrderNumber: receipt.purchaseOrder?.orderNumber ?? receipt.purchaseOrderId,
+      supplier: receipt.purchaseOrder?.supplier?.name ?? '',
+      receivedDate: receipt.createdAt ? new Date(receipt.createdAt).toLocaleDateString() : '',
+      receivedAt: receipt.createdAt ?? undefined,
+      receivedBy: receipt.receivedBy?.name ?? receipt.receivedBy?.email ?? '',
+      status,
+      actionReason: receipt.actionReason ?? receipt.notes ?? null,
+      proofImages: receipt.proofImages ?? [],
       totalAccepted,
       totalRejected,
       lines,
@@ -67,7 +83,7 @@ export function useRetailReceivingConfig(): ResolvedReceivingConfig {
       title: 'Products Received',
       subtitle: 'Inspect and log received inventory shipments',
     },
-    loading: approvedQuery.isLoading || partialQuery.isLoading || receivedQuery.isLoading,
+    loading: approvedQuery.isLoading || partialQuery.isLoading || goodsReceiptsQuery.isLoading,
 
     pending,
     history,
@@ -119,11 +135,25 @@ export function useRetailReceivingConfig(): ResolvedReceivingConfig {
       notes: draft.fields.inspectionNotes?.trim() || undefined,
     }),
 
-    receive: async (poId, items) => {
-      await receiveMutation.mutateAsync({ id: poId, items });
+    receive: async (poId, items, proofImages = []) => {
+      await receiveMutation.mutateAsync({ id: poId, items, proofImages });
+    },
+
+    quickAction: async (poId, action, reason, proofImages) => {
+      if (action === 'reject') {
+        await rejectMutation.mutateAsync({ id: poId, reason, proofImages });
+        return;
+      }
+      await cancelMutation.mutateAsync({ id: poId, reason, proofImages });
     },
 
     historyStatusClass: (status) =>
-      status === 'Fully Accepted' ? 'bg-[#E0F5F1] text-[#008967]' : 'bg-[#E0F2F2] text-[#007A5E]',
+      status === 'Fully Accepted'
+        ? 'bg-[#E0F5F1] text-[#008967]'
+        : status === 'Rejected'
+          ? 'bg-[#ffe2e2] text-[#991B1B]'
+          : status === 'Cancelled'
+            ? 'bg-[#f3f4f6] text-[#374151]'
+            : 'bg-[#E0F2F2] text-[#007A5E]',
   };
 }

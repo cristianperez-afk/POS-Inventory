@@ -15,7 +15,9 @@ import {
   useSaveRestaurantPurchaseOrderMutation,
 } from "../lib/restaurant";
 import {
+  EXPECTED_DELIVERY_TIME_WINDOW_LABEL,
   formatExpectedDelivery,
+  getExpectedDeliveryTimeWindowError,
   getDeliveryDelayLabel,
   isPurchaseOrderDelayed,
 } from "../lib/purchaseOrderDelivery";
@@ -408,6 +410,11 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
       toast.error("Please add at least one item to the order");
       return;
     }
+    const deliveryTimeError = getExpectedDeliveryTimeWindowError(newOrder.expectedDelivery);
+    if (deliveryTimeError) {
+      toast.error(deliveryTimeError);
+      return;
+    }
 
     try {
       const supplier = suppliers.find((item) => item.name === newOrder.supplier);
@@ -547,6 +554,11 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
     }
 
     if (!editingOrder) return;
+    const deliveryTimeError = getExpectedDeliveryTimeWindowError(newOrder.expectedDelivery);
+    if (deliveryTimeError) {
+      toast.error(deliveryTimeError);
+      return;
+    }
 
     try {
       const supplier = suppliers.find((item) => item.name === newOrder.supplier);
@@ -836,6 +848,9 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
                   className="w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
                   required
                 />
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Delivery time must be between {EXPECTED_DELIVERY_TIME_WINDOW_LABEL}.
+                </p>
               </div>
 
               <div className="border-t border-border pt-4">
@@ -1164,6 +1179,9 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
                   className="w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
                   required
                 />
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Delivery time must be between {EXPECTED_DELIVERY_TIME_WINDOW_LABEL}.
+                </p>
               </div>
 
               <div className="border-t border-border pt-4">

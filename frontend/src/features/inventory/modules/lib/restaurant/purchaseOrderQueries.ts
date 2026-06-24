@@ -8,6 +8,7 @@ import type {
 import {
   approvePurchaseOrder,
   cancelPurchaseOrder,
+  cancelGoodsReceipt,
   createInventoryItem,
   createPurchaseOrder,
   createSupplier,
@@ -15,6 +16,7 @@ import {
   getInventory,
   getPurchaseOrders,
   receivePurchaseOrder,
+  rejectGoodsReceipt,
   rejectPurchaseOrder,
   submitPurchaseOrder,
   updatePurchaseOrder,
@@ -303,9 +305,16 @@ export function useRestaurantGoodsRecordsQuery() {
           0,
         ),
         receivedBy: formatActorName(receipt.receivedBy),
-        status: (receipt.items ?? []).some((line) => line.rejectedQty > 0)
-          ? 'partial'
-          : 'verified',
+        status:
+          receipt.status === 'REJECTED'
+            ? 'rejected'
+            : receipt.status === 'CANCELLED'
+              ? 'cancelled'
+              : (receipt.items ?? []).some((line) => line.rejectedQty > 0)
+                ? 'partial'
+                : 'verified',
+        actionReason: receipt.actionReason ?? receipt.notes ?? '',
+        proofImages: receipt.proofImages ?? [],
         notes: receipt.notes ?? '',
       }));
       const pending = orders
@@ -495,17 +504,35 @@ export function useReceiveRestaurantPurchaseOrderMutation() {
       id,
       items,
       notes,
+      proofImages,
     }: {
       id: string;
       items: Parameters<typeof receivePurchaseOrder>[1];
       notes?: string;
-    }) => receivePurchaseOrder(id, items, notes, 'RESTAURANT'),
+      proofImages?: string[];
+    }) => receivePurchaseOrder(id, items, notes, 'RESTAURANT', proofImages),
     [
       domainQueryKeys.purchaseOrders,
       domainQueryKeys.goodsReceipts,
       domainQueryKeys.inventory,
       domainQueryKeys.stockMovements,
     ],
+  );
+}
+
+export function useRejectRestaurantGoodsReceiptMutation() {
+  return useDomainMutation(
+    ({ id, reason, proofImages }: { id: string; reason: string; proofImages?: string[] }) =>
+      rejectGoodsReceipt(id, reason, proofImages, 'RESTAURANT'),
+    [domainQueryKeys.purchaseOrders, domainQueryKeys.goodsReceipts],
+  );
+}
+
+export function useCancelRestaurantGoodsReceiptMutation() {
+  return useDomainMutation(
+    ({ id, reason, proofImages }: { id: string; reason: string; proofImages?: string[] }) =>
+      cancelGoodsReceipt(id, reason, proofImages, 'RESTAURANT'),
+    [domainQueryKeys.purchaseOrders, domainQueryKeys.goodsReceipts],
   );
 }
 

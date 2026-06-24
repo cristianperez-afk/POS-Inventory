@@ -17,7 +17,9 @@ import {
 import { categorySubcategories, generalMerchandiseSubcategories } from '../../app/utils/constants';
 import { SuppliersManager, type NormalizedSupplier } from '../shared/suppliers/SuppliersManager';
 import {
+  EXPECTED_DELIVERY_TIME_WINDOW_LABEL,
   formatExpectedDelivery,
+  getExpectedDeliveryTimeWindowError,
   getDeliveryDelayLabel,
   isPurchaseOrderDelayed,
 } from '../lib/purchaseOrderDelivery';
@@ -258,6 +260,11 @@ export default function PurchaseOrdersView({
     const location = locations[0];
     if (hasNewItems && !location) {
       toast.error('Create a location before ordering a new item');
+      return;
+    }
+    const deliveryTimeError = getExpectedDeliveryTimeWindowError(poForm.expectedDelivery);
+    if (deliveryTimeError) {
+      toast.error(deliveryTimeError);
       return;
     }
     setSaving(true);
@@ -507,6 +514,9 @@ export default function PurchaseOrdersView({
                   onChange={(e) => setPOForm({ ...poForm, expectedDelivery: e.target.value })}
                   className="w-full px-[12.8px] py-[8.8px] bg-white border-[0.8px] border-transparent rounded-[10px] text-[14px] focus:outline-none focus:border-[#007A5E]"
                 />
+                <p className="mt-1 text-[11px] text-[#6b7280]">
+                  Delivery time must be between {EXPECTED_DELIVERY_TIME_WINDOW_LABEL}.
+                </p>
               </div>
 
               <div>
