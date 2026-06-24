@@ -40,8 +40,12 @@ export class InventoryApiController {
   }
 
   @Patch('inventory/:id')
-  updateInventoryItem(@Param('id') id: string, @Body() body: Record<string, unknown>) {
-    return this.inventoryApiService.updateInventoryItem(id, body);
+  updateInventoryItem(
+    @Req() request: RequestLike,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.inventoryApiService.updateInventoryItem(request.headers, id, body);
   }
 
   @Delete('inventory/:id')
