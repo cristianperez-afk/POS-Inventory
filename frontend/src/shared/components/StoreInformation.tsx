@@ -52,7 +52,7 @@ const defaultStoreInfo: StoreInformationData = {
 };
 
 export function StoreInformation({ currentUser, onLogout, onNavigate, onUserUpdate, onStoreBrandUpdate, storeBrand }: StoreInformationProps) {
-  const { settings, discounts } = useStoreSettings();
+  const { settings, discounts, reload } = useStoreSettings();
   const defaultLogo = getDefaultStoreLogo(currentUser?.store_type);
   const [storeInfo, setStoreInfo] = useState<StoreInformationData>(defaultStoreInfo);
   const [loading, setLoading] = useState(true);
@@ -161,6 +161,7 @@ export function StoreInformation({ currentUser, onLogout, onNavigate, onUserUpda
         receipt_footer_message: normalized.receipt_footer_message,
         operating_hours: normalized.operating_hours,
       });
+      await reload();
       setMessage('Store information saved.');
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Unable to save store information.');
@@ -198,7 +199,7 @@ export function StoreInformation({ currentUser, onLogout, onNavigate, onUserUpda
 
   return (
     <div className="flex h-screen">
-      <Sidebar currentPage="store-information" onNavigate={onNavigate} onLogout={onLogout} isAdmin storeBrand={storeBrand} userName={currentUser?.full_name} storeType={currentUser?.store_type} />
+      <Sidebar currentPage="store-information" onNavigate={onNavigate} onLogout={onLogout} isAdmin storeBrand={storeBrand} userName={currentUser?.full_name} userRole={currentUser?.role} storeType={currentUser?.store_type} staffType={currentUser?.staff_type} />
 
       <div className="flex-1 overflow-auto bg-background">
         <main className="p-6">

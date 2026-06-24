@@ -370,10 +370,12 @@ function getStaffTypeLabel(staffType: StaffType) {
 }
 
 function getUserRoleLabel(role: string | null | undefined, isAdmin: boolean, staffType: StaffType) {
-  if (role === 'POS_MANAGER' || role === 'POS_ADMIN') return 'POS Manager';
-  if (role === 'INVENTORY_MANAGER' || role === 'INVENTORY_ADMIN') return 'Inventory Manager';
-  if (role === 'ADMIN' && staffType === 'INVENTORY_STAFF') return 'Inventory Manager';
-  if (isAdmin) return 'POS Manager';
+  if (role === 'POS_ADMIN') return 'POS Admin';
+  if (role === 'INVENTORY_ADMIN') return 'Inventory Admin';
+  if (role === 'POS_MANAGER') return 'POS Manager';
+  if (role === 'INVENTORY_MANAGER') return 'Inventory Manager';
+  if (role === 'ADMIN') return staffType === 'INVENTORY_STAFF' ? 'Inventory Admin' : 'POS Admin';
+  if (isAdmin) return 'Admin';
   return getStaffTypeLabel(staffType);
 }
 
