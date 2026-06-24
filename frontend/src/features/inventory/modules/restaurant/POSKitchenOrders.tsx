@@ -40,6 +40,7 @@ type KitchenOrder = {
   paymentAt?: string | null;
   preparingStartedAt?: string | null;
   readyAt?: string | null;
+  servedAt?: string | null;
   completedAt?: string | null;
   tableStartedAt?: string | null;
   tableEndedAt?: string | null;
@@ -141,15 +142,20 @@ function DetailList({ label, values }: { label: string; values?: string[] }) {
   );
 }
 
-function nextAction(status: KitchenStatus) {
+function nextAction(status: KitchenStatus, orderType: string) {
   if (status === "pending") return { label: "Start Preparing", next: "preparing" as KitchenStatus, icon: Play };
   if (status === "preparing") return { label: "Mark Ready to Serve", next: "ready" as KitchenStatus, icon: CheckCircle2 };
-  if (status === "ready") return { label: "Mark Served", next: "served" as KitchenStatus, icon: ClipboardCheck };
+  if (status === "ready") {
+    const isTakeout = orderType.replace(/_/g, "-").toLowerCase() === "takeout";
+    return isTakeout
+      ? { label: "Mark Served", next: "served" as KitchenStatus, icon: ClipboardCheck }
+      : { label: "Complete", next: "completed" as KitchenStatus, icon: ClipboardCheck };
+  }
   return null;
 }
 
 function canCancel(status: KitchenStatus) {
-  return status !== "completed" && status !== "cancelled";
+  return status !== "served" && status !== "completed" && status !== "cancelled";
 }
 
 function hasModifications(item: KitchenOrderItem) {
@@ -467,7 +473,7 @@ export function POSKitchenOrders() {
 
                   <div className="space-y-3">
                     {laneOrders.map((order) => {
-                      const action = nextAction(order.status);
+                      const action = nextAction(order.status, order.orderType);
                       const ActionIcon = action?.icon;
                       const showCancelAction = canCancel(order.status);
                       const isExpanded = expandedOrders[order.id] ?? false;

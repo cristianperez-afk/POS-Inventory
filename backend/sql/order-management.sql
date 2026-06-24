@@ -274,6 +274,10 @@ CREATE TABLE IF NOT EXISTS orders (
   table_started_at TIMESTAMP,
   table_ended_at TIMESTAMP,
   completed_at TIMESTAMP,
+  running_time_start TIMESTAMP,
+  running_time_end TIMESTAMP,
+  running_duration BIGINT,
+  is_running BOOLEAN NOT NULL DEFAULT FALSE,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -282,7 +286,11 @@ ALTER TABLE orders
   ADD COLUMN IF NOT EXISTS preparing_started_at TIMESTAMP,
   ADD COLUMN IF NOT EXISTS ready_at TIMESTAMP,
   ADD COLUMN IF NOT EXISTS table_started_at TIMESTAMP,
-  ADD COLUMN IF NOT EXISTS table_ended_at TIMESTAMP;
+  ADD COLUMN IF NOT EXISTS table_ended_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS running_time_start TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS running_time_end TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS running_duration BIGINT,
+  ADD COLUMN IF NOT EXISTS is_running BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE TABLE IF NOT EXISTS order_items (
   id BIGSERIAL PRIMARY KEY,
@@ -457,6 +465,7 @@ CREATE INDEX IF NOT EXISTS ingredient_alternatives_alternative_ingredient_id_idx
 CREATE INDEX IF NOT EXISTS restaurant_tables_store_id_idx ON restaurant_tables(store_id);
 CREATE INDEX IF NOT EXISTS orders_store_id_idx ON orders(store_id);
 CREATE INDEX IF NOT EXISTS orders_cashier_id_idx ON orders(cashier_id);
+CREATE INDEX IF NOT EXISTS orders_running_orders_idx ON orders(store_id, is_running) WHERE is_running = TRUE;
 CREATE INDEX IF NOT EXISTS order_items_order_id_idx ON order_items(order_id);
 CREATE INDEX IF NOT EXISTS order_items_variant_id_idx ON order_items(variant_id);
 CREATE INDEX IF NOT EXISTS order_item_customizations_order_item_id_idx ON order_item_customizations(order_item_id);
