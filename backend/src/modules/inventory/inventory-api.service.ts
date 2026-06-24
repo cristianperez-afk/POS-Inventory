@@ -1256,8 +1256,8 @@ export class InventoryApiService {
 
   async approvePurchaseOrder(headers: HeadersLike, id: string) {
     const scope = await this.resolveScope(headers);
-    if (!['Admin', 'Manager'].includes(scope.user.role)) {
-      throw new ForbiddenException('Only Admin or Manager can approve purchase orders.');
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only Inventory Manager can approve purchase orders.');
     }
     const rows = await this.safeQuery<{ id: string }>(
       `UPDATE "PurchaseOrder" SET status = 'APPROVED', "updatedAt" = CURRENT_TIMESTAMP
@@ -1270,8 +1270,8 @@ export class InventoryApiService {
 
   async rejectPurchaseOrder(headers: HeadersLike, id: string, body: { reason?: string }) {
     const scope = await this.resolveScope(headers);
-    if (!['Admin', 'Manager'].includes(scope.user.role)) {
-      throw new ForbiddenException('Only Admin or Manager can reject purchase orders.');
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only Inventory Manager can reject purchase orders.');
     }
     const reason = String(body?.reason ?? '').trim();
     if (!reason) throw new BadRequestException('A rejection reason is required.');
@@ -1960,8 +1960,8 @@ export class InventoryApiService {
 
   async approveAdjustment(headers: HeadersLike, id: string) {
     const scope = await this.resolveScope(headers);
-    if (!['Admin', 'Manager'].includes(scope.user.role)) {
-      throw new ForbiddenException('Only Admin or Manager can approve adjustments.');
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only Inventory Manager can approve adjustments.');
     }
 
     const lowStockCandidates: LowStockCandidate[] = [];
@@ -2069,7 +2069,7 @@ export class InventoryApiService {
 
   // Emits a LOW_STOCK notification for each item that crossed at/below its
   // reorder threshold (downward only), de-duped against existing unread alerts,
-  // to every Admin/Manager in the business.
+  // to every Inventory Manager in the business.
   private async notifyLowStock(businessId: string, items: LowStockCandidate[]) {
     const crossed = items.filter((item) => {
       const threshold = item.reorderPoint ?? item.minStock ?? 0;
@@ -2078,7 +2078,7 @@ export class InventoryApiService {
     if (crossed.length === 0) return;
 
     const managers = await this.safeQuery<{ id: string }>(
-      `SELECT id FROM "User" WHERE "businessId" = $1 AND role IN ('Admin', 'Manager') AND status = 'Active'`,
+      `SELECT id FROM "User" WHERE "businessId" = $1 AND role = 'Admin' AND status = 'Active'`,
       [businessId],
     );
     const recipientIds = managers.map((m) => m.id);
@@ -2114,8 +2114,8 @@ export class InventoryApiService {
 
   async rejectAdjustment(headers: HeadersLike, id: string, body: { reason?: string }) {
     const scope = await this.resolveScope(headers);
-    if (!['Admin', 'Manager'].includes(scope.user.role)) {
-      throw new ForbiddenException('Only Admin or Manager can reject adjustments.');
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only Inventory Manager can reject adjustments.');
     }
     const reason = String(body?.reason ?? '').trim();
     if (!reason) throw new BadRequestException('A rejection reason is required.');

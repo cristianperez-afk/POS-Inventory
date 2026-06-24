@@ -21,7 +21,7 @@ export interface User {
   id: string;
   name: string;
   email: string;
-  role: 'Admin' | 'Manager' | 'Staff' | 'Cashier' | 'KitchenStaff' | 'RetailStaff';
+  role: 'Admin' | 'Staff' | 'Cashier' | 'KitchenStaff' | 'RetailStaff';
   status: 'Active' | 'Inactive';
   lastLogin: string;
 }

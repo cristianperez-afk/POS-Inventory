@@ -22,22 +22,20 @@ const DEMO_ACCOUNT_GROUPS = [
     label: 'Restaurant Accounts',
     accounts: [
       { role: 'Admin', email: 'restaurantadmin@gmail.com', pwd: 'restaurantadmin123', color: '#007A5E' },
-      { role: 'POS Admin', email: 'posadmin@example.com', pwd: 'password123', color: '#047857' },
-      { role: 'Inventory Admin', email: 'inventoryadmin@example.com', pwd: 'password123', color: '#1d4ed8' },
+      { role: 'POS Manager', email: 'posadmin@example.com', pwd: 'password123', color: '#047857' },
+      { role: 'Inventory Manager', email: 'inventoryadmin@example.com', pwd: 'password123', color: '#1d4ed8' },
       { role: 'POS Staff', email: 'resstaff@pos.com', pwd: 'resstaffpos123', color: '#0f766e' },
       { role: 'Inventory Staff', email: 'resstaff@inventory.com', pwd: 'resstaffinventory123', color: '#2563eb' },
-      { role: 'Manager', email: 'resstaff@manager.com', pwd: 'resstaffmanager123', color: '#7c3aed' },
     ],
   },
   {
     label: 'Retail Accounts',
     accounts: [
       { role: 'Admin', email: 'retailadmin@gmail.com', pwd: 'retailadmin123', color: '#005656' },
-      { role: 'POS Admin', email: 'retailposadmin@example.com', pwd: 'password123', color: '#047857' },
-      { role: 'Inventory Admin', email: 'retailinventoryadmin@example.com', pwd: 'password123', color: '#1d4ed8' },
+      { role: 'POS Manager', email: 'retailposadmin@example.com', pwd: 'password123', color: '#047857' },
+      { role: 'Inventory Manager', email: 'retailinventoryadmin@example.com', pwd: 'password123', color: '#1d4ed8' },
       { role: 'POS Staff', email: 'retailstaff@pos.com', pwd: 'retailstaffpos123', color: '#0f766e' },
       { role: 'Inventory Staff', email: 'retailstaff@inventory.com', pwd: 'retailstaffinventory123', color: '#2563eb' },
-      { role: 'Manager', email: 'retailstaff@manager.com', pwd: 'retailstaffmanager123', color: '#7c3aed' },
     ],
   },
 ];

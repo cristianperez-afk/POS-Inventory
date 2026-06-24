@@ -55,7 +55,7 @@ export function ReportsView() {
   const [selectedLocation, setSelectedLocation] = useState<string>('all');
 
   const isAdmin = currentUser?.role === 'Admin';
-  const hasFullAuditTrailAccess = currentUser?.role === 'Admin' || currentUser?.role === 'Manager';
+  const hasFullAuditTrailAccess = currentUser?.role === 'Admin';
 
   // Overview Stats
   const overviewStats = useMemo(() => {
@@ -201,7 +201,6 @@ export function ReportsView() {
       activeUsers: users.filter(u => u.status === 'Active').length,
       inactiveUsers: users.filter(u => u.status === 'Inactive').length,
       adminUsers: users.filter(u => u.role === 'Admin').length,
-      managerUsers: users.filter(u => u.role === 'Manager').length,
       staffUsers: users.filter(u => u.role === 'Staff').length
     };
 
@@ -427,7 +426,6 @@ export function ReportsView() {
         csvContent += `Active Users,${confidentialReportData.systemAudit.activeUsers}\n`;
         csvContent += `Inactive Users,${confidentialReportData.systemAudit.inactiveUsers}\n`;
         csvContent += `Admin Users,${confidentialReportData.systemAudit.adminUsers}\n`;
-        csvContent += `Manager Users,${confidentialReportData.systemAudit.managerUsers}\n`;
         csvContent += `Staff Users,${confidentialReportData.systemAudit.staffUsers}\n`;
         csvContent += '\nFinancial Summary\n';
         csvContent += 'Metric,Value\n';
@@ -1345,9 +1343,7 @@ export function ReportsView() {
                 <div key={user.email} className="flex items-center justify-between p-3 bg-muted rounded-[8px]">
                   <div className="flex items-center gap-4">
                     <div className={`size-8 rounded-full flex items-center justify-center text-white text-[14px] font-bold ${
-                      user.role === 'Admin' ? 'bg-destructive' :
-                      user.role === 'Manager' ? 'bg-secondary' :
-                      'bg-secondary'
+                      user.role === 'Admin' ? 'bg-destructive' : 'bg-secondary'
                     }`}>
                       {user.name.charAt(0)}
                     </div>
@@ -1358,9 +1354,7 @@ export function ReportsView() {
                   </div>
                   <div className="flex items-center gap-4">
                     <span className={`px-3 py-1 rounded-[6px] text-[12px] font-medium ${
-                      user.role === 'Admin' ? 'bg-destructive/10 text-destructive' :
-                      user.role === 'Manager' ? 'bg-secondary/10 text-secondary' :
-                      'bg-secondary/10 text-secondary'
+                      user.role === 'Admin' ? 'bg-destructive/10 text-destructive' : 'bg-secondary/10 text-secondary'
                     }`}>
                       {user.role}
                     </span>
@@ -1535,3 +1529,4 @@ export function ReportsView() {
 }
 
 // Purchase Orders View
+
