@@ -42,6 +42,13 @@ function formatDuration(minutes?: number) {
   return `${hours} hr${hours === 1 ? '' : 's'}${rest ? ` ${rest} mins` : ''}`;
 }
 
+function formatServedTime(value?: string) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
+  return date.toLocaleString('en-PH', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
 export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, userName, storeType, staffType }: OrderListProps) {
   const { orders, completePayment, voidOrder, refundOrder, reloadOrders } = useOrders();
   const { settings } = useStoreSettings();
@@ -298,7 +305,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
         {/* Table Card */}
         <div className="bg-white rounded-xl shadow-sm border border-border overflow-hidden">
           <div className="overflow-x-auto">
-            <table className={`w-full ${showTableManagementColumns ? 'min-w-[1380px]' : 'min-w-[1080px]'}`}>
+            <table className={`w-full ${showTableManagementColumns ? 'min-w-[1300px]' : 'min-w-[1000px]'}`}>
               <thead className="bg-muted/30">
                 <tr>
                   <th className="w-[13%] text-left px-5 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Order Number</th>
@@ -314,8 +321,8 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                   <th className="w-[9%] text-right px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Total</th>
                   <th className="w-[8%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Payments</th>
                   <th className="w-[9%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Date and Time</th>
-                  <th className="w-[8%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Running</th>
                   <th className="w-[8%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Stay</th>
+                  <th className="w-[9%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Time Served</th>
                   <th className="w-[14%] text-center px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Action</th>
                 </tr>
               </thead>
@@ -382,8 +389,12 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                       <div className="text-xs text-gray-600 whitespace-nowrap">{order.date}</div>
                       <div className="text-xs text-gray-400 whitespace-nowrap">{order.time}</div>
                     </td>
-                    <td className="px-4 py-5 text-xs text-gray-600 whitespace-nowrap">{formatDuration(order.runningTimeMinutes)}</td>
-                    <td className="px-4 py-5 text-xs text-gray-600 whitespace-nowrap">{formatDuration(order.customerStayMinutes)}</td>
+                    <td className="px-4 py-5 text-xs text-gray-600 whitespace-nowrap">
+                      {order.type === 'Dine-In' || order.type === 'Mixed' ? formatDuration(order.customerStayMinutes) : '-'}
+                    </td>
+                    <td className="px-4 py-5 text-xs text-gray-600 whitespace-nowrap">
+                      {order.type === 'Takeout' ? formatServedTime(order.servedAt) : '-'}
+                    </td>
                     <td className="px-4 py-5">
                       <div className="flex items-center justify-center gap-1 whitespace-nowrap">
                         {/* View Details - always */}
@@ -519,12 +530,14 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="bg-muted rounded-xl p-3">
-                  <p className="text-xs text-gray-400 mb-1">Running Time</p>
-                  <p className="text-sm text-gray-800">{formatDuration(selectedOrder.runningTimeMinutes)}</p>
+                  <p className="text-xs text-gray-400 mb-1">Customer Stay Duration</p>
+                  <p className="text-sm text-gray-800">
+                    {selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed' ? formatDuration(selectedOrder.customerStayMinutes) : '-'}
+                  </p>
                 </div>
                 <div className="bg-muted rounded-xl p-3">
-                  <p className="text-xs text-gray-400 mb-1">Customer Stay Duration</p>
-                  <p className="text-sm text-gray-800">{formatDuration(selectedOrder.customerStayMinutes)}</p>
+                  <p className="text-xs text-gray-400 mb-1">Time Served</p>
+                  <p className="text-sm text-gray-800">{selectedOrder.type === 'Takeout' ? formatServedTime(selectedOrder.servedAt) : '-'}</p>
                 </div>
                 <div className="bg-muted rounded-xl p-3">
                   <p className="text-xs text-gray-400 mb-1">Payment Time</p>

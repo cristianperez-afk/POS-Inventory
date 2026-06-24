@@ -5,7 +5,7 @@ import {
   useUpdateRestaurantKitchenOrderStatusMutation,
 } from "../lib/restaurant";
 
-type KitchenStatus = "pending" | "preparing" | "ready" | "completed" | "cancelled";
+type KitchenStatus = "pending" | "preparing" | "ready" | "served" | "completed" | "cancelled";
 type StatusFilter = "all" | KitchenStatus;
 
 type KitchenOrderItem = {
@@ -39,6 +39,7 @@ type KitchenOrder = {
   paymentAt?: string | null;
   preparingStartedAt?: string | null;
   readyAt?: string | null;
+  servedAt?: string | null;
   completedAt?: string | null;
   tableStartedAt?: string | null;
   tableEndedAt?: string | null;
@@ -49,6 +50,7 @@ const STATUS_STYLES: Record<KitchenStatus, string> = {
   pending: "border-slate-300 bg-slate-50 text-slate-700",
   preparing: "border-amber-300 bg-amber-50 text-amber-700",
   ready: "border-emerald-300 bg-emerald-50 text-emerald-700",
+  served: "border-sky-300 bg-sky-50 text-sky-700",
   completed: "border-blue-300 bg-blue-50 text-blue-700",
   cancelled: "border-red-300 bg-red-50 text-red-700",
 };
@@ -57,6 +59,7 @@ const STATUS_LABELS: Record<KitchenStatus, string> = {
   pending: "New",
   preparing: "Preparing",
   ready: "Ready to Serve",
+  served: "Served",
   completed: "Completed",
   cancelled: "Cancelled",
 };
@@ -66,14 +69,16 @@ const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
   { value: "pending", label: "New" },
   { value: "preparing", label: "Preparing" },
   { value: "ready", label: "Ready to Serve" },
+  { value: "served", label: "Served" },
   { value: "completed", label: "Completed" },
   { value: "cancelled", label: "Cancelled" },
 ];
 
-const API_STATUS: Record<KitchenStatus, "PENDING" | "PREPARING" | "READY" | "COMPLETED" | "CANCELLED"> = {
+const API_STATUS: Record<KitchenStatus, "PENDING" | "PREPARING" | "READY" | "SERVED" | "COMPLETED" | "CANCELLED"> = {
   pending: "PENDING",
   preparing: "PREPARING",
   ready: "READY",
+  served: "SERVED",
   completed: "COMPLETED",
   cancelled: "CANCELLED",
 };
@@ -136,15 +141,20 @@ function DetailList({ label, values }: { label: string; values?: string[] }) {
   );
 }
 
-function nextAction(status: KitchenStatus) {
+function nextAction(status: KitchenStatus, orderType: string) {
   if (status === "pending") return { label: "Start Preparing", next: "preparing" as KitchenStatus, icon: Play };
   if (status === "preparing") return { label: "Mark Ready to Serve", next: "ready" as KitchenStatus, icon: CheckCircle2 };
-  if (status === "ready") return { label: "Complete", next: "completed" as KitchenStatus, icon: ClipboardCheck };
+  if (status === "ready") {
+    const isTakeout = orderType.replace(/_/g, "-").toLowerCase() === "takeout";
+    return isTakeout
+      ? { label: "Mark Served", next: "served" as KitchenStatus, icon: ClipboardCheck }
+      : { label: "Complete", next: "completed" as KitchenStatus, icon: ClipboardCheck };
+  }
   return null;
 }
 
 function canCancel(status: KitchenStatus) {
-  return status !== "completed" && status !== "cancelled";
+  return status !== "served" && status !== "completed" && status !== "cancelled";
 }
 
 function hasModifications(item: KitchenOrderItem) {
@@ -457,7 +467,7 @@ export function POSKitchenOrders() {
 
                   <div className="space-y-3">
                     {laneOrders.map((order) => {
-                      const action = nextAction(order.status);
+                      const action = nextAction(order.status, order.orderType);
                       const ActionIcon = action?.icon;
                       const showCancelAction = canCancel(order.status);
                       const isExpanded = expandedOrders[order.id] ?? false;

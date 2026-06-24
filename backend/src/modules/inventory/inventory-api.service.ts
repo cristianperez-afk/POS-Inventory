@@ -744,8 +744,13 @@ export class InventoryApiService {
                   o.payment_at,
                   o.preparing_started_at,
                   o.ready_at,
+                  o.served_at,
                   o.table_started_at,
                   o.table_ended_at,
+                  o.running_time_start,
+                  o.running_time_end,
+                  o.running_duration,
+                  o.is_running,
                   p.payment_number,
                   cashier.full_name AS cashier_name,
                   cashier.email AS cashier_email,
@@ -826,7 +831,7 @@ export class InventoryApiService {
                 payment_status AS "paymentStatus",
                 CASE
                   WHEN payment_status IN ('VOIDED', 'VOID', 'REFUNDED') OR order_status = 'CANCELLED' THEN 'CANCELLED'
-                  WHEN order_status = 'SERVED' THEN 'COMPLETED'
+                  WHEN order_status = 'SERVED' THEN 'SERVED'
                   ELSE order_status
                 END AS status,
                 created_at AS "createdAt",
@@ -834,9 +839,14 @@ export class InventoryApiService {
                 payment_at AS "paymentAt",
                 preparing_started_at AS "preparingStartedAt",
                 ready_at AS "readyAt",
+                served_at AS "servedAt",
                 completed_at AS "completedAt",
                 table_started_at AS "tableStartedAt",
                 table_ended_at AS "tableEndedAt",
+                running_time_start AS "runningTimeStart",
+                running_time_end AS "runningTimeEnd",
+                running_duration AS "runningDuration",
+                is_running AS "isRunning",
                 json_build_object('name', item_summary) AS recipe,
                 json_build_object('name', cashier_name, 'email', cashier_email) AS "completedBy",
                 items,
@@ -862,9 +872,9 @@ export class InventoryApiService {
     const scope = await this.resolveScope(headers);
     const posUserId = this.headerValue(headers['x-pos-user-id']);
     const nextStatus = String(body?.status ?? '').toUpperCase();
-    const allowed = new Set(['PENDING', 'PREPARING', 'READY', 'COMPLETED', 'CANCELLED']);
+    const allowed = new Set(['PENDING', 'PREPARING', 'READY', 'SERVED', 'COMPLETED', 'CANCELLED']);
     if (!allowed.has(nextStatus)) {
-      throw new BadRequestException('Status must be Pending, Preparing, Ready, Completed, or Cancelled.');
+      throw new BadRequestException('Status must be Pending, Preparing, Ready, Served, Completed, or Cancelled.');
     }
 
     if (id.startsWith('pos-order-')) {
@@ -886,8 +896,46 @@ export class InventoryApiService {
           SET order_status = $3::varchar,
               preparing_started_at = CASE WHEN $3::varchar = 'PREPARING' THEN COALESCE(preparing_started_at, CURRENT_TIMESTAMP) ELSE preparing_started_at END,
               ready_at = CASE WHEN $3::varchar = 'READY' THEN COALESCE(ready_at, CURRENT_TIMESTAMP) ELSE ready_at END,
-              completed_at = CASE WHEN $3::varchar = 'COMPLETED' THEN COALESCE(completed_at, CURRENT_TIMESTAMP) ELSE completed_at END,
+              served_at = CASE WHEN $3::varchar = 'SERVED' THEN COALESCE(served_at, CURRENT_TIMESTAMP) ELSE served_at END,
+              completed_at = CASE WHEN $3::varchar IN ('SERVED', 'COMPLETED') THEN COALESCE(completed_at, CURRENT_TIMESTAMP) ELSE completed_at END,
               table_ended_at = CASE WHEN $3::varchar IN ('COMPLETED', 'CANCELLED') THEN COALESCE(table_ended_at, CURRENT_TIMESTAMP) ELSE table_ended_at END,
+              -- Kitchen status updates must respect the restaurant lifecycle:
+              -- a takeout stops at completion; a dine-in Pay Later order only
+              -- stops after payment; a paid dine-in may stop when explicitly
+              -- marked completed (or later when its table is released).
+              running_time_end = CASE
+                WHEN COALESCE(is_running, FALSE) = TRUE
+                  AND running_time_start IS NOT NULL
+                  AND (
+                    $3::varchar = 'CANCELLED'
+                    OR (order_type = 'TAKEOUT' AND $3::varchar IN ('SERVED', 'COMPLETED'))
+                    OR (order_type IN ('DINE_IN', 'MIXED') AND payment_status = 'PAID' AND $3::varchar = 'COMPLETED')
+                  )
+                  THEN CURRENT_TIMESTAMP
+                ELSE running_time_end
+              END,
+              running_duration = CASE
+                WHEN COALESCE(is_running, FALSE) = TRUE
+                  AND running_time_start IS NOT NULL
+                  AND (
+                    $3::varchar = 'CANCELLED'
+                    OR (order_type = 'TAKEOUT' AND $3::varchar IN ('SERVED', 'COMPLETED'))
+                    OR (order_type IN ('DINE_IN', 'MIXED') AND payment_status = 'PAID' AND $3::varchar = 'COMPLETED')
+                  )
+                  THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - running_time_start)))::BIGINT)
+                ELSE running_duration
+              END,
+              is_running = CASE
+                WHEN COALESCE(is_running, FALSE) = TRUE
+                  AND running_time_start IS NOT NULL
+                  AND (
+                    $3::varchar = 'CANCELLED'
+                    OR (order_type = 'TAKEOUT' AND $3::varchar IN ('SERVED', 'COMPLETED'))
+                    OR (order_type IN ('DINE_IN', 'MIXED') AND payment_status = 'PAID' AND $3::varchar = 'COMPLETED')
+                  )
+                  THEN FALSE
+                ELSE is_running
+              END,
               updated_at = CURRENT_TIMESTAMP
           WHERE id = $4
             AND store_id = (SELECT store_id FROM scoped_user)

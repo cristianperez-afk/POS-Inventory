@@ -34,9 +34,15 @@ export interface Order {
   paymentAt?: string;
   preparingStartedAt?: string;
   readyAt?: string;
+  servedAt?: string;
   completedAt?: string;
   tableStartedAt?: string;
   tableEndedAt?: string;
+  runningTimeStart?: string;
+  runningTimeEnd?: string;
+  /** Persisted elapsed seconds once the restaurant order is finalized. */
+  runningDuration?: number;
+  isRunning?: boolean;
   runningTimeMinutes?: number;
   customerStayMinutes?: number;
   items: OrderItem[];
@@ -376,6 +382,8 @@ export function useOrders() {
 function mapDatabaseRestaurantOrder(row: any): Order {
   const createdAt = row.created_at ? new Date(row.created_at) : new Date();
   const completedAt = row.completed_at ? new Date(row.completed_at) : null;
+  const runningTimeStart = row.running_time_start ? new Date(row.running_time_start) : null;
+  const runningTimeEnd = row.running_time_end ? new Date(row.running_time_end) : null;
   const tableStartedAt = row.table_started_at ? new Date(row.table_started_at) : null;
   const tableEndedAt = row.table_ended_at ? new Date(row.table_ended_at) : null;
   const minutesBetween = (start: Date | null, end: Date | null) => {
@@ -428,10 +436,16 @@ function mapDatabaseRestaurantOrder(row: any): Order {
     paymentAt: row.payment_at ?? undefined,
     preparingStartedAt: row.preparing_started_at ?? undefined,
     readyAt: row.ready_at ?? undefined,
+    servedAt: row.served_at ?? undefined,
     completedAt: row.completed_at ?? undefined,
     tableStartedAt: row.table_started_at ?? undefined,
     tableEndedAt: row.table_ended_at ?? undefined,
-    runningTimeMinutes: minutesBetween(createdAt, completedAt),
+    runningTimeStart: row.running_time_start ?? undefined,
+    runningTimeEnd: row.running_time_end ?? undefined,
+    runningDuration: row.running_duration !== null && row.running_duration !== undefined ? Number(row.running_duration) : undefined,
+    isRunning: Boolean(row.is_running),
+    // Kept for older consumers; runningDuration is the precise source of truth.
+    runningTimeMinutes: minutesBetween(runningTimeStart ?? createdAt, runningTimeEnd),
     customerStayMinutes: tableStartedAt ? minutesBetween(tableStartedAt, tableEndedAt ?? completedAt) : undefined,
     items: items.map((item: any) => ({
       name: item.product_name,
