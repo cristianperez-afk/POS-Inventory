@@ -3017,10 +3017,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
               store_id, cashier_id, order_number, customer_name, order_type, table_name,
               party_size, subtotal, discount_amount, discount_type, tax_amount, service_charge,
               total_amount, order_status, payment_status, payment_at, completed_at,
-              table_started_at, preparing_started_at, ready_at, served_at,
+              table_started_at, preparing_started_at, ready_at, service_started_at, served_at, service_duration,
               running_time_start, running_time_end, running_duration, is_running
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
             RETURNING id
           `,
           [
@@ -3044,10 +3044,12 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             // completed while its table remains occupied. Its completion time
             // (and running timer end) are set only when that table is released.
             orderStatus === 'COMPLETED' ? confirmedAt : null,
-            input.tableName && !String(input.tableName).toLowerCase().startsWith('queue') ? new Date() : null,
+            null,
             orderStatus === 'PREPARING' ? new Date() : null,
             orderStatus === 'READY' ? new Date() : null,
+            orderStatus === 'READY' ? confirmedAt : null,
             orderStatus === 'SERVED' ? confirmedAt : null,
+            orderStatus === 'SERVED' ? 0 : null,
             runningTimeStart,
             runningTimeEnd,
             runningTimeEnd ? 0 : null,
@@ -3193,7 +3195,6 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     if (input.orderStatus === 'SERVED') addUpdate('served_at', new Date());
     if (input.orderStatus === 'COMPLETED') addUpdate('completed_at', new Date());
     if (input.orderStatus === 'COMPLETED') addUpdate('table_ended_at', new Date());
-    if (input.tableName !== undefined && input.tableName && !String(input.tableName).toLowerCase().startsWith('queue')) addUpdate('table_started_at', new Date());
 
     if (updates.length === 0 && !isPaymentUpdate) {
       throw new BadRequestException('No order updates were provided.');
@@ -3260,6 +3261,27 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
       const orderType = String(priorRows[0]?.order_type ?? '').toUpperCase();
       const nextStatus = String(input.orderStatus ?? '').toUpperCase();
+
+      if (nextStatus === 'READY') {
+        await this.queryWithClient(
+          client,
+          `UPDATE orders
+           SET service_started_at = COALESCE(service_started_at, NOW()),
+               table_started_at = CASE WHEN order_type IN ('DINE_IN', 'MIXED') THEN COALESCE(table_started_at, NOW()) ELSE table_started_at END
+           WHERE id = $1`,
+          [updatedRows[0].id],
+        );
+      }
+      if (nextStatus === 'SERVED') {
+        await this.queryWithClient(
+          client,
+          `UPDATE orders
+           SET served_at = COALESCE(served_at, NOW()),
+               service_duration = CASE WHEN service_started_at IS NOT NULL THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - service_started_at)))::BIGINT) ELSE service_duration END
+           WHERE id = $1`,
+          [updatedRows[0].id],
+        );
+      }
 
       // A queued dine-in has no customer at a table yet. Its timer starts once
       // it is assigned to an actual table and that table becomes occupied.
@@ -3414,7 +3436,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           o.payment_at,
           o.preparing_started_at,
           o.ready_at,
+          o.service_started_at,
           o.served_at,
+          o.service_duration,
           o.table_started_at,
           o.table_ended_at,
           o.running_time_start,
@@ -4708,7 +4732,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ADD COLUMN IF NOT EXISTS payment_at TIMESTAMP,
           ADD COLUMN IF NOT EXISTS preparing_started_at TIMESTAMP,
           ADD COLUMN IF NOT EXISTS ready_at TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS service_started_at TIMESTAMP,
           ADD COLUMN IF NOT EXISTS served_at TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS service_duration BIGINT,
           ADD COLUMN IF NOT EXISTS table_started_at TIMESTAMP,
           ADD COLUMN IF NOT EXISTS table_ended_at TIMESTAMP,
           ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP,
