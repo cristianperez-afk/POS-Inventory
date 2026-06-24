@@ -3481,6 +3481,48 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  private async resolveProductIngredientId(
+    client: PoolClient,
+    storeId: number,
+    productId: number | null,
+    productIngredientId: number | null,
+    originalIngredientId: number | null,
+  ) {
+    if (!productId) return null;
+
+    if (productIngredientId) {
+      const rows = await this.queryWithClient<{ id: number }>(
+        client,
+        `
+          SELECT id
+          FROM product_ingredients
+          WHERE id = $1
+            AND store_id = $2
+            AND product_id = $3
+          LIMIT 1
+        `,
+        [productIngredientId, storeId, productId],
+      );
+      if (rows[0]?.id) return rows[0].id;
+    }
+
+    if (!originalIngredientId) return null;
+
+    const linkedRows = await this.queryWithClient<{ id: number }>(
+      client,
+      `
+        SELECT id
+        FROM product_ingredients
+        WHERE store_id = $1
+          AND product_id = $2
+          AND ingredient_id = $3
+        LIMIT 1
+      `,
+      [storeId, productId, originalIngredientId],
+    );
+    return linkedRows[0]?.id ?? null;
+  }
+
   private async recordRestaurantIngredientCustomizations(client: PoolClient, storeId: number, orderItemId: number, item: any) {
     const ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
     const finiteNumberOrNull = (value: unknown) => {
@@ -3491,23 +3533,13 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     for (const ingredient of ingredients) {
       const originalId = finiteNumberOrNull(ingredient.ingredient_id ?? ingredient.ingredientId);
       const replacementId = finiteNumberOrNull(ingredient.replacement_ingredient_id ?? ingredient.replacementIngredientId);
-      let productIngredientId = finiteNumberOrNull(ingredient.product_ingredient_id ?? ingredient.productIngredientId ?? (originalId ? ingredient.id : null));
-
-      if (!productIngredientId && originalId) {
-        const linkedRows = await this.queryWithClient<{ id: number }>(
-          client,
-          `
-            SELECT id
-            FROM product_ingredients
-            WHERE store_id = $1
-              AND product_id = $2
-              AND ingredient_id = $3
-            LIMIT 1
-          `,
-          [storeId, item.productId ?? item.id ?? null, originalId],
-        );
-        productIngredientId = linkedRows[0]?.id ?? null;
-      }
+      const productIngredientId = await this.resolveProductIngredientId(
+        client,
+        storeId,
+        finiteNumberOrNull(item.productId ?? item.id),
+        finiteNumberOrNull(ingredient.product_ingredient_id ?? ingredient.productIngredientId ?? (originalId ? ingredient.id : null)),
+        originalId,
+      );
 
       const removed = ingredient.removed === true || Number(ingredient.quantity ?? 0) <= 0;
       const originalQuantity = Number(ingredient.original_quantity ?? ingredient.originalQuantity ?? ingredient.quantity ?? 0);
@@ -3556,9 +3588,18 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async deductRestaurantIngredients(client: PoolClient, storeId: number, orderId: number, orderItemId: number, item: any, movements: PosSaleMovement[]) {
+  private async deductRestaurantIngredients(
+    client: PoolClient,
+    storeId: number,
+    orderId: number,
+    orderItemId: number,
+    item: any,
+    movements: PosSaleMovement[],
+    options: { recordCustomizations?: boolean } = {},
+  ) {
     const itemQuantity = Number(item.quantity ?? 1);
-    const ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
+    const shouldRecordCustomizations = options.recordCustomizations !== false;
+    let ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
     const finiteNumberOrNull = (value: unknown) => {
       const parsed = Number(value);
       return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
@@ -3607,25 +3648,37 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
+    if (ingredients.length === 0 && dishProductId) {
+      ingredients = await this.queryWithClient<any>(
+        client,
+        `
+          SELECT
+            pi.id AS product_ingredient_id,
+            pi.ingredient_id,
+            COALESCE(ii.ingredient_name, pi.ingredient_name) AS name,
+            pi.quantity_required AS quantity,
+            pi.quantity_required AS original_quantity,
+            pi.unit
+          FROM product_ingredients pi
+          LEFT JOIN ingredients_inventory ii ON ii.id = pi.ingredient_id
+          WHERE pi.store_id = $1
+            AND pi.product_id = $2
+          ORDER BY pi.id ASC
+        `,
+        [storeId, dishProductId],
+      );
+    }
+
     for (const ingredient of ingredients) {
       const originalId = finiteNumberOrNull(ingredient.ingredient_id ?? ingredient.ingredientId);
       const replacementId = finiteNumberOrNull(ingredient.replacement_ingredient_id ?? ingredient.replacementIngredientId);
-      let productIngredientId = finiteNumberOrNull(ingredient.product_ingredient_id ?? ingredient.productIngredientId ?? (originalId ? ingredient.id : null));
-      if (!productIngredientId && originalId) {
-        const linkedRows = await this.queryWithClient<{ id: number }>(
-          client,
-          `
-            SELECT id
-            FROM product_ingredients
-            WHERE store_id = $1
-              AND product_id = $2
-              AND ingredient_id = $3
-            LIMIT 1
-          `,
-          [storeId, item.productId ?? item.id ?? null, originalId],
-        );
-        productIngredientId = linkedRows[0]?.id ?? null;
-      }
+      const productIngredientId = await this.resolveProductIngredientId(
+        client,
+        storeId,
+        finiteNumberOrNull(item.productId ?? item.id),
+        finiteNumberOrNull(ingredient.product_ingredient_id ?? ingredient.productIngredientId ?? (originalId ? ingredient.id : null)),
+        originalId,
+      );
       const ingredientId = replacementId ?? originalId;
       const removed = ingredient.removed === true || Number(ingredient.quantity ?? 0) <= 0;
       const quantity = removed ? 0 : Number(ingredient.quantity ?? ingredient.quantity_required ?? 0) * itemQuantity;
@@ -3645,7 +3698,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
 
-      if (hasCustomization) {
+      if (shouldRecordCustomizations && hasCustomization) {
         await this.queryWithClient(
           client,
           `
@@ -3767,8 +3820,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   // Deducts stock and writes the inventory Sale/StockMovement records for an order
   // that is being paid AFTER creation (the deferred-payment path in updatePosOrder).
   // Items/ingredients aren't in the payment request, so they are loaded from the DB.
-  // Restaurant deductions use the product's standard recipe (per-order ingredient
-  // customizations made on an unpaid order are not persisted, so cannot be replayed).
+  // Restaurant deductions replay saved per-item customizations over the default recipe.
   // Idempotent: skips entirely if this order was already mirrored into "Sale".
   private async applyInventoryForPaidPosOrder(
     client: PoolClient,
@@ -3927,6 +3979,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             ingredients: customizedIngredients,
           },
           movements,
+          { recordCustomizations: false },
         );
       }
     }
@@ -4927,6 +4980,13 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const databaseError = error as { code?: string; detail?: string; message?: string };
 
     if (databaseError.code === '23503') {
+      const isUserAccountWrite = /account|staff|admin|user/i.test(fallbackMessage);
+      if (!isUserAccountWrite) {
+        throw new ConflictException(
+          `${fallbackMessage} One of the selected records is no longer linked to the current store data. Please refresh the POS menu and try again.`,
+        );
+      }
+
       throw new ConflictException(
         'This account is linked to other records and cannot be permanently deleted. Use Deactivate instead; if deactivation is unavailable, run backend/sql/add-user-is-active.sql first.',
       );

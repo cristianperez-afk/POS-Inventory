@@ -19,6 +19,7 @@ type KitchenOrderItem = {
   notes?: string;
   addedIngredients?: string[];
   removedIngredients?: string[];
+  changedIngredients?: string[];
   modifiers?: string[];
   specialInstructions?: string[];
 };
@@ -154,6 +155,7 @@ function canCancel(status: KitchenStatus) {
 function hasModifications(item: KitchenOrderItem) {
   return cleanList(item.addedIngredients).length > 0 ||
     cleanList(item.removedIngredients).length > 0 ||
+    cleanList(item.changedIngredients).length > 0 ||
     cleanList(item.replacedIngredients).length > 0 ||
     cleanList(item.modifiers).length > 0 ||
     cleanList(item.specialInstructions).length > 0 ||
@@ -229,6 +231,7 @@ function KitchenTicketItems({ orderId, items }: { orderId: string; items: Kitche
                     <div className="grid gap-3 md:grid-cols-2">
                       <DetailList label="Removed" values={item.removedIngredients} />
                       <DetailList label="Added" values={item.addedIngredients} />
+                      <DetailList label="Changed Qty" values={item.changedIngredients} />
                       <DetailList label="Replaced" values={item.replacedIngredients} />
                       <DetailList label="Special Notes" values={[...(item.specialInstructions ?? []), item.notes ?? ""]} />
                     </div>
@@ -315,6 +318,7 @@ export function POSKitchenOrders() {
         ...cleanList(item.ingredients).map((value) => `  Ingredient: ${value}`),
         ...cleanList(item.removedIngredients).map((value) => `  Removed: ${value}`),
         ...cleanList(item.addedIngredients).map((value) => `  Added: ${value}`),
+        ...cleanList(item.changedIngredients).map((value) => `  Changed Qty: ${value}`),
         ...cleanList(item.replacedIngredients).map((value) => `  Replaced: ${value}`),
         ...cleanList([...(item.specialInstructions ?? []), item.notes ?? ""]).map((value) => `  Note: ${value}`),
       ]),
