@@ -16,6 +16,7 @@ interface OrderListProps {
   isAdmin?: boolean;
   storeBrand?: StoreBrand;
   userName?: string | null;
+  userRole?: string | null;
   storeType?: StoreType;
   staffType?: StaffType;
 }
@@ -49,8 +50,8 @@ function formatServedTime(value?: string) {
   return date.toLocaleString('en-PH', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
-export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, userName, storeType, staffType }: OrderListProps) {
-  const { orders, completePayment, voidOrder, refundOrder, reloadOrders } = useOrders();
+export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, userName, userRole, storeType, staffType }: OrderListProps) {
+  const { orders, completePayment, completeTableOrder, voidOrder, refundOrder, reloadOrders } = useOrders();
   const { settings } = useStoreSettings();
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState('All');
@@ -118,7 +119,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
 
     try {
       await completePayment(selectedOrder.id, { cashReceived: cash, changeGiven: change, cashier: userName ?? undefined, paymentId: pId, receiptId: rId });
-      const updates = { paymentStatus: 'Paid' as const, orderStatus: 'Completed' as const, paymentId: pId, receiptId: rId, cashReceived: cash, changeGiven: change, cashier: userName ?? undefined };
+      const updates = { paymentStatus: 'Paid' as const, paymentAt: new Date().toISOString(), paymentId: pId, receiptId: rId, cashReceived: cash, changeGiven: change, cashier: userName ?? undefined };
       setSelectedOrder(prev => prev ? { ...prev, ...updates } : null);
       setActiveModal('payment-success');
     } catch (error) {
@@ -148,6 +149,17 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
 
   const handlePrintReceipt = () => {
     window.print();
+  };
+
+  const handleCompleteOrder = async (order: Order) => {
+    if (!canProcessTransactions || order.paymentStatus !== 'Paid' || order.orderStatus === 'Completed') return;
+
+    try {
+      await completeTableOrder(order.id);
+      setSelectedOrder(prev => prev?.id === order.id ? { ...prev, orderStatus: 'Completed' } : prev);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Unable to complete order.');
+    }
   };
 
   const cashFloat = parseFloat(cashReceived) || 0;
@@ -237,7 +249,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
 
   return (
     <div className="flex h-screen bg-background">
-      <Sidebar currentPage="order-list" onNavigate={onNavigate} onLogout={onLogout} isAdmin={isAdmin} storeBrand={storeBrand} userName={userName} storeType={storeType} staffType={staffType} />
+      <Sidebar currentPage="order-list" onNavigate={onNavigate} onLogout={onLogout} isAdmin={isAdmin} storeBrand={storeBrand} userName={userName} userRole={userRole} storeType={storeType} staffType={staffType} />
 
       <div className="flex-1 overflow-auto p-8">
         {/* Header */}
@@ -428,6 +440,17 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                           >
                             <Printer className="w-3.5 h-3.5" />
                             Receipt
+                          </button>
+                        )}
+
+                        {canProcessTransactions && order.paymentStatus === 'Paid' && order.orderStatus !== 'Completed' && (
+                          <button
+                            onClick={() => void handleCompleteOrder(order)}
+                            title="Complete Order"
+                            className="inline-flex items-center gap-1 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors whitespace-nowrap"
+                          >
+                            <CheckCircle className="w-3.5 h-3.5" />
+                            Complete
                           </button>
                         )}
 

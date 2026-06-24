@@ -250,6 +250,7 @@ export function Reports() {
         readyAt: order.readyAt ?? undefined,
         tableStartedAt,
         tableEndedAt,
+        preparationTime: order.preparingStartedAt ? formatDuration(order.preparingStartedAt, order.readyAt ?? undefined) : 'Not started',
         runningTime: formatRunningSeconds(runningSeconds(order, runningClock)),
         customerStayDuration: tableStartedAt ? formatDuration(tableStartedAt, tableEndedAt) : 'No table selected',
         items,
@@ -506,7 +507,7 @@ export function Reports() {
         ].map(csvValue).join(',') + '\n';
       });
     } else if (activeTab === 'orders') {
-      csv = 'Type,Order Number,Customer,Order Type,Table,Payment Method,Payment Status,Order Status,Total,Time Ordered,Time Completed,Running Time,Customer Stay Duration\n';
+      csv = 'Type,Order Number,Customer,Order Type,Table,Payment Method,Payment Status,Order Status,Total,Time Ordered,Time Completed,Preparation Time,Running Time,Customer Stay Duration\n';
       posTransactions.forEach(order => {
         csv += [
           'POS Transaction',
@@ -520,6 +521,7 @@ export function Reports() {
           order.totalAmount.toFixed(2),
           formatAuditDate(order.orderedAt),
           order.completedAt ? formatAuditDate(order.completedAt) : '',
+          order.preparationTime,
           order.runningTime,
           order.customerStayDuration,
         ].map(csvValue).join(',') + '\n';
@@ -989,6 +991,10 @@ export function Reports() {
                             <div className="rounded-lg bg-muted/30 p-3">
                               <p className="text-xs text-muted-foreground">Ready to Serve</p>
                               <p className="text-sm font-semibold text-foreground">{order.readyAt ? formatAuditDate(order.readyAt) : '-'}</p>
+                            </div>
+                            <div className="rounded-lg bg-muted/30 p-3">
+                              <p className="text-xs text-muted-foreground">Preparation Time</p>
+                              <p className="text-sm font-semibold text-foreground">{order.preparationTime}</p>
                             </div>
                             <div className="rounded-lg bg-muted/30 p-3">
                               <p className="text-xs text-muted-foreground">Running Time</p>

@@ -19,6 +19,7 @@ type KitchenOrderItem = {
   notes?: string;
   addedIngredients?: string[];
   removedIngredients?: string[];
+  changedIngredients?: string[];
   modifiers?: string[];
   specialInstructions?: string[];
 };
@@ -160,6 +161,7 @@ function canCancel(status: KitchenStatus) {
 function hasModifications(item: KitchenOrderItem) {
   return cleanList(item.addedIngredients).length > 0 ||
     cleanList(item.removedIngredients).length > 0 ||
+    cleanList(item.changedIngredients).length > 0 ||
     cleanList(item.replacedIngredients).length > 0 ||
     cleanList(item.modifiers).length > 0 ||
     cleanList(item.specialInstructions).length > 0 ||
@@ -235,6 +237,7 @@ function KitchenTicketItems({ orderId, items }: { orderId: string; items: Kitche
                     <div className="grid gap-3 md:grid-cols-2">
                       <DetailList label="Removed" values={item.removedIngredients} />
                       <DetailList label="Added" values={item.addedIngredients} />
+                      <DetailList label="Changed Qty" values={item.changedIngredients} />
                       <DetailList label="Replaced" values={item.replacedIngredients} />
                       <DetailList label="Special Notes" values={[...(item.specialInstructions ?? []), item.notes ?? ""]} />
                     </div>
@@ -265,7 +268,7 @@ export function POSKitchenOrders() {
         acc[order.status] += 1;
         return acc;
       },
-      { pending: 0, preparing: 0, ready: 0, completed: 0, cancelled: 0 },
+      { pending: 0, preparing: 0, ready: 0, served: 0, completed: 0, cancelled: 0 },
     );
 
     return [
@@ -273,6 +276,7 @@ export function POSKitchenOrders() {
       { label: "Pending", value: counts.pending, filter: "pending" as StatusFilter, icon: ClipboardList, color: "from-slate-500 to-slate-600" },
       { label: "Preparing", value: counts.preparing, filter: "preparing" as StatusFilter, icon: Play, color: "from-amber-500 to-orange-500" },
       { label: "Ready", value: counts.ready, filter: "ready" as StatusFilter, icon: CheckCircle2, color: "from-emerald-500 to-green-500" },
+      { label: "Served", value: counts.served, filter: "served" as StatusFilter, icon: ClipboardCheck, color: "from-sky-500 to-cyan-500" },
       { label: "Completed", value: counts.completed, filter: "completed" as StatusFilter, icon: ClipboardCheck, color: "from-blue-500 to-sky-500" },
       { label: "Cancelled", value: counts.cancelled, filter: "cancelled" as StatusFilter, icon: X, color: "from-red-500 to-rose-500" },
     ];
@@ -320,6 +324,7 @@ export function POSKitchenOrders() {
         ...cleanList(item.ingredients).map((value) => `  Ingredient: ${value}`),
         ...cleanList(item.removedIngredients).map((value) => `  Removed: ${value}`),
         ...cleanList(item.addedIngredients).map((value) => `  Added: ${value}`),
+        ...cleanList(item.changedIngredients).map((value) => `  Changed Qty: ${value}`),
         ...cleanList(item.replacedIngredients).map((value) => `  Replaced: ${value}`),
         ...cleanList([...(item.specialInstructions ?? []), item.notes ?? ""]).map((value) => `  Note: ${value}`),
       ]),
@@ -337,7 +342,8 @@ export function POSKitchenOrders() {
     { status: "pending", title: "New Orders", helper: "Received by kitchen" },
     { status: "preparing", title: "Preparing Orders", helper: "Currently cooking" },
     { status: "ready", title: "Ready to Serve Orders", helper: "Needs pickup/service" },
-    { status: "completed", title: "Completed Orders", helper: "Done" },
+    { status: "served", title: "Served Orders", helper: "Waiting for customer session close" },
+    { status: "completed", title: "Completed Orders", helper: "Customer session closed" },
     { status: "cancelled", title: "Cancelled Orders", helper: "Stopped or voided" },
   ];
 

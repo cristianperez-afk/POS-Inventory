@@ -15,6 +15,7 @@ interface RetailOrderListProps {
   isAdmin?: boolean;
   storeBrand?: StoreBrand;
   userName?: string | null;
+  userRole?: string | null;
   storeType?: StoreType;
   staffType?: StaffType;
 }
@@ -23,7 +24,7 @@ function normalizeSearchValue(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
-export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, userName, storeType = 'RETAIL_STORE', staffType }: RetailOrderListProps) {
+export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, userName, userRole, storeType = 'RETAIL_STORE', staffType }: RetailOrderListProps) {
   const { orders, refundOrderItems, voidTransaction } = useOrders();
   const { settings } = useStoreSettings();
   const [searchTerm, setSearchTerm] = useState('');
@@ -185,7 +186,7 @@ export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBr
 
   return (
     <div className="flex h-screen bg-background">
-      <Sidebar currentPage="retail-transactions" onNavigate={onNavigate} onLogout={onLogout} isAdmin={isAdmin} storeType={storeType} staffType={staffType} storeBrand={storeBrand} userName={userName} />
+      <Sidebar currentPage="retail-transactions" onNavigate={onNavigate} onLogout={onLogout} isAdmin={isAdmin} storeType={storeType} staffType={staffType} storeBrand={storeBrand} userName={userName} userRole={userRole} />
 
       <div className="flex-1 overflow-auto p-8">
         <div className="mb-6">

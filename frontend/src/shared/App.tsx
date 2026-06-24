@@ -91,8 +91,11 @@ export default function App() {
     try {
       const parsedUser = JSON.parse(savedUser) as AuthenticatedUser;
       const savedPage = window.sessionStorage.getItem(SESSION_PAGE_KEY) as Page | null;
+      const defaultPage = getDefaultPageForUser(parsedUser);
+      const nextPage = savedPage && savedPage !== 'login' && canAccessPage(parsedUser, savedPage) ? savedPage : defaultPage;
       setCurrentUser(parsedUser);
-      setCurrentPage(savedPage && savedPage !== 'login' && canAccessPage(parsedUser, savedPage) ? savedPage : getDefaultPageForUser(parsedUser));
+      setCurrentPage(nextPage);
+      window.sessionStorage.setItem(SESSION_PAGE_KEY, nextPage);
     } catch {
       window.sessionStorage.removeItem(SESSION_USER_KEY);
       window.sessionStorage.removeItem(SESSION_PAGE_KEY);
@@ -233,6 +236,7 @@ export default function App() {
   const updateCurrentUser = (updates: Partial<AuthenticatedUser>) => {
     setCurrentUser((user) => (user ? { ...user, ...updates } : user));
   };
+  const isPosAdminUser = currentUser?.role === 'ADMIN' || currentUser?.role === 'POS_ADMIN';
 
   return (
     <QueryClientProvider client={appQueryClient}>
@@ -259,9 +263,10 @@ export default function App() {
                 <RetailPOSDashboard
                   onLogout={handleLogout}
                   onNavigate={navigateTo}
-                  isAdmin={currentUser?.role === 'ADMIN'}
+                  isAdmin={isPosAdminUser}
                   storeBrand={storeBrand}
                   userName={currentUser?.full_name}
+                  userRole={currentUser?.role}
                   storeType={currentUser?.store_type}
                   staffType={currentUser?.staff_type}
                 />
@@ -274,6 +279,7 @@ export default function App() {
                   onLogout={handleLogout}
                   storeBrand={storeBrand}
                   userName={currentUser?.full_name}
+                  userRole={currentUser?.role}
                   storeType={currentUser?.store_type}
                   staffType={currentUser?.staff_type}
                 />
@@ -282,9 +288,10 @@ export default function App() {
                 <RetailOrderList
                   onNavigate={navigateTo}
                   onLogout={handleLogout}
-                  isAdmin={currentUser?.role === 'ADMIN'}
+                  isAdmin={isPosAdminUser}
                   storeBrand={storeBrand}
                   userName={currentUser?.full_name}
+                  userRole={currentUser?.role}
                   storeType={currentUser?.store_type}
                   staffType={currentUser?.staff_type}
                 />
@@ -293,7 +300,7 @@ export default function App() {
                 <RetailReports
                   onNavigate={navigateTo}
                   onLogout={handleLogout}
-                  isAdmin={currentUser?.role === 'ADMIN'}
+                  isAdmin={isPosAdminUser}
                   storeBrand={storeBrand}
                   userName={currentUser?.full_name}
                   storeType={currentUser?.store_type}
@@ -303,7 +310,7 @@ export default function App() {
             </RetailOrderProvider>
           )}
           {currentPage === 'pos-dashboard' && (
-            <POSDashboard onLogout={handleLogout} onNavigate={navigateTo} isAdmin={currentUser?.role === 'ADMIN'} storeBrand={storeBrand} userName={currentUser?.full_name} storeType={currentUser?.store_type} staffType={currentUser?.staff_type} />
+            <POSDashboard onLogout={handleLogout} onNavigate={navigateTo} isAdmin={isPosAdminUser} storeBrand={storeBrand} userName={currentUser?.full_name} userRole={currentUser?.role} storeType={currentUser?.store_type} staffType={currentUser?.staff_type} />
           )}
           {currentPage === 'create-order' && (
             <CreateOrder currentUser={currentUser} onNavigate={navigateTo} onOrderCreated={setCurrentOrder} onLogout={handleLogout} storeBrand={storeBrand} userName={currentUser?.full_name} storeType={currentUser?.store_type} staffType={currentUser?.staff_type} />
@@ -324,10 +331,10 @@ export default function App() {
             <Receipt onNavigate={navigateTo} currentOrder={currentOrder} onLogout={handleLogout} storeBrand={storeBrand} userName={currentUser?.full_name} storeType={currentUser?.store_type} staffType={currentUser?.staff_type} />
           )}
           {currentPage === 'order-list' && (
-            <OrderList onNavigate={navigateTo} onLogout={handleLogout} isAdmin={currentUser?.role === 'ADMIN'} storeBrand={storeBrand} userName={currentUser?.full_name} storeType={currentUser?.store_type} staffType={currentUser?.staff_type} />
+            <OrderList onNavigate={navigateTo} onLogout={handleLogout} isAdmin={isPosAdminUser} storeBrand={storeBrand} userName={currentUser?.full_name} userRole={currentUser?.role} storeType={currentUser?.store_type} staffType={currentUser?.staff_type} />
           )}
           {currentPage === 'reports' && (
-            <Reports onNavigate={navigateTo} onLogout={handleLogout} isAdmin={currentUser?.role === 'ADMIN'} storeBrand={storeBrand} userName={currentUser?.full_name} storeType={currentUser?.store_type} staffType={currentUser?.staff_type} />
+            <Reports onNavigate={navigateTo} onLogout={handleLogout} isAdmin={isPosAdminUser} storeBrand={storeBrand} userName={currentUser?.full_name} userRole={currentUser?.role} storeType={currentUser?.store_type} staffType={currentUser?.staff_type} />
           )}
           {currentPage === 'store-information' && (
             <StoreInformation
@@ -350,7 +357,7 @@ export default function App() {
                   storeBrand={storeBrand}
                   onLogout={handleLogout}
                   onNavigate={navigateTo}
-                  isAdmin={currentUser?.role === 'ADMIN'}
+                  isAdmin={isPosAdminUser}
                   userName={currentUser?.full_name}
                   userRole={currentUser?.role}
                   storeType={currentUser?.store_type}
@@ -398,7 +405,17 @@ function canAccessPage(user: AuthenticatedUser, page: Page) {
   if (page === 'login') return true;
   if (user.role === 'SUPERADMIN') return page === 'superadmin-dashboard';
   if (user.role === 'POS_ADMIN') {
-    return isPosPage(page);
+    return [
+      'admin-dashboard',
+      'retail-pos-dashboard',
+      'retail-transactions',
+      'retail-reports',
+      'pos-dashboard',
+      'order-list',
+      'reports',
+      'store-information',
+      'store-settings',
+    ].includes(page);
   }
 
   if (user.role === 'INVENTORY_ADMIN') {
