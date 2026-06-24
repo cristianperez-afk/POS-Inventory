@@ -8,10 +8,12 @@ import { useQuery } from '@tanstack/react-query';
 import {
   approvePurchaseOrder,
   cancelPurchaseOrder,
+  cancelGoodsReceipt,
   createPurchaseOrder,
   createSupplier,
   getPurchaseOrder,
   receivePurchaseOrder,
+  rejectGoodsReceipt,
   rejectPurchaseOrder,
   submitPurchaseOrder,
 } from '../../../app/api/client';
@@ -197,6 +199,7 @@ export function useReceiveRetailPurchaseOrderMutation() {
       id,
       items,
       notes,
+      proofImages,
     }: {
       id: string;
       items: {
@@ -209,12 +212,29 @@ export function useReceiveRetailPurchaseOrderMutation() {
         storageTemperature?: string;
       }[];
       notes?: string;
-    }) => receivePurchaseOrder(id, items, notes, 'RETAIL'),
+      proofImages?: string[];
+    }) => receivePurchaseOrder(id, items, notes, 'RETAIL', proofImages),
     [
       retailQueryKeys.purchaseOrders,
       retailQueryKeys.inventory,
       retailQueryKeys.goodsReceipts,
     ],
+  );
+}
+
+export function useRejectRetailGoodsReceiptMutation() {
+  return useRetailMutation(
+    ({ id, reason, proofImages }: { id: string; reason: string; proofImages?: string[] }) =>
+      rejectGoodsReceipt(id, reason, proofImages, 'RETAIL'),
+    [retailQueryKeys.purchaseOrders, retailQueryKeys.goodsReceipts],
+  );
+}
+
+export function useCancelRetailGoodsReceiptMutation() {
+  return useRetailMutation(
+    ({ id, reason, proofImages }: { id: string; reason: string; proofImages?: string[] }) =>
+      cancelGoodsReceipt(id, reason, proofImages, 'RETAIL'),
+    [retailQueryKeys.purchaseOrders, retailQueryKeys.goodsReceipts],
   );
 }
 

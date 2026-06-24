@@ -8,6 +8,7 @@ import type {
 import {
   approvePurchaseOrder,
   cancelPurchaseOrder,
+  cancelGoodsReceipt,
   createInventoryItem,
   createPurchaseOrder,
   createSupplier,
@@ -15,6 +16,7 @@ import {
   getInventory,
   getPurchaseOrders,
   receivePurchaseOrder,
+  rejectGoodsReceipt,
   rejectPurchaseOrder,
   submitPurchaseOrder,
   updatePurchaseOrder,
@@ -28,6 +30,7 @@ import {
   useSuppliersQuery,
 } from '../domainQueries';
 import { useRestaurantProductMergeMetadataQuery } from './shared';
+import { toDateTimeLocalInput } from '../purchaseOrderDelivery';
 
 type RestaurantProductMergeMetadata = {
   aliases?: Record<string, string>;
@@ -102,7 +105,7 @@ export function mapRestaurantPurchaseOrders(orders: ApiPurchaseOrder[]) {
         REJECTED: 'rejected',
         CANCELLED: 'cancelled',
       } as Record<string, string>)[order.status] ?? order.status.toLowerCase(),
-    expectedDelivery: toDateInput(order.expectedDelivery),
+    expectedDelivery: toDateTimeLocalInput(order.expectedDelivery),
     createdBy: order.createdBy?.email ?? order.createdBy?.name ?? '',
     createdAt: order.createdAt,
     rejectionNote: order.rejectionReason,
@@ -302,9 +305,16 @@ export function useRestaurantGoodsRecordsQuery() {
           0,
         ),
         receivedBy: formatActorName(receipt.receivedBy),
-        status: (receipt.items ?? []).some((line) => line.rejectedQty > 0)
-          ? 'partial'
-          : 'verified',
+        status:
+          receipt.status === 'REJECTED'
+            ? 'rejected'
+            : receipt.status === 'CANCELLED'
+              ? 'cancelled'
+              : (receipt.items ?? []).some((line) => line.rejectedQty > 0)
+                ? 'partial'
+                : 'verified',
+        actionReason: receipt.actionReason ?? receipt.notes ?? '',
+        proofImages: receipt.proofImages ?? [],
         notes: receipt.notes ?? '',
       }));
       const pending = orders
@@ -434,7 +444,7 @@ export function useSaveRestaurantPurchaseOrderMutation() {
       const payload = {
         supplierId,
         expectedDelivery: expectedDelivery
-          ? new Date(`${expectedDelivery}T00:00:00`).toISOString()
+          ? new Date(expectedDelivery).toISOString()
           : undefined,
         items: apiItems,
         module: 'RESTAURANT',
@@ -494,17 +504,35 @@ export function useReceiveRestaurantPurchaseOrderMutation() {
       id,
       items,
       notes,
+      proofImages,
     }: {
       id: string;
       items: Parameters<typeof receivePurchaseOrder>[1];
       notes?: string;
-    }) => receivePurchaseOrder(id, items, notes, 'RESTAURANT'),
+      proofImages?: string[];
+    }) => receivePurchaseOrder(id, items, notes, 'RESTAURANT', proofImages),
     [
       domainQueryKeys.purchaseOrders,
       domainQueryKeys.goodsReceipts,
       domainQueryKeys.inventory,
       domainQueryKeys.stockMovements,
     ],
+  );
+}
+
+export function useRejectRestaurantGoodsReceiptMutation() {
+  return useDomainMutation(
+    ({ id, reason, proofImages }: { id: string; reason: string; proofImages?: string[] }) =>
+      rejectGoodsReceipt(id, reason, proofImages, 'RESTAURANT'),
+    [domainQueryKeys.purchaseOrders, domainQueryKeys.goodsReceipts],
+  );
+}
+
+export function useCancelRestaurantGoodsReceiptMutation() {
+  return useDomainMutation(
+    ({ id, reason, proofImages }: { id: string; reason: string; proofImages?: string[] }) =>
+      cancelGoodsReceipt(id, reason, proofImages, 'RESTAURANT'),
+    [domainQueryKeys.purchaseOrders, domainQueryKeys.goodsReceipts],
   );
 }
 

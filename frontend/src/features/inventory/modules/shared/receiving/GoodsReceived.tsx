@@ -7,6 +7,7 @@ import {
   XCircle,
   ClipboardCheck,
   Eye,
+  Upload,
 } from 'lucide-react';
 
 // ─── Shared types ────────────────────────────────────────────────────────────
@@ -40,6 +41,8 @@ export type ReceiptRecord = {
   status: string; // module-specific label
   // Parseable date (ISO or YYYY-MM-DD) used for time-range filtering.
   receivedAt?: string;
+  actionReason?: string | null;
+  proofImages?: string[];
   totalAccepted: number;
   totalRejected: number;
   lines: Array<{
@@ -100,7 +103,13 @@ export type ResolvedReceivingConfig = {
   ) => React.ReactNode;
   validateLine?: (line: NormalizedLine, draft: LineDraft) => string | null;
   buildReceiveItem: (line: NormalizedLine, draft: LineDraft) => ReceiveItemInput;
-  receive: (poId: string, items: ReceiveItemInput[]) => Promise<void>;
+  receive: (poId: string, items: ReceiveItemInput[], proofImages?: string[]) => Promise<void>;
+  quickAction?: (
+    poId: string,
+    action: 'reject' | 'cancel',
+    reason: string,
+    proofImages: string[],
+  ) => Promise<void>;
 
   historyStatusClass?: (status: string) => string;
   renderHistoryDetails?: (record: ReceiptRecord) => React.ReactNode;
@@ -121,6 +130,7 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
     validateLine,
     buildReceiveItem,
     receive,
+    quickAction,
     historyStatusClass,
     renderHistoryDetails,
     headerActions,
@@ -134,6 +144,13 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [viewRecord, setViewRecord] = useState<ReceiptRecord | null>(null);
+  const [quickActionTarget, setQuickActionTarget] = useState<{
+    po: PendingReceipt;
+    action: 'reject' | 'cancel';
+  } | null>(null);
+  const [quickActionReason, setQuickActionReason] = useState('');
+  const [proofImages, setProofImages] = useState<string[]>([]);
+  const [proofImageNames, setProofImageNames] = useState<string[]>([]);
 
   const formatReceivedDateTime = (record: ReceiptRecord) => {
     const value = record.receivedAt || record.receivedDate;
@@ -154,8 +171,8 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
     () => ({
       pending: pending.length,
       received: history.length,
-      fullyAccepted: history.filter((r) => r.totalRejected === 0).length,
-      withRejections: history.filter((r) => r.totalRejected > 0).length,
+      fullyAccepted: history.filter((r) => r.totalRejected === 0 && !['rejected', 'cancelled'].includes(r.status.toLowerCase())).length,
+      withRejections: history.filter((r) => r.totalRejected > 0 || ['rejected', 'cancelled'].includes(r.status.toLowerCase())).length,
     }),
     [pending, history],
   );
@@ -171,8 +188,8 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
       outcomeFilter === 'all'
         ? true
         : outcomeFilter === 'accepted'
-          ? r.totalRejected === 0
-          : r.totalRejected > 0;
+          ? r.totalRejected === 0 && !['rejected', 'cancelled'].includes(r.status.toLowerCase())
+          : r.totalRejected > 0 || ['rejected', 'cancelled'].includes(r.status.toLowerCase());
 
     let matchesMonths = true;
     if (monthsFilter !== 'all' && r.receivedAt) {
@@ -205,6 +222,60 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
     setSelected(null);
     setDrafts({});
     setError(null);
+  };
+
+  const openQuickAction = (po: PendingReceipt, action: 'reject' | 'cancel') => {
+    setError(null);
+    setQuickActionTarget({ po, action });
+    setQuickActionReason('');
+    setProofImages([]);
+    setProofImageNames([]);
+  };
+
+  const closeQuickAction = () => {
+    setQuickActionTarget(null);
+    setQuickActionReason('');
+    setProofImages([]);
+    setProofImageNames([]);
+    setError(null);
+  };
+
+  const handleProofImages = async (files: FileList | null) => {
+    if (!files) return;
+    const selectedFiles = Array.from(files).filter((file) => file.type.startsWith('image/')).slice(0, 6);
+    const encoded = await Promise.all(
+      selectedFiles.map(
+        (file) =>
+          new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result ?? ''));
+            reader.onerror = () => reject(reader.error);
+            reader.readAsDataURL(file);
+          }),
+      ),
+    );
+    setProofImages(encoded);
+    setProofImageNames(selectedFiles.map((file) => file.name));
+  };
+
+  const handleQuickAction = async () => {
+    if (!quickActionTarget || !quickAction || saving) return;
+    const reason = quickActionReason.trim();
+    if (!reason) {
+      setError(`Enter a reason before ${quickActionTarget.action === 'reject' ? 'rejecting' : 'cancelling'} this delivery.`);
+      return;
+    }
+
+    try {
+      setSaving(true);
+      setError(null);
+      await quickAction(quickActionTarget.po.id, quickActionTarget.action, reason, proofImages);
+      closeQuickAction();
+    } catch (e: any) {
+      setError(e?.message ?? 'Failed to update goods receipt');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const patchDraft = (lineId: string, line: NormalizedLine, partial: Partial<LineDraft>) => {
@@ -391,6 +462,23 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
                   <ClipboardCheck className="size-4" />
                   Quality Check
                 </button>
+                {quickAction && (
+                  <div className="flex flex-col gap-2">
+                    <button
+                      onClick={() => openQuickAction(po, 'reject')}
+                      className="px-3 py-2 bg-[#ffe2e2] text-[#991B1B] border border-[#DC2626] rounded-[8px] text-[12px] font-semibold hover:bg-[#fecaca] transition-colors flex items-center justify-center gap-2"
+                    >
+                      <XCircle className="size-4" />
+                      Reject
+                    </button>
+                    <button
+                      onClick={() => openQuickAction(po, 'cancel')}
+                      className="px-3 py-2 bg-[#f3f4f6] text-[#374151] border border-[#d1d5db] rounded-[8px] text-[12px] font-semibold hover:bg-[#e5e7eb] transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -462,6 +550,27 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
                   </p>
                   <p className="text-[14px] text-[#323B42]">Date Received: {formatReceivedDateTime(r)}</p>
                   <p className="text-[14px] text-[#323B42]">Received By: {r.receivedBy || 'N/A'}</p>
+                  {r.actionReason && (
+                    <p className="text-[14px] text-[#323B42]">
+                      Reason: <span className="font-medium">{r.actionReason}</span>
+                    </p>
+                  )}
+                  {r.proofImages && r.proofImages.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {r.proofImages.map((src, index) => (
+                        <a
+                          key={`${r.id}-proof-${index}`}
+                          href={src}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="block h-14 w-14 overflow-hidden rounded-[8px] border border-[rgba(0,0,0,0.1)] bg-[#F8FAFB]"
+                          title={`Open proof image ${index + 1}`}
+                        >
+                          <img src={src} alt={`Proof ${index + 1}`} className="h-full w-full object-cover" />
+                        </a>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-start gap-2">
                   <div className="text-right">
@@ -628,6 +737,101 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
               >
                 <CheckCircle className="size-4" />
                 {saving ? 'Saving...' : 'Complete QC & Add Accepted Stock'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Quick reject/cancel modal */}
+      {quickActionTarget && (
+        <div className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="bg-white rounded-[14px] p-6 max-w-xl w-full">
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <h3 className="text-[22px] font-bold text-[#323B42]">
+                  {quickActionTarget.action === 'reject' ? 'Reject Goods Received' : 'Cancel Goods Received'}
+                </h3>
+                <p className="text-[14px] text-[#6b7280] mt-1">
+                  {quickActionTarget.po.orderNumber} • {quickActionTarget.po.supplier || 'N/A'}
+                </p>
+              </div>
+              <button onClick={closeQuickAction} disabled={saving} className="p-2 hover:bg-[#F8FAFB] rounded">
+                <X className="size-5 text-[#323B42]" />
+              </button>
+            </div>
+
+            <div className="mb-4 rounded-[10px] border border-[#facc15] bg-[#fef9c3] p-3 text-[13px] text-[#713f12]">
+              This updates the whole delivery transaction without item-by-item checking. Accepted stock will not be added.
+            </div>
+
+            {error && (
+              <div className="mb-4 p-3 bg-[#ffe2e2] border border-[#E7000B] rounded-[8px] text-[14px] text-[#E7000B]">
+                {error}
+              </div>
+            )}
+
+            <label className="block text-[12px] font-medium text-[#323B42] mb-2">
+              Reason / note *
+            </label>
+            <textarea
+              value={quickActionReason}
+              onChange={(event) => setQuickActionReason(event.target.value)}
+              rows={4}
+              placeholder={
+                quickActionTarget.action === 'reject'
+                  ? 'Example: damaged items, incorrect delivery, quality issue...'
+                  : 'Example: supplier cancelled delivery, duplicate transaction...'
+              }
+              className="w-full resize-none rounded-[8px] border border-[rgba(0,0,0,0.1)] px-3 py-2 text-[14px] focus:outline-none focus:border-[#007A5E]"
+            />
+
+            <label className="block text-[12px] font-medium text-[#323B42] mt-4 mb-2">
+              Proof images
+            </label>
+            <label className="flex cursor-pointer items-center justify-center gap-2 rounded-[8px] border border-dashed border-[#9ca3af] px-4 py-4 text-[13px] text-[#374151] hover:bg-[#F8FAFB]">
+              <Upload className="size-4" />
+              Upload image proof
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={(event) => void handleProofImages(event.target.files)}
+              />
+            </label>
+            {proofImageNames.length > 0 && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {proofImageNames.map((name) => (
+                  <span key={name} className="rounded-full bg-[#E0F2F2] px-3 py-1 text-[12px] text-[#007A5E]">
+                    {name}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            <div className="mt-6 flex gap-3">
+              <button
+                onClick={closeQuickAction}
+                disabled={saving}
+                className="flex-1 rounded-[8px] border border-[rgba(0,0,0,0.1)] px-4 py-2 text-[14px] font-medium text-[#323B42] hover:bg-[#F8FAFB] disabled:opacity-50"
+              >
+                Back
+              </button>
+              <button
+                onClick={handleQuickAction}
+                disabled={saving || !quickActionReason.trim()}
+                className={`flex-1 rounded-[8px] px-4 py-2 text-[14px] font-semibold text-white disabled:opacity-50 ${
+                  quickActionTarget.action === 'reject'
+                    ? 'bg-[#DC2626] hover:bg-[#B91C1C]'
+                    : 'bg-[#374151] hover:bg-[#1F2937]'
+                }`}
+              >
+                {saving
+                  ? 'Saving...'
+                  : quickActionTarget.action === 'reject'
+                    ? 'Reject Delivery'
+                    : 'Cancel Delivery'}
               </button>
             </div>
           </div>

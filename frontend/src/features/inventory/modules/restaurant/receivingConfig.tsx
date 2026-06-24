@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Pencil, Plus, Settings, Trash2, X } from 'lucide-react';
 import {
+  useCancelRestaurantGoodsReceiptMutation,
   useReceiveRestaurantPurchaseOrderMutation,
+  useRejectRestaurantGoodsReceiptMutation,
   useRestaurantGoodsRecordsQuery,
   useRestaurantSettings,
   useRestaurantStorageTemperatureOptionsQuery,
@@ -216,6 +218,8 @@ function CriteriaManager({
 export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
   const goodsQuery = useRestaurantGoodsRecordsQuery() as { data?: any[]; isLoading: boolean };
   const receiveMutation = useReceiveRestaurantPurchaseOrderMutation();
+  const rejectMutation = useRejectRestaurantGoodsReceiptMutation();
+  const cancelMutation = useCancelRestaurantGoodsReceiptMutation();
   const settingsQuery = useRestaurantSettings();
   const saveSettingsMutation = useUpsertRestaurantSettingMutation();
   const { data: storageTemperatureOptions = getStorageTemperatureOptions() } =
@@ -289,6 +293,8 @@ export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
       receivedAt: g.receivedAt ?? g.receivedDate ?? undefined,
       receivedBy: g.receivedBy ?? '',
       status: g.status,
+      actionReason: g.actionReason ?? null,
+      proofImages: g.proofImages ?? [],
       totalAccepted: lines.reduce((s: number, l: { acceptedQty: number }) => s + l.acceptedQty, 0),
       totalRejected: lines.reduce((s: number, l: { rejectedQty: number }) => s + l.rejectedQty, 0),
       lines,
@@ -436,16 +442,28 @@ export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
       };
     },
 
-    receive: async (poId, items) => {
-      await receiveMutation.mutateAsync({ id: poId, items });
+    receive: async (poId, items, proofImages = []) => {
+      await receiveMutation.mutateAsync({ id: poId, items, proofImages });
+    },
+
+    quickAction: async (poId, action, reason, proofImages) => {
+      if (action === 'reject') {
+        await rejectMutation.mutateAsync({ id: poId, reason, proofImages });
+        return;
+      }
+      await cancelMutation.mutateAsync({ id: poId, reason, proofImages });
     },
 
     historyStatusClass: (status) =>
       status === 'verified'
         ? 'bg-[#E0F5F1] text-[#008967]'
-        : status === 'partial'
-          ? 'bg-[#fff4e6] text-[#d08700]'
-          : 'bg-[#ffe2e2] text-[#E7000B]',
+        : status === 'rejected'
+          ? 'bg-[#ffe2e2] text-[#991B1B]'
+        : status === 'cancelled'
+          ? 'bg-[#f3f4f6] text-[#374151]'
+      : status === 'partial'
+        ? 'bg-[#fff4e6] text-[#d08700]'
+        : 'bg-[#ffe2e2] text-[#E7000B]',
 
     renderHistoryDetails: (record) => {
       const g = receivedById.get(record.id);

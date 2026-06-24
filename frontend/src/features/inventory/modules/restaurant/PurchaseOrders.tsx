@@ -14,6 +14,13 @@ import {
   useRestaurantUsersQuery,
   useSaveRestaurantPurchaseOrderMutation,
 } from "../lib/restaurant";
+import {
+  EXPECTED_DELIVERY_TIME_WINDOW_LABEL,
+  formatExpectedDelivery,
+  getExpectedDeliveryTimeWindowError,
+  getDeliveryDelayLabel,
+  isPurchaseOrderDelayed,
+} from "../lib/purchaseOrderDelivery";
 import { SuppliersManager } from "../shared/suppliers/SuppliersManager";
 
 // Helper function to normalize product names (capitalize first letter of each word, trim)
@@ -160,6 +167,11 @@ export function PurchaseOrders() {
   const [rejectingOrder, setRejectingOrder] = useState<Order | null>(null);
   const [approvingOrder, setApprovingOrder] = useState<Order | null>(null);
   const [rejectionNote, setRejectionNote] = useState("");
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
   useEffect(() => {
     if (sessionStorage.getItem('po-open-approval') === 'true') {
       sessionStorage.removeItem('po-open-approval');
@@ -221,6 +233,18 @@ export function PurchaseOrders() {
       <span className="px-3 py-1 rounded-full text-xs font-medium border inline-flex items-center gap-1" style={{ backgroundColor: style.bg, color: style.text, borderColor: style.border }}>
         <Icon className="w-5 h-5" />
         {status.charAt(0).toUpperCase() + status.slice(1)}
+      </span>
+    );
+  };
+
+  const getDeliveryDelayBadge = (order: Order) => {
+    if (!isPurchaseOrderDelayed(order.expectedDelivery, order.status, now)) return null;
+    const delayLabel = getDeliveryDelayLabel(order.expectedDelivery, now);
+
+    return (
+      <span className="px-3 py-1 rounded-full text-xs font-medium border inline-flex items-center gap-1" style={{ backgroundColor: "#FEE2E2", color: "#991B1B", borderColor: "#DC2626" }}>
+        <AlertCircle className="w-5 h-5" />
+        Delayed: {delayLabel}
       </span>
     );
   };
@@ -386,6 +410,11 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
       toast.error("Please add at least one item to the order");
       return;
     }
+    const deliveryTimeError = getExpectedDeliveryTimeWindowError(newOrder.expectedDelivery);
+    if (deliveryTimeError) {
+      toast.error(deliveryTimeError);
+      return;
+    }
 
     try {
       const supplier = suppliers.find((item) => item.name === newOrder.supplier);
@@ -437,7 +466,7 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
     csvContent += `Creator Role:,${getOrderCreatorRole(order)}\n`;
     csvContent += `Created At:,${order.createdAt || order.date}\n`;
     csvContent += `Order Date:,${order.date}\n`;
-    csvContent += `Expected Delivery:,${order.expectedDelivery}\n`;
+    csvContent += `Expected Delivery:,${formatExpectedDelivery(order.expectedDelivery)}\n`;
     csvContent += `Status:,${order.status}\n\n`;
     if (order.rejectionNote) {
       csvContent += `Rejection Note:,${order.rejectionNote}\n`;
@@ -525,6 +554,11 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
     }
 
     if (!editingOrder) return;
+    const deliveryTimeError = getExpectedDeliveryTimeWindowError(newOrder.expectedDelivery);
+    if (deliveryTimeError) {
+      toast.error(deliveryTimeError);
+      return;
+    }
 
     try {
       const supplier = suppliers.find((item) => item.name === newOrder.supplier);
@@ -698,8 +732,13 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
                   <td className="px-6 py-4 text-muted-foreground">{order.date}</td>
                   <td className="px-6 py-4 text-foreground">{order.items}</td>
                   <td className="px-6 py-4 text-foreground font-medium">₱{order.total.toLocaleString()}</td>
-                  <td className="px-6 py-4 text-muted-foreground">{order.expectedDelivery}</td>
-                  <td className="px-6 py-4">{getStatusBadge(order.status)}</td>
+                  <td className="px-6 py-4 text-muted-foreground">{formatExpectedDelivery(order.expectedDelivery)}</td>
+                  <td className="px-6 py-4">
+                    <div className="flex flex-col items-start gap-2">
+                      {getStatusBadge(order.status)}
+                      {getDeliveryDelayBadge(order)}
+                    </div>
+                  </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-2">
                       <button
@@ -798,17 +837,20 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
 
               <div>
                 <label htmlFor="expectedDelivery" className="block text-sm mb-2 text-foreground">
-                  Expected Delivery Date *
+                  Expected Delivery Date and Time *
                 </label>
                 <input
                   id="expectedDelivery"
                   name="expectedDelivery"
-                  type="date"
+                  type="datetime-local"
                   value={newOrder.expectedDelivery}
                   onChange={handleInputChange}
                   className="w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
                   required
                 />
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Delivery time must be between {EXPECTED_DELIVERY_TIME_WINDOW_LABEL}.
+                </p>
               </div>
 
               <div className="border-t border-border pt-4">
@@ -911,7 +953,7 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
                   </div>
                   <div>
                     <p className="text-sm text-muted-foreground mb-1">Expected Delivery</p>
-                    <p className="text-foreground">{selectedOrder.expectedDelivery}</p>
+                    <p className="text-foreground">{formatExpectedDelivery(selectedOrder.expectedDelivery)}</p>
                   </div>
                   <div>
                     <p className="text-sm text-muted-foreground mb-1">Created By</p>
@@ -923,7 +965,10 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
                 <div className="space-y-4">
                   <div>
                     <p className="text-sm text-muted-foreground mb-1">Status</p>
-                    {getStatusBadge(selectedOrder.status)}
+                    <div className="flex flex-col items-start gap-2">
+                      {getStatusBadge(selectedOrder.status)}
+                      {getDeliveryDelayBadge(selectedOrder)}
+                    </div>
                   </div>
                   <div>
                     <p className="text-sm text-muted-foreground mb-1">Total Items</p>
@@ -1123,17 +1168,20 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
 
               <div>
                 <label htmlFor="edit-expectedDelivery" className="block text-sm mb-2 text-foreground">
-                  Expected Delivery Date *
+                  Expected Delivery Date and Time *
                 </label>
                 <input
                   id="edit-expectedDelivery"
                   name="expectedDelivery"
-                  type="date"
+                  type="datetime-local"
                   value={newOrder.expectedDelivery}
                   onChange={handleInputChange}
                   className="w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
                   required
                 />
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Delivery time must be between {EXPECTED_DELIVERY_TIME_WINDOW_LABEL}.
+                </p>
               </div>
 
               <div className="border-t border-border pt-4">
@@ -1296,7 +1344,8 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
                               </div>
                               <div>
                                 <p className="text-xs text-muted-foreground mb-1">Expected Delivery</p>
-                                <p className="text-sm font-medium text-foreground">{order.expectedDelivery}</p>
+                                <p className="text-sm font-medium text-foreground">{formatExpectedDelivery(order.expectedDelivery)}</p>
+                                {getDeliveryDelayBadge(order)}
                               </div>
                               <div>
                                 <p className="text-xs text-muted-foreground mb-1">Total Items</p>

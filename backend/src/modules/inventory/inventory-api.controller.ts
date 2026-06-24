@@ -182,6 +182,16 @@ export class InventoryApiController {
     return this.inventoryApiService.receivePurchaseOrder(request.headers, id, body);
   }
 
+  @Patch('purchase-orders/:id/goods-receipt/reject')
+  rejectGoodsReceipt(@Req() request: RequestLike, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.quickActionGoodsReceipt(request.headers, id, body, 'reject');
+  }
+
+  @Patch('purchase-orders/:id/goods-receipt/cancel')
+  cancelGoodsReceipt(@Req() request: RequestLike, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.quickActionGoodsReceipt(request.headers, id, body, 'cancel');
+  }
+
   @Get('transfers')
   listTransfers(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
     return this.inventoryApiService.listTransfers(request.headers, query);
