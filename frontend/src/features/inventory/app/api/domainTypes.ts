@@ -57,6 +57,7 @@ export interface ApiInventoryItem {
   dateAdded: string;
   locationId: string;
   location?: ApiLocation;
+  isActive?: boolean;
   createdAt?: string;
   updatedAt?: string;
 }

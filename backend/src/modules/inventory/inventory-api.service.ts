@@ -56,6 +56,11 @@ export class InventoryApiService {
     await this.safeQuery(
       `ALTER TABLE "InventoryItem" ADD COLUMN IF NOT EXISTS "expiryPeriod" TEXT`,
     );
+    // Soft-delete / archive flag used by the inventory list (archived items are
+    // hidden unless "Show archived" is on). Defaults to active.
+    await this.safeQuery(
+      `ALTER TABLE "InventoryItem" ADD COLUMN IF NOT EXISTS "isActive" BOOLEAN NOT NULL DEFAULT true`,
+    );
   }
 
   async getCurrentUser(headers: HeadersLike) {
@@ -87,7 +92,7 @@ export class InventoryApiService {
           i.quantity, i.price, i."costPrice", i."imageUrl", i.unit,
           i."minStock", i."maxStock", i."reorderPoint", i."expiryDate",
           i."expiryPeriod", i."storageTemperature", i."dateAdded", i."locationId",
-          i."createdAt", i."updatedAt",
+          i."isActive", i."createdAt", i."updatedAt",
           json_build_object(
             'id', l.id,
             'name', l.name,
@@ -221,6 +226,7 @@ export class InventoryApiService {
           "expiryDate" = COALESCE($20, "expiryDate"),
           "expiryPeriod" = COALESCE($21, "expiryPeriod"),
           "storageTemperature" = COALESCE($22, "storageTemperature"),
+          "isActive" = COALESCE($23, "isActive"),
           "updatedAt" = CURRENT_TIMESTAMP
         WHERE id = $1
         RETURNING *
@@ -248,6 +254,7 @@ export class InventoryApiService {
         body.expiryDate ?? null,
         body.expiryPeriod ?? null,
         body.storageTemperature ?? null,
+        body.isActive === undefined ? null : Boolean(body.isActive),
       ],
     );
 
