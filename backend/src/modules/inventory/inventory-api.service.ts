@@ -199,8 +199,29 @@ export class InventoryApiService {
     return rows[0];
   }
 
-  async updateInventoryItem(id: string, body: Record<string, unknown>) {
+  async updateInventoryItem(headers: HeadersLike, id: string, body: Record<string, unknown>) {
+    const scope = await this.resolveScope(headers);
     await this.ensureInventoryItemOperationalColumns();
+
+    // Stock quantity can only be changed directly by an Admin or Manager. Staff must
+    // route stock changes through the adjustment approval workflow, so we reject any
+    // attempt by them to set a quantity different from the item's current value.
+    let quantityChange: number | null = body.quantity === undefined ? null : Number(body.quantity);
+    if (quantityChange !== null && !['Admin', 'Manager'].includes(scope.user.role)) {
+      const current = await this.safeQuery<{ quantity: number }>(
+        `SELECT quantity FROM "InventoryItem" WHERE id = $1 AND "businessId" = $2 LIMIT 1`,
+        [id, scope.businessId],
+      );
+      if (!current[0]) throw new NotFoundException('Inventory item was not found.');
+      if (Number(current[0].quantity) !== quantityChange) {
+        throw new ForbiddenException(
+          'Only an Admin or Manager can change stock quantity directly. Submit a stock adjustment for approval instead.',
+        );
+      }
+      // Quantity is unchanged — leave it untouched.
+      quantityChange = null;
+    }
+
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
         UPDATE "InventoryItem"
@@ -236,7 +257,7 @@ export class InventoryApiService {
         body.name ?? null,
         body.description ?? null,
         body.category ?? null,
-        body.quantity === undefined ? null : Number(body.quantity),
+        quantityChange,
         body.price === undefined ? null : Number(body.price),
         body.costPrice === undefined ? null : Number(body.costPrice),
         body.imageUrl ?? null,
@@ -1245,10 +1266,14 @@ export class InventoryApiService {
 
   async submitPurchaseOrder(headers: HeadersLike, id: string) {
     const scope = await this.resolveScope(headers);
+    // Admins and Managers have approval authority, so their purchase orders skip
+    // the pending-approval queue and go straight to APPROVED on submission.
+    const autoApprove = ['Admin', 'Manager'].includes(scope.user.role);
+    const nextStatus = autoApprove ? 'APPROVED' : 'SUBMITTED';
     const rows = await this.safeQuery<{ id: string }>(
-      `UPDATE "PurchaseOrder" SET status = 'SUBMITTED', "updatedAt" = CURRENT_TIMESTAMP
+      `UPDATE "PurchaseOrder" SET status = $4::"PurchaseOrderStatus", "updatedAt" = CURRENT_TIMESTAMP
        WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule" AND status = 'DRAFT' RETURNING id`,
-      [id, scope.businessId, scope.module],
+      [id, scope.businessId, scope.module, nextStatus],
     );
     if (!rows[0]) throw new BadRequestException('Only DRAFT orders can be submitted.');
     return this.getPurchaseOrderRow(scope, id);

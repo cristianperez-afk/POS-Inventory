@@ -1013,6 +1013,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     enableIngredientCustomization?: boolean;
     enableReceiptPrinting?: boolean;
     enabledPaymentMethods?: string[];
+    paymentMethodAccounts?: Record<string, unknown>;
   }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
@@ -1041,10 +1042,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           enable_ingredient_customization = COALESCE($12, enable_ingredient_customization),
           enable_receipt_printing = COALESCE($13, enable_receipt_printing),
           enabled_payment_methods = COALESCE($14, enabled_payment_methods),
-          store_type = COALESCE(store_type, $15),
+          payment_method_accounts = COALESCE($15, payment_method_accounts),
+          store_type = COALESCE(store_type, $16),
           updated_at = CURRENT_TIMESTAMP
-        WHERE store_id = $16
-          AND (store_type = $15 OR store_type IS NULL)
+        WHERE store_id = $17
+          AND (store_type = $16 OR store_type IS NULL)
         RETURNING *
       `,
       [
@@ -1062,6 +1064,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         input.enableIngredientCustomization,
         input.enableReceiptPrinting,
         input.enabledPaymentMethods ?? null,
+        input.paymentMethodAccounts ? JSON.stringify(input.paymentMethodAccounts) : null,
         admin.store_type,
         admin.store_id,
       ],
@@ -2305,6 +2308,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       await this.syncRetailInventoryIntoPosCatalog(user);
     }
 
+    const restaurantBusinessId =
+      user.store_type === 'RESTAURANT'
+        ? await this.resolveInventoryBusinessIdForStoreScope(user)
+        : null;
+
     if (user.store_type === 'RETAIL_STORE') {
       return this.query<any>(
         `
@@ -2368,15 +2376,33 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           p.updated_at,
           c.name AS category_name,
           COALESCE(r.modifiers, '[]'::jsonb) AS modifiers,
+          r.servings,
+          r."prepTimeMinutes" AS prep_time_minutes,
           CASE
             WHEN p.store_type = 'RESTAURANT' THEN COALESCE(availability.available_quantity, 0)
             ELSE COALESCE(p.stock_quantity, 0)
           END AS available_quantity
         FROM products p
         LEFT JOIN product_categories c ON c.id = p.category_id
-        LEFT JOIN "Recipe" r
-          ON r."menuItemId" = p.inventory_item_id
-         AND COALESCE(r."isActive", TRUE) = TRUE
+        LEFT JOIN LATERAL (
+          SELECT
+            recipe.modifiers,
+            recipe.servings,
+            recipe."prepTimeMinutes",
+            recipe.instructions,
+            recipe."imageUrl"
+          FROM "Recipe" recipe
+          WHERE COALESCE(recipe."isActive", TRUE) = TRUE
+            AND ($3::text IS NULL OR recipe."businessId"::text = $3::text)
+            AND (
+              recipe."menuItemId" = p.inventory_item_id
+              OR lower(trim(COALESCE(recipe.name, ''))) = lower(trim(COALESCE(p.name, '')))
+            )
+          ORDER BY
+            CASE WHEN recipe."menuItemId" = p.inventory_item_id THEN 0 ELSE 1 END,
+            recipe."updatedAt" DESC NULLS LAST
+          LIMIT 1
+        ) r ON TRUE
         LEFT JOIN "InventoryItem" menu_item
           ON menu_item.id = p.inventory_item_id
         LEFT JOIN LATERAL (
@@ -2393,8 +2419,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           AND COALESCE(p.is_available, TRUE) = TRUE
         ORDER BY p.name ASC
       `,
-      [user.store_id, user.store_type],
-    );
+        [user.store_id, user.store_type, restaurantBusinessId],
+      );
 
     const ingredientRows = user.store_type === 'RESTAURANT'
       ? await this.query<any>(
@@ -2475,6 +2501,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       await this.syncRestaurantRecipesIntoPosCatalog(user);
     }
 
+    const restaurantBusinessId =
+      user.store_type === 'RESTAURANT'
+        ? await this.resolveInventoryBusinessIdForStoreScope(user)
+        : null;
+
     const rows = await this.query<any>(
       `
         SELECT
@@ -2483,6 +2514,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           p.store_id,
           p.store_type,
           COALESCE(r.modifiers, '[]'::jsonb) AS modifiers,
+          r.servings,
+          r."prepTimeMinutes" AS prep_time_minutes,
           COALESCE(
             json_agg(
               json_build_object(
@@ -2510,9 +2543,23 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             '[]'::json
           ) AS ingredients
         FROM products p
-        LEFT JOIN "Recipe" r
-          ON r."menuItemId" = p.inventory_item_id
-         AND COALESCE(r."isActive", TRUE) = TRUE
+        LEFT JOIN LATERAL (
+          SELECT
+            recipe.modifiers,
+            recipe.servings,
+            recipe."prepTimeMinutes"
+          FROM "Recipe" recipe
+          WHERE COALESCE(recipe."isActive", TRUE) = TRUE
+            AND ($3::text IS NULL OR recipe."businessId"::text = $3::text)
+            AND (
+              recipe."menuItemId" = p.inventory_item_id
+              OR lower(trim(COALESCE(recipe.name, ''))) = lower(trim(COALESCE(p.name, '')))
+            )
+          ORDER BY
+            CASE WHEN recipe."menuItemId" = p.inventory_item_id THEN 0 ELSE 1 END,
+            recipe."updatedAt" DESC NULLS LAST
+          LIMIT 1
+        ) r ON TRUE
         LEFT JOIN product_ingredients pi
           ON pi.product_id = p.id
          AND pi.store_id = p.store_id
@@ -2521,10 +2568,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
          AND ii.store_id = p.store_id
         WHERE p.id = $1
           AND p.store_id = $2
-        GROUP BY p.id, p.name, p.store_id, p.store_type, r.modifiers
+        GROUP BY p.id, p.name, p.store_id, p.store_type, r.modifiers, r.servings, r."prepTimeMinutes"
         LIMIT 1
       `,
-      [input.productId, user.store_id],
+      [input.productId, user.store_id, restaurantBusinessId],
     );
 
     if (!rows[0]) {
@@ -4412,14 +4459,16 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           enable_takeout,
           enable_ingredient_customization,
           enable_receipt_printing,
-          enabled_payment_methods
+          enabled_payment_methods,
+          payment_method_accounts
         )
-        VALUES ($1, $2, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, 0, 0, TRUE, 0, TRUE, TRUE, TRUE, TRUE, ARRAY['Cash', 'GCash', 'Maya', 'Bank Transfer']::TEXT[])
+        VALUES ($1, $2, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, 0, 0, TRUE, 0, TRUE, TRUE, TRUE, TRUE, ARRAY['Cash', 'GCash', 'Maya', 'Bank Transfer']::TEXT[], '{}'::JSONB)
         ON CONFLICT (store_id) DO UPDATE
         SET store_type = COALESCE(store_settings.store_type, EXCLUDED.store_type),
             service_charge_rate = COALESCE(store_settings.service_charge_rate, store_settings.service_charge_percentage, 0),
             service_charge_percentage = COALESCE(store_settings.service_charge_percentage, store_settings.service_charge_rate, 0),
             enabled_payment_methods = COALESCE(store_settings.enabled_payment_methods, EXCLUDED.enabled_payment_methods),
+            payment_method_accounts = COALESCE(store_settings.payment_method_accounts, EXCLUDED.payment_method_accounts),
             updated_at = CURRENT_TIMESTAMP
       `,
       [storeId, storeType],
@@ -4446,6 +4495,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ADD COLUMN IF NOT EXISTS enable_ingredient_customization BOOLEAN DEFAULT TRUE,
           ADD COLUMN IF NOT EXISTS enable_receipt_printing BOOLEAN DEFAULT TRUE,
           ADD COLUMN IF NOT EXISTS enabled_payment_methods TEXT[] DEFAULT ARRAY['Cash', 'GCash', 'Maya', 'Bank Transfer'],
+          ADD COLUMN IF NOT EXISTS payment_method_accounts JSONB DEFAULT '{}'::JSONB,
           ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       `,

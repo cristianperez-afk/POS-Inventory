@@ -82,7 +82,7 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
   const [showReceipt, setShowReceipt] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [completedOrder, setCompletedOrder] = useState<any>(null);
-  const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'Card' | 'GCash' | 'PayMaya'>('Cash');
+  const [paymentMethod, setPaymentMethod] = useState('Cash');
   const [cashAmount, setCashAmount] = useState('');
   const [isPaymentSubmitting, setIsPaymentSubmitting] = useState(false);
   const [changeAmount, setChangeAmount] = useState(0);
@@ -90,6 +90,8 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
   const [customDiscountPercent, setCustomDiscountPercent] = useState<number>(0);
   const [showDiscountModal, setShowDiscountModal] = useState(false);
   const [validationError, setValidationError] = useState<string>('');
+  const enabledPaymentMethods = settings.enabled_payment_methods.length > 0 ? settings.enabled_payment_methods : ['Cash'];
+  const selectedPaymentAccount = settings.payment_method_accounts[paymentMethod];
 
   // Autocomplete for customer
   const [showCustomerSuggestions, setShowCustomerSuggestions] = useState(false);
@@ -995,7 +997,7 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
               <div className="mb-4">
                 <label className="block text-sm font-medium mb-2">Payment Method</label>
                 <div className="grid grid-cols-2 gap-2">
-                  {(['Cash', 'Card', 'GCash', 'PayMaya'] as const).map(method => (
+                  {enabledPaymentMethods.map(method => (
                     <button
                       key={method}
                       onClick={() => setPaymentMethod(method)}
@@ -1032,6 +1034,15 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
                     </div>
                   )}
                 </>
+              )}
+
+              {paymentMethod !== 'Cash' && selectedPaymentAccount && (
+                <div className="mb-4 rounded-lg border border-primary/20 bg-primary/5 p-4 text-sm">
+                  {selectedPaymentAccount.qr_image && <img src={selectedPaymentAccount.qr_image} alt={`${paymentMethod} QR code`} className="mb-3 h-40 w-40 rounded-lg border border-border bg-white object-contain p-2" />}
+                  {selectedPaymentAccount.account_name && <p><span className="font-medium">Account Name:</span> {selectedPaymentAccount.account_name}</p>}
+                  {selectedPaymentAccount.account_number && <p><span className="font-medium">Account Details:</span> {selectedPaymentAccount.account_number}</p>}
+                  {selectedPaymentAccount.instructions && <p className="mt-2 text-muted-foreground">{selectedPaymentAccount.instructions}</p>}
+                </div>
               )}
 
               <div className="flex gap-2">

@@ -107,6 +107,7 @@ export function Sidebar({ currentPage, onNavigate, onLogout, isAdmin = false, st
   const headerTitle = storeBrand?.name || defaultTitle;
   const defaultLogo = getDefaultStoreLogo(storeType);
   const userRoleLabel = getUserRoleLabel(userRole, isAdmin, staffType);
+  const userSubtitle = userName?.trim() || userRoleLabel;
   const closeManagementGroups = () => {
     setOpenGroups({
       Store: false,
@@ -160,7 +161,7 @@ export function Sidebar({ currentPage, onNavigate, onLogout, isAdmin = false, st
           )}
           <div className={`overflow-hidden transition-all duration-300 ease-in-out ${isCollapsed ? 'max-h-0 opacity-0' : 'max-h-14 opacity-100'}`}>
             <h2 className="truncate text-lg font-semibold tracking-tight text-white">{headerTitle}</h2>
-            <p className="mt-0.5 text-sm leading-tight text-slate-200">{userRoleLabel}</p>
+            <p className="mt-0.5 truncate text-sm leading-tight text-slate-200">{userSubtitle}</p>
           </div>
         </div>
       </div>

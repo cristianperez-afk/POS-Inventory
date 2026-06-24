@@ -15,7 +15,15 @@ export interface StoreSettingValues {
   tax_rate: number;
   enable_discount: boolean;
   enabled_payment_methods: string[];
+  payment_method_accounts: Record<string, PaymentMethodAccount>;
   theme_color: string;
+}
+
+export interface PaymentMethodAccount {
+  account_name?: string;
+  account_number?: string;
+  instructions?: string;
+  qr_image?: string;
 }
 
 export interface DiscountSetting {
@@ -46,6 +54,7 @@ export const defaultStoreSettings: StoreSettingValues = {
   tax_rate: 0,
   enable_discount: true,
   enabled_payment_methods: ['Cash', 'GCash', 'Maya', 'Bank Transfer'],
+  payment_method_accounts: {},
   theme_color: '#008967',
 };
 
@@ -121,6 +130,7 @@ export function normalizeStoreSettings(data: any): StoreSettingValues {
     tax_rate: Number(data?.tax_rate ?? 0),
     enable_discount: data?.enable_discount ?? true,
     enabled_payment_methods: normalizePaymentMethods(data?.enabled_payment_methods),
+    payment_method_accounts: normalizePaymentMethodAccounts(data?.payment_method_accounts),
     theme_color: isHexColor(data?.theme_color) ? data.theme_color : defaultStoreSettings.theme_color,
   };
 }
@@ -162,4 +172,21 @@ function normalizePaymentMethods(value: unknown): string[] {
     }
   }
   return defaults;
+}
+
+function normalizePaymentMethodAccounts(value: unknown): Record<string, PaymentMethodAccount> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([method]) => method.trim().length > 0)
+      .map(([method, account]) => {
+        const data = account && typeof account === 'object' && !Array.isArray(account) ? account as Record<string, unknown> : {};
+        return [method, {
+          account_name: typeof data.account_name === 'string' ? data.account_name : '',
+          account_number: typeof data.account_number === 'string' ? data.account_number : '',
+          instructions: typeof data.instructions === 'string' ? data.instructions : '',
+          qr_image: typeof data.qr_image === 'string' ? data.qr_image : '',
+        }];
+      }),
+  );
 }
