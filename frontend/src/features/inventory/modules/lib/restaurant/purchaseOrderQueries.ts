@@ -210,9 +210,10 @@ export function useRestaurantGlobalProductsQuery() {
       metadataQuery.data ?? {},
     ],
     queryFn: async () => {
+      // Purchase orders cover raw ingredients and supplies only — finished
+      // MENU_ITEM dishes are not orderable through inventory.
       const groups = await Promise.all([
         getInventory({ itemType: 'INGREDIENT' }),
-        getInventory({ itemType: 'MENU_ITEM' }),
         getInventory({ itemType: 'SUPPLY' }),
       ]);
       return groups.flat();
@@ -445,7 +446,8 @@ export function useSaveRestaurantPurchaseOrderMutation() {
       const created = await createPurchaseOrder(payload);
       return submitPurchaseOrder(created.id, 'RESTAURANT');
     },
-    [domainQueryKeys.purchaseOrders, domainQueryKeys.inventory],
+    // restaurantSettings: auto-created PO line items may add CATEGORY_HIERARCHY entries.
+    [domainQueryKeys.purchaseOrders, domainQueryKeys.inventory, domainQueryKeys.restaurantSettings],
   );
 }
 

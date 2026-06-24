@@ -6,6 +6,15 @@ import { DatabaseService } from '../../shared/database/database.service';
 type HeadersLike = Record<string, string | string[] | undefined>;
 type BusinessModule = 'RETAIL' | 'RESTAURANT';
 
+// Raw item types presented through the restaurant inventory "Main > Sub" category
+// tree (and therefore drives CATEGORY_HIERARCHY). MENU_ITEM dishes are excluded —
+// they are managed on the menu/recipe screens, not in inventory.
+const NORMALIZED_CATEGORY_ITEM_TYPES = ['INGREDIENT', 'SUPPLY'];
+// Item types where a name uniquely identifies the item, so creation reuses an
+// existing row instead of making a duplicate. Excludes retail/thrift items, whose
+// identity also depends on size/condition/target customer.
+const DEDUP_BY_NAME_ITEM_TYPES = ['INGREDIENT', 'SUPPLY'];
+
 type Scope = {
   businessId: string;
   module: BusinessModule;
@@ -101,8 +110,40 @@ export class InventoryApiService {
   async createInventoryItem(headers: HeadersLike, body: Record<string, unknown>) {
     await this.ensureInventoryItemOperationalColumns();
     const scope = await this.resolveScope(headers);
+    const itemType = String(body.itemType ?? 'RETAIL_ITEM');
+    const name = String(body.name ?? 'Untitled Item').trim();
+
+    // Reuse an existing raw item with the same name instead of creating a
+    // duplicate (e.g. ordering the same new ingredient twice). Scoped to
+    // ingredients/supplies — retail/thrift items can share a name across
+    // size/condition variants, so name alone is not a safe identity there.
+    if (DEDUP_BY_NAME_ITEM_TYPES.includes(itemType) && name && name !== 'Untitled Item') {
+      const existing = await this.safeQuery<Record<string, unknown>>(
+        `SELECT * FROM "InventoryItem"
+         WHERE "businessId" = $1 AND "itemType" = $2::"InventoryItemType"
+           AND lower(trim(name)) = lower($3)
+         ORDER BY "createdAt" ASC
+         LIMIT 1`,
+        [scope.businessId, itemType, name.toLowerCase()],
+      );
+      if (existing[0]) return existing[0];
+    }
+
     const locationId = String(body.locationId ?? (await this.getDefaultLocationId(scope.businessId)));
     const id = randomUUID();
+
+    // Restaurant items are grouped by a "Main > Sub" category tree. Normalize the
+    // incoming category into that shape and make sure the resolved Main/Sub exist
+    // in CATEGORY_HIERARCHY, so every created item is countable AND visible in the
+    // inventory list (the two used to drift apart for unregistered categories).
+    let category = String(body.category ?? 'Uncategorized');
+    let subcategory = body.subcategory == null ? null : String(body.subcategory);
+    if (NORMALIZED_CATEGORY_ITEM_TYPES.includes(itemType)) {
+      const normalized = this.normalizeItemCategory(itemType, body.category, body.subcategory);
+      category = normalized.category;
+      subcategory = normalized.subcategory;
+      await this.registerCategoryInHierarchy(scope.businessId, normalized.main, normalized.sub);
+    }
 
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
@@ -110,26 +151,28 @@ export class InventoryApiService {
           id, name, description, "itemType", sku, barcode, category, "targetCustomer",
           subcategory, size, condition, quantity, price, "costPrice",
           "imageUrl", unit, "minStock", "maxStock", "reorderPoint",
-          "expiryDate", "expiryPeriod", "storageTemperature", "locationId", "businessId"
+          "expiryDate", "expiryPeriod", "storageTemperature", "locationId", "businessId",
+          "updatedAt"
         )
         VALUES (
           $1, $2, $3, $4::"InventoryItemType", $5, $6, $7, $8,
           $9, $10, $11, $12, $13, $14,
           $15, $16, $17, $18, $19,
-          $20, $21, $22, $23, $24
+          $20, $21, $22, $23, $24,
+          CURRENT_TIMESTAMP
         )
         RETURNING *
       `,
       [
         id,
-        String(body.name ?? 'Untitled Item'),
+        name,
         body.description ?? null,
-        String(body.itemType ?? 'RETAIL_ITEM'),
+        itemType,
         body.sku ?? null,
         body.barcode ?? null,
-        String(body.category ?? 'Uncategorized'),
+        category,
         body.targetCustomer ?? null,
-        body.subcategory ?? null,
+        subcategory,
         body.size ?? null,
         body.condition ?? null,
         Number(body.quantity ?? 0),
@@ -1996,6 +2039,80 @@ export class InventoryApiService {
       [scope.user.id, scope.businessId],
     );
     return { success: true };
+  }
+
+  // Coerce a raw ingredient/supply category/subcategory pair into a canonical
+  // "Main > Sub" form, keeping its own main with a "General" fallback sub so it
+  // always has a place in the category tree.
+  private normalizeItemCategory(
+    _itemType: string,
+    rawCategory: unknown,
+    rawSubcategory: unknown,
+  ): { category: string; subcategory: string; main: string; sub: string } {
+    const category = String(rawCategory ?? '').trim();
+    const subcategory = rawSubcategory == null ? '' : String(rawSubcategory).trim();
+
+    let main = '';
+    let sub = '';
+    if (category.includes(' > ')) {
+      const idx = category.indexOf(' > ');
+      main = category.slice(0, idx).trim();
+      sub = category.slice(idx + 3).trim();
+    } else {
+      main = category;
+      sub = subcategory;
+    }
+
+    if (!main) main = 'Other';
+    if (!sub) sub = 'General';
+    return { category: `${main} > ${sub}`, subcategory: sub, main, sub };
+  }
+
+  // Ensure a Main/Sub pair is present in the business CATEGORY_HIERARCHY setting,
+  // adding it (and the main bucket) when missing. Additive only — never removes.
+  private async registerCategoryInHierarchy(
+    businessId: string,
+    main: string,
+    sub: string,
+  ): Promise<void> {
+    const rows = await this.safeQuery<{ value: unknown }>(
+      `SELECT value FROM "RestaurantSetting" WHERE "businessId" = $1 AND key = 'CATEGORY_HIERARCHY' LIMIT 1`,
+      [businessId],
+    );
+
+    let hierarchy: Record<string, string[]> = {};
+    const raw = rows[0]?.value;
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      hierarchy = raw as Record<string, string[]>;
+    } else if (typeof raw === 'string') {
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          hierarchy = parsed as Record<string, string[]>;
+        }
+      } catch {
+        hierarchy = {};
+      }
+    }
+
+    const subs = Array.isArray(hierarchy[main]) ? [...hierarchy[main]] : [];
+    let changed = !Array.isArray(hierarchy[main]);
+    if (!subs.includes(sub)) {
+      subs.push(sub);
+      changed = true;
+    }
+    if (!changed) return;
+
+    hierarchy[main] = subs;
+    await this.safeQuery(
+      `
+        INSERT INTO "RestaurantSetting" (id, key, value, "businessId", "updatedAt")
+        VALUES ($1, 'CATEGORY_HIERARCHY', $2::jsonb, $3, CURRENT_TIMESTAMP)
+        ON CONFLICT ("businessId", key)
+        DO UPDATE SET value = EXCLUDED.value, "updatedAt" = CURRENT_TIMESTAMP
+      `,
+      [randomUUID(), JSON.stringify(hierarchy), businessId],
+    );
   }
 
   async listRestaurantSettings(headers: HeadersLike) {

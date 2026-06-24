@@ -7,7 +7,7 @@ import react from '@vitejs/plugin-react'
 function figmaAssetResolver() {
   return {
     name: 'figma-asset-resolver',
-    resolveId(id) {
+    resolveId(id: string) {
       if (id.startsWith('figma:asset/')) {
         const filename = id.replace('figma:asset/', '')
         return path.resolve(__dirname, 'src/assets', filename)
@@ -49,7 +49,7 @@ export default defineConfig({
     },
     proxy: {
       '/api': {
-        target: process.env.VITE_INVENTORY_API_BASE_URL ?? process.env.VITE_API_BASE_URL ?? 'http://localhost:3004',
+        target: process.env.VITE_INVENTORY_API_BASE_URL ?? process.env.VITE_API_BASE_URL ?? 'http://localhost:3000',
         changeOrigin: true,
       },
     },

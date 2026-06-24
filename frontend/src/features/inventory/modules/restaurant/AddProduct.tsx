@@ -248,8 +248,9 @@ export function AddProduct({ onClose }: { onClose?: () => void } = {}) {
                     className="w-full px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all appearance-none cursor-pointer"
                     required
                   >
+                    {/* Inventory stores raw items only — menu items are created
+                        on the menu/recipe screens, not here. */}
                     <option value="INGREDIENT">Ingredient</option>
-                    <option value="MENU_ITEM">Menu Item</option>
                     <option value="SUPPLY">Supply</option>
                   </select>
                 </div>
