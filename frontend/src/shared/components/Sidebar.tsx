@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ChevronDown, Home, ShoppingCart, List, BarChart3, LogOut, Users, UtensilsCrossed, Store, ShoppingBag, Info, SlidersHorizontal, Package, PanelLeftClose, PanelLeftOpen, AlertTriangle, Apple, ArrowRightLeft, ChefHat, ClipboardCheck, FileText, Layers, LayoutDashboard, MapPin, PackageCheck, PackageSearch, Receipt, ReceiptText, Settings2 } from 'lucide-react';
+import { ChevronDown, Home, ShoppingCart, List, BarChart3, LogOut, Users, UtensilsCrossed, Store, ShoppingBag, Info, SlidersHorizontal, Package, PanelLeftClose, PanelLeftOpen, AlertTriangle, Apple, ArrowRightLeft, ChefHat, ClipboardCheck, FileText, Layers, LayoutDashboard, MapPin, PackageCheck, PackageSearch, Receipt, ReceiptText, Settings, Settings2 } from 'lucide-react';
 import { Page, type StoreBrand } from '../App';
 import type { StaffType } from '../../auth/types/auth';
 import { useStoreSettings } from '../context/StoreSettingsContext';
@@ -335,9 +335,28 @@ export function Sidebar({ currentPage, onNavigate, onLogout, isAdmin = false, st
       </nav>
 
       <div className={`shrink-0 border-t border-white/10 py-2 text-white transition-all duration-300 ease-in-out ${isCollapsed ? 'px-3' : 'px-5'}`}>
+        {isAdmin && (
+          <button
+            onClick={() => {
+              closeManagementGroups();
+              onNavigate('general-settings');
+            }}
+            className={`flex h-[52px] w-full items-center rounded-lg border transition ${
+              isCollapsed ? 'justify-center gap-0 px-0' : 'gap-4 px-4 text-left'
+            } ${getMenuButtonClasses(currentPage === 'general-settings', false)}`}
+            style={getMenuButtonStyle(currentPage === 'general-settings', false)}
+          >
+            <span className="shrink-0">
+              <Settings className="h-5 w-5" strokeWidth={1.8} />
+            </span>
+            <span className={`overflow-hidden whitespace-nowrap text-base transition-all duration-300 ease-in-out ${isCollapsed ? 'w-0 opacity-0' : 'flex-1 opacity-100'} ${currentPage === 'general-settings' ? 'font-semibold' : 'font-medium'}`}>
+              {!isCollapsed && 'Settings'}
+            </span>
+          </button>
+        )}
         <button
           onClick={() => setShowLogoutConfirm(true)}
-          className={`flex h-[52px] w-full items-center rounded-lg border border-transparent text-white transition hover:bg-red-500/10 hover:text-red-200 ${
+          className={`mt-1 flex h-[52px] w-full items-center rounded-lg border border-transparent text-white transition hover:bg-red-500/10 hover:text-red-200 ${
             isCollapsed ? 'justify-center gap-0 px-0' : 'gap-4 px-4 text-left'
           }`}
         >

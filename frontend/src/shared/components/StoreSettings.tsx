@@ -237,8 +237,8 @@ export function StoreSettings({ currentUser, storeBrand, onLogout, onNavigate }:
 
           <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(360px,430px)]">
             <section className="rounded-lg border border-border bg-card p-6 shadow-sm">
-              <h2 className="mb-1 text-xl font-semibold">{isRestaurant ? 'Restaurant POS Settings' : 'Retail Store Settings'}</h2>
-              <p className="mb-5 text-sm text-muted-foreground">These settings are saved per store and applied to staff POS pages.</p>
+              <h2 className="mb-1 text-xl font-semibold">System Configuration</h2>
+              <p className="mb-5 text-sm text-muted-foreground">These {isRestaurant ? 'restaurant POS' : 'retail store'} settings are saved per store and applied to staff POS pages.</p>
 
               {loading ? (
                 <p className="text-muted-foreground">Loading settings...</p>

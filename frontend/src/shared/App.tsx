@@ -18,6 +18,7 @@ import { OrderList } from '../restaurant/pages/OrderList';
 import { Reports } from '../restaurant/pages/Reports';
 import { StoreInformation } from './components/StoreInformation';
 import { StoreSettings } from './components/StoreSettings';
+import { GeneralSettings } from './components/GeneralSettings';
 import { InventoryModulePage } from './components/InventoryModulePage';
 import { Sidebar } from './components/Sidebar';
 import { OrderProvider } from './context/OrderContext';
@@ -51,6 +52,7 @@ export type Page =
   | 'reports'
   | 'store-information'
   | 'store-settings'
+  | 'general-settings'
   | 'inventory-dashboard'
   | 'inventory-stock-alerts'
   | 'inventory-items'
@@ -342,6 +344,9 @@ export default function App() {
           {currentPage === 'store-settings' && (
             <StoreSettings currentUser={currentUser} storeBrand={storeBrand} onLogout={handleLogout} onNavigate={navigateTo} />
           )}
+          {currentPage === 'general-settings' && (
+            <GeneralSettings currentUser={currentUser} storeBrand={storeBrand} onLogout={handleLogout} onNavigate={navigateTo} />
+          )}
           {isInventoryPage(currentPage) && INVENTORY_MODULES_ENABLED && (
             <div className="flex h-screen">
               <div className="shrink-0">
@@ -416,6 +421,7 @@ function canAccessPage(user: AuthenticatedUser, page: Page) {
       'reports',
       'store-information',
       'store-settings',
+      'general-settings',
     ].includes(page) || isInventoryPage(page);
   }
 
