@@ -372,6 +372,7 @@ function getStaffTypeLabel(staffType: StaffType) {
 function getUserRoleLabel(role: string | null | undefined, isAdmin: boolean, staffType: StaffType) {
   if (role === 'POS_MANAGER' || role === 'POS_ADMIN') return 'POS Manager';
   if (role === 'INVENTORY_MANAGER' || role === 'INVENTORY_ADMIN') return 'Inventory Manager';
+  if (role === 'ADMIN' && staffType === 'INVENTORY_STAFF') return 'Inventory Manager';
   if (isAdmin) return 'POS Manager';
   return getStaffTypeLabel(staffType);
 }

@@ -153,22 +153,7 @@ export default function App() {
       return;
     }
 
-    if ((user.role === 'ADMIN' || user.role === 'POS_MANAGER') && user.store_type === 'RETAIL_STORE') {
-      navigateTo('retail-pos-dashboard');
-      return;
-    }
-
-    if ((user.role === 'ADMIN' || user.role === 'POS_MANAGER') && user.store_type === 'RESTAURANT') {
-      navigateTo('pos-dashboard');
-      return;
-    }
-
-    if (user.role === 'POS_MANAGER' || user.role === 'POS_ADMIN') {
-      navigateTo(getDefaultPageForUser(user));
-      return;
-    }
-
-    if (user.role === 'INVENTORY_MANAGER' || user.role === 'INVENTORY_ADMIN') {
+    if (isPosManagerUser(user) || isInventoryManagerUser(user)) {
       navigateTo(getDefaultPageForUser(user));
       return;
     }
@@ -236,7 +221,7 @@ export default function App() {
   const updateCurrentUser = (updates: Partial<AuthenticatedUser>) => {
     setCurrentUser((user) => (user ? { ...user, ...updates } : user));
   };
-  const isPosAdminUser = currentUser?.role === 'ADMIN' || currentUser?.role === 'POS_MANAGER' || currentUser?.role === 'POS_ADMIN';
+  const isPosAdminUser = isPosManagerUser(currentUser);
 
   return (
     <QueryClientProvider client={appQueryClient}>
@@ -379,13 +364,25 @@ export default function App() {
 
 function getDefaultPageForUser(user: AuthenticatedUser): Page {
   if (user.role === 'SUPERADMIN') return 'superadmin-dashboard';
-  if (user.role === 'INVENTORY_MANAGER' || user.role === 'INVENTORY_ADMIN') return INVENTORY_MODULES_ENABLED ? 'inventory-dashboard' : 'login';
-  if ((user.role === 'POS_MANAGER' || user.role === 'POS_ADMIN') && user.store_type === 'RETAIL_STORE') return 'retail-pos-dashboard';
-  if ((user.role === 'POS_MANAGER' || user.role === 'POS_ADMIN') && user.store_type === 'RESTAURANT') return 'pos-dashboard';
+  if (isInventoryManagerUser(user)) return INVENTORY_MODULES_ENABLED ? 'inventory-dashboard' : 'login';
+  if (isPosManagerUser(user) && user.store_type === 'RETAIL_STORE') return 'retail-pos-dashboard';
+  if (isPosManagerUser(user) && user.store_type === 'RESTAURANT') return 'pos-dashboard';
   if (INVENTORY_MODULES_ENABLED && user.role === 'STAFF' && user.staff_type === 'INVENTORY_STAFF') return 'inventory-dashboard';
   if (user.store_type === 'RETAIL_STORE') return 'retail-pos-dashboard';
   if (user.store_type === 'RESTAURANT') return 'pos-dashboard';
   return 'login';
+}
+
+function isPosManagerUser(user: AuthenticatedUser | null | undefined) {
+  if (!user) return false;
+  if (user.role === 'POS_MANAGER' || user.role === 'POS_ADMIN') return true;
+  return user.role === 'ADMIN' && user.staff_type !== 'INVENTORY_STAFF';
+}
+
+function isInventoryManagerUser(user: AuthenticatedUser | null | undefined) {
+  if (!user) return false;
+  if (user.role === 'INVENTORY_MANAGER' || user.role === 'INVENTORY_ADMIN') return true;
+  return user.role === 'ADMIN' && user.staff_type === 'INVENTORY_STAFF';
 }
 
 function isInventoryPage(page: Page) {
@@ -403,7 +400,7 @@ function canAccessPage(user: AuthenticatedUser, page: Page) {
 
   if (page === 'login') return true;
   if (user.role === 'SUPERADMIN') return page === 'superadmin-dashboard';
-  if (user.role === 'POS_MANAGER' || user.role === 'POS_ADMIN') {
+  if (isPosManagerUser(user)) {
     return [
       'admin-dashboard',
       'retail-pos-dashboard',
@@ -417,7 +414,7 @@ function canAccessPage(user: AuthenticatedUser, page: Page) {
     ].includes(page);
   }
 
-  if (user.role === 'INVENTORY_MANAGER' || user.role === 'INVENTORY_ADMIN') {
+  if (isInventoryManagerUser(user)) {
     return isInventoryPage(page);
   }
 
