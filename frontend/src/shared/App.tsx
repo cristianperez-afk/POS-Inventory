@@ -236,11 +236,7 @@ export default function App() {
   const updateCurrentUser = (updates: Partial<AuthenticatedUser>) => {
     setCurrentUser((user) => (user ? { ...user, ...updates } : user));
   };
-<<<<<<< HEAD
-  const isPosAdminUser = currentUser?.role === 'ADMIN' || currentUser?.role === 'POS_ADMIN';
-=======
   const isPosAdminUser = currentUser?.role === 'ADMIN' || currentUser?.role === 'POS_MANAGER' || currentUser?.role === 'POS_ADMIN';
->>>>>>> featureupdate
 
   return (
     <QueryClientProvider client={appQueryClient}>
@@ -407,11 +403,7 @@ function canAccessPage(user: AuthenticatedUser, page: Page) {
 
   if (page === 'login') return true;
   if (user.role === 'SUPERADMIN') return page === 'superadmin-dashboard';
-<<<<<<< HEAD
-  if (user.role === 'POS_ADMIN') {
-=======
   if (user.role === 'POS_MANAGER' || user.role === 'POS_ADMIN') {
->>>>>>> featureupdate
     return [
       'admin-dashboard',
       'retail-pos-dashboard',
