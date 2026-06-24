@@ -2305,6 +2305,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       await this.syncRetailInventoryIntoPosCatalog(user);
     }
 
+    const restaurantBusinessId =
+      user.store_type === 'RESTAURANT'
+        ? await this.resolveInventoryBusinessIdForStoreScope(user)
+        : null;
+
     if (user.store_type === 'RETAIL_STORE') {
       return this.query<any>(
         `
@@ -2368,15 +2373,33 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           p.updated_at,
           c.name AS category_name,
           COALESCE(r.modifiers, '[]'::jsonb) AS modifiers,
+          r.servings,
+          r."prepTimeMinutes" AS prep_time_minutes,
           CASE
             WHEN p.store_type = 'RESTAURANT' THEN COALESCE(availability.available_quantity, 0)
             ELSE COALESCE(p.stock_quantity, 0)
           END AS available_quantity
         FROM products p
         LEFT JOIN product_categories c ON c.id = p.category_id
-        LEFT JOIN "Recipe" r
-          ON r."menuItemId" = p.inventory_item_id
-         AND COALESCE(r."isActive", TRUE) = TRUE
+        LEFT JOIN LATERAL (
+          SELECT
+            recipe.modifiers,
+            recipe.servings,
+            recipe."prepTimeMinutes",
+            recipe.instructions,
+            recipe."imageUrl"
+          FROM "Recipe" recipe
+          WHERE COALESCE(recipe."isActive", TRUE) = TRUE
+            AND ($3::text IS NULL OR recipe."businessId"::text = $3::text)
+            AND (
+              recipe."menuItemId" = p.inventory_item_id
+              OR lower(trim(COALESCE(recipe.name, ''))) = lower(trim(COALESCE(p.name, '')))
+            )
+          ORDER BY
+            CASE WHEN recipe."menuItemId" = p.inventory_item_id THEN 0 ELSE 1 END,
+            recipe."updatedAt" DESC NULLS LAST
+          LIMIT 1
+        ) r ON TRUE
         LEFT JOIN "InventoryItem" menu_item
           ON menu_item.id = p.inventory_item_id
         LEFT JOIN LATERAL (
@@ -2393,8 +2416,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           AND COALESCE(p.is_available, TRUE) = TRUE
         ORDER BY p.name ASC
       `,
-      [user.store_id, user.store_type],
-    );
+        [user.store_id, user.store_type, restaurantBusinessId],
+      );
 
     const ingredientRows = user.store_type === 'RESTAURANT'
       ? await this.query<any>(
@@ -2475,6 +2498,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       await this.syncRestaurantRecipesIntoPosCatalog(user);
     }
 
+    const restaurantBusinessId =
+      user.store_type === 'RESTAURANT'
+        ? await this.resolveInventoryBusinessIdForStoreScope(user)
+        : null;
+
     const rows = await this.query<any>(
       `
         SELECT
@@ -2483,6 +2511,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           p.store_id,
           p.store_type,
           COALESCE(r.modifiers, '[]'::jsonb) AS modifiers,
+          r.servings,
+          r."prepTimeMinutes" AS prep_time_minutes,
           COALESCE(
             json_agg(
               json_build_object(
@@ -2510,9 +2540,23 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             '[]'::json
           ) AS ingredients
         FROM products p
-        LEFT JOIN "Recipe" r
-          ON r."menuItemId" = p.inventory_item_id
-         AND COALESCE(r."isActive", TRUE) = TRUE
+        LEFT JOIN LATERAL (
+          SELECT
+            recipe.modifiers,
+            recipe.servings,
+            recipe."prepTimeMinutes"
+          FROM "Recipe" recipe
+          WHERE COALESCE(recipe."isActive", TRUE) = TRUE
+            AND ($3::text IS NULL OR recipe."businessId"::text = $3::text)
+            AND (
+              recipe."menuItemId" = p.inventory_item_id
+              OR lower(trim(COALESCE(recipe.name, ''))) = lower(trim(COALESCE(p.name, '')))
+            )
+          ORDER BY
+            CASE WHEN recipe."menuItemId" = p.inventory_item_id THEN 0 ELSE 1 END,
+            recipe."updatedAt" DESC NULLS LAST
+          LIMIT 1
+        ) r ON TRUE
         LEFT JOIN product_ingredients pi
           ON pi.product_id = p.id
          AND pi.store_id = p.store_id
@@ -2521,10 +2565,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
          AND ii.store_id = p.store_id
         WHERE p.id = $1
           AND p.store_id = $2
-        GROUP BY p.id, p.name, p.store_id, p.store_type, r.modifiers
+        GROUP BY p.id, p.name, p.store_id, p.store_type, r.modifiers, r.servings, r."prepTimeMinutes"
         LIMIT 1
       `,
-      [input.productId, user.store_id],
+      [input.productId, user.store_id, restaurantBusinessId],
     );
 
     if (!rows[0]) {

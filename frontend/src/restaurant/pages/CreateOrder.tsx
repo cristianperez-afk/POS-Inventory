@@ -61,6 +61,8 @@ interface MenuProduct {
   categoryName?: string;
   image: string;
   availableQuantity?: number;
+  servings?: number;
+  prepTimeMinutes?: number;
   ingredients: Ingredient[];
   modifiers: Modifier[];
 }
@@ -83,6 +85,11 @@ interface CartItem {
 const finiteNumberOrUndefined = (value: unknown) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+};
+
+const finiteNumberIncludingZeroOrUndefined = (value: unknown) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 };
 
 function toOrderListFormat(order: any, paid: boolean) {
@@ -186,8 +193,10 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
   const receiptRef = useRef<HTMLDivElement>(null);
   const [isInQueue, setIsInQueue] = useState(false);
   const [queuePosition, setQueuePosition] = useState<number | null>(null);
+  const [hoveredProductId, setHoveredProductId] = useState<number | null>(null);
   const customizeProductId = customizeItemIndex !== null ? cart[customizeItemIndex]?.id : null;
   const productRecipeQuery = useProductRecipeQuery(currentUser?.id, customizeProductId);
+  const hoveredProductRecipeQuery = useProductRecipeQuery(currentUser?.id, hoveredProductId);
   const enabledPaymentMethods = settings.enabled_payment_methods.length > 0 ? settings.enabled_payment_methods : ['Cash'];
   const posProducts = useMemo<MenuProduct[]>(() => {
     return (posMenuQuery.data ?? []).map((product: any) => ({
@@ -199,6 +208,8 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       categoryName: product.category_name ?? null,
       image: product.image_url || storeBrand?.logo || '',
       availableQuantity: Number(product.available_quantity ?? 0),
+      servings: finiteNumberIncludingZeroOrUndefined(product.servings),
+      prepTimeMinutes: finiteNumberIncludingZeroOrUndefined(product.prep_time_minutes),
       ingredients: (product.ingredients ?? []).map((ingredient: any) => ({
         id: finiteNumberOrUndefined(ingredient.id) ?? finiteNumberOrUndefined(ingredient.product_ingredient_id) ?? finiteNumberOrUndefined(ingredient.ingredient_id) ?? 0,
         itemId: ingredient.inventory_item_id ?? ingredient.itemId,
@@ -1220,25 +1231,81 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-            {filteredProducts.map(product => (
-              <button
+            {filteredProducts.map(product => {
+              const hoveredRecipeDetails =
+                product.id === hoveredProductId
+                  ? hoveredProductRecipeQuery.data as Record<string, unknown> | undefined
+                  : undefined;
+              const resolvedPrepTimeMinutes = finiteNumberIncludingZeroOrUndefined(
+                hoveredRecipeDetails?.prep_time_minutes ?? hoveredRecipeDetails?.prepTimeMinutes ?? product.prepTimeMinutes,
+              );
+              const resolvedServings = finiteNumberIncludingZeroOrUndefined(
+                hoveredRecipeDetails?.servings ?? product.servings,
+              );
+
+              return (
+                <button
                 key={product.id}
                 onClick={() => addToCart(product)}
+                onMouseEnter={() => setHoveredProductId(product.id)}
+                onMouseLeave={() => setHoveredProductId((current) => (current === product.id ? null : current))}
+                onFocus={() => setHoveredProductId(product.id)}
+                onBlur={() => setHoveredProductId((current) => (current === product.id ? null : current))}
                 disabled={product.availableQuantity !== undefined && product.availableQuantity <= 0}
-                className="bg-white rounded-lg p-2.5 hover:shadow-md transition-shadow text-left disabled:cursor-not-allowed disabled:opacity-50"
+                className="group relative isolate overflow-visible rounded-2xl text-left transition-transform duration-300 ease-out hover:z-30 hover:-translate-y-3 hover:scale-[1.18] focus-visible:z-30 focus-visible:-translate-y-3 focus-visible:scale-[1.18] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <div className="aspect-square bg-muted rounded-lg mb-2 overflow-hidden">
+                <div className="overflow-hidden rounded-2xl border border-border bg-white p-2.5 shadow-sm transition-all duration-300 ease-out group-hover:border-primary/35 group-hover:shadow-[0_18px_38px_rgba(15,23,42,0.18)] group-focus-visible:border-primary/35 group-focus-visible:shadow-[0_18px_38px_rgba(15,23,42,0.18)]">
+                  <div className="aspect-square overflow-hidden rounded-xl bg-muted">
                   <img
                     src={product.image}
                     alt={product.name}
-                    className="w-full h-full object-cover"
+                    className="h-full w-full object-cover transition-transform duration-300 ease-out group-hover:scale-[1.06] group-focus-visible:scale-[1.06]"
                   />
                 </div>
-                <h3 className="text-xs font-medium mb-0.5 line-clamp-1">{product.name}</h3>
-                {product.description && <p className="text-xs text-muted-foreground mb-1 line-clamp-2">{product.description}</p>}
+                <h3 className="mt-3 line-clamp-2 text-sm font-semibold text-foreground">{product.name}</h3>
                 <p className="text-xs text-primary font-medium">₱ {product.price.toFixed(2)}</p>
-              </button>
-            ))}
+                </div>
+                <div className="pointer-events-none absolute left-1/2 top-1/2 z-20 w-[118%] max-w-[280px] -translate-x-1/2 -translate-y-1/2 opacity-0 transition-all duration-300 ease-out group-hover:opacity-100 group-focus-visible:opacity-100">
+                  <div className="overflow-hidden rounded-[1.35rem] border border-primary/20 bg-white shadow-[0_24px_48px_rgba(15,23,42,0.22)] ring-1 ring-primary/10">
+                    <div className="aspect-[16/10] overflow-hidden bg-slate-100">
+                      <img
+                        src={product.image}
+                        alt={product.name}
+                        className="h-full w-full object-contain p-2"
+                      />
+                    </div>
+                    <div className="space-y-3 p-4">
+                      <div className="min-w-0 space-y-2">
+                        <h3 className="text-base font-semibold leading-5 text-foreground">{product.name}</h3>
+                        <p className="text-xs leading-5 text-muted-foreground">
+                          {product.description || 'No description available.'}
+                        </p>
+                      </div>
+                      <p className="shrink-0 text-xs font-semibold text-primary">₱ {product.price.toFixed(2)}</p>
+                    </div>
+                    <div className="mx-4 mb-4 space-y-1.5 rounded-xl bg-slate-50 px-3 py-2.5 text-xs">
+                      <p className="text-foreground">
+                        <span className="font-semibold text-slate-700">Prep Time:</span>{' '}
+                          {resolvedPrepTimeMinutes !== undefined
+                            ? `${resolvedPrepTimeMinutes} mins`
+                            : hoveredProductRecipeQuery.isFetching && product.id === hoveredProductId
+                              ? 'Loading...'
+                              : 'N/A'}
+                      </p>
+                      <p className="text-foreground">
+                        <span className="font-semibold text-slate-700">Servings:</span>{' '}
+                          {resolvedServings !== undefined
+                            ? resolvedServings
+                            : hoveredProductRecipeQuery.isFetching && product.id === hoveredProductId
+                              ? 'Loading...'
+                              : 'N/A'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>
@@ -1976,13 +2043,13 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                     onClick={() => {
                       addToCart(product, 'takeout');
                     }}
-                    className="bg-white rounded-lg p-2.5 hover:shadow-md transition-shadow text-left border border-border"
+                    className="group rounded-lg border border-border bg-white p-2.5 text-left shadow-sm transition-all duration-150 ease-out hover:-translate-y-0.5 hover:border-secondary/50 hover:bg-secondary/[0.03] hover:shadow-lg focus-visible:-translate-y-0.5 focus-visible:border-secondary/50 focus-visible:ring-2 focus-visible:ring-secondary/20"
                   >
-                    <div className="aspect-square bg-muted rounded-lg mb-2 overflow-hidden">
+                    <div className="mb-2 aspect-square overflow-hidden rounded-lg bg-muted">
                       <img
                         src={product.image}
                         alt={product.name}
-                        className="w-full h-full object-cover"
+                        className="h-full w-full object-cover transition-transform duration-150 ease-out group-hover:scale-[1.03]"
                       />
                     </div>
                     <h3 className="text-xs font-medium mb-0.5 line-clamp-1">{product.name}</h3>
