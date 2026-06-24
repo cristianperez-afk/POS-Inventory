@@ -1277,9 +1277,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             AND COALESCE(pv.is_active, TRUE) = TRUE
         ) variant_summary ON TRUE
         LEFT JOIN LATERAL (
-          SELECT MIN(FLOOR(ii.quantity_available / NULLIF(pi.quantity_required, 0))) AS available_quantity
+          SELECT MIN(FLOOR(
+            CASE
+              WHEN inv."expiryDate" IS NOT NULL AND inv."expiryDate"::date < CURRENT_DATE THEN 0
+              ELSE ii.quantity_available
+            END / NULLIF(pi.quantity_required, 0)
+          )) AS available_quantity
           FROM product_ingredients pi
           JOIN ingredients_inventory ii ON ii.id = pi.ingredient_id
+          LEFT JOIN "InventoryItem" inv ON inv.id = ii.inventory_item_id
           WHERE pi.product_id = p.id
             AND pi.is_required = TRUE
             AND COALESCE(ii.is_available, TRUE) = TRUE
@@ -2406,9 +2412,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         LEFT JOIN "InventoryItem" menu_item
           ON menu_item.id = p.inventory_item_id
         LEFT JOIN LATERAL (
-          SELECT MIN(FLOOR(ii.quantity_available / NULLIF(pi.quantity_required, 0))) AS available_quantity
+          SELECT MIN(FLOOR(
+            CASE
+              WHEN inv."expiryDate" IS NOT NULL AND inv."expiryDate"::date < CURRENT_DATE THEN 0
+              ELSE ii.quantity_available
+            END / NULLIF(pi.quantity_required, 0)
+          )) AS available_quantity
           FROM product_ingredients pi
           JOIN ingredients_inventory ii ON ii.id = pi.ingredient_id
+          LEFT JOIN "InventoryItem" inv ON inv.id = ii.inventory_item_id
           WHERE pi.product_id = p.id
             AND pi.is_required = TRUE
             AND COALESCE(ii.is_available, TRUE) = TRUE
@@ -2436,10 +2448,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
               pi.additional_cost,
               pi.is_required,
               pi.is_removable,
-              ii.quantity_available,
+              CASE
+                WHEN inv."expiryDate" IS NOT NULL AND inv."expiryDate"::date < CURRENT_DATE THEN 0
+                ELSE ii.quantity_available
+              END AS quantity_available,
               COALESCE(ii.is_available, TRUE) AS is_available
             FROM product_ingredients pi
             LEFT JOIN ingredients_inventory ii ON ii.id = pi.ingredient_id
+            LEFT JOIN "InventoryItem" inv ON inv.id = ii.inventory_item_id
             WHERE pi.store_id = $1
             ORDER BY pi.id ASC
           `,
@@ -2527,11 +2543,16 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
                 'additional_cost', pi.additional_cost,
                 'is_required', pi.is_required,
                 'is_removable', pi.is_removable,
-                'quantity_available', ii.quantity_available,
+                'quantity_available',
+                  CASE
+                    WHEN inv."expiryDate" IS NOT NULL AND inv."expiryDate"::date < CURRENT_DATE THEN 0
+                    ELSE ii.quantity_available
+                  END,
                 'is_available', COALESCE(ii.is_available, TRUE),
                 'stock_status',
                   CASE
                     WHEN ii.id IS NULL THEN 'missing'
+                    WHEN inv."expiryDate" IS NOT NULL AND inv."expiryDate"::date < CURRENT_DATE THEN 'expired'
                     WHEN COALESCE(ii.is_available, TRUE) = FALSE THEN 'unavailable'
                     WHEN ii.quantity_available < pi.quantity_required THEN 'insufficient'
                     WHEN ii.quantity_available <= COALESCE(ii.low_stock_limit, 0) THEN 'low'
@@ -2566,6 +2587,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         LEFT JOIN ingredients_inventory ii
           ON ii.id = pi.ingredient_id
          AND ii.store_id = p.store_id
+        LEFT JOIN "InventoryItem" inv ON inv.id = ii.inventory_item_id
         WHERE p.id = $1
           AND p.store_id = $2
         GROUP BY p.id, p.name, p.store_id, p.store_type, r.modifiers, r.servings, r."prepTimeMinutes"
@@ -2592,12 +2614,16 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             pi.additional_cost,
             pi.is_required,
             pi.is_removable,
-            ii.quantity_available,
+            CASE
+              WHEN inv."expiryDate" IS NOT NULL AND inv."expiryDate"::date < CURRENT_DATE THEN 0
+              ELSE ii.quantity_available
+            END AS quantity_available,
             COALESCE(ii.is_available, TRUE) AS is_available
           FROM product_ingredients pi
           LEFT JOIN ingredients_inventory ii
             ON ii.id = pi.ingredient_id
            AND ii.store_id = pi.store_id
+          LEFT JOIN "InventoryItem" inv ON inv.id = ii.inventory_item_id
           WHERE pi.product_id = $1
             AND pi.store_id = $2
           ORDER BY pi.id ASC
@@ -2621,18 +2647,27 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return this.query(
       `
         SELECT
-          id,
-          inventory_item_id,
-          ingredient_name AS name,
-          quantity_available,
-          unit,
-          cost_per_unit,
-          is_available
-        FROM ingredients_inventory
-        WHERE store_id = $1
-          AND COALESCE(is_available, TRUE) = TRUE
-          AND quantity_available > 0
-        ORDER BY ingredient_name ASC
+          ii.id,
+          ii.inventory_item_id,
+          ii.ingredient_name AS name,
+          CASE
+            WHEN inv."expiryDate" IS NOT NULL AND inv."expiryDate"::date < CURRENT_DATE THEN 0
+            ELSE ii.quantity_available
+          END AS quantity_available,
+          ii.unit,
+          ii.cost_per_unit,
+          ii.is_available
+        FROM ingredients_inventory ii
+        LEFT JOIN "InventoryItem" inv ON inv.id = ii.inventory_item_id
+        WHERE ii.store_id = $1
+          AND COALESCE(ii.is_available, TRUE) = TRUE
+          AND (
+            CASE
+              WHEN inv."expiryDate" IS NOT NULL AND inv."expiryDate"::date < CURRENT_DATE THEN 0
+              ELSE ii.quantity_available
+            END
+          ) > 0
+        ORDER BY ii.ingredient_name ASC
       `,
       [user.store_id],
     );
@@ -3798,13 +3833,19 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
 
-      const inventoryRows = await this.queryWithClient<{ quantity_available: string | number; unit: string; inventory_item_id: string | null }>(
+      const inventoryRows = await this.queryWithClient<{
+        quantity_available: string | number;
+        unit: string;
+        inventory_item_id: string | null;
+        expiryDate: Date | string | null;
+      }>(
         client,
         `
-          SELECT quantity_available, unit, inventory_item_id
-          FROM ingredients_inventory
-          WHERE id = $1
-            AND store_id = $2
+          SELECT ii.quantity_available, ii.unit, ii.inventory_item_id, inv."expiryDate"
+          FROM ingredients_inventory ii
+          LEFT JOIN "InventoryItem" inv ON inv.id = ii.inventory_item_id
+          WHERE ii.id = $1
+            AND ii.store_id = $2
           FOR UPDATE
         `,
         [ingredientId, storeId],
@@ -3813,6 +3854,16 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       const inventory = inventoryRows[0];
       if (!inventory) {
         throw new NotFoundException('Ingredient was not found for this store.');
+      }
+
+      const expiryDate = inventory.expiryDate ? new Date(inventory.expiryDate) : null;
+      if (expiryDate && !Number.isNaN(expiryDate.getTime())) {
+        expiryDate.setHours(0, 0, 0, 0);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        if (expiryDate < today) {
+          throw new BadRequestException('Ingredient inventory for this order is expired.');
+        }
       }
 
       if (Number(inventory.quantity_available ?? 0) < quantity) {

@@ -298,6 +298,7 @@ export interface ApiRecipe {
   menuItemId?: string | null;
   menuItem?: ApiInventoryItem | null;
   ingredients: ApiRecipeIngredient[];
+  availableOrders: number;
   createdAt: string;
   updatedAt?: string;
 }

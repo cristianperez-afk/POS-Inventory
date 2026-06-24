@@ -463,6 +463,7 @@ export class InventoryApiService {
         SELECT
           r.*,
           COALESCE(ingredients.items, '[]'::json) AS ingredients,
+          COALESCE(availability."availableOrders", 0) AS "availableOrders",
           row_to_json(menu_item.*) AS "menuItem"
         FROM "Recipe" r
         LEFT JOIN "InventoryItem" menu_item ON menu_item.id = r."menuItemId"
@@ -483,6 +484,24 @@ export class InventoryApiService {
           JOIN "InventoryItem" item ON item.id = ri."itemId"
           WHERE ri."recipeId" = r.id
         ) ingredients ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT
+            CASE
+              WHEN COUNT(*) = 0 OR BOOL_OR(ri.quantity IS NULL OR ri.quantity <= 0) THEN 0
+              ELSE GREATEST(
+                0,
+                FLOOR(MIN(
+                  CASE
+                    WHEN item."expiryDate" IS NOT NULL AND item."expiryDate"::date < CURRENT_DATE THEN 0
+                    ELSE COALESCE(item.quantity, 0)::numeric
+                  END / NULLIF(ri.quantity, 0)
+                ))::integer
+              )
+            END AS "availableOrders"
+          FROM "RecipeIngredient" ri
+          JOIN "InventoryItem" item ON item.id = ri."itemId"
+          WHERE ri."recipeId" = r.id
+        ) availability ON TRUE
         WHERE r."businessId" = $1
           AND ($2::text IS NULL OR r."isActive" = ($2::boolean))
         ORDER BY r.name ASC
