@@ -1,5 +1,5 @@
--- Allows Store Admin user management to create POS Admin and Inventory Admin
--- accounts without changing existing users.
+-- Migrates old POS Admin / Inventory Admin role values to POS Manager /
+-- Inventory Manager and updates the users.role CHECK constraint.
 
 DO $$
 DECLARE
@@ -21,6 +21,9 @@ BEGIN
   END IF;
 END $$;
 
+UPDATE users SET role = 'POS_MANAGER' WHERE role = 'POS_ADMIN';
+UPDATE users SET role = 'INVENTORY_MANAGER' WHERE role = 'INVENTORY_ADMIN';
+
 ALTER TABLE users
   ADD CONSTRAINT users_role_check
-  CHECK (role IN ('SUPERADMIN', 'ADMIN', 'STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN'));
+  CHECK (role IN ('SUPERADMIN', 'ADMIN', 'STAFF', 'POS_MANAGER', 'INVENTORY_MANAGER'));

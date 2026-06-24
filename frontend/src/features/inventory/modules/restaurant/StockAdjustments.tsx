@@ -41,7 +41,7 @@ const formatDate = (value?: string | null) => (value ? new Date(value).toLocaleS
 
 export function StockAdjustments({ embedded = false }: { embedded?: boolean } = {}) {
   const { currentUser } = useSession();
-  const canReview = currentUser?.role === "Admin" || currentUser?.role === "Manager";
+  const canReview = currentUser?.role === "Admin";
 
   const { data: items = [] } = useRestaurantInventoryQuery();
   const { data: locations = [] } = useRestaurantLocationsQuery() as { data?: { id: string; name: string }[] };
@@ -290,7 +290,7 @@ export function StockAdjustments({ embedded = false }: { embedded?: boolean } = 
             {createMutation.isPending ? "Submitting..." : "Submit for Approval"}
           </button>
           <p className="mt-2 text-xs text-muted-foreground">
-            Adjustments are recorded as <span className="font-medium">pending</span> and only change stock once an Admin or Manager approves them.
+            Adjustments are recorded as <span className="font-medium">pending</span> and only change stock once an Inventory Manager approves them.
           </p>
         </div>
 
@@ -416,3 +416,4 @@ function AdjustmentCard({
     </div>
   );
 }
+

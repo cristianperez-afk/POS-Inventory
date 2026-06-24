@@ -1,8 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { DatabaseService } from '../../../shared/database/database.service';
 
-type StaffType = 'POS_STAFF' | 'INVENTORY_STAFF' | 'MANAGER';
-type StaffRole = 'STAFF' | 'POS_ADMIN' | 'INVENTORY_ADMIN';
+type StaffType = 'POS_STAFF' | 'INVENTORY_STAFF';
+type StaffRole = 'STAFF' | 'POS_MANAGER' | 'INVENTORY_MANAGER';
 
 @Injectable()
 export class AdminService {

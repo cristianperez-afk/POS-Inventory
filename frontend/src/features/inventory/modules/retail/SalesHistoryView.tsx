@@ -63,7 +63,7 @@ export default function SalesHistoryView({
   const [refundTarget, setRefundTarget] = useState<Sale | null>(null);
   const [refundReason, setRefundReason] = useState('');
 
-  const canRefund = currentUser?.role === 'Admin' || currentUser?.role === 'Manager';
+  const canRefund = currentUser?.role === 'Admin';
 
   const rangeStart = useMemo(() => {
     if (dateRange === 'all') return null;
@@ -429,3 +429,4 @@ export default function SalesHistoryView({
     </div>
   );
 }
+

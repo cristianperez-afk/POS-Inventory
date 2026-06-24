@@ -49,7 +49,6 @@ function formatServedTime(value?: string) {
   if (Number.isNaN(date.getTime())) return '-';
   return date.toLocaleString('en-PH', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
-
 export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, userName, userRole, storeType, staffType }: OrderListProps) {
   const { orders, completePayment, completeTableOrder, voidOrder, refundOrder, reloadOrders } = useOrders();
   const { settings } = useStoreSettings();

@@ -33,7 +33,8 @@ type MenuItem = {
 export function Sidebar({ currentPage, onNavigate, onLogout, isAdmin = false, storeBrand, userName, userRole, storeType = 'RESTAURANT', staffType = 'POS_STAFF', inventoryEnabled = true }: SidebarProps) {
   const SIDEBAR_COLLAPSED_STORAGE_KEY = 'bukolabs-pos-sidebar-collapsed';
   const isRetail = storeType === 'RETAIL_STORE';
-  const isPosAdminRole = userRole === 'POS_ADMIN';
+  const isPosManagerRole = userRole === 'POS_MANAGER' || userRole === 'POS_ADMIN';
+  const isInventoryManagerRole = userRole === 'INVENTORY_MANAGER' || userRole === 'INVENTORY_ADMIN';
   const { settings } = useStoreSettings();
 
   const storeItems = [
@@ -42,8 +43,8 @@ export function Sidebar({ currentPage, onNavigate, onLogout, isAdmin = false, st
   ];
 
   const storePages = storeItems.map((item) => item.page);
-  const canUsePos = isAdmin || staffType === 'POS_STAFF' || staffType === 'MANAGER';
-  const canUseInventory = inventoryEnabled && !isPosAdminRole && (isAdmin || staffType === 'INVENTORY_STAFF' || staffType === 'MANAGER');
+  const canUsePos = isAdmin || isPosManagerRole || staffType === 'POS_STAFF';
+  const canUseInventory = inventoryEnabled && !isPosManagerRole && (isAdmin || isInventoryManagerRole || staffType === 'INVENTORY_STAFF');
   const inventoryItems = getInventoryItems(isRetail, isAdmin);
   const inventoryPages = inventoryItems.map((item) => item.page);
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
@@ -365,14 +366,14 @@ export function Sidebar({ currentPage, onNavigate, onLogout, isAdmin = false, st
 
 function getStaffTypeLabel(staffType: StaffType) {
   if (staffType === 'INVENTORY_STAFF') return 'Inventory Staff';
-  if (staffType === 'MANAGER') return 'Manager';
   return 'POS Staff';
 }
 
 function getUserRoleLabel(role: string | null | undefined, isAdmin: boolean, staffType: StaffType) {
-  if (role === 'POS_ADMIN') return 'Admin';
-  if (role === 'INVENTORY_ADMIN') return 'Inventory Admin';
-  if (isAdmin) return 'Admin';
+  if (role === 'POS_MANAGER' || role === 'POS_ADMIN') return 'POS Manager';
+  if (role === 'INVENTORY_MANAGER' || role === 'INVENTORY_ADMIN') return 'Inventory Manager';
+  if (role === 'ADMIN' && staffType === 'INVENTORY_STAFF') return 'Inventory Manager';
+  if (isAdmin) return 'POS Manager';
   return getStaffTypeLabel(staffType);
 }
 

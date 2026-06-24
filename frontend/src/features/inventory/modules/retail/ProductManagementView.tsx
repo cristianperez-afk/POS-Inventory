@@ -83,7 +83,7 @@ export default function ProductManagementView({
   const [form, setForm] = useState<any>({});
   const [saving, setSaving] = useState(false);
 
-  const isAdmin = currentUser?.role === 'Admin' || currentUser?.role === 'Manager';
+  const isAdmin = currentUser?.role === 'Admin';
 
   const locationNameById = useMemo(
     () => new Map(locations.map((loc: any) => [loc.id, loc.name])),
@@ -250,7 +250,7 @@ export default function ProductManagementView({
           <ShieldAlert className="size-6" />
           <h2 className="text-[18px] font-bold">Admin Access Required</h2>
         </div>
-        <p className="text-[13px] text-destructive">Product Management is restricted to Admin and Manager roles.</p>
+        <p className="text-[13px] text-destructive">Product Management is restricted to Inventory Manager role.</p>
       </div>
     );
   }
@@ -481,3 +481,4 @@ export default function ProductManagementView({
     </div>
   );
 }
+

@@ -12,7 +12,6 @@ function getStaffTypeOptions(storeType?: string | null): Array<{ value: Exclude<
   return [
     { value: 'POS_STAFF', label: `${storeLabel} POS Staff` },
     { value: 'INVENTORY_STAFF', label: `${storeLabel} Inventory Staff` },
-    { value: 'MANAGER', label: `${storeLabel} Manager` },
   ];
 }
 
@@ -20,28 +19,29 @@ function getStaffTypeLabel(staffType: StaffType, storeType?: string | null) {
   return getStaffTypeOptions(storeType).find((option) => option.value === staffType)?.label ?? 'POS Staff';
 }
 
-type AccessRole = 'POS_ADMIN' | 'INVENTORY_ADMIN' | 'POS_STAFF' | 'INVENTORY_STAFF' | 'MANAGER';
+type AccessRole = 'POS_MANAGER' | 'INVENTORY_MANAGER' | 'POS_STAFF' | 'INVENTORY_STAFF';
 
 function getAccessRoleOptions(storeType?: string | null): Array<{ value: AccessRole; label: string }> {
   const storeLabel = storeType === 'RESTAURANT' ? 'Restaurant' : 'Retail';
 
   return [
-    { value: 'POS_ADMIN', label: `${storeLabel} POS Admin` },
-    { value: 'INVENTORY_ADMIN', label: `${storeLabel} Inventory Admin` },
+    { value: 'POS_MANAGER', label: `${storeLabel} POS Manager` },
+    { value: 'INVENTORY_MANAGER', label: `${storeLabel} Inventory Manager` },
     { value: 'POS_STAFF', label: `${storeLabel} POS Staff` },
     { value: 'INVENTORY_STAFF', label: `${storeLabel} Inventory Staff` },
-    { value: 'MANAGER', label: `${storeLabel} Manager` },
   ];
 }
 
 function getAccessRolePayload(accessRole: AccessRole) {
-  if (accessRole === 'POS_ADMIN') return { role: 'POS_ADMIN', staff_type: 'POS_STAFF' };
-  if (accessRole === 'INVENTORY_ADMIN') return { role: 'INVENTORY_ADMIN', staff_type: 'INVENTORY_STAFF' };
+  if (accessRole === 'POS_MANAGER') return { role: 'POS_MANAGER', staff_type: 'POS_STAFF' };
+  if (accessRole === 'INVENTORY_MANAGER') return { role: 'INVENTORY_MANAGER', staff_type: 'INVENTORY_STAFF' };
   return { role: 'STAFF', staff_type: accessRole };
 }
 
 function getAccessRoleFromUser(user: StaffUser): AccessRole {
-  if (user.role === 'POS_ADMIN' || user.role === 'INVENTORY_ADMIN') return user.role;
+  if (user.role === 'POS_MANAGER' || user.role === 'INVENTORY_MANAGER') return user.role;
+  if (user.role === 'POS_ADMIN') return 'POS_MANAGER';
+  if (user.role === 'INVENTORY_ADMIN') return 'INVENTORY_MANAGER';
   return user.staff_type ?? 'POS_STAFF';
 }
 

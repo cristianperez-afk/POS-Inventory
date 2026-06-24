@@ -335,7 +335,7 @@ export default function POSView({
       {/* Returns Tab */}
       {activeTab === 'returns' && (
         <div className="bg-white border border-border rounded-[14px] p-6">
-          <p className="text-[14px] text-muted-foreground mb-4">Process returns for completed sales (Admin/Manager only)</p>
+          <p className="text-[14px] text-muted-foreground mb-4">Process returns for completed sales (Inventory Manager only)</p>
           {sales.filter((s: any) => s.status === 'COMPLETED').length === 0 ? (
             <p className="text-center text-muted-foreground py-8">No completed sales available for returns.</p>
           ) : (
