@@ -1,7 +1,7 @@
 import type { AuthenticatedUser } from '../types/auth';
 
 export function getApiBaseUrl() {
-  return import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3004';
+  return import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3000';
 }
 
 const API_URL = getApiBaseUrl();
@@ -18,7 +18,9 @@ export async function login(
     body: JSON.stringify({ email, password }),
   });
 
-  const data = await response.json();
+  const data = response.headers.get('content-type')?.includes('application/json')
+    ? await response.json().catch(() => ({}))
+    : {};
 
   if (!response.ok) {
     throw new Error(data.message || 'Invalid email or password');

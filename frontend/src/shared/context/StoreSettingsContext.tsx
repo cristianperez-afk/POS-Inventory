@@ -15,6 +15,7 @@ export interface StoreSettingValues {
   tax_rate: number;
   enable_discount: boolean;
   enabled_payment_methods: string[];
+  theme_color: string;
 }
 
 export interface DiscountSetting {
@@ -45,6 +46,7 @@ export const defaultStoreSettings: StoreSettingValues = {
   tax_rate: 0,
   enable_discount: true,
   enabled_payment_methods: ['Cash', 'GCash', 'Maya', 'Bank Transfer'],
+  theme_color: '#008967',
 };
 
 const StoreSettingsContext = createContext<StoreSettingsContextValue>({
@@ -68,15 +70,17 @@ export function StoreSettingsProvider({ currentUser, children }: { currentUser: 
 
     setLoading(true);
     try {
-      const [settingsResponse, discountsResponse] = await Promise.all([
+      const [settingsResponse, discountsResponse, storeInfoResponse] = await Promise.all([
         fetch(`${getApiBaseUrl()}/admin/store-settings?admin_user_id=${currentUser.id}`),
         fetch(`${getApiBaseUrl()}/admin/discount-settings?admin_user_id=${currentUser.id}`),
+        fetch(`${getApiBaseUrl()}/admin/store-information?admin_user_id=${currentUser.id}`),
       ]);
       const settingsData = await settingsResponse.json();
       const discountsData = await discountsResponse.json();
+      const storeInfoData = await storeInfoResponse.json();
 
       if (settingsResponse.ok) {
-        setSettings(normalizeStoreSettings(settingsData));
+        setSettings(normalizeStoreSettings({ ...settingsData, theme_color: storeInfoResponse.ok ? storeInfoData?.theme_color : undefined }));
       }
       if (discountsResponse.ok) {
         setDiscounts(Array.isArray(discountsData) ? discountsData : []);
@@ -89,6 +93,10 @@ export function StoreSettingsProvider({ currentUser, children }: { currentUser: 
   useEffect(() => {
     void reload();
   }, [currentUser?.id, currentUser?.role, currentUser?.store_id]);
+
+  useEffect(() => {
+    applyThemeColor(settings.theme_color);
+  }, [settings.theme_color]);
 
   const value = useMemo(() => ({ settings, discounts, loading, reload }), [settings, discounts, loading]);
 
@@ -113,7 +121,22 @@ export function normalizeStoreSettings(data: any): StoreSettingValues {
     tax_rate: Number(data?.tax_rate ?? 0),
     enable_discount: data?.enable_discount ?? true,
     enabled_payment_methods: normalizePaymentMethods(data?.enabled_payment_methods),
+    theme_color: isHexColor(data?.theme_color) ? data.theme_color : defaultStoreSettings.theme_color,
   };
+}
+
+function applyThemeColor(color: string) {
+  const root = document.documentElement;
+  root.style.setProperty('--primary', color);
+  root.style.setProperty('--accent', color);
+  root.style.setProperty('--ring', color);
+  root.style.setProperty('--chart-1', color);
+  root.style.setProperty('--sidebar-primary', color);
+  root.style.setProperty('--sidebar-ring', color);
+}
+
+function isHexColor(value: unknown): value is string {
+  return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value);
 }
 
 function normalizePaymentMethods(value: unknown): string[] {

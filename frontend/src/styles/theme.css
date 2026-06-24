@@ -215,7 +215,7 @@ button.bg-emerald-700,
 button.bg-\[\#008967\],
 button.bg-\[\#00a7a5\] {
   background-color: transparent;
-  background-image: linear-gradient(to right, #008967, #005656);
+  background-image: linear-gradient(to right, var(--primary), color-mix(in srgb, var(--primary) 70%, black));
   color: #ffffff;
 }
 
@@ -226,7 +226,7 @@ button.bg-emerald-700:hover,
 button.bg-\[\#008967\]:hover,
 button.bg-\[\#00a7a5\]:hover {
   background-color: transparent;
-  background-image: linear-gradient(to right, #008967, #005656);
+  background-image: linear-gradient(to right, var(--primary), color-mix(in srgb, var(--primary) 70%, black));
   opacity: 0.95;
 }
 
