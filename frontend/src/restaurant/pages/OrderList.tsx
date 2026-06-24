@@ -8,7 +8,7 @@ import { ThermalReceipt } from '../../shared/components/ThermalReceipt';
 import { useStoreSettings } from '../../shared/context/StoreSettingsContext';
 import { DeleteConfirmDialog } from '../../shared/components/DeleteConfirmDialog';
 import { DateFilterControl, type DateFilterMode } from '../../shared/components/DateFilterControl';
-import { getLocalDateKey, parseLocalDateKey } from '../../shared/utils/date';
+import { getLocalDateKey, parseDatabaseTimestamp, parseLocalDateKey } from '../../shared/utils/date';
 
 interface OrderListProps {
   onNavigate: (page: Page) => void;
@@ -43,6 +43,17 @@ function formatDuration(minutes?: number) {
   return `${hours} hr${hours === 1 ? '' : 's'}${rest ? ` ${rest} mins` : ''}`;
 }
 
+function formatElapsed(start?: string, end?: string, duration?: number, now = Date.now()) {
+  const seconds = duration !== undefined && end
+    ? duration
+    : start
+      ? Math.max(0, Math.floor(((end ? parseDatabaseTimestamp(end).getTime() : now) - parseDatabaseTimestamp(start).getTime()) / 1000))
+      : null;
+  if (seconds === null || !Number.isFinite(seconds)) return '-';
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  return [hours, minutes, seconds % 60].map((value) => String(value).padStart(2, '0')).join(':');
+}
 export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, userName, userRole, storeType, staffType }: OrderListProps) {
   const { orders, completePayment, completeTableOrder, voidOrder, refundOrder, reloadOrders } = useOrders();
   const { settings } = useStoreSettings();
@@ -67,6 +78,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
   const [restockOnRefund, setRestockOnRefund] = useState(false);
   const [restockOnVoid, setRestockOnVoid] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
+  const [clock, setClock] = useState(() => Date.now());
   const [isCompletingPayment, setIsCompletingPayment] = useState(false);
   const showTableManagementColumns = settings.enable_table_management;
   const canProcessTransactions = !isAdmin && staffType === 'POS_STAFF';
@@ -74,6 +86,11 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
   useEffect(() => {
     void reloadOrders();
   }, [reloadOrders]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setClock(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   const openModal = (order: Order, modal: ActiveModal) => {
     if (!canProcessTransactions && ['payment', 'refund', 'void'].includes(String(modal))) return;
@@ -310,7 +327,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
         {/* Table Card */}
         <div className="bg-white rounded-xl shadow-sm border border-border overflow-hidden">
           <div className="overflow-x-auto">
-            <table className={`w-full ${showTableManagementColumns ? 'min-w-[1380px]' : 'min-w-[1080px]'}`}>
+            <table className={`w-full ${showTableManagementColumns ? 'min-w-[1300px]' : 'min-w-[1000px]'}`}>
               <thead className="bg-muted/30">
                 <tr>
                   <th className="w-[13%] text-left px-5 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Order Number</th>
@@ -326,8 +343,8 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                   <th className="w-[9%] text-right px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Total</th>
                   <th className="w-[8%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Payments</th>
                   <th className="w-[9%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Date and Time</th>
-                  <th className="w-[8%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Running</th>
                   <th className="w-[8%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Stay</th>
+                  <th className="w-[9%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Time Served</th>
                   <th className="w-[14%] text-center px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Action</th>
                 </tr>
               </thead>
@@ -394,8 +411,16 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                       <div className="text-xs text-gray-600 whitespace-nowrap">{order.date}</div>
                       <div className="text-xs text-gray-400 whitespace-nowrap">{order.time}</div>
                     </td>
-                    <td className="px-4 py-5 text-xs text-gray-600 whitespace-nowrap">{formatDuration(order.runningTimeMinutes)}</td>
-                    <td className="px-4 py-5 text-xs text-gray-600 whitespace-nowrap">{formatDuration(order.customerStayMinutes)}</td>
+                    <td className="px-4 py-5 text-xs text-gray-600 whitespace-nowrap">
+                      {order.type === 'Dine-In' || order.type === 'Mixed'
+                        ? formatElapsed(order.tableStartedAt, order.tableEndedAt, undefined, clock)
+                        : '-'}
+                    </td>
+                    <td className="px-4 py-5 text-xs text-gray-600 whitespace-nowrap">
+                      {order.type === 'Takeout'
+                        ? formatElapsed(order.serviceStartedAt, order.servedAt, order.serviceDuration, clock)
+                        : '-'}
+                    </td>
                     <td className="px-4 py-5">
                       <div className="flex items-center justify-center gap-1 whitespace-nowrap">
                         {/* View Details - always */}
@@ -542,12 +567,16 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="bg-muted rounded-xl p-3">
-                  <p className="text-xs text-gray-400 mb-1">Running Time</p>
-                  <p className="text-sm text-gray-800">{formatDuration(selectedOrder.runningTimeMinutes)}</p>
+                  <p className="text-xs text-gray-400 mb-1">Customer Stay Duration</p>
+                  <p className="text-sm text-gray-800">
+                    {selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed'
+                      ? formatElapsed(selectedOrder.tableStartedAt, selectedOrder.tableEndedAt, undefined, clock)
+                      : '-'}
+                  </p>
                 </div>
                 <div className="bg-muted rounded-xl p-3">
-                  <p className="text-xs text-gray-400 mb-1">Customer Stay Duration</p>
-                  <p className="text-sm text-gray-800">{formatDuration(selectedOrder.customerStayMinutes)}</p>
+                  <p className="text-xs text-gray-400 mb-1">Time Served</p>
+                  <p className="text-sm text-gray-800">{selectedOrder.type === 'Takeout' ? formatElapsed(selectedOrder.serviceStartedAt, selectedOrder.servedAt, selectedOrder.serviceDuration, clock) : '-'}</p>
                 </div>
                 <div className="bg-muted rounded-xl p-3">
                   <p className="text-xs text-gray-400 mb-1">Payment Time</p>
