@@ -763,6 +763,7 @@ export class InventoryApiService {
                         'notes', oi.notes,
                         'addedIngredients', COALESCE(customizations.added, '[]'::json),
                         'removedIngredients', COALESCE(customizations.removed, '[]'::json),
+                        'changedIngredients', COALESCE(customizations.changed, '[]'::json),
                         'replacedIngredients', COALESCE(customizations.replaced, '[]'::json),
                         'modifiers', COALESCE(customizations.modifiers, '[]'::json),
                         'specialInstructions', COALESCE(customizations.instructions, '[]'::json)
@@ -780,11 +781,22 @@ export class InventoryApiService {
                 LEFT JOIN LATERAL (
                   SELECT
                     COALESCE(json_agg(DISTINCT COALESCE(oic.replacement_ingredient_name, oic.original_ingredient_name, oic.notes)) FILTER (
-                      WHERE oic.customization_type IN ('ADD', 'EXTRA', 'REPLACE')
+                      WHERE oic.customization_type IN ('ADD', 'EXTRA')
                     ), '[]'::json) AS added,
                     COALESCE(json_agg(DISTINCT COALESCE(oic.original_ingredient_name, oic.notes)) FILTER (
                       WHERE oic.customization_type = 'REMOVE'
                     ), '[]'::json) AS removed,
+                    COALESCE(json_agg(DISTINCT CONCAT(
+                      COALESCE(oic.original_ingredient_name, 'Ingredient'),
+                      ': ',
+                      COALESCE(oic.original_quantity::text, '0'),
+                      COALESCE(CONCAT(' ', oic.unit), ''),
+                      ' -> ',
+                      COALESCE(oic.new_quantity::text, '0'),
+                      COALESCE(CONCAT(' ', oic.unit), '')
+                    )) FILTER (
+                      WHERE oic.customization_type IN ('CHANGE_QUANTITY', 'QUANTITY_CHANGE')
+                    ), '[]'::json) AS changed,
                     COALESCE(json_agg(DISTINCT CONCAT(COALESCE(oic.original_ingredient_name, 'Ingredient'), ' -> ', COALESCE(oic.replacement_ingredient_name, 'Replacement'))) FILTER (
                       WHERE oic.customization_type = 'REPLACE'
                     ), '[]'::json) AS replaced,
@@ -826,7 +838,6 @@ export class InventoryApiService {
                 payment_status AS "paymentStatus",
                 CASE
                   WHEN payment_status IN ('VOIDED', 'VOID', 'REFUNDED') OR order_status = 'CANCELLED' THEN 'CANCELLED'
-                  WHEN order_status = 'SERVED' THEN 'COMPLETED'
                   ELSE order_status
                 END AS status,
                 created_at AS "createdAt",
@@ -862,16 +873,16 @@ export class InventoryApiService {
     const scope = await this.resolveScope(headers);
     const posUserId = this.headerValue(headers['x-pos-user-id']);
     const nextStatus = String(body?.status ?? '').toUpperCase();
-    const allowed = new Set(['PENDING', 'PREPARING', 'READY', 'COMPLETED', 'CANCELLED']);
+    const allowed = new Set(['PENDING', 'PREPARING', 'READY', 'SERVED', 'COMPLETED', 'CANCELLED']);
     if (!allowed.has(nextStatus)) {
-      throw new BadRequestException('Status must be Pending, Preparing, Ready, Completed, or Cancelled.');
+      throw new BadRequestException('Status must be Pending, Preparing, Ready, Served, Completed, or Cancelled.');
     }
 
     if (id.startsWith('pos-order-')) {
       const orderId = Number(id.replace('pos-order-', ''));
       if (!Number.isFinite(orderId)) throw new BadRequestException('Invalid POS order id.');
 
-      const posStatus = nextStatus === 'COMPLETED' ? 'COMPLETED' : nextStatus;
+      const posStatus = nextStatus;
       const rows = await this.safeQuery<Record<string, unknown>>(
         `
           WITH scoped_user AS (

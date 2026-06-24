@@ -14,6 +14,7 @@ interface RetailPOSDashboardProps {
   isAdmin?: boolean;
   storeBrand?: StoreBrand;
   userName?: string | null;
+  userRole?: string | null;
   storeType?: StoreType;
   staffType?: StaffType;
 }
@@ -36,7 +37,7 @@ function TopItemImage({ src, name }: { src?: string | null; name: string }) {
   );
 }
 
-export function RetailPOSDashboard({ onLogout, onNavigate, isAdmin = false, storeBrand, userName, storeType = 'RETAIL_STORE', staffType }: RetailPOSDashboardProps) {
+export function RetailPOSDashboard({ onLogout, onNavigate, isAdmin = false, storeBrand, userName, userRole, storeType = 'RETAIL_STORE', staffType }: RetailPOSDashboardProps) {
   const { orders } = useOrders();
   const today = getLocalDateKey();
   const [selectedDate, setSelectedDate] = useState('');
@@ -170,7 +171,7 @@ export function RetailPOSDashboard({ onLogout, onNavigate, isAdmin = false, stor
 
   return (
     <div className="flex h-screen">
-      <Sidebar currentPage="retail-pos-dashboard" onNavigate={onNavigate} onLogout={onLogout} isAdmin={isAdmin} storeType={storeType} staffType={staffType} storeBrand={storeBrand} userName={userName} />
+      <Sidebar currentPage="retail-pos-dashboard" onNavigate={onNavigate} onLogout={onLogout} isAdmin={isAdmin} storeType={storeType} staffType={staffType} storeBrand={storeBrand} userName={userName} userRole={userRole} />
 
       <div className="flex-1 overflow-auto bg-background">
         <div className="p-6">

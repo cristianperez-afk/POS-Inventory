@@ -307,6 +307,7 @@ export type KitchenOrderStatus =
   | 'PENDING'
   | 'PREPARING'
   | 'READY'
+  | 'SERVED'
   | 'COMPLETED'
   | 'VOIDED'
   | 'CANCELLED';
@@ -322,6 +323,7 @@ export interface ApiKitchenOrderItem {
   notes?: string | null;
   addedIngredients?: string[];
   removedIngredients?: string[];
+  changedIngredients?: string[];
   modifiers?: string[];
   specialInstructions?: string[];
 }

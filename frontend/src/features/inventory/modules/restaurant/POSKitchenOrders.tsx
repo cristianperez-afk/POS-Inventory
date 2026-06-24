@@ -5,7 +5,7 @@ import {
   useUpdateRestaurantKitchenOrderStatusMutation,
 } from "../lib/restaurant";
 
-type KitchenStatus = "pending" | "preparing" | "ready" | "completed" | "cancelled";
+type KitchenStatus = "pending" | "preparing" | "ready" | "served" | "completed" | "cancelled";
 type StatusFilter = "all" | KitchenStatus;
 
 type KitchenOrderItem = {
@@ -19,6 +19,7 @@ type KitchenOrderItem = {
   notes?: string;
   addedIngredients?: string[];
   removedIngredients?: string[];
+  changedIngredients?: string[];
   modifiers?: string[];
   specialInstructions?: string[];
 };
@@ -49,6 +50,7 @@ const STATUS_STYLES: Record<KitchenStatus, string> = {
   pending: "border-slate-300 bg-slate-50 text-slate-700",
   preparing: "border-amber-300 bg-amber-50 text-amber-700",
   ready: "border-emerald-300 bg-emerald-50 text-emerald-700",
+  served: "border-sky-300 bg-sky-50 text-sky-700",
   completed: "border-blue-300 bg-blue-50 text-blue-700",
   cancelled: "border-red-300 bg-red-50 text-red-700",
 };
@@ -57,6 +59,7 @@ const STATUS_LABELS: Record<KitchenStatus, string> = {
   pending: "New",
   preparing: "Preparing",
   ready: "Ready to Serve",
+  served: "Served",
   completed: "Completed",
   cancelled: "Cancelled",
 };
@@ -66,14 +69,16 @@ const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
   { value: "pending", label: "New" },
   { value: "preparing", label: "Preparing" },
   { value: "ready", label: "Ready to Serve" },
+  { value: "served", label: "Served" },
   { value: "completed", label: "Completed" },
   { value: "cancelled", label: "Cancelled" },
 ];
 
-const API_STATUS: Record<KitchenStatus, "PENDING" | "PREPARING" | "READY" | "COMPLETED" | "CANCELLED"> = {
+const API_STATUS: Record<KitchenStatus, "PENDING" | "PREPARING" | "READY" | "SERVED" | "COMPLETED" | "CANCELLED"> = {
   pending: "PENDING",
   preparing: "PREPARING",
   ready: "READY",
+  served: "SERVED",
   completed: "COMPLETED",
   cancelled: "CANCELLED",
 };
@@ -139,7 +144,7 @@ function DetailList({ label, values }: { label: string; values?: string[] }) {
 function nextAction(status: KitchenStatus) {
   if (status === "pending") return { label: "Start Preparing", next: "preparing" as KitchenStatus, icon: Play };
   if (status === "preparing") return { label: "Mark Ready to Serve", next: "ready" as KitchenStatus, icon: CheckCircle2 };
-  if (status === "ready") return { label: "Complete", next: "completed" as KitchenStatus, icon: ClipboardCheck };
+  if (status === "ready") return { label: "Mark Served", next: "served" as KitchenStatus, icon: ClipboardCheck };
   return null;
 }
 
@@ -150,6 +155,7 @@ function canCancel(status: KitchenStatus) {
 function hasModifications(item: KitchenOrderItem) {
   return cleanList(item.addedIngredients).length > 0 ||
     cleanList(item.removedIngredients).length > 0 ||
+    cleanList(item.changedIngredients).length > 0 ||
     cleanList(item.replacedIngredients).length > 0 ||
     cleanList(item.modifiers).length > 0 ||
     cleanList(item.specialInstructions).length > 0 ||
@@ -225,6 +231,7 @@ function KitchenTicketItems({ orderId, items }: { orderId: string; items: Kitche
                     <div className="grid gap-3 md:grid-cols-2">
                       <DetailList label="Removed" values={item.removedIngredients} />
                       <DetailList label="Added" values={item.addedIngredients} />
+                      <DetailList label="Changed Qty" values={item.changedIngredients} />
                       <DetailList label="Replaced" values={item.replacedIngredients} />
                       <DetailList label="Special Notes" values={[...(item.specialInstructions ?? []), item.notes ?? ""]} />
                     </div>
@@ -255,7 +262,7 @@ export function POSKitchenOrders() {
         acc[order.status] += 1;
         return acc;
       },
-      { pending: 0, preparing: 0, ready: 0, completed: 0, cancelled: 0 },
+      { pending: 0, preparing: 0, ready: 0, served: 0, completed: 0, cancelled: 0 },
     );
 
     return [
@@ -263,6 +270,7 @@ export function POSKitchenOrders() {
       { label: "Pending", value: counts.pending, filter: "pending" as StatusFilter, icon: ClipboardList, color: "from-slate-500 to-slate-600" },
       { label: "Preparing", value: counts.preparing, filter: "preparing" as StatusFilter, icon: Play, color: "from-amber-500 to-orange-500" },
       { label: "Ready", value: counts.ready, filter: "ready" as StatusFilter, icon: CheckCircle2, color: "from-emerald-500 to-green-500" },
+      { label: "Served", value: counts.served, filter: "served" as StatusFilter, icon: ClipboardCheck, color: "from-sky-500 to-cyan-500" },
       { label: "Completed", value: counts.completed, filter: "completed" as StatusFilter, icon: ClipboardCheck, color: "from-blue-500 to-sky-500" },
       { label: "Cancelled", value: counts.cancelled, filter: "cancelled" as StatusFilter, icon: X, color: "from-red-500 to-rose-500" },
     ];
@@ -310,6 +318,7 @@ export function POSKitchenOrders() {
         ...cleanList(item.ingredients).map((value) => `  Ingredient: ${value}`),
         ...cleanList(item.removedIngredients).map((value) => `  Removed: ${value}`),
         ...cleanList(item.addedIngredients).map((value) => `  Added: ${value}`),
+        ...cleanList(item.changedIngredients).map((value) => `  Changed Qty: ${value}`),
         ...cleanList(item.replacedIngredients).map((value) => `  Replaced: ${value}`),
         ...cleanList([...(item.specialInstructions ?? []), item.notes ?? ""]).map((value) => `  Note: ${value}`),
       ]),
@@ -327,7 +336,8 @@ export function POSKitchenOrders() {
     { status: "pending", title: "New Orders", helper: "Received by kitchen" },
     { status: "preparing", title: "Preparing Orders", helper: "Currently cooking" },
     { status: "ready", title: "Ready to Serve Orders", helper: "Needs pickup/service" },
-    { status: "completed", title: "Completed Orders", helper: "Done" },
+    { status: "served", title: "Served Orders", helper: "Waiting for customer session close" },
+    { status: "completed", title: "Completed Orders", helper: "Customer session closed" },
     { status: "cancelled", title: "Cancelled Orders", helper: "Stopped or voided" },
   ];
 
