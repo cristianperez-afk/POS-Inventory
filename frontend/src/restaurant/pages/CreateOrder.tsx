@@ -189,6 +189,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
   const customizeProductId = customizeItemIndex !== null ? cart[customizeItemIndex]?.id : null;
   const productRecipeQuery = useProductRecipeQuery(currentUser?.id, customizeProductId);
   const enabledPaymentMethods = settings.enabled_payment_methods.length > 0 ? settings.enabled_payment_methods : ['Cash'];
+  const selectedPaymentAccount = settings.payment_method_accounts[paymentMethod];
   const posProducts = useMemo<MenuProduct[]>(() => {
     return (posMenuQuery.data ?? []).map((product: any) => ({
       id: Number(product.id),
@@ -2144,6 +2145,15 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                     className="w-full px-4 py-3 border border-border rounded-lg text-lg focus:outline-none focus:ring-2 focus:ring-primary"
                     autoFocus
                   />
+                </div>
+              )}
+
+              {paymentMethod !== 'Cash' && selectedPaymentAccount && (
+                <div className="mb-4 rounded-lg border border-primary/20 bg-primary/5 p-4 text-sm">
+                  {selectedPaymentAccount.qr_image && <img src={selectedPaymentAccount.qr_image} alt={`${paymentMethod} QR code`} className="mb-3 h-40 w-40 rounded-lg border border-border bg-white object-contain p-2" />}
+                  {selectedPaymentAccount.account_name && <p><span className="font-medium">Account Name:</span> {selectedPaymentAccount.account_name}</p>}
+                  {selectedPaymentAccount.account_number && <p><span className="font-medium">Account Details:</span> {selectedPaymentAccount.account_number}</p>}
+                  {selectedPaymentAccount.instructions && <p className="mt-2 text-muted-foreground">{selectedPaymentAccount.instructions}</p>}
                 </div>
               )}
 

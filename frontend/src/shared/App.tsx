@@ -400,6 +400,20 @@ function canAccessPage(user: AuthenticatedUser, page: Page) {
 
   if (page === 'login') return true;
   if (user.role === 'SUPERADMIN') return page === 'superadmin-dashboard';
+  if (user.role === 'ADMIN') {
+    return [
+      'admin-dashboard',
+      'retail-pos-dashboard',
+      'retail-transactions',
+      'retail-reports',
+      'pos-dashboard',
+      'order-list',
+      'reports',
+      'store-information',
+      'store-settings',
+    ].includes(page) || isInventoryPage(page);
+  }
+
   if (isPosManagerUser(user)) {
     return [
       'admin-dashboard',
@@ -416,20 +430,6 @@ function canAccessPage(user: AuthenticatedUser, page: Page) {
 
   if (isInventoryManagerUser(user)) {
     return isInventoryPage(page);
-  }
-
-  if (user.role === 'ADMIN') {
-    return [
-      'admin-dashboard',
-      'retail-pos-dashboard',
-      'retail-transactions',
-      'retail-reports',
-      'pos-dashboard',
-      'order-list',
-      'reports',
-      'store-information',
-      'store-settings',
-    ].includes(page) || isInventoryPage(page);
   }
 
   if (user.staff_type === 'INVENTORY_STAFF') {

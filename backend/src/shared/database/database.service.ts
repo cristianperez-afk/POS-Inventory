@@ -1013,6 +1013,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     enableIngredientCustomization?: boolean;
     enableReceiptPrinting?: boolean;
     enabledPaymentMethods?: string[];
+    paymentMethodAccounts?: Record<string, unknown>;
   }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
@@ -1041,10 +1042,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           enable_ingredient_customization = COALESCE($12, enable_ingredient_customization),
           enable_receipt_printing = COALESCE($13, enable_receipt_printing),
           enabled_payment_methods = COALESCE($14, enabled_payment_methods),
-          store_type = COALESCE(store_type, $15),
+          payment_method_accounts = COALESCE($15, payment_method_accounts),
+          store_type = COALESCE(store_type, $16),
           updated_at = CURRENT_TIMESTAMP
-        WHERE store_id = $16
-          AND (store_type = $15 OR store_type IS NULL)
+        WHERE store_id = $17
+          AND (store_type = $16 OR store_type IS NULL)
         RETURNING *
       `,
       [
@@ -1062,6 +1064,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         input.enableIngredientCustomization,
         input.enableReceiptPrinting,
         input.enabledPaymentMethods ?? null,
+        input.paymentMethodAccounts ? JSON.stringify(input.paymentMethodAccounts) : null,
         admin.store_type,
         admin.store_id,
       ],
@@ -4412,14 +4415,16 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           enable_takeout,
           enable_ingredient_customization,
           enable_receipt_printing,
-          enabled_payment_methods
+          enabled_payment_methods,
+          payment_method_accounts
         )
-        VALUES ($1, $2, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, 0, 0, TRUE, 0, TRUE, TRUE, TRUE, TRUE, ARRAY['Cash', 'GCash', 'Maya', 'Bank Transfer']::TEXT[])
+        VALUES ($1, $2, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, 0, 0, TRUE, 0, TRUE, TRUE, TRUE, TRUE, ARRAY['Cash', 'GCash', 'Maya', 'Bank Transfer']::TEXT[], '{}'::JSONB)
         ON CONFLICT (store_id) DO UPDATE
         SET store_type = COALESCE(store_settings.store_type, EXCLUDED.store_type),
             service_charge_rate = COALESCE(store_settings.service_charge_rate, store_settings.service_charge_percentage, 0),
             service_charge_percentage = COALESCE(store_settings.service_charge_percentage, store_settings.service_charge_rate, 0),
             enabled_payment_methods = COALESCE(store_settings.enabled_payment_methods, EXCLUDED.enabled_payment_methods),
+            payment_method_accounts = COALESCE(store_settings.payment_method_accounts, EXCLUDED.payment_method_accounts),
             updated_at = CURRENT_TIMESTAMP
       `,
       [storeId, storeType],
@@ -4446,6 +4451,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ADD COLUMN IF NOT EXISTS enable_ingredient_customization BOOLEAN DEFAULT TRUE,
           ADD COLUMN IF NOT EXISTS enable_receipt_printing BOOLEAN DEFAULT TRUE,
           ADD COLUMN IF NOT EXISTS enabled_payment_methods TEXT[] DEFAULT ARRAY['Cash', 'GCash', 'Maya', 'Bank Transfer'],
+          ADD COLUMN IF NOT EXISTS payment_method_accounts JSONB DEFAULT '{}'::JSONB,
           ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       `,
