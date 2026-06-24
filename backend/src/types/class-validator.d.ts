@@ -6,6 +6,7 @@ declare module 'class-validator' {
   export const IsEmail: ValidatorDecorator;
   export const IsIn: ValidatorDecorator;
   export const IsNumber: ValidatorDecorator;
+  export const IsObject: ValidatorDecorator;
   export const IsOptional: ValidatorDecorator;
   export const IsString: ValidatorDecorator;
   export const MinLength: ValidatorDecorator;
