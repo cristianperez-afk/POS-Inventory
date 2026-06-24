@@ -34,11 +34,12 @@ interface ReportsProps {
   isAdmin?: boolean;
   storeBrand?: StoreBrand;
   userName?: string | null;
+  userRole?: string | null;
   storeType?: StoreType;
   staffType?: StaffType;
 }
 
-export function Reports({ onNavigate, onLogout, isAdmin = false, storeBrand, userName, storeType, staffType }: ReportsProps) {
+export function Reports({ onNavigate, onLogout, isAdmin = false, storeBrand, userName, userRole, storeType, staffType }: ReportsProps) {
   const { orders } = useOrders();
   const todayString = getLocalDateKey();
   const [selectedDate, setSelectedDate] = useState('');
@@ -231,7 +232,7 @@ export function Reports({ onNavigate, onLogout, isAdmin = false, storeBrand, use
 
   return (
     <div className="flex h-screen">
-      <Sidebar currentPage="reports" onNavigate={onNavigate} onLogout={onLogout} isAdmin={isAdmin} storeBrand={storeBrand} userName={userName} storeType={storeType} staffType={staffType} />
+      <Sidebar currentPage="reports" onNavigate={onNavigate} onLogout={onLogout} isAdmin={isAdmin} storeBrand={storeBrand} userName={userName} userRole={userRole} storeType={storeType} staffType={staffType} />
 
       <div className="flex-1 overflow-auto bg-background">
         <div className="p-4 sm:p-6 lg:p-8">

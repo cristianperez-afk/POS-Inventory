@@ -1,4 +1,5 @@
 const { execFileSync } = require('node:child_process');
+require('dotenv/config');
 
 const port = Number(process.argv[2] || process.env.PORT || 3000);
 

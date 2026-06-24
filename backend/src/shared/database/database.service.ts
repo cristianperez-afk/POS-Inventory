@@ -232,7 +232,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           u.${this.quoteIdentifier(passwordColumn)} AS password_hash,
           ${storeTypeSelect},
           ${storeNameSelect},
-          ${userColumns.statusColumn ? `u.${this.quoteIdentifier(userColumns.statusColumn)} AS status` : `'ACTIVE' AS status`}
+          ${this.userStatusSelect(userColumns)}
         FROM users u
         ${storeJoin}
         WHERE LOWER(u.email) = LOWER($1)
@@ -287,7 +287,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ${storeTypeSelect},
           ${storeNameSelect},
           ${userColumns.staffTypeColumn ? `u.${this.quoteIdentifier(userColumns.staffTypeColumn)} AS staff_type` : 'NULL AS staff_type'},
-          ${userColumns.statusColumn ? `u.${this.quoteIdentifier(userColumns.statusColumn)} AS status` : `'ACTIVE' AS status`}
+          ${this.userStatusSelect(userColumns)}
         FROM users u
         ${storeJoin}
         WHERE u.${this.quoteIdentifier(userColumns.roleColumn)} = 'ADMIN'
@@ -523,7 +523,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const schema = await this.getSchemaColumns();
     const userColumns = this.resolveUserColumns(schema.users);
 
-    if (!userColumns.statusColumn || !userColumns.roleColumn) {
+    if ((!userColumns.statusColumn && !userColumns.activeColumn) || !userColumns.roleColumn) {
       throw new InternalServerErrorException('Users table is missing required status columns.');
     }
 
@@ -561,7 +561,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ${userColumns.staffTypeColumn ? `u.${this.quoteIdentifier(userColumns.staffTypeColumn)} AS staff_type` : 'NULL AS staff_type'},
           ${storeTypeSelect},
           ${storeNameSelect},
-          ${userColumns.statusColumn ? `u.${this.quoteIdentifier(userColumns.statusColumn)} AS status` : `'ACTIVE' AS status`}
+          ${this.userStatusSelect(userColumns)}
         FROM users u
         ${storeJoin}
         WHERE u.${this.quoteIdentifier(userColumns.roleColumn)} IN ('STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN')
@@ -617,7 +617,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ${this.quoteIdentifier(userColumns.staffTypeColumn)} AS staff_type,
           $7::text AS store_type,
           $8::text AS store_name,
-          ${userColumns.statusColumn ? `${this.quoteIdentifier(userColumns.statusColumn)} AS status` : `'ACTIVE' AS status`}
+          ${this.userStatusSelect(userColumns, '')}
       `,
       [input.fullName, input.email, passwordHash, admin.store_id, staffType, role, admin.store_type, admin.store_name],
     );
@@ -694,7 +694,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             u.${this.quoteIdentifier(userColumns.staffTypeColumn)} AS staff_type,
             ${storeTypeSelect},
             ${storeNameSelect},
-            ${userColumns.statusColumn ? `u.${this.quoteIdentifier(userColumns.statusColumn)} AS status` : `'ACTIVE' AS status`}
+            ${this.userStatusSelect(userColumns)}
           FROM updated u
           ${storeJoin}
           LIMIT 1
@@ -738,7 +738,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       throw new InternalServerErrorException('Users table is missing required columns for staff deletion.');
     }
 
-    if (userColumns.statusColumn) {
+    if (userColumns.statusColumn || userColumns.activeColumn) {
       const rows = await this.deactivateStaffForStore(input.staffUserId, admin.store_id, userColumns);
 
       if (rows.length === 0) {
@@ -818,7 +818,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const schema = await this.getSchemaColumns();
     const userColumns = this.resolveUserColumns(schema.users);
 
-    if (!userColumns.statusColumn || !userColumns.roleColumn || !userColumns.storeIdColumn) {
+    if ((!userColumns.statusColumn && !userColumns.activeColumn) || !userColumns.roleColumn || !userColumns.storeIdColumn) {
       throw new InternalServerErrorException('Users table is missing required columns for staff activation.');
     }
 
@@ -2556,6 +2556,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       `
         SELECT
           id,
+          inventory_item_id,
           ingredient_name AS name,
           quantity_available,
           unit,
@@ -2867,7 +2868,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     try {
       return await this.withTransaction(async (client) => {
         const isPaid = Boolean(input.payment);
-        const orderStatus = input.orderStatus ?? (isPaid ? 'COMPLETED' : 'PENDING');
+        const hasOpenTableSession = Boolean(input.tableName && !String(input.tableName).toLowerCase().startsWith('queue'));
+        const orderStatus = input.orderStatus ?? (isPaid && !hasOpenTableSession ? 'COMPLETED' : 'PENDING');
         const paymentStatus = input.paymentStatus ?? (isPaid ? 'PAID' : 'NOT_PAID');
         const orderNumber = await this.createUniqueOrderNumber(client, input.orderNumber);
         const partySize = Number(input.partySize ?? input.party_size ?? input.requiredSeats ?? 0);
@@ -2880,7 +2882,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
               total_amount, order_status, payment_status, payment_at, completed_at,
               table_started_at, preparing_started_at, ready_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
             RETURNING id
           `,
           [
@@ -2900,8 +2902,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             orderStatus,
             paymentStatus,
             isPaid ? new Date() : null,
-            isPaid ? new Date() : null,
-            input.tableName && !String(input.tableName).toLowerCase().startsWith('queue') ? new Date() : null,
+            orderStatus === 'COMPLETED' ? new Date() : null,
+            hasOpenTableSession ? new Date() : null,
             orderStatus === 'PREPARING' ? new Date() : null,
             orderStatus === 'READY' ? new Date() : null,
           ],
@@ -2943,6 +2945,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           } else {
             await this.deductRestaurantIngredients(client, user.store_id!, orderId, orderItemId, item, inventorySaleMovements);
           }
+        } else if (user.store_type === 'RESTAURANT') {
+          await this.recordRestaurantIngredientCustomizations(client, user.store_id!, orderItemId, item);
         }
       }
 
@@ -3146,7 +3150,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       if (hasDiningTable && input.orderStatus === 'COMPLETED' && !isPaymentUpdate && priorPaymentStatus !== 'PAID') {
         throw new BadRequestException('Cannot release a Pay Later table before payment is completed.');
       }
-      if ((isPaymentUpdate && priorPaymentStatus !== 'PAID') || (input.orderStatus === 'COMPLETED' && priorPaymentStatus === 'PAID')) {
+      if (input.orderStatus === 'COMPLETED') {
         await this.releaseDiningTable(client, user, nextTableName, Number.isFinite(nextPartySize) ? nextPartySize : 0);
       }
 
@@ -3477,6 +3481,81 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  private async recordRestaurantIngredientCustomizations(client: PoolClient, storeId: number, orderItemId: number, item: any) {
+    const ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
+    const finiteNumberOrNull = (value: unknown) => {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    };
+
+    for (const ingredient of ingredients) {
+      const originalId = finiteNumberOrNull(ingredient.ingredient_id ?? ingredient.ingredientId);
+      const replacementId = finiteNumberOrNull(ingredient.replacement_ingredient_id ?? ingredient.replacementIngredientId);
+      let productIngredientId = finiteNumberOrNull(ingredient.product_ingredient_id ?? ingredient.productIngredientId ?? (originalId ? ingredient.id : null));
+
+      if (!productIngredientId && originalId) {
+        const linkedRows = await this.queryWithClient<{ id: number }>(
+          client,
+          `
+            SELECT id
+            FROM product_ingredients
+            WHERE store_id = $1
+              AND product_id = $2
+              AND ingredient_id = $3
+            LIMIT 1
+          `,
+          [storeId, item.productId ?? item.id ?? null, originalId],
+        );
+        productIngredientId = linkedRows[0]?.id ?? null;
+      }
+
+      const removed = ingredient.removed === true || Number(ingredient.quantity ?? 0) <= 0;
+      const originalQuantity = Number(ingredient.original_quantity ?? ingredient.originalQuantity ?? ingredient.quantity ?? 0);
+      const ingredientQuantity = Number(ingredient.quantity ?? 0);
+      const additionalCost = Number(ingredient.additional_price ?? ingredient.additionalCost ?? 0);
+      const customizationType = ingredient.customization_type ?? ingredient.customizationType ?? null;
+      const hasCustomization = Boolean(
+        customizationType ||
+          removed ||
+          replacementId ||
+          additionalCost !== 0 ||
+          (Number.isFinite(originalQuantity) && Number.isFinite(ingredientQuantity) && ingredientQuantity !== originalQuantity),
+      );
+
+      if (!hasCustomization || (!originalId && !replacementId && !productIngredientId)) {
+        continue;
+      }
+
+      await this.queryWithClient(
+        client,
+        `
+          INSERT INTO order_item_customizations (
+            store_id, order_item_id, product_ingredient_id, original_ingredient_id,
+            replacement_ingredient_id, customization_type, original_ingredient_name,
+            replacement_ingredient_name, original_quantity, new_quantity, unit,
+            additional_cost, notes
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        `,
+        [
+          storeId,
+          orderItemId,
+          productIngredientId,
+          originalId,
+          replacementId,
+          customizationType ?? (removed ? 'REMOVE' : replacementId ? 'REPLACE' : 'CHANGE_QUANTITY'),
+          ingredient.original_name ?? ingredient.name ?? null,
+          ingredient.replacement_name ?? null,
+          Number.isFinite(originalQuantity) ? originalQuantity : null,
+          Number.isFinite(ingredientQuantity) ? ingredientQuantity : 0,
+          ingredient.unit ?? null,
+          additionalCost,
+          ingredient.notes ?? null,
+        ],
+      );
+    }
+  }
+
   private async deductRestaurantIngredients(client: PoolClient, storeId: number, orderId: number, orderItemId: number, item: any, movements: PosSaleMovement[]) {
     const itemQuantity = Number(item.quantity ?? 1);
     const ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
@@ -3732,11 +3811,109 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           movements,
         );
       } else {
-        const ingredients = await this.queryWithClient<{ ingredient_id: number; quantity: string | number; unit: string | null }>(
+        const ingredients = await this.queryWithClient<{
+          product_ingredient_id: number;
+          ingredient_id: number;
+          ingredient_name: string;
+          quantity: string | number;
+          unit: string | null;
+        }>(
           client,
-          `SELECT ingredient_id, quantity_required AS quantity, unit FROM product_ingredients WHERE product_id = $1 AND store_id = $2`,
+          `
+            SELECT id AS product_ingredient_id, ingredient_id, ingredient_name, quantity_required AS quantity, unit
+            FROM product_ingredients
+            WHERE product_id = $1
+              AND store_id = $2
+          `,
           [oi.product_id, user.store_id],
         );
+        const customizations = await this.queryWithClient<{
+          product_ingredient_id: number | null;
+          original_ingredient_id: number | null;
+          replacement_ingredient_id: number | null;
+          customization_type: string;
+          original_ingredient_name: string | null;
+          replacement_ingredient_name: string | null;
+          original_quantity: string | number | null;
+          new_quantity: string | number | null;
+          unit: string | null;
+          additional_cost: string | number | null;
+          notes: string | null;
+        }>(
+          client,
+          `
+            SELECT product_ingredient_id, original_ingredient_id, replacement_ingredient_id,
+                   customization_type, original_ingredient_name, replacement_ingredient_name,
+                   original_quantity, new_quantity, unit, additional_cost, notes
+            FROM order_item_customizations
+            WHERE order_item_id = $1
+          `,
+          [oi.id],
+        );
+        const customizedIngredients: any[] = ingredients.map((ingredient) => ({
+          product_ingredient_id: ingredient.product_ingredient_id,
+          ingredient_id: ingredient.ingredient_id,
+          name: ingredient.ingredient_name,
+          quantity: Number(ingredient.quantity ?? 0),
+          original_quantity: Number(ingredient.quantity ?? 0),
+          unit: ingredient.unit,
+        }));
+
+        for (const customization of customizations) {
+          const type = String(customization.customization_type ?? '').toUpperCase();
+          const matchIndex = customizedIngredients.findIndex((ingredient) =>
+            (customization.product_ingredient_id && Number(ingredient.product_ingredient_id) === Number(customization.product_ingredient_id)) ||
+            (customization.original_ingredient_id && Number(ingredient.ingredient_id) === Number(customization.original_ingredient_id)),
+          );
+          const newQuantity = Number(customization.new_quantity ?? 0);
+
+          if (type === 'REMOVE' && matchIndex >= 0) {
+            customizedIngredients[matchIndex] = {
+              ...customizedIngredients[matchIndex],
+              removed: true,
+              quantity: 0,
+              customization_type: 'REMOVE',
+              notes: customization.notes ?? undefined,
+            };
+            continue;
+          }
+
+          if (type === 'REPLACE' && matchIndex >= 0) {
+            customizedIngredients[matchIndex] = {
+              ...customizedIngredients[matchIndex],
+              replacement_ingredient_id: customization.replacement_ingredient_id,
+              replacement_name: customization.replacement_ingredient_name,
+              quantity: Number.isFinite(newQuantity) && newQuantity > 0 ? newQuantity : customizedIngredients[matchIndex].quantity,
+              customization_type: 'REPLACE',
+              notes: customization.notes ?? undefined,
+            };
+            continue;
+          }
+
+          if ((type === 'CHANGE_QUANTITY' || type === 'QUANTITY_CHANGE') && matchIndex >= 0) {
+            customizedIngredients[matchIndex] = {
+              ...customizedIngredients[matchIndex],
+              quantity: Number.isFinite(newQuantity) ? Math.max(0, newQuantity) : customizedIngredients[matchIndex].quantity,
+              customization_type: 'CHANGE_QUANTITY',
+              notes: customization.notes ?? undefined,
+            };
+            continue;
+          }
+
+          if ((type === 'ADD' || type === 'EXTRA') && customization.replacement_ingredient_id) {
+            customizedIngredients.push({
+              product_ingredient_id: null,
+              ingredient_id: customization.replacement_ingredient_id,
+              name: customization.replacement_ingredient_name ?? 'Added ingredient',
+              quantity: Number.isFinite(newQuantity) && newQuantity > 0 ? newQuantity : 1,
+              original_quantity: 0,
+              unit: customization.unit,
+              customization_type: 'ADD',
+              additional_price: Number(customization.additional_cost ?? 0),
+              notes: customization.notes ?? undefined,
+            });
+          }
+        }
         await this.deductRestaurantIngredients(
           client,
           user.store_id,
@@ -3747,7 +3924,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             name: oi.product_name,
             price: Number(oi.unit_price ?? 0),
             quantity: Number(oi.quantity ?? 1),
-            ingredients: ingredients.map((g) => ({ ingredient_id: g.ingredient_id, quantity: Number(g.quantity ?? 0), unit: g.unit })),
+            ingredients: customizedIngredients,
           },
           movements,
         );
@@ -4459,15 +4636,39 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       staffTypeColumn: pick(['staff_type']),
       passwordColumn: pick(['hashed_password', 'password_hash', 'password']),
       statusColumn: pick(['status']),
+      activeColumn: pick(['is_active']),
     };
   }
 
-  private activeUsersWhereClause(userColumns: { statusColumn: string | null }, alias = 'u') {
-    if (!userColumns.statusColumn) {
-      return '';
+  private userStatusSelect(userColumns: { statusColumn: string | null; activeColumn?: string | null }, alias = 'u') {
+    const prefix = alias ? `${alias}.` : '';
+    if (userColumns.statusColumn) {
+      return `${prefix}${this.quoteIdentifier(userColumns.statusColumn)} AS status`;
     }
+    if (userColumns.activeColumn) {
+      return `CASE WHEN COALESCE(${prefix}${this.quoteIdentifier(userColumns.activeColumn)}, TRUE) THEN 'ACTIVE' ELSE 'INACTIVE' END AS status`;
+    }
+    return `'ACTIVE' AS status`;
+  }
 
-    return ` AND COALESCE(${alias}.${this.quoteIdentifier(userColumns.statusColumn)}, 'ACTIVE') = 'ACTIVE'`;
+  private activeUsersWhereClause(userColumns: { statusColumn: string | null; activeColumn?: string | null }, alias = 'u') {
+    if (userColumns.statusColumn) {
+      return ` AND COALESCE(${alias}.${this.quoteIdentifier(userColumns.statusColumn)}, 'ACTIVE') = 'ACTIVE'`;
+    }
+    if (userColumns.activeColumn) {
+      return ` AND COALESCE(${alias}.${this.quoteIdentifier(userColumns.activeColumn)}, TRUE) = TRUE`;
+    }
+    return '';
+  }
+
+  private userActiveUpdateAssignment(userColumns: { statusColumn: string | null; activeColumn?: string | null }, active: boolean) {
+    if (userColumns.statusColumn) {
+      return `${this.quoteIdentifier(userColumns.statusColumn)} = '${active ? 'ACTIVE' : 'INACTIVE'}'`;
+    }
+    if (userColumns.activeColumn) {
+      return `${this.quoteIdentifier(userColumns.activeColumn)} = ${active ? 'TRUE' : 'FALSE'}`;
+    }
+    return null;
   }
 
   private async deactivateAdminAndStoreStaff(
@@ -4475,11 +4676,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     storeId: number | null,
     userColumns: ReturnType<DatabaseService['resolveUserColumns']>,
   ) {
-    if (!userColumns.statusColumn || !userColumns.roleColumn) {
+    const activeAssignment = this.userActiveUpdateAssignment(userColumns, false);
+    if (!activeAssignment || !userColumns.roleColumn) {
       throw new InternalServerErrorException('Users table is missing required status columns.');
     }
 
-    const statusColumn = this.quoteIdentifier(userColumns.statusColumn);
     const roleColumn = this.quoteIdentifier(userColumns.roleColumn);
 
     if (storeId && userColumns.storeIdColumn) {
@@ -4487,7 +4688,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       const rows = await this.query<{ id: number }>(
         `
           UPDATE users
-          SET ${statusColumn} = 'INACTIVE'
+          SET ${activeAssignment}
           WHERE (
             (id = $1 AND ${roleColumn} = 'ADMIN')
             OR (${roleColumn} IN ('STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN') AND ${storeIdColumn} = $2)
@@ -4507,7 +4708,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const rows = await this.query<{ id: number }>(
       `
         UPDATE users
-        SET ${statusColumn} = 'INACTIVE'
+        SET ${activeAssignment}
         WHERE id = $1
           AND ${roleColumn} = 'ADMIN'
         RETURNING id
@@ -4527,11 +4728,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     storeId: number | null,
     userColumns: ReturnType<DatabaseService['resolveUserColumns']>,
   ) {
-    if (!userColumns.statusColumn || !userColumns.roleColumn) {
+    const activeAssignment = this.userActiveUpdateAssignment(userColumns, true);
+    if (!activeAssignment || !userColumns.roleColumn) {
       throw new InternalServerErrorException('Users table is missing required status columns.');
     }
 
-    const statusColumn = this.quoteIdentifier(userColumns.statusColumn);
     const roleColumn = this.quoteIdentifier(userColumns.roleColumn);
 
     if (storeId && userColumns.storeIdColumn) {
@@ -4539,7 +4740,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       const rows = await this.query<{ id: number }>(
         `
           UPDATE users
-          SET ${statusColumn} = 'ACTIVE'
+          SET ${activeAssignment}
           WHERE (
             (id = $1 AND ${roleColumn} = 'ADMIN')
             OR (${roleColumn} IN ('STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN') AND ${storeIdColumn} = $2)
@@ -4559,7 +4760,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const rows = await this.query<{ id: number }>(
       `
         UPDATE users
-        SET ${statusColumn} = 'ACTIVE'
+        SET ${activeAssignment}
         WHERE id = $1
           AND ${roleColumn} = 'ADMIN'
         RETURNING id
@@ -4579,18 +4780,18 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     storeId: number,
     userColumns: ReturnType<DatabaseService['resolveUserColumns']>,
   ) {
-    if (!userColumns.statusColumn || !userColumns.roleColumn || !userColumns.storeIdColumn) {
+    const activeAssignment = this.userActiveUpdateAssignment(userColumns, false);
+    if (!activeAssignment || !userColumns.roleColumn || !userColumns.storeIdColumn) {
       return [];
     }
 
-    const statusColumn = this.quoteIdentifier(userColumns.statusColumn);
     const roleColumn = this.quoteIdentifier(userColumns.roleColumn);
     const storeIdColumn = this.quoteIdentifier(userColumns.storeIdColumn);
 
     return this.query<{ id: number }>(
       `
         UPDATE users
-        SET ${statusColumn} = 'INACTIVE'
+        SET ${activeAssignment}
         WHERE id = $1
           AND ${roleColumn} IN ('STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN')
           AND ${storeIdColumn} = $2
@@ -4605,18 +4806,18 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     storeId: number,
     userColumns: ReturnType<DatabaseService['resolveUserColumns']>,
   ) {
-    if (!userColumns.statusColumn || !userColumns.roleColumn || !userColumns.storeIdColumn) {
+    const activeAssignment = this.userActiveUpdateAssignment(userColumns, true);
+    if (!activeAssignment || !userColumns.roleColumn || !userColumns.storeIdColumn) {
       return [];
     }
 
-    const statusColumn = this.quoteIdentifier(userColumns.statusColumn);
     const roleColumn = this.quoteIdentifier(userColumns.roleColumn);
     const storeIdColumn = this.quoteIdentifier(userColumns.storeIdColumn);
 
     return this.query<{ id: number }>(
       `
         UPDATE users
-        SET ${statusColumn} = 'ACTIVE'
+        SET ${activeAssignment}
         WHERE id = $1
           AND ${roleColumn} IN ('STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN')
           AND ${storeIdColumn} = $2
@@ -4727,7 +4928,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     if (databaseError.code === '23503') {
       throw new ConflictException(
-        'This account is linked to other records and cannot be permanently deleted. Run backend/sql/add-user-is-active.sql to enable deactivation instead.',
+        'This account is linked to other records and cannot be permanently deleted. Use Deactivate instead; if deactivation is unavailable, run backend/sql/add-user-is-active.sql first.',
       );
     }
 

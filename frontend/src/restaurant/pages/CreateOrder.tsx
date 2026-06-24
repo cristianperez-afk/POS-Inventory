@@ -453,40 +453,21 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
 
   const addToCart = (product: MenuProduct, orderType?: 'dine-in' | 'takeout') => {
     const typeToUse = orderType || (diningOption === 'dine-in' || diningOption === 'takeout' ? diningOption : 'dine-in');
+    const newItem: CartItem = {
+      id: product.id,
+      name: product.name,
+      price: product.price,
+      image: product.image,
+      quantity: 1,
+      orderType: typeToUse,
+      notes: '',
+      ingredients: JSON.parse(JSON.stringify(product.ingredients)),
+      originalIngredients: JSON.parse(JSON.stringify(product.ingredients)),
+      modifiers: product.modifiers,
+      selectedModifierIds: [],
+    };
 
-    // Check if item already exists in cart with same id and orderType
-    const existingItemIndex = cart.findIndex(item =>
-      item.id === product.id &&
-      item.orderType === typeToUse &&
-      item.notes === '' && // Only merge if no customization
-      (item.selectedModifierIds ?? []).length === 0 &&
-      JSON.stringify(item.ingredients) === JSON.stringify(product.ingredients) // Same ingredients
-    );
-
-    if (existingItemIndex !== -1) {
-      // Item exists, increment quantity
-      setCart(cart.map((item, index) =>
-        index === existingItemIndex
-          ? { ...item, quantity: item.quantity + 1 }
-          : item
-      ));
-    } else {
-      // Item doesn't exist, add new
-      const newItem: CartItem = {
-        id: product.id,
-        name: product.name,
-        price: product.price,
-        image: product.image,
-        quantity: 1,
-        orderType: typeToUse,
-        notes: '',
-        ingredients: JSON.parse(JSON.stringify(product.ingredients)),
-        originalIngredients: JSON.parse(JSON.stringify(product.ingredients)),
-        modifiers: product.modifiers,
-        selectedModifierIds: [],
-      };
-      setCart([...cart, newItem]);
-    }
+    setCart((items) => [...items, newItem]);
   };
 
   const updateQuantity = (index: number, newQuantity: number) => {

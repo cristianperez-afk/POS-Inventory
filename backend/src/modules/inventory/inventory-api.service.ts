@@ -760,7 +760,6 @@ export class InventoryApiService {
                 payment_status AS "paymentStatus",
                 CASE
                   WHEN payment_status IN ('VOIDED', 'VOID', 'REFUNDED') OR order_status = 'CANCELLED' THEN 'CANCELLED'
-                  WHEN order_status = 'SERVED' THEN 'COMPLETED'
                   ELSE order_status
                 END AS status,
                 created_at AS "createdAt",
@@ -796,16 +795,16 @@ export class InventoryApiService {
     const scope = await this.resolveScope(headers);
     const posUserId = this.headerValue(headers['x-pos-user-id']);
     const nextStatus = String(body?.status ?? '').toUpperCase();
-    const allowed = new Set(['PENDING', 'PREPARING', 'READY', 'COMPLETED', 'CANCELLED']);
+    const allowed = new Set(['PENDING', 'PREPARING', 'READY', 'SERVED', 'COMPLETED', 'CANCELLED']);
     if (!allowed.has(nextStatus)) {
-      throw new BadRequestException('Status must be Pending, Preparing, Ready, Completed, or Cancelled.');
+      throw new BadRequestException('Status must be Pending, Preparing, Ready, Served, Completed, or Cancelled.');
     }
 
     if (id.startsWith('pos-order-')) {
       const orderId = Number(id.replace('pos-order-', ''));
       if (!Number.isFinite(orderId)) throw new BadRequestException('Invalid POS order id.');
 
-      const posStatus = nextStatus === 'COMPLETED' ? 'COMPLETED' : nextStatus;
+      const posStatus = nextStatus;
       const rows = await this.safeQuery<Record<string, unknown>>(
         `
           WITH scoped_user AS (

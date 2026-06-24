@@ -119,6 +119,30 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
     void reloadOrders();
   }, [reloadOrders]);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setOrders(prev => prev.map((order) => {
+        if (order.orderStatus === 'Completed') return order;
+
+        const startedAt = order.createdAt ? new Date(order.createdAt) : new Date(`${order.date} ${order.time}`);
+        const tableStartedAt = order.tableStartedAt
+          ? new Date(order.tableStartedAt)
+          : (order.type === 'Dine-In' || order.type === 'Mixed' ? startedAt : null);
+        const now = new Date();
+
+        return {
+          ...order,
+          runningTimeMinutes: Math.max(0, Math.round((now.getTime() - startedAt.getTime()) / 60000)),
+          customerStayMinutes: tableStartedAt
+            ? Math.max(0, Math.round((now.getTime() - tableStartedAt.getTime()) / 60000))
+            : order.customerStayMinutes,
+        };
+      }));
+    }, 60000);
+
+    return () => window.clearInterval(timer);
+  }, []);
+
   // Derive queued orders from orders with isQueued = true
   const queuedOrders: QueuedOrder[] = orders
     .filter(o => o.isQueued && o.table === 'Queue' && o.orderStatus !== 'Completed')
@@ -275,7 +299,7 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
         ? {
             ...o,
             paymentStatus: 'Paid' as const,
-            orderStatus: 'Completed' as const,
+            paymentAt: new Date().toISOString(),
             cashReceived: paymentData.cashReceived,
             changeGiven: paymentData.changeGiven,
             cashier: paymentData.cashier,
@@ -292,7 +316,6 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             user_id: currentUser.id,
-            orderStatus: 'COMPLETED',
             paymentStatus: 'PAID',
             payment: {
               paymentNumber: paymentId,
@@ -318,9 +341,19 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
   const completeTableOrder = async (orderId: string) => {
     const order = orders.find(o => o.id === orderId);
     if (!order) return;
+    const completedAt = new Date();
+    const startedAt = order.createdAt ? new Date(order.createdAt) : new Date(`${order.date} ${order.time}`);
+    const tableStartedAt = order.tableStartedAt ? new Date(order.tableStartedAt) : (order.type === 'Dine-In' || order.type === 'Mixed' ? startedAt : null);
+    const runningTimeMinutes = Math.max(0, Math.round((completedAt.getTime() - startedAt.getTime()) / 60000));
+    const customerStayMinutes = tableStartedAt
+      ? Math.max(0, Math.round((completedAt.getTime() - tableStartedAt.getTime()) / 60000))
+      : order.customerStayMinutes;
+    const completedAtIso = completedAt.toISOString();
 
     setOrders(prev => prev.map(o =>
-      o.id === orderId ? { ...o, orderStatus: 'Completed' as const } : o
+      o.id === orderId
+        ? { ...o, orderStatus: 'Completed' as const, completedAt: completedAtIso, tableEndedAt: completedAtIso, runningTimeMinutes, customerStayMinutes }
+        : o
     ));
 
     if (!currentUser?.id || !order.orderNumber) return;
@@ -375,7 +408,7 @@ export function useOrders() {
 
 function mapDatabaseRestaurantOrder(row: any): Order {
   const createdAt = row.created_at ? new Date(row.created_at) : new Date();
-  const completedAt = row.completed_at ? new Date(row.completed_at) : null;
+  const rawCompletedAt = row.completed_at ? new Date(row.completed_at) : null;
   const tableStartedAt = row.table_started_at ? new Date(row.table_started_at) : null;
   const tableEndedAt = row.table_ended_at ? new Date(row.table_ended_at) : null;
   const minutesBetween = (start: Date | null, end: Date | null) => {
@@ -402,6 +435,7 @@ function mapDatabaseRestaurantOrder(row: any): Order {
     row.order_status === 'SERVED' ? 'Served' :
     row.order_status === 'COMPLETED' ? 'Completed' :
     'Pending';
+  const completedAt = orderStatus === 'Completed' ? rawCompletedAt : null;
   const isQueued = Boolean(queueMatch) && orderStatus !== 'Completed';
   const type: Order['type'] =
     row.order_type === 'DINE_IN' ? 'Dine-In' :
@@ -428,7 +462,7 @@ function mapDatabaseRestaurantOrder(row: any): Order {
     paymentAt: row.payment_at ?? undefined,
     preparingStartedAt: row.preparing_started_at ?? undefined,
     readyAt: row.ready_at ?? undefined,
-    completedAt: row.completed_at ?? undefined,
+    completedAt: orderStatus === 'Completed' ? row.completed_at ?? undefined : undefined,
     tableStartedAt: row.table_started_at ?? undefined,
     tableEndedAt: row.table_ended_at ?? undefined,
     runningTimeMinutes: minutesBetween(createdAt, completedAt),

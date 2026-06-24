@@ -16,6 +16,7 @@ interface POSDashboardProps {
   isAdmin?: boolean;
   storeBrand?: StoreBrand;
   userName?: string | null;
+  userRole?: string | null;
   storeType?: StoreType;
   staffType?: StaffType;
 }
@@ -38,7 +39,7 @@ function TopItemImage({ src, name }: { src?: string | null; name: string }) {
   );
 }
 
-export function POSDashboard({ onLogout, onNavigate, isAdmin = false, storeBrand, userName, storeType, staffType }: POSDashboardProps) {
+export function POSDashboard({ onLogout, onNavigate, isAdmin = false, storeBrand, userName, userRole, storeType, staffType }: POSDashboardProps) {
   const { orders, queuedOrders } = useOrders();
   const { tables, getAvailableTablesCount } = useTables();
   const { settings } = useStoreSettings();
@@ -183,7 +184,7 @@ export function POSDashboard({ onLogout, onNavigate, isAdmin = false, storeBrand
 
   return (
     <div className="flex h-screen">
-      <Sidebar currentPage="pos-dashboard" onNavigate={onNavigate} onLogout={onLogout} isAdmin={isAdmin} storeBrand={storeBrand} userName={userName} storeType={storeType} staffType={staffType} />
+      <Sidebar currentPage="pos-dashboard" onNavigate={onNavigate} onLogout={onLogout} isAdmin={isAdmin} storeBrand={storeBrand} userName={userName} userRole={userRole} storeType={storeType} staffType={staffType} />
 
       <div className="flex-1 overflow-auto bg-background">
         <div className="p-6">
