@@ -52,10 +52,12 @@ export interface ApiInventoryItem {
   maxStock?: number | null;
   reorderPoint?: number | null;
   expiryDate?: string | null;
+  expiryPeriod?: string | null;
   storageTemperature?: string | null;
   dateAdded: string;
   locationId: string;
   location?: ApiLocation;
+  isActive?: boolean;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -122,6 +124,7 @@ export interface ApiGoodsReceiptItem {
   purchaseOrderItem?: ApiPurchaseOrderItem;
   inventoryItemId?: string | null;
   inventoryItem?: ApiInventoryItem | null;
+  category?: string | null;
   receivedQty: number;
   rejectedQty: number;
   condition?: 'Excellent' | 'Good' | 'Fair' | 'Damaged' | null;
@@ -366,7 +369,8 @@ export interface ApiCategory {
 export type RestaurantSettingKey =
   | 'CATEGORY_HIERARCHY'
   | 'STORAGE_TEMPERATURE_OPTIONS'
-  | 'PRODUCT_MERGE_METADATA';
+  | 'PRODUCT_MERGE_METADATA'
+  | 'GOODS_RECEIVED_QUALITY_CRITERIA';
 
 export interface ApiRestaurantSetting {
   key: RestaurantSettingKey;

@@ -6,6 +6,15 @@ import { DatabaseService } from '../../shared/database/database.service';
 type HeadersLike = Record<string, string | string[] | undefined>;
 type BusinessModule = 'RETAIL' | 'RESTAURANT';
 
+// Raw item types presented through the restaurant inventory "Main > Sub" category
+// tree (and therefore drives CATEGORY_HIERARCHY). MENU_ITEM dishes are excluded —
+// they are managed on the menu/recipe screens, not in inventory.
+const NORMALIZED_CATEGORY_ITEM_TYPES = ['INGREDIENT', 'SUPPLY'];
+// Item types where a name uniquely identifies the item, so creation reuses an
+// existing row instead of making a duplicate. Excludes retail/thrift items, whose
+// identity also depends on size/condition/target customer.
+const DEDUP_BY_NAME_ITEM_TYPES = ['INGREDIENT', 'SUPPLY'];
+
 type Scope = {
   businessId: string;
   module: BusinessModule;
@@ -43,12 +52,24 @@ type LowStockCandidate = {
 export class InventoryApiService {
   constructor(private readonly databaseService: DatabaseService) {}
 
+  private async ensureInventoryItemOperationalColumns() {
+    await this.safeQuery(
+      `ALTER TABLE "InventoryItem" ADD COLUMN IF NOT EXISTS "expiryPeriod" TEXT`,
+    );
+    // Soft-delete / archive flag used by the inventory list (archived items are
+    // hidden unless "Show archived" is on). Defaults to active.
+    await this.safeQuery(
+      `ALTER TABLE "InventoryItem" ADD COLUMN IF NOT EXISTS "isActive" BOOLEAN NOT NULL DEFAULT true`,
+    );
+  }
+
   async getCurrentUser(headers: HeadersLike) {
     const scope = await this.resolveScope(headers);
     return { user: scope.user };
   }
 
   async listInventory(headers: HeadersLike, query: Record<string, string | undefined>) {
+    await this.ensureInventoryItemOperationalColumns();
     const scope = await this.resolveScope(headers);
     const where = ['i."businessId" = $1'];
     const params: unknown[] = [scope.businessId];
@@ -70,8 +91,8 @@ export class InventoryApiService {
           i."targetCustomer", i.subcategory, i.size, i.condition,
           i.quantity, i.price, i."costPrice", i."imageUrl", i.unit,
           i."minStock", i."maxStock", i."reorderPoint", i."expiryDate",
-          i."storageTemperature", i."dateAdded", i."locationId",
-          i."createdAt", i."updatedAt",
+          i."expiryPeriod", i."storageTemperature", i."dateAdded", i."locationId",
+          i."isActive", i."createdAt", i."updatedAt",
           json_build_object(
             'id', l.id,
             'name', l.name,
@@ -92,9 +113,42 @@ export class InventoryApiService {
   }
 
   async createInventoryItem(headers: HeadersLike, body: Record<string, unknown>) {
+    await this.ensureInventoryItemOperationalColumns();
     const scope = await this.resolveScope(headers);
+    const itemType = String(body.itemType ?? 'RETAIL_ITEM');
+    const name = String(body.name ?? 'Untitled Item').trim();
+
+    // Reuse an existing raw item with the same name instead of creating a
+    // duplicate (e.g. ordering the same new ingredient twice). Scoped to
+    // ingredients/supplies — retail/thrift items can share a name across
+    // size/condition variants, so name alone is not a safe identity there.
+    if (DEDUP_BY_NAME_ITEM_TYPES.includes(itemType) && name && name !== 'Untitled Item') {
+      const existing = await this.safeQuery<Record<string, unknown>>(
+        `SELECT * FROM "InventoryItem"
+         WHERE "businessId" = $1 AND "itemType" = $2::"InventoryItemType"
+           AND lower(trim(name)) = lower($3)
+         ORDER BY "createdAt" ASC
+         LIMIT 1`,
+        [scope.businessId, itemType, name.toLowerCase()],
+      );
+      if (existing[0]) return existing[0];
+    }
+
     const locationId = String(body.locationId ?? (await this.getDefaultLocationId(scope.businessId)));
     const id = randomUUID();
+
+    // Restaurant items are grouped by a "Main > Sub" category tree. Normalize the
+    // incoming category into that shape and make sure the resolved Main/Sub exist
+    // in CATEGORY_HIERARCHY, so every created item is countable AND visible in the
+    // inventory list (the two used to drift apart for unregistered categories).
+    let category = String(body.category ?? 'Uncategorized');
+    let subcategory = body.subcategory == null ? null : String(body.subcategory);
+    if (NORMALIZED_CATEGORY_ITEM_TYPES.includes(itemType)) {
+      const normalized = this.normalizeItemCategory(itemType, body.category, body.subcategory);
+      category = normalized.category;
+      subcategory = normalized.subcategory;
+      await this.registerCategoryInHierarchy(scope.businessId, normalized.main, normalized.sub);
+    }
 
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
@@ -102,26 +156,28 @@ export class InventoryApiService {
           id, name, description, "itemType", sku, barcode, category, "targetCustomer",
           subcategory, size, condition, quantity, price, "costPrice",
           "imageUrl", unit, "minStock", "maxStock", "reorderPoint",
-          "expiryDate", "storageTemperature", "locationId", "businessId"
+          "expiryDate", "expiryPeriod", "storageTemperature", "locationId", "businessId",
+          "updatedAt"
         )
         VALUES (
           $1, $2, $3, $4::"InventoryItemType", $5, $6, $7, $8,
           $9, $10, $11, $12, $13, $14,
           $15, $16, $17, $18, $19,
-          $20, $21, $22, $23
+          $20, $21, $22, $23, $24,
+          CURRENT_TIMESTAMP
         )
         RETURNING *
       `,
       [
         id,
-        String(body.name ?? 'Untitled Item'),
+        name,
         body.description ?? null,
-        String(body.itemType ?? 'RETAIL_ITEM'),
+        itemType,
         body.sku ?? null,
         body.barcode ?? null,
-        String(body.category ?? 'Uncategorized'),
+        category,
         body.targetCustomer ?? null,
-        body.subcategory ?? null,
+        subcategory,
         body.size ?? null,
         body.condition ?? null,
         Number(body.quantity ?? 0),
@@ -133,6 +189,7 @@ export class InventoryApiService {
         body.maxStock === undefined ? null : Number(body.maxStock),
         body.reorderPoint === undefined ? null : Number(body.reorderPoint),
         body.expiryDate ?? null,
+        body.expiryPeriod ?? null,
         body.storageTemperature ?? null,
         locationId,
         scope.businessId,
@@ -143,6 +200,7 @@ export class InventoryApiService {
   }
 
   async updateInventoryItem(id: string, body: Record<string, unknown>) {
+    await this.ensureInventoryItemOperationalColumns();
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
         UPDATE "InventoryItem"
@@ -165,6 +223,10 @@ export class InventoryApiService {
           size = COALESCE($17, size),
           condition = COALESCE($18, condition),
           "locationId" = COALESCE($19, "locationId"),
+          "expiryDate" = COALESCE($20, "expiryDate"),
+          "expiryPeriod" = COALESCE($21, "expiryPeriod"),
+          "storageTemperature" = COALESCE($22, "storageTemperature"),
+          "isActive" = COALESCE($23, "isActive"),
           "updatedAt" = CURRENT_TIMESTAMP
         WHERE id = $1
         RETURNING *
@@ -189,6 +251,10 @@ export class InventoryApiService {
         body.size ?? null,
         body.condition ?? null,
         body.locationId ?? null,
+        body.expiryDate ?? null,
+        body.expiryPeriod ?? null,
+        body.storageTemperature ?? null,
+        body.isActive === undefined ? null : Boolean(body.isActive),
       ],
     );
 
@@ -969,11 +1035,46 @@ export class InventoryApiService {
     const scope = await this.resolveScope(headers);
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
-        SELECT gr.*, COALESCE(items.items, '[]'::json) AS items
+        SELECT
+          gr.id,
+          gr."receiptNumber",
+          gr."purchaseOrderId",
+          gr."receivedById",
+          gr.notes,
+          gr."businessId",
+          gr.module,
+          to_char(gr."createdAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "createdAt",
+          json_build_object(
+            'id', po.id,
+            'orderNumber', po."orderNumber",
+            'supplier', row_to_json(s.*)
+          ) AS "purchaseOrder",
+          row_to_json(u.*) AS "receivedBy",
+          COALESCE(items.items, '[]'::json) AS items
         FROM "GoodsReceipt" gr
+        LEFT JOIN "PurchaseOrder" po ON po.id = gr."purchaseOrderId"
+        LEFT JOIN "Supplier" s ON s.id = po."supplierId"
+        LEFT JOIN "User" u ON u.id = gr."receivedById"
         LEFT JOIN LATERAL (
-          SELECT json_agg(gri.* ORDER BY gri."createdAt") AS items
+          SELECT json_agg(
+            json_build_object(
+              'id', gri.id,
+              'purchaseOrderItemId', gri."purchaseOrderItemId",
+              'inventoryItemId', gri."inventoryItemId",
+              'category', ii.category,
+              'receivedQty', gri."receivedQty",
+              'rejectedQty', gri."rejectedQty",
+              'condition', gri.condition,
+              'notes', gri.notes,
+              'createdAt', to_char(gri."createdAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+              'purchaseOrderItem', row_to_json(poi.*),
+              'inventoryItem', row_to_json(ii.*)
+            )
+            ORDER BY gri."createdAt"
+          ) AS items
           FROM "GoodsReceiptItem" gri
+          LEFT JOIN "PurchaseOrderItem" poi ON poi.id = gri."purchaseOrderItemId"
+          LEFT JOIN "InventoryItem" ii ON ii.id = gri."inventoryItemId"
           WHERE gri."goodsReceiptId" = gr.id
         ) items ON TRUE
         WHERE gr."businessId" = $1
@@ -1182,6 +1283,7 @@ export class InventoryApiService {
   // Receive (full or partial): adds accepted qty to stock with weighted-average
   // costing, writes a GoodsReceipt + StockMovements, and advances PO status.
   async receivePurchaseOrder(headers: HeadersLike, id: string, body: Record<string, unknown>) {
+    await this.ensureInventoryItemOperationalColumns();
     const scope = await this.resolveScope(headers);
     const dtoItems = Array.isArray(body.items) ? (body.items as Record<string, unknown>[]) : [];
 
@@ -1255,14 +1357,16 @@ export class InventoryApiService {
               UPDATE "InventoryItem"
               SET quantity = $1, price = $2,
                   "expiryDate" = COALESCE($3, "expiryDate"),
-                  "storageTemperature" = COALESCE($4, "storageTemperature"),
+                  "expiryPeriod" = COALESCE($4, "expiryPeriod"),
+                  "storageTemperature" = COALESCE($5, "storageTemperature"),
                   "updatedAt" = CURRENT_TIMESTAMP
-              WHERE id = $5
+              WHERE id = $6
             `,
             [
               newQuantity,
               wacPrice,
               ri.expiryDate ? new Date(String(ri.expiryDate)) : null,
+              ri.expiryPeriod ?? null,
               ri.storageTemperature ?? null,
               poItem.inventoryItemId,
             ],
@@ -1943,6 +2047,80 @@ export class InventoryApiService {
     return { success: true };
   }
 
+  // Coerce a raw ingredient/supply category/subcategory pair into a canonical
+  // "Main > Sub" form, keeping its own main with a "General" fallback sub so it
+  // always has a place in the category tree.
+  private normalizeItemCategory(
+    _itemType: string,
+    rawCategory: unknown,
+    rawSubcategory: unknown,
+  ): { category: string; subcategory: string; main: string; sub: string } {
+    const category = String(rawCategory ?? '').trim();
+    const subcategory = rawSubcategory == null ? '' : String(rawSubcategory).trim();
+
+    let main = '';
+    let sub = '';
+    if (category.includes(' > ')) {
+      const idx = category.indexOf(' > ');
+      main = category.slice(0, idx).trim();
+      sub = category.slice(idx + 3).trim();
+    } else {
+      main = category;
+      sub = subcategory;
+    }
+
+    if (!main) main = 'Other';
+    if (!sub) sub = 'General';
+    return { category: `${main} > ${sub}`, subcategory: sub, main, sub };
+  }
+
+  // Ensure a Main/Sub pair is present in the business CATEGORY_HIERARCHY setting,
+  // adding it (and the main bucket) when missing. Additive only — never removes.
+  private async registerCategoryInHierarchy(
+    businessId: string,
+    main: string,
+    sub: string,
+  ): Promise<void> {
+    const rows = await this.safeQuery<{ value: unknown }>(
+      `SELECT value FROM "RestaurantSetting" WHERE "businessId" = $1 AND key = 'CATEGORY_HIERARCHY' LIMIT 1`,
+      [businessId],
+    );
+
+    let hierarchy: Record<string, string[]> = {};
+    const raw = rows[0]?.value;
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      hierarchy = raw as Record<string, string[]>;
+    } else if (typeof raw === 'string') {
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          hierarchy = parsed as Record<string, string[]>;
+        }
+      } catch {
+        hierarchy = {};
+      }
+    }
+
+    const subs = Array.isArray(hierarchy[main]) ? [...hierarchy[main]] : [];
+    let changed = !Array.isArray(hierarchy[main]);
+    if (!subs.includes(sub)) {
+      subs.push(sub);
+      changed = true;
+    }
+    if (!changed) return;
+
+    hierarchy[main] = subs;
+    await this.safeQuery(
+      `
+        INSERT INTO "RestaurantSetting" (id, key, value, "businessId", "updatedAt")
+        VALUES ($1, 'CATEGORY_HIERARCHY', $2::jsonb, $3, CURRENT_TIMESTAMP)
+        ON CONFLICT ("businessId", key)
+        DO UPDATE SET value = EXCLUDED.value, "updatedAt" = CURRENT_TIMESTAMP
+      `,
+      [randomUUID(), JSON.stringify(hierarchy), businessId],
+    );
+  }
+
   async listRestaurantSettings(headers: HeadersLike) {
     const scope = await this.resolveScope(headers);
     return this.safeQuery<Record<string, unknown>>(
@@ -1960,8 +2138,8 @@ export class InventoryApiService {
     const scope = await this.resolveScope(headers);
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
-        INSERT INTO "RestaurantSetting" (id, key, value, "businessId")
-        VALUES ($1, $2, $3::jsonb, $4)
+        INSERT INTO "RestaurantSetting" (id, key, value, "businessId", "updatedAt")
+        VALUES ($1, $2, $3::jsonb, $4, CURRENT_TIMESTAMP)
         ON CONFLICT ("businessId", key)
         DO UPDATE SET value = EXCLUDED.value, "updatedAt" = CURRENT_TIMESTAMP
         RETURNING key, value

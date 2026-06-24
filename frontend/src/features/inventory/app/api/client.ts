@@ -57,7 +57,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       : {};
     const fallbackMessage =
       response.status === 502
-        ? 'Inventory backend is not reachable. Start inventory/backend on port 3001 and check that DATABASE_URL points to the inventory database.'
+        ? 'Inventory backend is not reachable. Start inventory/backend on port 3004 and check that DATABASE_URL points to the inventory database.'
         : `Request failed with ${response.status}`;
 
     throw new Error(error.message ?? fallbackMessage);

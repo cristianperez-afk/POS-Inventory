@@ -26,12 +26,22 @@ type Product = {
   reorderPoint?: number;
   price: number;
   expiry: string;
+  expiryPeriod?: string;
   location?: string;
   unit: string;
   storageTemperature?: string;
   isActive?: boolean;
   isRecent?: boolean;
+  addedDate?: string;
 };
+
+const EXPIRY_PERIOD_OPTIONS = [
+  "Early Morning",
+  "Morning",
+  "Afternoon",
+  "Evening",
+  "Midnight",
+];
 
 export function Inventory() {
   const { currentUser } = useSession();
@@ -44,7 +54,9 @@ export function Inventory() {
   const [showInitialStockModal, setShowInitialStockModal] = useState(false);
   const [pendingDeactivateId, setPendingDeactivateId] = useState<number | null>(null);
   const [showArchived, setShowArchived] = useState(false);
+  const [expiryPeriodFilter, setExpiryPeriodFilter] = useState("all");
   const [costHistoryItem, setCostHistoryItem] = useState<{ id: string; name: string } | null>(null);
+  const [showRecentModal, setShowRecentModal] = useState(false);
 
   // Hierarchical category structure — read from persisted backend settings so
   // categories added via Initial Stock Setup appear here immediately.
@@ -55,7 +67,12 @@ export function Inventory() {
   const { data: locations = [] } = useRestaurantLocationsQuery();
   const updateProduct = useUpdateRestaurantInventoryMutation();
 
-  const mainCategories = Object.keys(categoryHierarchy);
+  // Inventory lists raw ingredients/supplies only. "Menu Items" is a menu/recipe
+  // grouping (present in the default hierarchy) and must not appear as an
+  // inventory category folder.
+  const mainCategories = Object.keys(categoryHierarchy).filter(
+    (category) => category !== "Menu Items",
+  );
 
   const toggleMainCategory = (category: string) => {
     const newExpanded = new Set(expandedMainCategories);
@@ -91,9 +108,10 @@ export function Inventory() {
       const matchesSearch = searchQuery === "" ||
         (p.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
         (p.sku || '').toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesExpiryPeriod = expiryPeriodFilter === "all" || (p.expiryPeriod || "") === expiryPeriodFilter;
       // Archived (deactivated) items are hidden unless the user opts to see them.
       const matchesArchived = showArchived || p.isActive !== false;
-      return matchesCategory && matchesSearch && matchesArchived;
+      return matchesCategory && matchesSearch && matchesExpiryPeriod && matchesArchived;
     });
   };
 
@@ -127,6 +145,7 @@ export function Inventory() {
           expiryDate: editingProduct.expiry
             ? new Date(`${editingProduct.expiry}T00:00:00`).toISOString()
             : undefined,
+          expiryPeriod: editingProduct.expiryPeriod || undefined,
           storageTemperature: editingProduct.storageTemperature || undefined,
         },
       });
@@ -202,10 +221,15 @@ export function Inventory() {
         <div className="flex items-center gap-3">
           <h1 className="text-3xl font-bold text-foreground">Inventory</h1>
           {products.filter((p) => p.isRecent).length > 0 && (
-            <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-medium bg-primary/10 text-primary">
+            <button
+              type="button"
+              onClick={() => setShowRecentModal(true)}
+              title="View recently added items"
+              className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors cursor-pointer"
+            >
               <Sparkles className="w-4 h-4" />
               {products.filter((p) => p.isRecent).length} recently added
-            </span>
+            </button>
           )}
         </div>
         {userRole === "admin" && (
@@ -242,6 +266,16 @@ export function Inventory() {
             />
             Show archived
           </label>
+          <select
+            value={expiryPeriodFilter}
+            onChange={(e) => setExpiryPeriodFilter(e.target.value)}
+            className="px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary transition-all whitespace-nowrap"
+          >
+            <option value="all">All expiry periods</option>
+            {EXPIRY_PERIOD_OPTIONS.map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
         </div>
 
         {/* Stats Row */}
@@ -345,12 +379,12 @@ export function Inventory() {
                               {subCategoryProducts.map((product) => (
                                 <div
                                   key={product.id}
-                                  className="flex items-center gap-2 p-2 bg-card border border-border rounded-lg hover:shadow-md transition-all"
+                                  className="flex items-center gap-2 overflow-hidden p-2 bg-card border border-border rounded-lg hover:shadow-md transition-all"
                                 >
                                   <Package className="w-5 h-5 text-primary flex-shrink-0" />
 
-                                  <div className="flex-1 grid grid-cols-6 gap-2 items-center">
-                                    <div className="col-span-2">
+                                  <div className="min-w-0 flex-1 grid grid-cols-[minmax(150px,2fr)_minmax(105px,1fr)_minmax(115px,1fr)_minmax(95px,0.85fr)_minmax(145px,1fr)] gap-3 items-center [&>div]:min-w-0 [&>div>p]:truncate">
+                                    <div className="min-w-0">
                                       <div className="flex items-center gap-2">
                                         <p className="font-medium text-foreground text-sm truncate">{product.name}</p>
                                         {product.isRecent && (
@@ -363,69 +397,71 @@ export function Inventory() {
                                       <p className="text-xs text-muted-foreground truncate">{product.sku}</p>
                                     </div>
 
-                                    <div>
+                                    <div className="min-w-0">
                                       <p className="text-xs text-muted-foreground truncate">{product.location}</p>
                                     </div>
 
-                                    <div>
-                                      <p className={`text-sm font-bold ${getStockStatus(product.stock, product.maxStock, product.minStock, product.reorderPoint).textColor}`}>
+                                    <div className="min-w-0">
+                                      <p className={`text-[13px] font-bold ${getStockStatus(product.stock, product.maxStock, product.minStock, product.reorderPoint).textColor}`}>
                                         {formatQuantity(product.stock, product.unit)} / {formatQuantity(product.maxStock, product.unit)}
                                       </p>
                                     </div>
 
-                                    <div>
-                                      <p className="text-sm font-medium text-foreground">₱{product.price}</p>
+                                    <div className="min-w-0">
+                                      <p className="text-[13px] font-medium text-foreground truncate">₱{product.price}</p>
                                     </div>
 
-                                    <div>
-                                      <p className="text-xs text-foreground truncate">{product.expiry}</p>
+                                    <div className="min-w-0">
+                                      <p className="text-[11px] leading-tight text-foreground truncate">{product.expiry || "No expiry"}</p>
+                                      <p className="text-[10px] leading-tight text-muted-foreground truncate">{product.expiryPeriod || "No period"}</p>
                                     </div>
                                   </div>
 
-                                  <div className="flex items-center gap-1 flex-shrink-0">
+                                  <div className="flex w-[90px] min-w-[90px] items-center justify-end gap-0.5">
+                                    <button
+                                      onClick={() => setCostHistoryItem({ id: product.backendId ?? String(product.id), name: product.name })}
+                                      className="p-1 hover:bg-emerald-50 text-emerald-600 rounded-md transition-colors"
+                                      title="View cost history"
+                                    >
+                                      <History className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                      onClick={() => handleEdit(product)}
+                                      className="p-1 hover:bg-green-50 text-green-600 rounded-md transition-colors"
+                                      title="Edit storage & expiry"
+                                    >
+                                      <Edit className="w-4 h-4" />
+                                    </button>
+                                    {product.isActive === false ? (
+                                      <button
+                                        onClick={() => handleReactivate(product)}
+                                        className="p-1 hover:bg-green-50 text-green-600 rounded-md transition-colors"
+                                        title="Reactivate"
+                                      >
+                                        <ArchiveRestore className="w-4 h-4" />
+                                      </button>
+                                    ) : (
+                                      <button
+                                        onClick={() => handleDeactivate(product.id)}
+                                        className="p-1 hover:bg-amber-50 text-amber-600 rounded-md transition-colors"
+                                        title="Archive (deactivate)"
+                                      >
+                                        <Archive className="w-4 h-4" />
+                                      </button>
+                                    )}
+                                  </div>
+
+                                  <div className="flex w-[112px] min-w-[112px] items-center justify-center gap-1">
                                     {product.isActive === false && (
                                       <span className="px-2 py-0.5 rounded text-xs font-medium border bg-muted text-muted-foreground border-border">
                                         Archived
                                       </span>
                                     )}
-                                    <span className={`px-2 py-0.5 rounded text-xs font-medium border ${getStockStatus(product.stock, product.maxStock, product.minStock, product.reorderPoint).color}`}>
+                                    <span className={`max-w-full truncate px-1.5 py-0.5 rounded text-[11px] font-medium border ${getStockStatus(product.stock, product.maxStock, product.minStock, product.reorderPoint).color}`}>
                                       {getStockStatus(product.stock, product.maxStock, product.minStock, product.reorderPoint).label}
                                     </span>
                                   </div>
 
-                                  <div className="flex items-center gap-1 flex-shrink-0">
-                                    <button
-                                      onClick={() => setCostHistoryItem({ id: product.backendId ?? String(product.id), name: product.name })}
-                                      className="p-1.5 hover:bg-emerald-50 text-emerald-600 rounded-lg transition-colors"
-                                      title="View cost history"
-                                    >
-                                      <History className="w-5 h-5" />
-                                    </button>
-                                    <button
-                                      onClick={() => handleEdit(product)}
-                                      className="p-1.5 hover:bg-green-50 text-green-600 rounded-lg transition-colors"
-                                      title="Edit storage & expiry"
-                                    >
-                                      <Edit className="w-5 h-5" />
-                                    </button>
-                                    {product.isActive === false ? (
-                                      <button
-                                        onClick={() => handleReactivate(product)}
-                                        className="p-1.5 hover:bg-green-50 text-green-600 rounded-lg transition-colors"
-                                        title="Reactivate"
-                                      >
-                                        <ArchiveRestore className="w-5 h-5" />
-                                      </button>
-                                    ) : (
-                                      <button
-                                        onClick={() => handleDeactivate(product.id)}
-                                        className="p-1.5 hover:bg-amber-50 text-amber-600 rounded-lg transition-colors"
-                                        title="Archive (deactivate)"
-                                      >
-                                        <Archive className="w-5 h-5" />
-                                      </button>
-                                    )}
-                                  </div>
                                 </div>
                               ))}
                               {subCategoryProducts.length === 0 && (
@@ -458,6 +494,78 @@ export function Inventory() {
           itemName={costHistoryItem.name}
           onClose={() => setCostHistoryItem(null)}
         />
+      )}
+
+      {/* Recently Added Items Modal */}
+      {showRecentModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-card rounded-2xl shadow-xl w-full max-w-2xl max-h-[85vh] overflow-y-auto">
+            <div className="sticky top-0 bg-card border-b border-border px-6 py-4 flex items-center justify-between z-10">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-primary/10 rounded-xl">
+                  <Sparkles className="w-5 h-5 text-primary" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-foreground">Recently Added Items</h2>
+                  <p className="text-sm text-muted-foreground">Items added in the last 7 days</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowRecentModal(false)}
+                className="p-2 hover:bg-muted rounded-xl transition-colors text-muted-foreground"
+                aria-label="Close recently added"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6">
+              {(() => {
+                const recentProducts = products
+                  .filter((p) => p.isRecent)
+                  .sort((a, b) => (b.addedDate || "").localeCompare(a.addedDate || ""));
+                if (recentProducts.length === 0) {
+                  return (
+                    <div className="py-12 flex flex-col items-center gap-3 text-center">
+                      <Package className="w-10 h-10 text-muted-foreground/40" />
+                      <p className="text-muted-foreground text-sm">No recently added items.</p>
+                    </div>
+                  );
+                }
+                return (
+                  <div className="space-y-2">
+                    {recentProducts.map((p) => (
+                      <div
+                        key={p.backendId ?? p.id}
+                        className="flex items-center gap-3 p-3 bg-muted/30 border border-border rounded-xl"
+                      >
+                        <Package className="w-5 h-5 text-primary flex-shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <p className="font-medium text-foreground text-sm truncate">{p.name}</p>
+                          <p className="text-xs text-muted-foreground truncate">{p.category}</p>
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          <p className="text-sm font-semibold text-foreground">
+                            {formatQuantity(p.stock)} {p.unit}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {p.addedDate
+                              ? new Date(p.addedDate).toLocaleDateString(undefined, {
+                                  month: "short",
+                                  day: "numeric",
+                                  year: "numeric",
+                                })
+                              : "—"}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Edit Modal */}
@@ -509,6 +617,20 @@ export function Inventory() {
                   >
                     <option value="">Select storage temperature</option>
                     {storageTemperatureOptions.map((option) => (
+                      <option key={option} value={option}>{option}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm mb-2 text-foreground">Expiry Period</label>
+                  <select
+                    value={editingProduct.expiryPeriod || ""}
+                    onChange={(e) => setEditingProduct({ ...editingProduct, expiryPeriod: e.target.value })}
+                    className="w-full px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                  >
+                    <option value="">Select expiry period</option>
+                    {EXPIRY_PERIOD_OPTIONS.map((option) => (
                       <option key={option} value={option}>{option}</option>
                     ))}
                   </select>

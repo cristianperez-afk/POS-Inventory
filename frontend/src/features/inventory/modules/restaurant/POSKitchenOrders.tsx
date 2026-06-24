@@ -121,18 +121,21 @@ const cleanList = (items?: string[]) =>
 
 function DetailList({ label, values }: { label: string; values?: string[] }) {
   const cleanValues = cleanList(values);
-  if (cleanValues.length === 0) return null;
 
   return (
     <div>
       <p className="text-[12px] font-semibold text-foreground">{label}</p>
-      <div className="mt-1 flex flex-wrap gap-1.5">
-        {cleanValues.map((value) => (
-          <span key={value} className="rounded border border-border bg-muted/40 px-2 py-1 text-[12px] text-muted-foreground">
-            {value}
-          </span>
-        ))}
-      </div>
+      {cleanValues.length > 0 ? (
+        <div className="mt-1 flex flex-wrap gap-1.5">
+          {cleanValues.map((value) => (
+            <span key={value} className="rounded border border-border bg-muted/40 px-2 py-1 text-[12px] text-muted-foreground">
+              {value}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-1 text-[12px] text-muted-foreground">None</p>
+      )}
     </div>
   );
 }
