@@ -90,6 +90,7 @@ export class AdminService {
     enableIngredientCustomization?: boolean;
     enableReceiptPrinting?: boolean;
     enabledPaymentMethods?: string[];
+    paymentMethodAccounts?: Record<string, unknown>;
   }) {
     return this.databaseService.updateStoreSettingsForAdmin(input);
   }

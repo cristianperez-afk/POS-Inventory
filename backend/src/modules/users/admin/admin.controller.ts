@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { Type } from 'class-transformer';
-import { IsArray, IsBoolean, IsEmail, IsIn, IsNumber, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsArray, IsBoolean, IsEmail, IsIn, IsNumber, IsObject, IsOptional, IsString, MinLength } from 'class-validator';
 import { AdminService } from './admin.service';
 
 const STAFF_TYPES = ['POS_STAFF', 'INVENTORY_STAFF'] as const;
@@ -168,6 +168,10 @@ class UpdateStoreSettingsDto {
   enabled_payment_methods?: string[];
 
   @IsOptional()
+  @IsObject()
+  payment_method_accounts?: Record<string, unknown>;
+
+  @IsOptional()
   @IsBoolean()
   enable_dine_in?: boolean;
 
@@ -307,6 +311,7 @@ export class AdminController {
       enableIngredientCustomization: body.enable_ingredient_customization,
       enableReceiptPrinting: body.enable_receipt_printing,
       enabledPaymentMethods: body.enabled_payment_methods,
+      paymentMethodAccounts: body.payment_method_accounts,
     });
   }
 
