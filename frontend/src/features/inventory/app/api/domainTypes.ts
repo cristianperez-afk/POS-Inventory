@@ -52,10 +52,12 @@ export interface ApiInventoryItem {
   maxStock?: number | null;
   reorderPoint?: number | null;
   expiryDate?: string | null;
+  expiryPeriod?: string | null;
   storageTemperature?: string | null;
   dateAdded: string;
   locationId: string;
   location?: ApiLocation;
+  isActive?: boolean;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -122,6 +124,7 @@ export interface ApiGoodsReceiptItem {
   purchaseOrderItem?: ApiPurchaseOrderItem;
   inventoryItemId?: string | null;
   inventoryItem?: ApiInventoryItem | null;
+  category?: string | null;
   receivedQty: number;
   rejectedQty: number;
   condition?: 'Excellent' | 'Good' | 'Fair' | 'Damaged' | null;
@@ -309,6 +312,10 @@ export interface ApiKitchenOrderItem {
   id: string | number;
   name: string;
   quantity: number;
+  price?: number;
+  prepTimeMinutes?: number;
+  ingredients?: string[];
+  replacedIngredients?: string[];
   notes?: string | null;
   addedIngredients?: string[];
   removedIngredients?: string[];
@@ -326,6 +333,8 @@ export interface ApiKitchenOrder {
   itemCount?: number | null;
   quantity: number;
   status: KitchenOrderStatus;
+  paymentStatus?: string | null;
+  totalAmount?: number | string | null;
   notes?: string | null;
   voidReason?: string | null;
   voidedAt?: string | null;
@@ -341,6 +350,12 @@ export interface ApiKitchenOrder {
   completedBy?: ApiActor | null;
   createdAt: string;
   updatedAt?: string;
+  paymentAt?: string | null;
+  preparingStartedAt?: string | null;
+  readyAt?: string | null;
+  completedAt?: string | null;
+  tableStartedAt?: string | null;
+  tableEndedAt?: string | null;
 }
 
 export interface ApiCategory {
@@ -354,7 +369,8 @@ export interface ApiCategory {
 export type RestaurantSettingKey =
   | 'CATEGORY_HIERARCHY'
   | 'STORAGE_TEMPERATURE_OPTIONS'
-  | 'PRODUCT_MERGE_METADATA';
+  | 'PRODUCT_MERGE_METADATA'
+  | 'GOODS_RECEIVED_QUALITY_CRITERIA';
 
 export interface ApiRestaurantSetting {
   key: RestaurantSettingKey;

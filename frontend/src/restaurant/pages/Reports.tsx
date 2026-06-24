@@ -42,6 +42,7 @@ export function Reports({ onNavigate, onLogout, isAdmin = false, storeBrand, use
   const { orders } = useOrders();
   const todayString = getLocalDateKey();
   const [selectedDate, setSelectedDate] = useState('');
+  const [selectedEndDate, setSelectedEndDate] = useState('');
   const [dateFilter, setDateFilter] = useState<DateFilterMode>('today');
   const [showAllTransactions, setShowAllTransactions] = useState(false);
   const [showAllProducts, setShowAllProducts] = useState(false);
@@ -63,6 +64,13 @@ export function Reports({ onNavigate, onLogout, isAdmin = false, storeBrand, use
       return { start: selectedDate || todayString, end: selectedDate || todayString };
     }
 
+    if (dateFilter === 'range') {
+      if (selectedDate && selectedEndDate && selectedDate > selectedEndDate) {
+        return { start: selectedEndDate, end: selectedDate };
+      }
+      return { start: selectedDate, end: selectedEndDate };
+    }
+
     if (dateFilter === 'week') {
       start.setDate(today.getDate() - 6);
     } else if (dateFilter === 'month') {
@@ -80,6 +88,12 @@ export function Reports({ onNavigate, onLogout, isAdmin = false, storeBrand, use
   const getReportDateLabel = () => {
     if (dateFilter === 'today') return 'Today';
     if (dateFilter === 'date') return selectedDate || 'Select Date';
+    if (dateFilter === 'range') {
+      if (selectedDate && selectedEndDate) return `${selectedDate} to ${selectedEndDate}`;
+      if (selectedDate) return `${selectedDate} onward`;
+      if (selectedEndDate) return `Until ${selectedEndDate}`;
+      return 'Custom Range';
+    }
     if (dateFilter === 'week') return 'This Week';
     if (dateFilter === 'month') return 'This Month';
     if (dateFilter === 'all') return 'All Time';
@@ -231,8 +245,10 @@ export function Reports({ onNavigate, onLogout, isAdmin = false, storeBrand, use
               <DateFilterControl
                 mode={dateFilter}
                 selectedDate={selectedDate}
+                selectedEndDate={selectedEndDate}
                 onModeChange={setDateFilter}
                 onDateChange={setSelectedDate}
+                onEndDateChange={setSelectedEndDate}
                 className="rounded-lg border border-border px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
               />
               <button

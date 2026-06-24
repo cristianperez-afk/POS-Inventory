@@ -13,6 +13,7 @@ export interface InventoryItem {
   dateAdded: string;
   location: string;
   isActive?: boolean;
+  isRecent?: boolean;
 }
 
 export interface PurchaseOrder {

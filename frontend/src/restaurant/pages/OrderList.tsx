@@ -34,6 +34,14 @@ function normalizeSearchValue(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
+function formatDuration(minutes?: number) {
+  if (minutes === undefined) return '-';
+  if (minutes < 60) return `${minutes} min${minutes === 1 ? '' : 's'}`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return `${hours} hr${hours === 1 ? '' : 's'}${rest ? ` ${rest} mins` : ''}`;
+}
+
 export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, userName, storeType, staffType }: OrderListProps) {
   const { orders, completePayment, voidOrder, refundOrder, reloadOrders } = useOrders();
   const { settings } = useStoreSettings();
@@ -190,7 +198,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
   const paginatedOrders = filteredOrders.slice(pageStartIndex, pageStartIndex + ORDERS_PER_PAGE);
   const visibleStart = filteredOrders.length === 0 ? 0 : pageStartIndex + 1;
   const visibleEnd = Math.min(pageStartIndex + ORDERS_PER_PAGE, filteredOrders.length);
-  const tableColumnCount = showTableManagementColumns ? 10 : 7;
+  const tableColumnCount = showTableManagementColumns ? 12 : 9;
 
   useEffect(() => {
     setCurrentPage(1);
@@ -290,7 +298,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
         {/* Table Card */}
         <div className="bg-white rounded-xl shadow-sm border border-border overflow-hidden">
           <div className="overflow-x-auto">
-            <table className={`w-full ${showTableManagementColumns ? 'min-w-[1180px]' : 'min-w-[880px]'}`}>
+            <table className={`w-full ${showTableManagementColumns ? 'min-w-[1380px]' : 'min-w-[1080px]'}`}>
               <thead className="bg-muted/30">
                 <tr>
                   <th className="w-[13%] text-left px-5 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Order Number</th>
@@ -306,6 +314,8 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                   <th className="w-[9%] text-right px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Total</th>
                   <th className="w-[8%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Payments</th>
                   <th className="w-[9%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Date and Time</th>
+                  <th className="w-[8%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Running</th>
+                  <th className="w-[8%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Stay</th>
                   <th className="w-[14%] text-center px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Action</th>
                 </tr>
               </thead>
@@ -372,6 +382,8 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                       <div className="text-xs text-gray-600 whitespace-nowrap">{order.date}</div>
                       <div className="text-xs text-gray-400 whitespace-nowrap">{order.time}</div>
                     </td>
+                    <td className="px-4 py-5 text-xs text-gray-600 whitespace-nowrap">{formatDuration(order.runningTimeMinutes)}</td>
+                    <td className="px-4 py-5 text-xs text-gray-600 whitespace-nowrap">{formatDuration(order.customerStayMinutes)}</td>
                     <td className="px-4 py-5">
                       <div className="flex items-center justify-center gap-1 whitespace-nowrap">
                         {/* View Details - always */}
@@ -502,6 +514,33 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                 <div className="bg-muted rounded-xl p-3">
                   <p className="text-xs text-gray-400 mb-1">Date & Time</p>
                   <p className="text-sm text-gray-800">{selectedOrder.date} · {selectedOrder.time}</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-muted rounded-xl p-3">
+                  <p className="text-xs text-gray-400 mb-1">Running Time</p>
+                  <p className="text-sm text-gray-800">{formatDuration(selectedOrder.runningTimeMinutes)}</p>
+                </div>
+                <div className="bg-muted rounded-xl p-3">
+                  <p className="text-xs text-gray-400 mb-1">Customer Stay Duration</p>
+                  <p className="text-sm text-gray-800">{formatDuration(selectedOrder.customerStayMinutes)}</p>
+                </div>
+                <div className="bg-muted rounded-xl p-3">
+                  <p className="text-xs text-gray-400 mb-1">Payment Time</p>
+                  <p className="text-sm text-gray-800">{selectedOrder.paymentAt ? new Date(selectedOrder.paymentAt).toLocaleString('en-PH') : '-'}</p>
+                </div>
+                <div className="bg-muted rounded-xl p-3">
+                  <p className="text-xs text-gray-400 mb-1">Preparing Start</p>
+                  <p className="text-sm text-gray-800">{selectedOrder.preparingStartedAt ? new Date(selectedOrder.preparingStartedAt).toLocaleString('en-PH') : '-'}</p>
+                </div>
+                <div className="bg-muted rounded-xl p-3">
+                  <p className="text-xs text-gray-400 mb-1">Ready to Serve</p>
+                  <p className="text-sm text-gray-800">{selectedOrder.readyAt ? new Date(selectedOrder.readyAt).toLocaleString('en-PH') : '-'}</p>
+                </div>
+                <div className="bg-muted rounded-xl p-3">
+                  <p className="text-xs text-gray-400 mb-1">Completed Time</p>
+                  <p className="text-sm text-gray-800">{selectedOrder.completedAt ? new Date(selectedOrder.completedAt).toLocaleString('en-PH') : '-'}</p>
                 </div>
               </div>
 

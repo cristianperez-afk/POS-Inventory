@@ -4,6 +4,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import {
   useRestaurantGoodsRecordsQuery,
   useRestaurantInventoryQuery,
+  useRestaurantKitchenOrdersQuery,
   useRestaurantPurchaseOrdersQuery,
 } from "../lib/restaurant";
 import { useSession } from "../../app/hooks/useSession";
@@ -41,6 +42,22 @@ const goToPurchaseOrders = () => {
   window.dispatchEvent(new CustomEvent('restaurant-navigate', { detail: 'restaurant-purchase-orders' }));
 };
 
+const formatDuration = (minutes: number) => {
+  if (!Number.isFinite(minutes) || minutes <= 0) return "0 mins";
+  if (minutes < 60) return `${Math.round(minutes)} mins`;
+  const hours = Math.floor(minutes / 60);
+  const rest = Math.round(minutes % 60);
+  return `${hours}h${rest ? ` ${rest}m` : ""}`;
+};
+
+const minutesBetween = (start?: string | null, end?: string | null) => {
+  if (!start) return 0;
+  const startTime = new Date(start).getTime();
+  const endTime = end ? new Date(end).getTime() : Date.now();
+  if (Number.isNaN(startTime) || Number.isNaN(endTime)) return 0;
+  return Math.max(0, Math.round((endTime - startTime) / 60000));
+};
+
 export function Dashboard() {
   const { currentUser } = useSession();
   const userRole = currentUser?.role === "Admin" ? "admin" : "staff";
@@ -73,6 +90,7 @@ export function Dashboard() {
 
   const { data: purchaseOrders = [] } = useRestaurantPurchaseOrdersQuery();
   const { data: goodsRecords = [] } = useRestaurantGoodsRecordsQuery();
+  const { data: kitchenOrders = [] } = useRestaurantKitchenOrdersQuery();
   const pendingOrders: PendingOrder[] = purchaseOrders
     .filter((order) => order.backendStatus === "SUBMITTED")
     .map((order) => ({
@@ -84,6 +102,15 @@ export function Dashboard() {
       total: order.total,
       expectedDelivery: order.expectedDelivery,
     }));
+
+  const completedKitchenOrders = (kitchenOrders as any[]).filter((order) => ['completed', 'cancelled'].includes(String(order.status ?? '').toLowerCase()));
+  const averageRunningTime = completedKitchenOrders.length > 0
+    ? completedKitchenOrders.reduce((sum, order) => sum + minutesBetween(order.orderedAt, order.completedAt ?? order.updatedAt), 0) / completedKitchenOrders.length
+    : 0;
+  const dineInStayOrders = (kitchenOrders as any[]).filter((order) => order.tableStartedAt);
+  const averageStayTime = dineInStayOrders.length > 0
+    ? dineInStayOrders.reduce((sum, order) => sum + minutesBetween(order.tableStartedAt, order.tableEndedAt ?? order.completedAt ?? order.updatedAt), 0) / dineInStayOrders.length
+    : 0;
 
   const stats = [
     {
@@ -117,6 +144,22 @@ export function Dashboard() {
       trend: "up",
       icon: userRole === "admin" ? Clock : ShoppingCart,
       color: "from-amber-500 to-orange-500",
+    },
+    {
+      title: "Avg Running Time",
+      value: formatDuration(averageRunningTime),
+      change: "POS",
+      trend: "up",
+      icon: Clock,
+      color: "from-cyan-500 to-blue-500",
+    },
+    {
+      title: "Avg Dine-In Stay",
+      value: formatDuration(averageStayTime),
+      change: "Tables",
+      trend: "up",
+      icon: Clock,
+      color: "from-violet-500 to-fuchsia-500",
     },
   ];
 
@@ -235,7 +278,7 @@ export function Dashboard() {
       </div>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-4 gap-6 mb-8">
+      <div className="grid grid-cols-1 gap-6 mb-8 md:grid-cols-2 xl:grid-cols-6">
         {stats.map((stat, index) => {
           const Icon = stat.icon;
           return (

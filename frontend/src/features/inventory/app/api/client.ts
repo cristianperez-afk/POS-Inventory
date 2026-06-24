@@ -57,7 +57,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       : {};
     const fallbackMessage =
       response.status === 502
-        ? 'Inventory backend is not reachable. Start inventory/backend on port 3001 and check that DATABASE_URL points to the inventory database.'
+        ? 'Inventory backend is not reachable. Start inventory/backend on port 3004 and check that DATABASE_URL points to the inventory database.'
         : `Request failed with ${response.status}`;
 
     throw new Error(error.message ?? fallbackMessage);
@@ -138,6 +138,33 @@ export function deleteInventoryItem(id: string) {
   return request<ApiInventoryItem>(`/api/inventory/${id}`, {
     method: 'DELETE',
   });
+}
+
+export interface CostHistoryEntry {
+  id: string;
+  quantityReceived: number;
+  unitCost: number;
+  totalCost: number;
+  dateReceived: string;
+  receiptNumber: string | null;
+  orderNumber: string | null;
+  supplierName: string | null;
+}
+
+export interface ItemCostHistory {
+  itemId: string;
+  name: string;
+  unit: string | null;
+  currentStock: number;
+  weightedAverageCost: number;
+  totalReceipts: number;
+  totalQuantityReceived: number;
+  totalCost: number;
+  entries: CostHistoryEntry[];
+}
+
+export function getItemCostHistory(id: string) {
+  return request<ItemCostHistory>(`/api/inventory/${id}/cost-history`);
 }
 
 export function getStockMovements(params?: {

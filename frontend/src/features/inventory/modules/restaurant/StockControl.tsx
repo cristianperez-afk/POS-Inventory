@@ -35,6 +35,7 @@ type ExpiryItem = {
   sku: string;
   location: string;
   expiry: string;
+  expiryPeriod: string;
   stock: number;
   unit: string;
   daysUntilExpiry: number;
@@ -60,12 +61,15 @@ type InventoryMovementSummary = {
 };
 
 const normalizeName = (value: string | undefined) => (value || '').trim().toLowerCase();
+const expiryPeriodOptions = ["Early Morning", "Morning", "Afternoon", "Evening", "Midnight"];
 
 export function StockControl() {
   const [viewType, setViewType] = useState<ViewType>("control");
   const [searchQuery, setSearchQuery] = useState("");
   const [classificationFilter, setClassificationFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [expiryDateFilter, setExpiryDateFilter] = useState("all");
+  const [expiryPeriodFilter, setExpiryPeriodFilter] = useState("all");
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const { data: products = [] } = useRestaurantInventoryQuery();
@@ -150,6 +154,7 @@ export function StockControl() {
         sku: product.sku,
         location: product.location || "Unassigned",
         expiry: product.expiry,
+        expiryPeriod: product.expiryPeriod || "",
         stock: product.stock,
         unit: product.unit || "pcs",
         daysUntilExpiry: getDaysUntilExpiry(product.expiry),
@@ -174,8 +179,17 @@ export function StockControl() {
   });
 
   const filteredExpiryItems = expiryItems.filter(item => {
-    return (item.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+    const matchesSearch = (item.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
            (item.sku || '').toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesDate =
+      expiryDateFilter === "all" ||
+      (expiryDateFilter === "expired" && item.daysUntilExpiry < 0) ||
+      (expiryDateFilter === "today" && item.daysUntilExpiry === 0) ||
+      (expiryDateFilter === "tomorrow" && item.daysUntilExpiry === 1) ||
+      (expiryDateFilter === "next3" && item.daysUntilExpiry >= 0 && item.daysUntilExpiry <= 3) ||
+      (expiryDateFilter === "next7" && item.daysUntilExpiry >= 0 && item.daysUntilExpiry <= 7);
+    const matchesPeriod = expiryPeriodFilter === "all" || (item.expiryPeriod || "") === expiryPeriodFilter;
+    return matchesSearch && matchesDate && matchesPeriod;
   });
 
   const getStatusBadge = (status: string) => {
@@ -324,10 +338,10 @@ export function StockControl() {
       filename = "low_stock_alerts.csv";
     } else if (viewType === "expiring") {
       // Export Expiring Items
-      csvContent = "SKU,Product Name,Category,Expiry Date,Days Until Expiry,Current Stock,Location\n";
+      csvContent = "SKU,Product Name,Category,Expiry Date,Expiry Period,Days Until Expiry,Current Stock,Location\n";
 
       filteredExpiryItems.forEach(item => {
-        csvContent += `${item.sku},${item.name},${item.category},${item.expiry},${item.daysUntilExpiry},${item.stock} ${item.unit},${item.location}\n`;
+        csvContent += `${item.sku},${item.name},${item.category},${item.expiry},${item.expiryPeriod || 'N/A'},${item.daysUntilExpiry},${item.stock} ${item.unit},${item.location}\n`;
       });
 
       filename = "expiring_items_report.csv";
@@ -466,6 +480,32 @@ export function StockControl() {
                 <option value="medium">Medium Stock (31% - 70%)</option>
                 <option value="healthy">Healthy Stock (71% - 100%)</option>
                 <option value="overstock">Overstock</option>
+              </select>
+            </>
+          )}
+          {viewType === "expiring" && (
+            <>
+              <select
+                value={expiryDateFilter}
+                onChange={(e) => setExpiryDateFilter(e.target.value)}
+                className="px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all appearance-none cursor-pointer"
+              >
+                <option value="all">All Expiry Dates</option>
+                <option value="expired">Expired</option>
+                <option value="today">Expires Today</option>
+                <option value="tomorrow">Expires Tomorrow</option>
+                <option value="next3">Within 3 Days</option>
+                <option value="next7">Within 7 Days</option>
+              </select>
+              <select
+                value={expiryPeriodFilter}
+                onChange={(e) => setExpiryPeriodFilter(e.target.value)}
+                className="px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all appearance-none cursor-pointer"
+              >
+                <option value="all">All Expiry Periods</option>
+                {expiryPeriodOptions.map((period) => (
+                  <option key={period} value={period}>{period}</option>
+                ))}
               </select>
             </>
           )}
@@ -640,6 +680,10 @@ export function StockControl() {
                         <div>
                           <p className="text-xs text-muted-foreground mb-1">Expiry Date</p>
                           <p className="text-sm font-medium text-foreground">{item.expiry}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground mb-1">Expiry Period</p>
+                          <p className="text-sm font-medium text-foreground">{item.expiryPeriod || "Not specified"}</p>
                         </div>
                         <div>
                           <p className="text-xs text-muted-foreground mb-1">Days Until Expiry</p>

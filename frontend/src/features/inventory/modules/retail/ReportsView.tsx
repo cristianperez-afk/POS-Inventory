@@ -52,7 +52,6 @@ export function ReportsView() {
     queryFn: () => getItemsSoldReport({ module: 'RETAIL', from: soldFrom || undefined, to: soldTo || undefined }),
   });
   const sold = soldQuery.data;
-  const [dateRange, setDateRange] = useState<'7days' | '30days' | '3months' | 'year' | 'all'>('30days');
   const [selectedLocation, setSelectedLocation] = useState<string>('all');
 
   const isAdmin = currentUser?.role === 'Admin';
@@ -474,17 +473,20 @@ export function ReportsView() {
           <p className="text-[14px] text-muted-foreground mt-1">Comprehensive system reports and insights</p>
         </div>
         <div className="flex gap-3">
-          <select
-            value={dateRange}
-            onChange={(e) => setDateRange(e.target.value as any)}
-            className="bg-white border border-border rounded-[8px] px-4 py-2 text-[14px] text-foreground"
-          >
-            <option value="7days">Last 7 Days</option>
-            <option value="30days">Last 30 Days</option>
-            <option value="3months">Last 3 Months</option>
-            <option value="year">This Year</option>
-            <option value="all">All Time</option>
-          </select>
+          <label className="text-[12px] text-muted-foreground">
+            From
+            <input type="date" value={soldFrom} onChange={e => setSoldFrom(e.target.value)}
+              className="block mt-1 bg-white border border-border rounded-[8px] px-3 py-2 text-[14px] text-foreground" />
+          </label>
+          <label className="text-[12px] text-muted-foreground">
+            To
+            <input type="date" value={soldTo} onChange={e => setSoldTo(e.target.value)}
+              className="block mt-1 bg-white border border-border rounded-[8px] px-3 py-2 text-[14px] text-foreground" />
+          </label>
+          {(soldFrom || soldTo) && (
+            <button onClick={() => { setSoldFrom(''); setSoldTo(''); }}
+              className="self-end px-3 py-2 text-[14px] text-muted-foreground hover:text-foreground">Clear</button>
+          )}
           <select
             value={selectedLocation}
             onChange={(e) => setSelectedLocation(e.target.value)}

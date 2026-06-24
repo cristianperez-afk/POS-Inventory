@@ -16,6 +16,7 @@ import {
   useDomainMutation,
   useStockMovementsQuery,
 } from '../domainQueries';
+import { isRecentlyAdded } from '../../../app/utils/format';
 
 const toDateInput = (value?: string | null) => {
   if (!value) return '';
@@ -24,9 +25,10 @@ const toDateInput = (value?: string | null) => {
 };
 
 async function getRestaurantInventory() {
+  // Inventory tracks raw ingredients and supplies only. Finished MENU_ITEM dishes
+  // (recipes/menu items) are managed on the menu/recipe screens, not here.
   const groups = await Promise.all([
     getInventory({ itemType: 'INGREDIENT' }),
-    getInventory({ itemType: 'MENU_ITEM' }),
     getInventory({ itemType: 'SUPPLY' }),
   ]);
   return groups.flat();
@@ -52,10 +54,13 @@ export function mapRestaurantInventory(items: ApiInventoryItem[]) {
     price: item.price ?? 0,
     condition: item.condition ?? 'Good',
     expiry: toDateInput(item.expiryDate),
+    expiryPeriod: item.expiryPeriod ?? '',
     location: item.location?.name ?? 'Unassigned',
     unit: item.unit ?? 'pcs',
     storageTemperature: item.storageTemperature ?? 'Dry Storage',
     isActive: item.isActive ?? true,
+    isRecent: isRecentlyAdded(item.createdAt ?? item.dateAdded),
+    addedDate: item.createdAt ?? item.dateAdded ?? '',
   }));
 }
 
@@ -178,7 +183,8 @@ export function useRestaurantIngredientConsumptionQuery(range?: { from?: string;
 export function useCreateRestaurantInventoryMutation() {
   return useDomainMutation(
     (data: Record<string, unknown>) => createInventoryItem(data),
-    [domainQueryKeys.inventory, domainQueryKeys.stockMovements],
+    // restaurantSettings: a new item may auto-register a CATEGORY_HIERARCHY entry.
+    [domainQueryKeys.inventory, domainQueryKeys.stockMovements, domainQueryKeys.restaurantSettings],
   );
 }
 
