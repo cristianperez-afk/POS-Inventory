@@ -60,7 +60,7 @@ export default function StockAdjustmentsView({
   const adjustments = adjustmentsQuery.data ?? [];
   const loading = itemsQuery.isLoading || locationsQuery.isLoading || adjustmentsQuery.isLoading;
 
-  const canReview = currentUser?.role === 'Admin' || currentUser?.role === 'Manager';
+  const canReview = currentUser?.role === 'Admin';
 
   const [itemSearch, setItemSearch] = useState('');
   const [itemId, setItemId] = useState('');
@@ -318,7 +318,7 @@ export default function StockAdjustmentsView({
             {createMutation.isPending ? 'Submitting…' : 'Submit for Approval'}
           </button>
           <p className="text-[11px] text-muted-foreground mt-2">
-            Adjustments are recorded as <span className="font-medium">pending</span> and only change stock once an Admin or Manager approves them.
+            Adjustments are recorded as <span className="font-medium">pending</span> and only change stock once an Inventory Manager approves them.
           </p>
         </div>
 
@@ -445,3 +445,4 @@ function AdjustmentCard({
     </div>
   );
 }
+

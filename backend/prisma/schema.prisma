@@ -18,7 +18,6 @@ enum BusinessModule {
 
 enum UserRole {
   Admin
-  Manager
   Staff
   Cashier
   KitchenStaff

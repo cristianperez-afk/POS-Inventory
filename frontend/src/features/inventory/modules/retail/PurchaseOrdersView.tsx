@@ -357,7 +357,7 @@ export default function PurchaseOrdersView({
 
   const filteredOrders = orders.filter(o => filterStatus === 'all' || o.status === filterStatus);
   const submittedPOs = orders.filter(o => o.status === 'SUBMITTED');
-  const isAdmin = currentUser?.role === 'Admin' || currentUser?.role === 'Manager';
+  const isAdmin = currentUser?.role === 'Admin';
 
   const stats = {
     total: orders.length,
@@ -1091,3 +1091,4 @@ export default function PurchaseOrdersView({
 }
 
 // Products Received View
+

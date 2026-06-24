@@ -61,8 +61,15 @@ type StoreInformation = {
   updated_at: Date | string | null;
 };
 
-type StaffType = 'POS_STAFF' | 'INVENTORY_STAFF' | 'MANAGER';
-type StaffRole = 'STAFF' | 'POS_ADMIN' | 'INVENTORY_ADMIN';
+type StaffType = 'POS_STAFF' | 'INVENTORY_STAFF';
+type StaffRole = 'STAFF' | 'POS_MANAGER' | 'INVENTORY_MANAGER';
+
+const LEGACY_STORE_ADMIN_ROLES = ['ADMIN'] as const;
+const STORE_MANAGER_ROLES = ['POS_MANAGER', 'INVENTORY_MANAGER'] as const;
+const STORE_STAFF_ROLES = ['STAFF'] as const;
+const STORE_USER_ROLES = [...STORE_STAFF_ROLES, ...STORE_MANAGER_ROLES] as const;
+const STORE_USER_ROLES_WITH_LEGACY_SQL = "'STAFF', 'POS_MANAGER', 'INVENTORY_MANAGER', 'POS_ADMIN', 'INVENTORY_ADMIN'";
+const STORE_ADMIN_ROLES_WITH_LEGACY_SQL = "'POS_MANAGER', 'INVENTORY_MANAGER', 'ADMIN'";
 
 @Injectable()
 export class DatabaseService implements OnModuleInit, OnModuleDestroy {
@@ -188,6 +195,18 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  private isStoreManagerRole(role: unknown) {
+    return role === 'POS_MANAGER' || role === 'INVENTORY_MANAGER' || role === 'ADMIN';
+  }
+
+  private isPosManagerRole(role: unknown) {
+    return role === 'POS_MANAGER' || role === 'ADMIN';
+  }
+
+  private isInventoryManagerRole(role: unknown) {
+    return role === 'INVENTORY_MANAGER' || role === 'ADMIN';
+  }
+
   async getLoginUserByEmail(email: string): Promise<AuthenticatedUser & { password_hash: string } | null> {
     const schema = await this.getSchemaColumns();
     const userColumns = this.resolveUserColumns(schema.users);
@@ -290,7 +309,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ${this.userStatusSelect(userColumns)}
         FROM users u
         ${storeJoin}
-        WHERE u.${this.quoteIdentifier(userColumns.roleColumn)} = 'ADMIN'
+        WHERE u.${this.quoteIdentifier(userColumns.roleColumn)} IN (${STORE_ADMIN_ROLES_WITH_LEGACY_SQL})
         ORDER BY u.id ASC
       `,
     );
@@ -341,7 +360,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       const storeId = storeRows[0]?.id ?? null;
 
       const userInsertColumns: string[] = [this.quoteIdentifier(userColumns.fullNameColumn!), 'email', this.quoteIdentifier(userColumns.roleColumn!), this.quoteIdentifier(userColumns.passwordColumn!)];
-      const userInsertValues: unknown[] = [input.fullName, input.email, 'ADMIN', passwordHash];
+      const userInsertValues: unknown[] = [input.fullName, input.email, 'POS_MANAGER', passwordHash];
       const userInsertPlaceholders: string[] = ['$1', '$2', '$3', '$4'];
 
       if (userColumns.storeIdColumn) {
@@ -397,7 +416,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async updateAdminAccount(input: { adminUserId: number; fullName: string; email: string; storeType: 'RESTAURANT' | 'RETAIL_STORE'; password?: string }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Admin account was not found.');
     }
 
@@ -463,7 +482,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     const admin = await this.getUserStoreScope(adminUserId);
 
-    if (admin.role !== 'ADMIN') {
+    if (!this.isStoreManagerRole(admin.role)) {
       throw new NotFoundException('Admin account was not found.');
     }
 
@@ -485,7 +504,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     const admin = await this.getUserStoreScope(adminUserId);
 
-    if (admin.role !== 'ADMIN') {
+    if (!this.isStoreManagerRole(admin.role)) {
       throw new NotFoundException('Admin account was not found.');
     }
 
@@ -516,7 +535,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     const admin = await this.getUserStoreScope(adminUserId);
 
-    if (admin.role !== 'ADMIN') {
+    if (!this.isStoreManagerRole(admin.role)) {
       throw new NotFoundException('Admin account was not found.');
     }
 
@@ -564,7 +583,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ${this.userStatusSelect(userColumns)}
         FROM users u
         ${storeJoin}
-        WHERE u.${this.quoteIdentifier(userColumns.roleColumn)} IN ('STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN')
+        WHERE u.${this.quoteIdentifier(userColumns.roleColumn)} IN (${STORE_USER_ROLES_WITH_LEGACY_SQL})
           AND u.${this.quoteIdentifier(userColumns.storeIdColumn)} = $1
         ORDER BY u.id ASC
       `,
@@ -582,8 +601,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
-      throw new InternalServerErrorException('Only store admin accounts can create staff.');
+    if (!this.isPosManagerRole(admin.role) || !admin.store_id) {
+      throw new InternalServerErrorException('Only POS Manager accounts can create staff.');
     }
 
     const schema = await this.getSchemaColumns();
@@ -636,8 +655,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
-      throw new InternalServerErrorException('Only store admin accounts can update staff.');
+    if (!this.isPosManagerRole(admin.role) || !admin.store_id) {
+      throw new InternalServerErrorException('Only POS Manager accounts can update staff.');
     }
 
     const schema = await this.getSchemaColumns();
@@ -681,7 +700,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             UPDATE users
             SET ${updates.join(', ')}
             WHERE id = ${staffIdParam}
-              AND ${this.quoteIdentifier(userColumns.roleColumn)} IN ('STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN')
+              AND ${this.quoteIdentifier(userColumns.roleColumn)} IN (${STORE_USER_ROLES_WITH_LEGACY_SQL})
               AND ${this.quoteIdentifier(userColumns.storeIdColumn)} = ${storeIdParam}
             RETURNING *
           )
@@ -727,8 +746,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
-      throw new ForbiddenException('Only store admin accounts can remove staff for their store.');
+    if (!this.isPosManagerRole(admin.role) || !admin.store_id) {
+      throw new ForbiddenException('Only POS Manager accounts can remove staff for their store.');
     }
 
     const schema = await this.getSchemaColumns();
@@ -776,8 +795,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
-      throw new ForbiddenException('Only store admin accounts can remove staff for their store.');
+    if (!this.isPosManagerRole(admin.role) || !admin.store_id) {
+      throw new ForbiddenException('Only POS Manager accounts can remove staff for their store.');
     }
 
     const schema = await this.getSchemaColumns();
@@ -811,8 +830,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
-      throw new ForbiddenException('Only store admin accounts can activate staff for their store.');
+    if (!this.isPosManagerRole(admin.role) || !admin.store_id) {
+      throw new ForbiddenException('Only POS Manager accounts can activate staff for their store.');
     }
 
     const schema = await this.getSchemaColumns();
@@ -834,7 +853,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async getStoreInformationForAdmin(adminUserId: number): Promise<StoreInformation> {
     const user = await this.getUserStoreScope(adminUserId);
 
-    if (!['ADMIN', 'STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN'].includes(String(user.role)) || !user.store_id) {
+    if (![...LEGACY_STORE_ADMIN_ROLES, ...STORE_USER_ROLES, 'POS_ADMIN', 'INVENTORY_ADMIN'].includes(String(user.role) as any) || !user.store_id) {
       throw new InternalServerErrorException('Only store users can view store information.');
     }
 
@@ -891,7 +910,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   }): Promise<StoreInformation> {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can update store information.');
     }
 
@@ -997,7 +1016,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can update store settings.');
     }
 
@@ -1074,7 +1093,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async createDiscountSettingForAdmin(input: { adminUserId: number; discountName: string; discountRate: number; isEnabled: boolean }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can create discount settings.');
     }
 
@@ -1093,7 +1112,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async updateDiscountSettingForAdmin(input: { adminUserId: number; discountId: number; discountName: string; discountRate: number; isEnabled: boolean }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can update discount settings.');
     }
 
@@ -1121,7 +1140,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async deleteDiscountSettingForAdmin(input: { adminUserId: number; discountId: number }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can delete discount settings.');
     }
 
@@ -1145,7 +1164,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async listCategoriesForAdmin(adminUserId: number) {
     const admin = await this.getUserStoreScope(adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can view categories.');
     }
 
@@ -1164,7 +1183,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async createCategoryForAdmin(input: { adminUserId: number; name: string; description: string | null }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id || !admin.store_type) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id || !admin.store_type) {
       throw new InternalServerErrorException('Only store admin accounts can create categories.');
     }
 
@@ -1183,7 +1202,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async updateCategoryForAdmin(input: { adminUserId: number; categoryId: number; name: string; description: string | null }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can update categories.');
     }
 
@@ -1210,7 +1229,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async deleteCategoryForAdmin(input: { adminUserId: number; categoryId: number }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can delete categories.');
     }
 
@@ -1230,7 +1249,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async listProductsForAdmin(adminUserId: number) {
     const admin = await this.getUserStoreScope(adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can view products.');
     }
 
@@ -1303,7 +1322,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async createProductForAdmin(input: any) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id || !admin.store_type) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id || !admin.store_type) {
       throw new InternalServerErrorException('Only store admin accounts can create products.');
     }
 
@@ -1356,7 +1375,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async updateProductForAdmin(input: any) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can update products.');
     }
 
@@ -1430,7 +1449,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async deleteProductForAdmin(input: { adminUserId: number; productId: number }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can delete products.');
     }
 
@@ -1450,7 +1469,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async listIngredientsForAdmin(adminUserId: number) {
     const admin = await this.getUserStoreScope(adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can view ingredients.');
     }
 
@@ -1468,7 +1487,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async createIngredientForAdmin(input: any) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can create ingredients.');
     }
 
@@ -1497,7 +1516,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async updateIngredientForAdmin(input: any) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can update ingredients.');
     }
 
@@ -1537,7 +1556,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async deleteIngredientForAdmin(input: { adminUserId: number; ingredientId: number }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can delete ingredients.');
     }
 
@@ -1557,7 +1576,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async listIngredientAlternativesForAdmin(adminUserId: number) {
     const admin = await this.getUserStoreScope(adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can view ingredient alternatives.');
     }
 
@@ -1589,7 +1608,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async createIngredientAlternativeForAdmin(input: any) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can create ingredient alternatives.');
     }
 
@@ -1637,7 +1656,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async updateIngredientAlternativeForAdmin(input: any) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can update ingredient alternatives.');
     }
 
@@ -1694,7 +1713,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async deleteIngredientAlternativeForAdmin(input: { adminUserId: number; alternativeId: number }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can delete ingredient alternatives.');
     }
 
@@ -1714,7 +1733,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async listInventoryDeductionsForAdmin(adminUserId: number) {
     const admin = await this.getUserStoreScope(adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can view inventory history.');
     }
 
@@ -1756,7 +1775,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async listProductIngredientsForAdmin(input: { adminUserId: number; productId: number }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can view product ingredients.');
     }
 
@@ -2861,8 +2880,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     if (!user.store_id || !user.store_type) {
       throw new InternalServerErrorException('User account is not linked to a store.');
     }
-    if (user.role === 'ADMIN') {
-      throw new ForbiddenException('Admin accounts can only view orders and receipts. Payment processing is restricted to POS staff.');
+    if (this.isInventoryManagerRole(user.role)) {
+      throw new ForbiddenException('Inventory Manager accounts can only view inventory workflows. Payment processing is restricted to POS Manager or POS Staff accounts.');
     }
 
     try {
@@ -3024,8 +3043,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       input.paymentStatus === 'PAID' ||
       input.paymentStatus === 'VOIDED' ||
       input.paymentStatus === 'REFUNDED';
-    if (user.role === 'ADMIN' && isRestrictedTransactionUpdate) {
-      throw new ForbiddenException('Admin accounts can only view orders and receipts. Payment, refund, and void processing is restricted to POS staff.');
+    if (this.isInventoryManagerRole(user.role) && isRestrictedTransactionUpdate) {
+      throw new ForbiddenException('Inventory Manager accounts can only view inventory workflows. Payment, refund, and void processing is restricted to POS Manager or POS Staff accounts.');
     }
 
     const updates: string[] = [];
@@ -4743,8 +4762,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           UPDATE users
           SET ${activeAssignment}
           WHERE (
-            (id = $1 AND ${roleColumn} = 'ADMIN')
-            OR (${roleColumn} IN ('STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN') AND ${storeIdColumn} = $2)
+            (id = $1 AND ${roleColumn} IN (${STORE_ADMIN_ROLES_WITH_LEGACY_SQL}))
+            OR (${roleColumn} IN (${STORE_USER_ROLES_WITH_LEGACY_SQL}) AND ${storeIdColumn} = $2)
           )
           RETURNING id
         `,
@@ -4763,7 +4782,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         UPDATE users
         SET ${activeAssignment}
         WHERE id = $1
-          AND ${roleColumn} = 'ADMIN'
+          AND ${roleColumn} IN (${STORE_ADMIN_ROLES_WITH_LEGACY_SQL})
         RETURNING id
       `,
       [adminUserId],
@@ -4795,8 +4814,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           UPDATE users
           SET ${activeAssignment}
           WHERE (
-            (id = $1 AND ${roleColumn} = 'ADMIN')
-            OR (${roleColumn} IN ('STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN') AND ${storeIdColumn} = $2)
+            (id = $1 AND ${roleColumn} IN (${STORE_ADMIN_ROLES_WITH_LEGACY_SQL}))
+            OR (${roleColumn} IN (${STORE_USER_ROLES_WITH_LEGACY_SQL}) AND ${storeIdColumn} = $2)
           )
           RETURNING id
         `,
@@ -4815,7 +4834,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         UPDATE users
         SET ${activeAssignment}
         WHERE id = $1
-          AND ${roleColumn} = 'ADMIN'
+          AND ${roleColumn} IN (${STORE_ADMIN_ROLES_WITH_LEGACY_SQL})
         RETURNING id
       `,
       [adminUserId],
@@ -4846,7 +4865,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         UPDATE users
         SET ${activeAssignment}
         WHERE id = $1
-          AND ${roleColumn} IN ('STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN')
+          AND ${roleColumn} IN (${STORE_USER_ROLES_WITH_LEGACY_SQL})
           AND ${storeIdColumn} = $2
         RETURNING id
       `,
@@ -4872,7 +4891,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         UPDATE users
         SET ${activeAssignment}
         WHERE id = $1
-          AND ${roleColumn} IN ('STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN')
+          AND ${roleColumn} IN (${STORE_USER_ROLES_WITH_LEGACY_SQL})
           AND ${storeIdColumn} = $2
         RETURNING id
       `,
@@ -4931,7 +4950,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         `
           DELETE FROM users
           WHERE id = $1
-            AND ${this.quoteIdentifier(userColumns.roleColumn)} IN ('STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN')
+            AND ${this.quoteIdentifier(userColumns.roleColumn)} IN (${STORE_USER_ROLES_WITH_LEGACY_SQL})
             AND ${this.quoteIdentifier(userColumns.storeIdColumn)} = $2
           RETURNING id
         `,
@@ -4943,8 +4962,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   }
 
   private staffTypeForRole(role: StaffRole, staffType: StaffType): StaffType {
-    if (role === 'POS_ADMIN') return 'POS_STAFF';
-    if (role === 'INVENTORY_ADMIN') return 'INVENTORY_STAFF';
+    if (role === 'POS_MANAGER') return 'POS_STAFF';
+    if (role === 'INVENTORY_MANAGER') return 'INVENTORY_STAFF';
     return staffType;
   }
 
@@ -5015,3 +5034,4 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return Math.random().toString(36).slice(-10);
   }
 }
+

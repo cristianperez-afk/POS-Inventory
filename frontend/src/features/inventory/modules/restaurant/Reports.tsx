@@ -105,7 +105,7 @@ export function Reports() {
   const [selectedSubCategory, setSelectedSubCategory] = useState("all");
 
   const isAdmin = currentUser?.role === "Admin";
-  const hasFullAuditTrailAccess = currentUser?.role === "Admin" || currentUser?.role === "Manager";
+  const hasFullAuditTrailAccess = currentUser?.role === "Admin";
   const currentUserEmail = currentUser?.email ?? "";
 
   const { data: products = [] } = useRestaurantInventoryQuery();
@@ -1384,7 +1384,7 @@ export function Reports() {
                 <p className="text-2xl font-bold text-red-700">{confidentialData.byRole['admin'] || 0}</p>
               </div>
               <div className="p-4 bg-green-50 rounded-xl">
-                <p className="text-xs text-green-700 mb-1">Staff / Manager</p>
+                <p className="text-xs text-green-700 mb-1">Staff / Inventory Manager</p>
                 <p className="text-2xl font-bold text-green-700">
                   {(confidentialData.byRole['staff'] || 0) + (confidentialData.byRole['manager'] || 0)}
                 </p>
@@ -1453,3 +1453,4 @@ export function Reports() {
     </div>
   );
 }
+
