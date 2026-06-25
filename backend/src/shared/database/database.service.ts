@@ -2519,10 +2519,13 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       ingredientsByProduct.set(Number(ingredient.product_id), list);
     }
 
-    return products.map((product) => ({
+    const modifiersByProduct = await this.withModifierStock(user.store_id, products.map((product) => product.modifiers));
+
+    return products.map((product, index) => ({
       ...product,
       available_orders: product.available_orders ?? product.available_quantity,
       availableOrders: product.availableOrders ?? product.available_quantity,
+      modifiers: modifiersByProduct[index],
       ingredients: ingredientsByProduct.get(Number(product.id)) ?? [],
     }));
   }
@@ -2655,7 +2658,45 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       rows[0].ingredients = recipeRows;
     }
 
+    rows[0].modifiers = (await this.withModifierStock(user.store_id, [rows[0].modifiers]))[0];
+
     return rows[0];
+  }
+
+  private async withModifierStock(storeId: number, modifierGroups: any[][]) {
+    const itemIds = Array.from(new Set(
+      modifierGroups.flatMap((modifiers) =>
+        (Array.isArray(modifiers) ? modifiers : [])
+          .map((modifier) => modifier?.itemId)
+          .filter(Boolean),
+      ),
+    ));
+    if (itemIds.length === 0) return modifierGroups.map((modifiers) => Array.isArray(modifiers) ? modifiers : []);
+
+    const rows = await this.query<any>(
+      `
+        SELECT inventory_item_id, ingredient_name, quantity_available, unit, COALESCE(is_available, TRUE) AS is_available
+        FROM ingredients_inventory
+        WHERE store_id = $1
+          AND inventory_item_id = ANY($2::text[])
+      `,
+      [storeId, itemIds],
+    );
+    const stockByItemId = new Map(rows.map((row) => [String(row.inventory_item_id), row]));
+
+    return modifierGroups.map((modifiers) =>
+      (Array.isArray(modifiers) ? modifiers : []).map((modifier) => {
+        const stock = stockByItemId.get(String(modifier?.itemId ?? ''));
+        const available = Boolean(stock?.is_available) && Number(stock?.quantity_available ?? 0) > 0;
+        return {
+          ...modifier,
+          itemName: modifier.itemName ?? stock?.ingredient_name,
+          quantityAvailable: stock ? Number(stock.quantity_available ?? 0) : null,
+          unit: stock?.unit ?? modifier.unit,
+          stockStatus: modifier.itemId || modifier.requiresStock ? (available ? 'available' : 'unavailable') : 'untracked',
+        };
+      }),
+    );
   }
 
   async listPosIngredients(userId: number) {
@@ -3209,7 +3250,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             item.color ?? null,
             item.quantity ?? 1,
             item.price ?? 0,
-            (item.price ?? 0) * (item.quantity ?? 1),
+            item.lineTotal ?? ((item.price ?? 0) * (item.quantity ?? 1)),
             item.orderType ?? null,
             item.notes ?? null,
             Number.isFinite(Number(item.prepTimeMinutes ?? item.prep_time_minutes)) ? Number(item.prepTimeMinutes ?? item.prep_time_minutes) : null,

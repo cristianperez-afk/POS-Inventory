@@ -47,9 +47,16 @@ interface Ingredient {
 interface Modifier {
   id: string;
   name: string;
-  type: 'remove';
+  group?: string;
+  type: 'remove' | 'note';
   itemId?: string;
   itemName?: string;
+  quantityAvailable?: number | null;
+  unit?: string;
+  stockStatus?: 'available' | 'unavailable' | 'untracked';
+  requiresStock?: boolean;
+  priceDelta?: number;
+  priceDeltaPercent?: number;
 }
 
 interface MenuProduct {
@@ -235,9 +242,16 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
         ? product.modifiers.map((modifier: any): Modifier => ({
             id: String(modifier.id),
             name: String(modifier.name),
-            type: 'remove',
+            group: String(modifier.group ?? 'Modifiers'),
+            type: modifier.type === 'note' ? 'note' : 'remove',
             itemId: modifier.itemId,
             itemName: modifier.itemName,
+            quantityAvailable: modifier.quantityAvailable,
+            unit: modifier.unit,
+            stockStatus: modifier.stockStatus,
+            requiresStock: modifier.requiresStock,
+            priceDelta: Number(modifier.priceDelta ?? 0),
+            priceDeltaPercent: Number(modifier.priceDeltaPercent ?? 0),
           }))
         : [],
     }));
@@ -324,9 +338,16 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
           ? modifiers.map((modifier: any): Modifier => ({
               id: String(modifier.id),
               name: String(modifier.name),
-              type: 'remove',
+              group: String(modifier.group ?? 'Modifiers'),
+              type: modifier.type === 'note' ? 'note' : 'remove',
               itemId: modifier.itemId,
               itemName: modifier.itemName,
+              quantityAvailable: modifier.quantityAvailable,
+              unit: modifier.unit,
+              stockStatus: modifier.stockStatus,
+              requiresStock: modifier.requiresStock,
+              priceDelta: Number(modifier.priceDelta ?? 0),
+              priceDeltaPercent: Number(modifier.priceDeltaPercent ?? 0),
             }))
           : item.modifiers,
       };
@@ -534,6 +555,8 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
   const toggleModifier = (index: number, modifierId: string) => {
     setCart(cart.map((item, i) => {
       if (i !== index) return item;
+      const modifier = (item.modifiers ?? []).find((option) => option.id === modifierId);
+      if (modifier?.stockStatus === 'unavailable') return item;
       const selectedModifierIds = item.selectedModifierIds ?? [];
       const selected = selectedModifierIds.includes(modifierId);
       return {
@@ -660,7 +683,15 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
     return matchesCategory && matchesSearch;
   });
 
-  const itemAdditionalCost = (item: CartItem) => item.ingredients.reduce((sum, ingredient) => sum + Number(ingredient.additional_price ?? 0), 0) * item.quantity;
+  const modifierPrice = (item: CartItem) => (item.modifiers ?? [])
+    .filter((modifier) => (item.selectedModifierIds ?? []).includes(modifier.id))
+    .reduce((sum, modifier) => sum + Number(modifier.priceDelta ?? 0) + (item.price * (Number(modifier.priceDeltaPercent ?? 0) / 100)), 0);
+  const formatModifierPrice = (modifier: Modifier) => {
+    if (modifier.priceDeltaPercent) return `${modifier.priceDeltaPercent > 0 ? '+' : ''}${modifier.priceDeltaPercent}%`;
+    if (modifier.priceDelta) return `${modifier.priceDelta > 0 ? '+' : '-'}₱${Math.abs(modifier.priceDelta)}`;
+    return '';
+  };
+  const itemAdditionalCost = (item: CartItem) => (item.ingredients.reduce((sum, ingredient) => sum + Number(ingredient.additional_price ?? 0), 0) + modifierPrice(item)) * item.quantity;
   const itemLineTotal = (item: CartItem) => (item.price * item.quantity) + itemAdditionalCost(item);
   function applySelectedModifiers(item: CartItem) {
     const selectedModifierIds = item.selectedModifierIds ?? [];
@@ -803,6 +834,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
     categoryName: posProducts.find((product) => product.id === item.id)?.categoryName ?? null,
     price: item.price,
     quantity: item.quantity,
+    lineTotal: itemLineTotal(item),
     orderType: item.orderType,
     notes: item.notes,
     modifiers: (item.modifiers ?? []).filter((modifier) => (item.selectedModifierIds ?? []).includes(modifier.id)),
@@ -1999,16 +2031,45 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
               {(cart[customizeItemIndex].modifiers ?? []).length > 0 && (
                 <div className="mb-4">
                   <label className="block text-xs text-muted-foreground mb-2">Modifiers:</label>
-                  <div className="space-y-2">
-                    {(cart[customizeItemIndex].modifiers ?? []).map((modifier) => (
-                      <label key={modifier.id} className="flex items-center gap-2 rounded-lg border border-border p-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={(cart[customizeItemIndex].selectedModifierIds ?? []).includes(modifier.id)}
-                          onChange={() => toggleModifier(customizeItemIndex, modifier.id)}
-                        />
-                        <span>{modifier.name}</span>
-                      </label>
+                  <div className="space-y-3">
+                    {Object.entries((cart[customizeItemIndex].modifiers ?? []).reduce<Record<string, Modifier[]>>((groups, modifier) => {
+                      const group = modifier.group ?? 'Modifiers';
+                      groups[group] = [...(groups[group] ?? []), modifier];
+                      return groups;
+                    }, {})).map(([group, options]) => (
+                      <div key={group} className="rounded-lg border border-border p-3">
+                        <p className="mb-2 text-xs font-semibold text-foreground">{group}</p>
+                        <div className="space-y-2">
+                          {options.map((modifier) => {
+                            const disabled = modifier.stockStatus === 'unavailable';
+                            return (
+                              <label
+                                key={modifier.id}
+                                className={`flex items-center justify-between gap-2 rounded-lg border p-2 text-sm ${disabled ? 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400' : 'border-border hover:bg-muted/50'}`}
+                              >
+                                <span className="flex min-w-0 items-center gap-2">
+                                  <input
+                                    type="checkbox"
+                                    name={`modifier-${customizeItemIndex}-${group}`}
+                                    checked={(cart[customizeItemIndex].selectedModifierIds ?? []).includes(modifier.id)}
+                                    onChange={() => toggleModifier(customizeItemIndex, modifier.id)}
+                                    disabled={disabled}
+                                  />
+                                  <span className="truncate">
+                                    {modifier.name}
+                                    {formatModifierPrice(modifier) && <span className="ml-1 text-xs text-primary">{formatModifierPrice(modifier)}</span>}
+                                  </span>
+                                </span>
+                                {modifier.itemId && (
+                                  <span className="shrink-0 text-[10px] text-muted-foreground">
+                                    {disabled ? 'Out of stock' : `${Number(modifier.quantityAvailable ?? 0)} ${modifier.unit ?? ''}`}
+                                  </span>
+                                )}
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
                     ))}
                   </div>
                 </div>
