@@ -476,6 +476,20 @@ export class InventoryApiService {
               'unit', ri.unit,
               'unitCost', ri."unitCost",
               'totalCost', ri."totalCost",
+              'physicalStock', COALESCE(item.quantity, 0),
+              'usableStock',
+                CASE
+                  WHEN item."expiryDate" IS NOT NULL AND item."expiryDate"::date < CURRENT_DATE THEN 0
+                  ELSE COALESCE(item.quantity, 0)
+                END,
+              'stockStatus',
+                CASE
+                  WHEN item.id IS NULL THEN 'missing'
+                  WHEN item."expiryDate" IS NOT NULL AND item."expiryDate"::date < CURRENT_DATE THEN 'expired'
+                  WHEN COALESCE(item.quantity, 0) < ri.quantity THEN 'insufficient'
+                  WHEN COALESCE(item.quantity, 0) <= COALESCE(item."reorderPoint", item."minStock", 0) THEN 'low'
+                  ELSE 'available'
+                END,
               'item', row_to_json(item.*)
             )
             ORDER BY item.name

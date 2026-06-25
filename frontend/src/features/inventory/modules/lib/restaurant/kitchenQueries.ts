@@ -37,13 +37,16 @@ const calculateAvailableOrders = (
     inventoryQuantity?: number;
     quantity: number;
     inventoryStock?: number;
+    inventoryUsableStock?: number;
     inventoryExpiry?: string | null;
   }[],
 ) => {
   if (ingredients.length === 0) return 0;
   const values = ingredients.map((ingredient) => {
     const required = Number(ingredient.inventoryQuantity ?? ingredient.quantity);
-    const stock = isExpiredDate(ingredient.inventoryExpiry)
+    const stock = ingredient.inventoryUsableStock != null
+      ? Number(ingredient.inventoryUsableStock)
+      : isExpiredDate(ingredient.inventoryExpiry)
       ? 0
       : Number(ingredient.inventoryStock ?? 0);
     if (!Number.isFinite(required) || required <= 0) return 0;
@@ -66,8 +69,13 @@ export function useRestaurantRecipesQuery() {
           unit: ingredient.unit ?? ingredient.item?.unit ?? 'pcs',
           inventoryQuantity: ingredient.quantity,
           inventoryUnit: ingredient.item?.unit ?? ingredient.unit ?? 'pcs',
-          inventoryStock: Number(ingredient.item?.quantity ?? 0),
+          inventoryStock: Number(ingredient.physicalStock ?? ingredient.item?.quantity ?? 0),
+          inventoryUsableStock: Number(
+            ingredient.usableStock ??
+            (isExpiredDate(ingredient.item?.expiryDate) ? 0 : ingredient.item?.quantity ?? 0),
+          ),
           inventoryExpiry: ingredient.item?.expiryDate ?? null,
+          stockStatus: ingredient.stockStatus ?? (isExpiredDate(ingredient.item?.expiryDate) ? 'expired' : 'available'),
           unitCost: ingredient.unitCost ?? ingredient.item?.price ?? 0,
           totalCost:
             (ingredient.unitCost ?? ingredient.item?.price ?? 0) *

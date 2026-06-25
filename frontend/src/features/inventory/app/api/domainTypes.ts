@@ -274,6 +274,9 @@ export interface ApiRecipeIngredient {
   unit?: string | null;
   unitCost?: number | null;
   totalCost?: number | null;
+  physicalStock?: number;
+  usableStock?: number;
+  stockStatus?: 'available' | 'low' | 'insufficient' | 'expired' | 'missing';
 }
 
 export interface ApiRecipe {
