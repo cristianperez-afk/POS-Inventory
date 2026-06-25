@@ -111,6 +111,7 @@ export function Reports() {
   const { currentUser } = useSession();
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [expandedPosTransactions, setExpandedPosTransactions] = useState<Record<string, boolean>>({});
+  const [auditModuleFilter, setAuditModuleFilter] = useState('all');
   const [consumptionFrom, setConsumptionFrom] = useState('');
   const [consumptionTo, setConsumptionTo] = useState('');
   const consumptionQuery = useRestaurantIngredientConsumptionQuery({
@@ -448,6 +449,20 @@ export function Reports() {
     return { byModule, latest };
   }, [visibleAuditTrail]);
 
+  // Summary cards filter the activity table below by module; clicking the active
+  // card (or Total Events) clears it back to "all".
+  const toggleAuditModule = (module: string) => {
+    setAuditModuleFilter((current) => (current === module ? 'all' : module));
+  };
+
+  const filteredAuditTrail = useMemo(
+    () =>
+      auditModuleFilter === 'all'
+        ? visibleAuditTrail
+        : visibleAuditTrail.filter((entry) => entry.module === auditModuleFilter),
+    [visibleAuditTrail, auditModuleFilter],
+  );
+
   // ── Confidential ────────────────────────────────────────────────────────────
   const confidentialData = useMemo(() => {
     if (!isAdmin) return null;
@@ -579,12 +594,12 @@ export function Reports() {
 
   // ── Tab button helper ───────────────────────────────────────────────────────
   const tabCls = (id: TabType, danger = false) =>
-    `px-6 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${
+    `px-6 py-3 text-sm font-medium border-b-2 rounded-t-lg transition-all duration-200 flex items-center gap-2 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${
       activeTab === id
         ? danger
           ? 'text-red-600 border-red-600'
           : 'text-primary border-primary'
-        : 'text-muted-foreground border-transparent hover:text-foreground'
+        : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/40 hover:border-border'
     }`;
 
   return (
@@ -599,12 +614,12 @@ export function Reports() {
           <label className="text-xs text-muted-foreground">
             From
             <input type="date" value={consumptionFrom} onChange={e => setConsumptionFrom(e.target.value)}
-              className="block mt-1 bg-card border border-border rounded-xl px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50" />
+              className="block mt-1 bg-card border border-border rounded-xl px-3 py-2 text-sm text-foreground cursor-pointer hover:border-primary/60 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all duration-200" />
           </label>
           <label className="text-xs text-muted-foreground">
             To
             <input type="date" value={consumptionTo} onChange={e => setConsumptionTo(e.target.value)}
-              className="block mt-1 bg-card border border-border rounded-xl px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50" />
+              className="block mt-1 bg-card border border-border rounded-xl px-3 py-2 text-sm text-foreground cursor-pointer hover:border-primary/60 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all duration-200" />
           </label>
           {(consumptionFrom || consumptionTo) && (
             <button onClick={() => { setConsumptionFrom(''); setConsumptionTo(''); }}
@@ -612,7 +627,7 @@ export function Reports() {
           )}
           <button
             onClick={handleExport}
-            className="bg-primary text-primary-foreground px-4 py-2 rounded-xl text-sm font-medium hover:opacity-90 transition-opacity flex items-center gap-2"
+            className="bg-primary text-primary-foreground px-4 py-2 rounded-xl text-sm font-medium hover:opacity-90 hover:-translate-y-0.5 hover:shadow-md hover:shadow-primary/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-sm transition-all duration-200 flex items-center gap-2"
           >
             <Download className="w-4 h-4" />
             Export
@@ -1203,18 +1218,28 @@ export function Reports() {
           </div>
 
           <div className="grid grid-cols-4 gap-4 mb-4">
-            <div className="bg-card border border-border rounded-2xl p-6">
-              <p className="text-muted-foreground text-xs mb-2">Total Events</p>
-              <p className="text-2xl font-bold text-foreground">{visibleAuditTrail.length}</p>
-            </div>
-            <div className="bg-card border border-border rounded-2xl p-6">
-              <p className="text-muted-foreground text-xs mb-2">Inventory Events</p>
-              <p className="text-2xl font-bold text-primary">{auditSummary.byModule.Inventory || 0}</p>
-            </div>
-            <div className="bg-card border border-border rounded-2xl p-6">
-              <p className="text-muted-foreground text-xs mb-2">Receiving Events</p>
-              <p className="text-2xl font-bold text-green-700">{auditSummary.byModule['Goods Received'] || 0}</p>
-            </div>
+            {[
+              { label: 'Total Events', value: visibleAuditTrail.length, valueClass: 'text-foreground', module: 'all' },
+              { label: 'Inventory Events', value: auditSummary.byModule.Inventory || 0, valueClass: 'text-primary', module: 'Inventory' },
+              { label: 'Receiving Events', value: auditSummary.byModule['Goods Received'] || 0, valueClass: 'text-green-700', module: 'Goods Received' },
+            ].map((card) => {
+              const isActive = auditModuleFilter === card.module;
+              return (
+                <button
+                  key={card.label}
+                  type="button"
+                  onClick={() => toggleAuditModule(card.module)}
+                  aria-pressed={isActive}
+                  aria-label={`Filter audit trail by ${card.label}`}
+                  className={`group text-left w-full bg-card border rounded-2xl p-6 cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-xl hover:shadow-primary/25 hover:border-primary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-lg active:shadow-primary/30 ${
+                    isActive ? 'border-primary bg-primary/5 shadow-md shadow-primary/20' : 'border-border'
+                  }`}
+                >
+                  <p className="text-muted-foreground text-xs mb-2">{card.label}</p>
+                  <p className={`text-2xl font-bold ${card.valueClass}`}>{card.value}</p>
+                </button>
+              );
+            })}
             <div className="bg-card border border-border rounded-2xl p-6 overflow-hidden">
               <p className="text-muted-foreground text-xs mb-2">Latest Activity</p>
               <p className="text-sm font-semibold text-foreground break-words">{auditSummary.latest}</p>
@@ -1224,7 +1249,10 @@ export function Reports() {
           <div className="bg-card border border-border rounded-2xl p-6">
             <div className="flex items-center justify-between mb-4">
               <h4 className="text-base font-semibold text-foreground">Recent Activity</h4>
-              <p className="text-xs text-muted-foreground">{visibleAuditTrail.length} record{visibleAuditTrail.length !== 1 ? 's' : ''}</p>
+              <p className="text-xs text-muted-foreground">
+                {auditModuleFilter === 'all' ? '' : `${auditModuleFilter} • `}
+                {filteredAuditTrail.length} record{filteredAuditTrail.length !== 1 ? 's' : ''}
+              </p>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[900px]">
@@ -1241,14 +1269,14 @@ export function Reports() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {visibleAuditTrail.length === 0 ? (
+                  {filteredAuditTrail.length === 0 ? (
                     <tr>
                       <td colSpan={8} className="px-4 py-8 text-center text-sm text-muted-foreground">
                         No audit trail records found
                       </td>
                     </tr>
                   ) : (
-                    visibleAuditTrail.slice(0, 100).map(entry => (
+                    filteredAuditTrail.slice(0, 100).map(entry => (
                       <tr key={entry.id} className="hover:bg-muted/30 transition-colors">
                         <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">{formatAuditDate(entry.date)}</td>
                         <td className="px-4 py-3">

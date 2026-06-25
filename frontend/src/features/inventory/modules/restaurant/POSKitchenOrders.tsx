@@ -304,6 +304,13 @@ export function POSKitchenOrders() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [selectedOrder, setSelectedOrder] = useState<KitchenOrder | null>(null);
+
+  // Cards toggle the shared status filter that drives the order lanes below;
+  // clicking the active card (or Total Orders) clears it back to "all".
+  const toggleStatusFilter = (filter: StatusFilter) => {
+    setStatusFilter((current) => (current === filter ? "all" : filter));
+  };
+
   const [expandedOrders, setExpandedOrders] = useState<Record<string, boolean>>({});
   const { data: orderRecords = [], isLoading } = useRestaurantKitchenOrdersQuery();
   const updateStatus = useUpdateRestaurantKitchenOrderStatusMutation();
@@ -418,9 +425,11 @@ export function POSKitchenOrders() {
             <button
               key={stat.label}
               type="button"
-              onClick={() => setStatusFilter(stat.filter)}
-              className={`rounded-2xl border border-border bg-card p-5 text-left shadow-sm transition-all duration-200 hover:shadow-md ${
-                isActive ? "ring-2 ring-primary/40" : ""
+              onClick={() => toggleStatusFilter(stat.filter)}
+              aria-pressed={isActive}
+              aria-label={`Filter by ${stat.label}`}
+              className={`group text-left w-full rounded-2xl border bg-card p-5 shadow-sm cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-xl hover:shadow-primary/25 hover:border-primary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-lg active:shadow-primary/30 ${
+                isActive ? "border-primary bg-primary/5 shadow-md shadow-primary/20" : "border-border"
               }`}
             >
               <div className="mb-4 flex items-center justify-between">
@@ -434,41 +443,6 @@ export function POSKitchenOrders() {
             </button>
           );
         })}
-      </div>
-
-      <div className="mb-8 rounded-xl border border-border bg-card p-5 shadow-sm">
-        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="text-xl font-semibold text-foreground">Customer Order Status Display</h2>
-            <p className="text-sm text-muted-foreground">Queue preview for received, preparing, ready, completed, and cancelled orders.</p>
-          </div>
-          <span className="rounded-full border border-border bg-muted/40 px-3 py-1 text-xs font-medium text-muted-foreground">
-            Kitchen Side Preview
-          </span>
-        </div>
-
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-          {orders
-            .filter((order) => order.status !== "cancelled" || statusFilter === "cancelled")
-            .slice(0, 15)
-            .map((order) => (
-              <div key={`queue-${order.id}`} className={`rounded-lg border px-4 py-3 ${STATUS_STYLES[order.status]}`}>
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-base font-bold">Order #{order.orderNumber}</p>
-                  <span className="text-xs font-semibold">{STATUS_LABELS[order.status]}</span>
-                </div>
-                <p className="mt-1 text-xs opacity-80">{order.customerName || "Walk-in Customer"}</p>
-                <p className="mt-2 text-xs font-medium">
-                  Serve Time: {getRunningTime(order)}
-                </p>
-              </div>
-            ))}
-          {orders.length === 0 && (
-            <div className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground md:col-span-2 xl:col-span-5">
-              No customer queue orders yet.
-            </div>
-          )}
-        </div>
       </div>
 
       <div className="rounded-xl border border-border bg-card p-5 shadow-sm">

@@ -208,6 +208,8 @@ export default function App() {
     const RESTAURANT_NAV_MAP: Record<string, Page> = {
       'restaurant-purchase-orders': 'inventory-purchase-orders',
       'restaurant-food-inventory': 'inventory-items',
+      'restaurant-stock-alerts': 'inventory-stock-alerts',
+      'restaurant-pos-kitchen': 'inventory-pos-kitchen',
     };
     const handleRestaurantNavigate = (event: Event) => {
       const detail = (event as CustomEvent<string>).detail;
@@ -350,7 +352,7 @@ export default function App() {
                   inventoryEnabled={INVENTORY_MODULES_ENABLED}
                 />
               </div>
-              <InventoryModulePage currentPage={currentPage} currentUser={currentUser} />
+              <InventoryModulePage currentPage={currentPage} currentUser={currentUser} onNavigate={navigateTo} />
             </div>
           )}
               </TableProvider>

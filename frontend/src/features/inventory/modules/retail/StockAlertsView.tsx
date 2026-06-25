@@ -172,7 +172,7 @@ export function StockAlertsView() {
         <div className="flex border-b border-border">
           <button
             onClick={() => setActiveTab('low-stock')}
-            className={`flex items-center gap-2 px-6 py-3 text-[16px] font-medium transition-colors relative ${
+            className={`flex items-center gap-2 px-6 py-3 text-[16px] font-medium transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-secondary/50 relative ${
               activeTab === 'low-stock'
                 ? 'bg-warning/10 text-warning'
                 : 'text-foreground hover:bg-muted'
@@ -193,7 +193,7 @@ export function StockAlertsView() {
           </button>
           <button
             onClick={() => setActiveTab('stock-control')}
-            className={`flex items-center gap-2 px-6 py-3 text-[16px] font-medium transition-colors relative ${
+            className={`flex items-center gap-2 px-6 py-3 text-[16px] font-medium transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-secondary/50 relative ${
               activeTab === 'stock-control'
                 ? 'bg-accent/10 text-secondary'
                 : 'text-foreground hover:bg-muted'
@@ -214,7 +214,7 @@ export function StockAlertsView() {
           </button>
           <button
             onClick={() => setActiveTab('bad-condition')}
-            className={`flex items-center gap-2 px-6 py-3 text-[16px] font-medium transition-colors relative ${
+            className={`flex items-center gap-2 px-6 py-3 text-[16px] font-medium transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-secondary/50 relative ${
               activeTab === 'bad-condition'
                 ? 'bg-destructive/10 text-destructive'
                 : 'text-foreground hover:bg-muted'

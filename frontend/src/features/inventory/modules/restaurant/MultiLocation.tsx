@@ -231,13 +231,19 @@ export function MultiLocation() {
       matchesLocation = product.locations.some(loc => loc.location === selectedLocation);
     }
 
+    // "critical-out" is a combined alert filter (matches critical OR out-of-stock).
+    const statusMatches = (status: string) =>
+      statusFilter === "critical-out"
+        ? status === "critical" || status === "out-of-stock"
+        : status === statusFilter;
+
     let matchesStatus = true;
     if (statusFilter !== "all") {
       if (selectedLocation !== "all") {
         const locationStock = product.locations.find(loc => loc.location === selectedLocation);
-        matchesStatus = locationStock ? locationStock.status === statusFilter : false;
+        matchesStatus = locationStock ? statusMatches(locationStock.status) : false;
       } else {
-        matchesStatus = product.locations.some(loc => loc.status === statusFilter);
+        matchesStatus = product.locations.some(loc => statusMatches(loc.status));
       }
     }
 
@@ -304,11 +310,27 @@ export function MultiLocation() {
     );
   };
 
-  const stats = [
-    { label: "Total Locations", value: mergedLocations.length, icon: Building2, color: "from-blue-500 to-cyan-500" },
-    { label: "Total Products", value: products.length, icon: Package, color: "from-purple-500 to-indigo-500" },
-    { label: "Critical/Out Alerts", value: locations.reduce((sum, loc) => sum + loc.criticalItems, 0), icon: AlertCircle, color: "from-red-500 to-zinc-800" },
-    { label: "Low Stock Items", value: locations.reduce((sum, loc) => sum + loc.lowStockItems, 0), icon: TrendingDown, color: "from-orange-500 to-amber-500" },
+  // Cards drive the view + status filter below. Total Locations opens the
+  // Locations view; the others open the Products view filtered by stock status
+  // (clicking the active card clears the status filter back to "all").
+  const focusLocations = () => setViewMode("locations");
+  const focusProducts = (status: string) => {
+    setViewMode("products");
+    setStatusFilter((current) => (current === status ? "all" : status));
+  };
+
+  const stats: Array<{
+    label: string;
+    value: number;
+    icon: typeof Building2;
+    color: string;
+    view: "locations" | "products";
+    filter?: string;
+  }> = [
+    { label: "Total Locations", value: mergedLocations.length, icon: Building2, color: "from-blue-500 to-cyan-500", view: "locations" },
+    { label: "Total Products", value: products.length, icon: Package, color: "from-purple-500 to-indigo-500", view: "products", filter: "all" },
+    { label: "Critical/Out Alerts", value: locations.reduce((sum, loc) => sum + loc.criticalItems, 0), icon: AlertCircle, color: "from-red-500 to-zinc-800", view: "products", filter: "critical-out" },
+    { label: "Low Stock Items", value: locations.reduce((sum, loc) => sum + loc.lowStockItems, 0), icon: TrendingDown, color: "from-orange-500 to-amber-500", view: "products", filter: "low" },
   ];
 
   return (
@@ -322,7 +344,7 @@ export function MultiLocation() {
         {isAdmin && (
           <button
             onClick={() => setShowAddLocation(true)}
-            className="mt-4 md:mt-0 inline-flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-all text-sm font-medium"
+            className="mt-4 md:mt-0 inline-flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 hover:-translate-y-0.5 hover:shadow-md hover:shadow-primary/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-sm transition-all duration-200 text-sm font-medium"
           >
             <Plus className="w-4 h-4" />
             Add Location
@@ -334,8 +356,21 @@ export function MultiLocation() {
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
         {stats.map((stat, index) => {
           const Icon = stat.icon;
+          const isActive =
+            stat.view === "locations"
+              ? viewMode === "locations"
+              : viewMode === "products" && statusFilter === stat.filter;
           return (
-            <div key={index} className="bg-card rounded-2xl p-6 shadow-sm border border-border">
+            <button
+              key={index}
+              type="button"
+              onClick={() => (stat.view === "locations" ? focusLocations() : focusProducts(stat.filter!))}
+              aria-pressed={isActive}
+              aria-label={`Filter by ${stat.label}`}
+              className={`group text-left w-full bg-card rounded-2xl p-6 shadow-sm border cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-xl hover:shadow-primary/25 hover:border-primary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-lg active:shadow-primary/30 ${
+                isActive ? "border-primary bg-primary/5 shadow-md shadow-primary/20" : "border-border"
+              }`}
+            >
               <div className="flex items-center gap-3 mb-3">
                 <div className={`w-10 h-10 bg-gradient-to-br ${stat.color} rounded-xl flex items-center justify-center`}>
                   <Icon className="w-5 h-5 text-white" />
@@ -343,7 +378,7 @@ export function MultiLocation() {
               </div>
               <p className="text-muted-foreground text-sm mb-1">{stat.label}</p>
               <p className="text-2xl font-bold text-foreground">{stat.value}</p>
-            </div>
+            </button>
           );
         })}
       </div>
@@ -352,10 +387,10 @@ export function MultiLocation() {
       <div className="flex items-center gap-2 bg-muted rounded-xl p-1 mb-6 w-fit">
         <button
           onClick={() => setViewMode("products")}
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${
             viewMode === "products"
               ? "bg-primary text-white shadow-md"
-              : "text-muted-foreground hover:text-foreground"
+              : "text-muted-foreground hover:text-foreground hover:bg-background/70 hover:shadow-sm"
           }`}
         >
           <Package className="w-4 h-4 inline-block mr-2" />
@@ -363,10 +398,10 @@ export function MultiLocation() {
         </button>
         <button
           onClick={() => setViewMode("locations")}
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${
             viewMode === "locations"
               ? "bg-primary text-white shadow-md"
-              : "text-muted-foreground hover:text-foreground"
+              : "text-muted-foreground hover:text-foreground hover:bg-background/70 hover:shadow-sm"
           }`}
         >
           <MapPin className="w-4 h-4 inline-block mr-2" />
@@ -402,6 +437,7 @@ export function MultiLocation() {
               className="px-3 py-2 bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all appearance-none cursor-pointer text-sm"
             >
               <option value="all">All Status</option>
+              <option value="critical-out">Critical / Out of Stock</option>
               <option value="out-of-stock">Out of Stock</option>
               <option value="critical">Critical Stock (1% - 10%)</option>
               <option value="low">Low Stock (11% - 30%)</option>

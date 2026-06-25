@@ -120,7 +120,7 @@ export function InventoryView() {
               className="pl-10 pr-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] w-[300px] text-[14px] focus:outline-none focus:border-[#007A5E]"
             />
           </div>
-          <label className="flex items-center gap-2 px-3 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] text-[#323B42] cursor-pointer whitespace-nowrap">
+          <label className="flex items-center gap-2 px-3 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] text-[#323B42] cursor-pointer whitespace-nowrap hover:bg-[#F8FAFB] hover:border-[#007A5E]/40 hover:-translate-y-0.5 hover:shadow-sm focus-within:ring-2 focus-within:ring-[#007A5E]/40 active:translate-y-0 transition-all duration-200">
             <input
               type="checkbox"
               checked={showArchived}
@@ -132,7 +132,7 @@ export function InventoryView() {
           {isAdmin && (
             <button
               onClick={() => setShowInitialStockModal(true)}
-              className="px-4 py-2 bg-[#007A5E] text-white rounded-[8px] text-[14px] font-medium hover:bg-[#008967] transition-colors flex items-center gap-2"
+              className="px-4 py-2 bg-[#007A5E] text-white rounded-[8px] text-[14px] font-medium hover:bg-[#008967] hover:-translate-y-0.5 hover:shadow-md hover:shadow-[#007A5E]/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#007A5E]/50 active:translate-y-0 active:shadow-sm transition-all duration-200 flex items-center gap-2"
             >
               <PackagePlus className="size-5" />
               Initial Stock Setup
