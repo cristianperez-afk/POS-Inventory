@@ -79,7 +79,7 @@ const runningSeconds = (order: any, now: number) => {
   if (order.runningDuration !== null && order.runningDuration !== undefined && !order.isRunning) {
     return Number(order.runningDuration);
   }
-  const start = order.runningTimeStart ?? order.running_time_start ?? order.orderedAt ?? order.createdAt;
+  const start = order.runningTimeStart ?? order.running_time_start ?? order.preparingStartedAt;
   const end = order.runningTimeEnd ?? order.running_time_end ?? (order.isRunning ? undefined : order.completedAt);
   const startMs = start ? new Date(start).getTime() : NaN;
   const endMs = end ? new Date(end).getTime() : now;
@@ -227,7 +227,7 @@ export function Reports() {
   const posTransactions = useMemo(() =>
     (posOrders as any[]).map((order) => {
       const items = Array.isArray(order.items) ? order.items : [];
-      const orderedAt = order.runningTimeStart ?? order.running_time_start ?? order.orderedAt ?? order.createdAt ?? '';
+      const orderedAt = order.runningTimeStart ?? order.running_time_start ?? order.preparingStartedAt ?? '';
       const completedAt = ['completed', 'cancelled'].includes(String(order.status ?? '').toLowerCase())
         ? order.completedAt ?? order.tableEndedAt ?? order.updatedAt ?? orderedAt
         : undefined;

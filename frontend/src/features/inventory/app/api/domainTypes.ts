@@ -352,6 +352,7 @@ export interface ApiKitchenOrder {
   sale?: { id: string; transactionNumber: string } | null;
   items?: ApiKitchenOrderItem[];
   completedBy?: ApiActor | null;
+  orderedAt?: string | null;
   createdAt: string;
   updatedAt?: string;
   paymentAt?: string | null;
@@ -362,6 +363,10 @@ export interface ApiKitchenOrder {
   completedAt?: string | null;
   tableStartedAt?: string | null;
   tableEndedAt?: string | null;
+  runningTimeStart?: string | null;
+  runningTimeEnd?: string | null;
+  runningDuration?: number | string | null;
+  isRunning?: boolean | null;
 }
 
 export interface ApiCategory {

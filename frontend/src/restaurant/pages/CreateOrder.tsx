@@ -3,7 +3,7 @@ import { Sidebar } from '../../shared/components/Sidebar';
 import { Page, type StoreBrand } from '../../shared/App';
 import type { StaffType, StoreType } from '../../auth/types/auth';
 import { Banknote, Building2, Minus, Plus, Search, Edit2, Trash2, X, AlertCircle, Printer, Download, Users, Smartphone, Wallet, MoreVertical } from 'lucide-react';
-import { useOrders } from '../../shared/context/OrderContext';
+import { useOrders, type Order } from '../../shared/context/OrderContext';
 import { useTables } from '../../shared/context/TableContext';
 import { useStoreSettings } from '../../shared/context/StoreSettingsContext';
 import { ThermalReceipt } from '../../shared/components/ThermalReceipt';
@@ -111,8 +111,6 @@ function toOrderListFormat(order: any, paid: boolean) {
     ? order.tableNumbers.map((tableNumber: number) => `Table ${tableNumber}`).join(' + ')
     : order.isQueued ? 'Queue' : '—';
 
-  const hasAssignedTable = Boolean(order.tableNumber || (Array.isArray(order.tableNumbers) && order.tableNumbers.length > 0));
-
   return {
     orderNumber: order.orderNumber,
     customer: order.customerName,
@@ -124,7 +122,7 @@ function toOrderListFormat(order: any, paid: boolean) {
     discount: order.discount,
     discountType: discountTypeLabel,
     paymentStatus: paid ? 'Paid' as const : 'Not Paid' as const,
-    orderStatus: paid ? (hasAssignedTable ? 'Served' as const : 'Completed' as const) : 'Pending' as const,
+    orderStatus: 'Pending' as const,
     date: getLocalDateKey(now),
     time: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
     cashier: order.cashier,
@@ -703,15 +701,30 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
   const cartPrepMinutes = settings.prep_time_strategy === 'sequential'
     ? cart.reduce((sum, item) => sum + estimateItemMinutes(item), 0)
     : cart.reduce((max, item) => Math.max(max, estimateItemMinutes(item)), 0);
+  const estimateExistingOrderMinutes = (order: Order) => {
+    const itemMinutes = order.items.map((item) => {
+      const baseMinutes = Math.max(0, Number(item.prepTimeMinutes ?? 0));
+      const customizationMinutes = Math.max(0, Number(item.customizationPrepMinutes ?? 0));
+      const lineMinutes = baseMinutes + customizationMinutes;
+      const quantity = Math.max(1, Number(item.quantity ?? 1));
+      return lineMinutes > 0
+        ? settings.prep_time_strategy === 'sequential' ? lineMinutes * quantity : lineMinutes
+        : 5 * quantity;
+    });
+    if (itemMinutes.length === 0) return 0;
+    return settings.prep_time_strategy === 'sequential'
+      ? itemMinutes.reduce((sum, minutes) => sum + minutes, 0)
+      : Math.max(0, ...itemMinutes);
+  };
+  const remainingEstimateMinutes = (order: Order) => {
+    if (!['Pending', 'Preparing'].includes(order.orderStatus)) return 0;
+    const estimate = estimateExistingOrderMinutes(order);
+    if (!Number.isFinite(estimate) || estimate <= 0) return 0;
+    return Math.max(0, estimate - Math.max(0, order.runningTimeMinutes ?? 0));
+  };
   const activeKitchenWorkloadMinutes = settings.enable_estimated_prep_time
     ? orders
-        .filter((order) => order.orderStatus !== 'Completed' && order.orderStatus !== 'Ready')
-        .reduce((sum, order) => {
-          const estimate = Number(order.estimatedPrepMinutes ?? 0);
-          if (!Number.isFinite(estimate) || estimate <= 0) return sum;
-          const elapsed = order.runningTimeMinutes ?? 0;
-          return sum + Math.max(0, estimate - elapsed);
-        }, 0)
+        .reduce((sum, order) => sum + remainingEstimateMinutes(order), 0)
     : 0;
   const estimatedWaitingMinutes = settings.enable_estimated_prep_time
     ? Math.max(0, Math.ceil(cartPrepMinutes + activeKitchenWorkloadMinutes))

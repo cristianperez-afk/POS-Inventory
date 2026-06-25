@@ -2939,7 +2939,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       `
         UPDATE orders
         SET running_time_end = NOW(),
-            running_duration = GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - running_time_start)))::BIGINT),
+            running_duration = GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - COALESCE(ordered_at, running_time_start))))::BIGINT),
             table_ended_at = COALESCE(table_ended_at, NOW()),
             completed_at = COALESCE(completed_at, NOW()),
             order_status = CASE WHEN order_status IN ('PENDING', 'PREPARING', 'READY', 'SERVED') THEN 'COMPLETED' ELSE order_status END,
@@ -2948,7 +2948,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           AND order_type IN ('DINE_IN', 'MIXED')
           AND UPPER(COALESCE(payment_status, '')) = 'PAID'
           AND COALESCE(is_running, FALSE) = TRUE
-          AND running_time_start IS NOT NULL
+          AND COALESCE(ordered_at, running_time_start) IS NOT NULL
           AND EXISTS (
             SELECT 1
             FROM regexp_split_to_table(COALESCE(table_name, ''), '\\s*\\+\\s*') AS table_name_part
@@ -2966,11 +2966,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       `
         UPDATE orders
         SET running_time_end = NOW(),
-            running_duration = GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - running_time_start)))::BIGINT),
+            running_duration = GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - COALESCE(ordered_at, running_time_start))))::BIGINT),
             is_running = FALSE
         WHERE id = $1
           AND COALESCE(is_running, FALSE) = TRUE
-          AND running_time_start IS NOT NULL
+          AND COALESCE(ordered_at, running_time_start) IS NOT NULL
       `,
       [orderId],
     );
@@ -2990,7 +2990,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       `
         UPDATE orders o
         SET running_time_end = NOW(),
-            running_duration = GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - o.running_time_start)))::BIGINT),
+            running_duration = GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - COALESCE(o.ordered_at, o.running_time_start))))::BIGINT),
             table_ended_at = CASE WHEN o.order_type IN ('DINE_IN', 'MIXED') THEN COALESCE(o.table_ended_at, NOW()) ELSE o.table_ended_at END,
             completed_at = CASE WHEN o.order_type IN ('DINE_IN', 'MIXED') THEN COALESCE(o.completed_at, NOW()) ELSE o.completed_at END,
             order_status = CASE
@@ -3001,10 +3001,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         WHERE o.store_id = $1
           AND o.order_type <> 'RETAIL'
           AND COALESCE(o.is_running, FALSE) = TRUE
-          AND o.running_time_start IS NOT NULL
+          AND COALESCE(o.ordered_at, o.running_time_start) IS NOT NULL
           AND (
             -- Takeout has no table stay: serving or completion ends it.
-            (o.order_type = 'TAKEOUT' AND o.order_status IN ('SERVED', 'COMPLETED', 'CANCELLED'))
+            (o.order_type = 'TAKEOUT' AND o.order_status IN ('READY', 'SERVED', 'COMPLETED', 'CANCELLED'))
             -- An explicitly completed dine-in lifecycle is final as well.
             OR (o.order_type IN ('DINE_IN', 'MIXED') AND o.order_status IN ('COMPLETED', 'CANCELLED'))
             -- Pay Now remains active only while its assigned table is occupied.
@@ -3050,18 +3050,17 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         const orderType = input.orderType ?? (user.store_type === 'RETAIL_STORE' ? 'RETAIL' : 'TAKEOUT');
         const hasDiningTable = Boolean(input.tableName && !String(input.tableName).toLowerCase().startsWith('queue'));
         const isDineInOrder = ['DINE_IN', 'MIXED'].includes(orderType);
-        // A pay-now dine-in order remains active while the table is occupied.
-        const isPaidDineIn = isPaid && ['DINE_IN', 'MIXED'].includes(orderType) && hasDiningTable;
-        const orderStatus = input.orderStatus ?? (isPaid && !isPaidDineIn ? 'COMPLETED' : 'PENDING');
-        const paymentStatus = input.paymentStatus ?? (isPaid ? 'PAID' : 'NOT_PAID');
         const isRestaurantOrder = user.store_type === 'RESTAURANT' && orderType !== 'RETAIL';
+        // A pay-now dine-in order remains active while the table/stay lifecycle is open.
+        const isPaidDineIn = isPaid && ['DINE_IN', 'MIXED'].includes(orderType) && hasDiningTable;
+        const orderStatus = input.orderStatus ?? (isRestaurantOrder ? 'PENDING' : (isPaid && !isPaidDineIn ? 'COMPLETED' : 'PENDING'));
+        const paymentStatus = input.paymentStatus ?? (isPaid ? 'PAID' : 'NOT_PAID');
         const confirmedAt = new Date();
-        // Takeout runs from confirmation. A dine-in's customer-stay timer only
-        // begins once an actual table is occupied; queued orders have no timer.
-        const shouldStartTimerAtConfirmation = isRestaurantOrder && (!isDineInOrder || hasDiningTable);
-        const runningTimeStart = shouldStartTimerAtConfirmation ? confirmedAt : null;
+        const shouldStartPreparationAtConfirmation = isRestaurantOrder;
+        const shouldStartStayAtConfirmation = isRestaurantOrder && isDineInOrder;
+        const runningTimeStart = isRestaurantOrder ? confirmedAt : null;
         const stopsOnConfirmation =
-          (orderType === 'TAKEOUT' && ['SERVED', 'COMPLETED'].includes(orderStatus)) ||
+          (orderType === 'TAKEOUT' && ['READY', 'SERVED', 'COMPLETED'].includes(orderStatus)) ||
           (['DINE_IN', 'MIXED'].includes(orderType) && orderStatus === 'COMPLETED');
         const runningTimeEnd = isRestaurantOrder && stopsOnConfirmation ? runningTimeStart : null;
         const orderNumber = await this.createUniqueOrderNumber(client, input.orderNumber);
@@ -3072,11 +3071,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             INSERT INTO orders (
               store_id, cashier_id, order_number, customer_name, order_type, table_name,
               party_size, subtotal, discount_amount, discount_type, tax_amount, service_charge,
-              total_amount, order_status, payment_status, payment_at, completed_at,
+              total_amount, order_status, payment_status, ordered_at, payment_at, completed_at,
               table_started_at, preparing_started_at, ready_at, service_started_at, served_at, service_duration,
               running_time_start, running_time_end, running_duration, is_running, estimated_prep_minutes, estimated_ready_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)
             RETURNING id
           `,
           [
@@ -3095,21 +3094,22 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             input.total ?? 0,
             orderStatus,
             paymentStatus,
+            isRestaurantOrder ? confirmedAt : null,
             isPaid ? confirmedAt : null,
             // A dine-in Pay Now order is paid at confirmation but is not
             // completed while its table remains occupied. Its completion time
             // (and running timer end) are set only when that table is released.
             orderStatus === 'COMPLETED' ? confirmedAt : null,
-            null,
-            orderStatus === 'PREPARING' ? new Date() : null,
-            orderStatus === 'READY' ? new Date() : null,
-            orderStatus === 'READY' ? confirmedAt : null,
+            shouldStartStayAtConfirmation ? confirmedAt : null,
+            shouldStartPreparationAtConfirmation ? confirmedAt : null,
+            ['READY', 'SERVED', 'COMPLETED'].includes(orderStatus) ? confirmedAt : null,
+            shouldStartPreparationAtConfirmation ? confirmedAt : null,
             orderStatus === 'SERVED' ? confirmedAt : null,
-            orderStatus === 'SERVED' ? 0 : null,
+            stopsOnConfirmation ? 0 : null,
             runningTimeStart,
             runningTimeEnd,
             runningTimeEnd ? 0 : null,
-            shouldStartTimerAtConfirmation && !stopsOnConfirmation,
+            Boolean(isRestaurantOrder && !stopsOnConfirmation),
             Number.isFinite(Number(input.estimatedPrepMinutes ?? input.estimated_prep_minutes)) ? Number(input.estimatedPrepMinutes ?? input.estimated_prep_minutes) : null,
             input.estimatedReadyAt ?? input.estimated_ready_at ?? null,
           ],
@@ -3331,12 +3331,30 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       const orderType = String(priorRows[0]?.order_type ?? '').toUpperCase();
       const nextStatus = String(input.orderStatus ?? '').toUpperCase();
 
+      if (nextStatus === 'PREPARING') {
+        await this.queryWithClient(
+          client,
+          `UPDATE orders
+           SET preparing_started_at = COALESCE(preparing_started_at, NOW()),
+               ordered_at = COALESCE(ordered_at, NOW()),
+               service_started_at = COALESCE(service_started_at, ordered_at, NOW()),
+               running_time_start = COALESCE(running_time_start, ordered_at, NOW()),
+               table_started_at = CASE WHEN order_type IN ('DINE_IN', 'MIXED') THEN COALESCE(table_started_at, ordered_at, running_time_start, NOW()) ELSE table_started_at END,
+               is_running = CASE WHEN running_time_end IS NULL THEN TRUE ELSE is_running END
+           WHERE id = $1`,
+          [updatedRows[0].id],
+        );
+      }
       if (nextStatus === 'READY') {
         await this.queryWithClient(
           client,
           `UPDATE orders
-           SET service_started_at = COALESCE(service_started_at, NOW()),
-               table_started_at = CASE WHEN order_type IN ('DINE_IN', 'MIXED') THEN COALESCE(table_started_at, NOW()) ELSE table_started_at END
+           SET ready_at = COALESCE(ready_at, NOW()),
+               service_duration = CASE
+                 WHEN order_type = 'TAKEOUT'
+                   THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - COALESCE(ordered_at, NOW()))))::BIGINT)
+                 ELSE service_duration
+               END
            WHERE id = $1`,
           [updatedRows[0].id],
         );
@@ -3346,7 +3364,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           client,
           `UPDATE orders
            SET served_at = COALESCE(served_at, NOW()),
-               service_duration = CASE WHEN service_started_at IS NOT NULL THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - service_started_at)))::BIGINT) ELSE service_duration END
+               service_duration = CASE
+                WHEN ordered_at IS NOT NULL
+                   THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - ordered_at)))::BIGINT)
+                 WHEN preparing_started_at IS NOT NULL
+                   THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - preparing_started_at)))::BIGINT)
+                 WHEN running_time_start IS NOT NULL
+                   THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - running_time_start)))::BIGINT)
+                 ELSE service_duration
+               END
            WHERE id = $1`,
           [updatedRows[0].id],
         );
@@ -3367,7 +3393,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           client,
           `
             UPDATE orders
-            SET running_time_start = COALESCE(running_time_start, NOW()),
+            SET ordered_at = COALESCE(ordered_at, NOW()),
+                running_time_start = COALESCE(running_time_start, ordered_at, NOW()),
+                table_started_at = COALESCE(table_started_at, ordered_at, running_time_start, NOW()),
+                preparing_started_at = COALESCE(preparing_started_at, ordered_at, running_time_start, NOW()),
+                service_started_at = COALESCE(service_started_at, ordered_at, running_time_start, NOW()),
                 is_running = CASE WHEN running_time_start IS NULL THEN TRUE ELSE is_running END
             WHERE id = $1
               AND running_time_start IS NULL
@@ -3380,13 +3410,27 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         (isPaymentUpdate || String(input.paymentStatus ?? '').toUpperCase() === 'PAID') &&
         String(priorPaymentStatus ?? '').toUpperCase() !== 'PAID';
       const shouldStopRunningTimer =
-        (orderType === 'TAKEOUT' && ['SERVED', 'COMPLETED'].includes(nextStatus)) ||
+        (orderType === 'TAKEOUT' && (['READY', 'SERVED', 'COMPLETED'].includes(nextStatus) || paymentCompletedNow)) ||
         (['DINE_IN', 'MIXED'].includes(orderType) && paymentCompletedNow) ||
         (['DINE_IN', 'MIXED'].includes(orderType) && String(priorPaymentStatus ?? '').toUpperCase() === 'PAID' && nextStatus === 'COMPLETED') ||
         // Cancellation is also a terminal lifecycle event; it never pauses a timer.
         nextStatus === 'CANCELLED';
       if (shouldStopRunningTimer) {
         await this.stopOrderRunningTimer(client, updatedRows[0].id);
+        await this.queryWithClient(
+          client,
+          `
+            UPDATE orders
+            SET table_ended_at = CASE WHEN order_type IN ('DINE_IN', 'MIXED') THEN COALESCE(table_ended_at, NOW()) ELSE table_ended_at END,
+                service_duration = CASE
+                  WHEN order_type = 'TAKEOUT'
+                    THEN COALESCE(service_duration, GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - COALESCE(ordered_at, NOW()))))::BIGINT))
+                  ELSE service_duration
+                END
+            WHERE id = $1
+          `,
+          [updatedRows[0].id],
+        );
       }
 
       if (isPaymentUpdate) {
@@ -3500,6 +3544,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           o.total_amount,
           o.order_status,
           o.payment_status,
+          o.ordered_at,
           o.created_at,
           o.completed_at,
           o.payment_at,
@@ -4465,6 +4510,22 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const paymentMethod = input.payment?.method ?? 'Cash';
     const amountPaid = Number(input.payment?.amountPaid ?? total);
     const change = Number(input.payment?.changeAmount ?? 0);
+    const transactionNumber = `POS-${orderNumber}`;
+    const existingSale = await this.queryWithClient<{ id: string }>(
+      client,
+      `
+        SELECT id
+        FROM "Sale"
+        WHERE "businessId" = $1
+          AND "transactionNumber" = $2
+        LIMIT 1
+      `,
+      [businessId, transactionNumber],
+    );
+
+    if (existingSale.length > 0) {
+      return;
+    }
 
     const saleId = randomUUID();
     await this.queryWithClient(
@@ -4479,7 +4540,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       `,
       [
         saleId,
-        `POS-${orderNumber}`,
+        transactionNumber,
         locationId,
         Number(input.subtotal ?? 0),
         Number(input.discount ?? 0),
@@ -4825,6 +4886,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ADD COLUMN IF NOT EXISTS tax_amount DECIMAL(10,2) DEFAULT 0,
           ADD COLUMN IF NOT EXISTS service_charge DECIMAL(10,2) DEFAULT 0,
           ADD COLUMN IF NOT EXISTS total_amount DECIMAL(10,2) DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS ordered_at TIMESTAMP,
           ADD COLUMN IF NOT EXISTS payment_at TIMESTAMP,
           ADD COLUMN IF NOT EXISTS preparing_started_at TIMESTAMP,
           ADD COLUMN IF NOT EXISTS ready_at TIMESTAMP,
@@ -4841,6 +4903,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ADD COLUMN IF NOT EXISTS running_duration BIGINT,
           ADD COLUMN IF NOT EXISTS is_running BOOLEAN NOT NULL DEFAULT FALSE,
           ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      `,
+    );
+    await this.query(
+      `
+        UPDATE orders
+        SET ordered_at = COALESCE(running_time_start, preparing_started_at, created_at)
+        WHERE ordered_at IS NULL
+          AND order_type <> 'RETAIL'
+          AND COALESCE(running_time_start, preparing_started_at, created_at) IS NOT NULL
       `,
     );
     await this.query(
