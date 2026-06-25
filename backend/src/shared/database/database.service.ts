@@ -3242,9 +3242,18 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     const rows = await this.query<{ next_order_number: string | number }>(
       `
-        SELECT COALESCE(MAX(NULLIF(regexp_replace(order_number, '\\D', '', 'g'), '')::BIGINT), 100000) + 1 AS next_order_number
-        FROM orders
-        WHERE store_id = $1
+        SELECT COALESCE(MAX(order_number), 100000) + 1 AS next_order_number
+        FROM (
+          SELECT NULLIF(regexp_replace(order_number, '\\D', '', 'g'), '')::BIGINT AS order_number
+          FROM orders
+          WHERE store_id = $1
+
+          UNION ALL
+
+          SELECT NULLIF(regexp_replace("transactionNumber", '\\D', '', 'g'), '')::BIGINT AS order_number
+          FROM "Sale"
+          WHERE "transactionNumber" LIKE 'POS-%'
+        ) used_numbers
       `,
       [user.store_id],
     );
@@ -4591,14 +4600,24 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
   private async createUniqueOrderNumber(client: PoolClient, requestedOrderNumber: unknown) {
     await client.query('LOCK TABLE orders IN SHARE ROW EXCLUSIVE MODE');
+    await client.query('LOCK TABLE "Sale" IN SHARE ROW EXCLUSIVE MODE');
 
     const requestedDigits = String(requestedOrderNumber ?? '').replace(/\D/g, '');
     const requestedNumeric = requestedDigits ? Number(requestedDigits) : null;
     const maxRows = await this.queryWithClient<{ max_order_number: string | number | null }>(
       client,
       `
-        SELECT COALESCE(MAX(NULLIF(regexp_replace(order_number, '\\D', '', 'g'), '')::BIGINT), 100000) AS max_order_number
-        FROM orders
+        SELECT COALESCE(MAX(order_number), 100000) AS max_order_number
+        FROM (
+          SELECT NULLIF(regexp_replace(order_number, '\\D', '', 'g'), '')::BIGINT AS order_number
+          FROM orders
+
+          UNION ALL
+
+          SELECT NULLIF(regexp_replace("transactionNumber", '\\D', '', 'g'), '')::BIGINT AS order_number
+          FROM "Sale"
+          WHERE "transactionNumber" LIKE 'POS-%'
+        ) used_numbers
       `,
     );
     const maxOrderNumber = Number(maxRows[0]?.max_order_number ?? 100000);
@@ -4615,6 +4634,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           SELECT id
           FROM orders
           WHERE regexp_replace(order_number, '\\D', '', 'g') = $1
+          UNION ALL
+          SELECT 1 AS id
+          FROM "Sale"
+          WHERE "transactionNumber" = CONCAT('POS-', $1::text)
           LIMIT 1
         `,
         [candidateText],
