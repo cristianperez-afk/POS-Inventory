@@ -103,6 +103,18 @@ const finiteNumberIncludingZeroOrUndefined = (value: unknown) => {
   return Number.isFinite(parsed) ? parsed : undefined;
 };
 
+const DEFAULT_ITEM_PREP_MINUTES = 5;
+const MAX_ITEM_PREP_MINUTES = 30;
+const MAX_CART_PREP_MINUTES = 35;
+const MAX_QUEUE_DELAY_MINUTES = 20;
+const MAX_CUSTOMER_WAIT_MINUTES = 45;
+const KITCHEN_PARALLEL_ORDER_CAPACITY = 3;
+
+const clampMinutes = (minutes: number, min: number, max: number) => {
+  if (!Number.isFinite(minutes)) return min;
+  return Math.min(max, Math.max(min, minutes));
+};
+
 function toOrderListFormat(order: any, paid: boolean) {
   const hasDineIn = order.items.some((i: CartItem) => i.orderType === 'dine-in');
   const hasTakeout = order.items.some((i: CartItem) => i.orderType === 'takeout');
@@ -747,32 +759,34 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       quantityChanges.length > 0;
   };
   const estimateItemMinutes = (item: CartItem) => {
-    const baseMinutes = Math.max(0, Number(item.prepTimeMinutes ?? 0));
+    const baseMinutes = clampMinutes(Number(item.prepTimeMinutes ?? DEFAULT_ITEM_PREP_MINUTES), 0, MAX_ITEM_PREP_MINUTES);
     const customizationMinutes = hasItemCustomization(item)
       ? Math.max(0, Number(settings.customization_prep_time_minutes ?? 0))
       : 0;
-    const lineMinutes = baseMinutes + customizationMinutes;
+    const lineMinutes = clampMinutes(baseMinutes + customizationMinutes, 0, MAX_ITEM_PREP_MINUTES);
     return settings.prep_time_strategy === 'sequential'
       ? lineMinutes * Math.max(1, Number(item.quantity ?? 1))
       : lineMinutes;
   };
-  const cartPrepMinutes = settings.prep_time_strategy === 'sequential'
+  const rawCartPrepMinutes = settings.prep_time_strategy === 'sequential'
     ? cart.reduce((sum, item) => sum + estimateItemMinutes(item), 0)
     : cart.reduce((max, item) => Math.max(max, estimateItemMinutes(item)), 0);
+  const cartPrepMinutes = cart.length > 0 ? clampMinutes(rawCartPrepMinutes, DEFAULT_ITEM_PREP_MINUTES, MAX_CART_PREP_MINUTES) : 0;
   const estimateExistingOrderMinutes = (order: Order) => {
     const itemMinutes = order.items.map((item) => {
-      const baseMinutes = Math.max(0, Number(item.prepTimeMinutes ?? 0));
+      const baseMinutes = clampMinutes(Number(item.prepTimeMinutes ?? DEFAULT_ITEM_PREP_MINUTES), 0, MAX_ITEM_PREP_MINUTES);
       const customizationMinutes = Math.max(0, Number(item.customizationPrepMinutes ?? 0));
-      const lineMinutes = baseMinutes + customizationMinutes;
+      const lineMinutes = clampMinutes(baseMinutes + customizationMinutes, 0, MAX_ITEM_PREP_MINUTES);
       const quantity = Math.max(1, Number(item.quantity ?? 1));
       return lineMinutes > 0
         ? settings.prep_time_strategy === 'sequential' ? lineMinutes * quantity : lineMinutes
-        : 5 * quantity;
+        : DEFAULT_ITEM_PREP_MINUTES * quantity;
     });
     if (itemMinutes.length === 0) return 0;
-    return settings.prep_time_strategy === 'sequential'
+    const rawEstimate = settings.prep_time_strategy === 'sequential'
       ? itemMinutes.reduce((sum, minutes) => sum + minutes, 0)
       : Math.max(0, ...itemMinutes);
+    return clampMinutes(rawEstimate, 0, MAX_CART_PREP_MINUTES);
   };
   const remainingEstimateMinutes = (order: Order) => {
     if (!['Pending', 'Preparing'].includes(order.orderStatus)) return 0;
@@ -784,8 +798,13 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
     ? orders
         .reduce((sum, order) => sum + remainingEstimateMinutes(order), 0)
     : 0;
+  const queueDelayMinutes = activeKitchenWorkloadMinutes > 0
+    ? clampMinutes(Math.ceil(activeKitchenWorkloadMinutes / KITCHEN_PARALLEL_ORDER_CAPACITY), 0, MAX_QUEUE_DELAY_MINUTES)
+    : 0;
   const estimatedWaitingMinutes = settings.enable_estimated_prep_time
-    ? Math.max(0, Math.ceil(cartPrepMinutes + activeKitchenWorkloadMinutes))
+    ? cart.length > 0
+      ? clampMinutes(Math.ceil(cartPrepMinutes + queueDelayMinutes), DEFAULT_ITEM_PREP_MINUTES, MAX_CUSTOMER_WAIT_MINUTES)
+      : 0
     : 0;
   const estimatedReadyAt = settings.enable_estimated_prep_time && estimatedWaitingMinutes > 0
     ? new Date(Date.now() + estimatedWaitingMinutes * 60000)
@@ -1375,24 +1394,39 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
               const resolvedServings = finiteNumberIncludingZeroOrUndefined(
                 hoveredRecipeDetails?.servings ?? product.servings,
               );
+              const isUnavailable = remainingOrders !== undefined && remainingOrders <= 0;
 
               return (
                 <button
                 key={product.id}
                 onClick={() => addToCart(product)}
-                onMouseEnter={() => setHoveredProductId(product.id)}
+                onMouseEnter={() => {
+                  if (!isUnavailable) setHoveredProductId(product.id);
+                }}
                 onMouseLeave={() => setHoveredProductId((current) => (current === product.id ? null : current))}
-                onFocus={() => setHoveredProductId(product.id)}
+                onFocus={() => {
+                  if (!isUnavailable) setHoveredProductId(product.id);
+                }}
                 onBlur={() => setHoveredProductId((current) => (current === product.id ? null : current))}
-                disabled={remainingOrders !== undefined && remainingOrders <= 0}
-                className="group relative isolate overflow-visible rounded-2xl text-left transition-transform duration-300 ease-out hover:z-30 hover:-translate-y-3 hover:scale-[1.18] focus-visible:z-30 focus-visible:-translate-y-3 focus-visible:scale-[1.18] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={isUnavailable}
+                className={`group relative isolate overflow-visible rounded-2xl text-left transition-transform duration-300 ease-out focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 ${
+                  isUnavailable
+                    ? 'cursor-not-allowed'
+                    : 'hover:z-30 hover:-translate-y-3 hover:scale-[1.18] focus-visible:z-30 focus-visible:-translate-y-3 focus-visible:scale-[1.18]'
+                }`}
               >
-                <div className="overflow-hidden rounded-2xl border border-border bg-white p-2.5 shadow-sm transition-all duration-300 ease-out group-hover:border-primary/35 group-hover:shadow-[0_18px_38px_rgba(15,23,42,0.18)] group-focus-visible:border-primary/35 group-focus-visible:shadow-[0_18px_38px_rgba(15,23,42,0.18)]">
+                <div className={`overflow-hidden rounded-2xl border border-border bg-white p-2.5 shadow-sm transition-all duration-300 ease-out ${
+                  isUnavailable
+                    ? ''
+                    : 'group-hover:border-primary/35 group-hover:shadow-[0_18px_38px_rgba(15,23,42,0.18)] group-focus-visible:border-primary/35 group-focus-visible:shadow-[0_18px_38px_rgba(15,23,42,0.18)]'
+                }`}>
                   <div className="aspect-square overflow-hidden rounded-xl bg-muted">
                   <img
                     src={product.image}
                     alt={product.name}
-                    className="h-full w-full object-cover transition-transform duration-300 ease-out group-hover:scale-[1.06] group-focus-visible:scale-[1.06]"
+                    className={`h-full w-full object-cover transition-transform duration-300 ease-out ${
+                      isUnavailable ? '' : 'group-hover:scale-[1.06] group-focus-visible:scale-[1.06]'
+                    }`}
                   />
                 </div>
                 <h3 className="mt-3 line-clamp-2 text-sm font-semibold text-foreground">{product.name}</h3>
@@ -1403,6 +1437,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                 )}
                 <p className="text-xs text-primary font-medium">₱ {product.price.toFixed(2)}</p>
                 </div>
+                {!isUnavailable && (
                 <div className="pointer-events-none absolute left-1/2 top-1/2 z-20 w-[118%] max-w-[280px] -translate-x-1/2 -translate-y-1/2 opacity-0 transition-all duration-300 ease-out group-hover:opacity-100 group-focus-visible:opacity-100">
                   <div className="overflow-hidden rounded-[1.35rem] border border-primary/20 bg-white shadow-[0_24px_48px_rgba(15,23,42,0.22)] ring-1 ring-primary/10">
                     <div className="aspect-[16/10] overflow-hidden bg-slate-100">
@@ -1445,6 +1480,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                     </div>
                   </div>
                 </div>
+                )}
                 </button>
               );
             })}
@@ -2226,6 +2262,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                     .filter((item) => item.id === product.id)
                     .reduce((sum, item) => sum + Number(item.quantity ?? 0), 0);
                   const remainingOrders = availableOrders !== undefined ? Math.max(0, availableOrders - cartQuantity) : undefined;
+                  const isUnavailable = remainingOrders !== undefined && remainingOrders <= 0;
 
                   return (
                   <button
@@ -2233,14 +2270,20 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                     onClick={() => {
                       addToCart(product, 'takeout');
                     }}
-                    disabled={remainingOrders !== undefined && remainingOrders <= 0}
-                    className="group rounded-lg border border-border bg-white p-2.5 text-left shadow-sm transition-all duration-150 ease-out hover:-translate-y-0.5 hover:border-secondary/50 hover:bg-secondary/[0.03] hover:shadow-lg focus-visible:-translate-y-0.5 focus-visible:border-secondary/50 focus-visible:ring-2 focus-visible:ring-secondary/20 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={isUnavailable}
+                    className={`group rounded-lg border border-border bg-white p-2.5 text-left shadow-sm transition-all duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-50 ${
+                      isUnavailable
+                        ? 'cursor-not-allowed'
+                        : 'hover:-translate-y-0.5 hover:border-secondary/50 hover:bg-secondary/[0.03] hover:shadow-lg focus-visible:-translate-y-0.5 focus-visible:border-secondary/50 focus-visible:ring-2 focus-visible:ring-secondary/20'
+                    }`}
                   >
                     <div className="mb-2 aspect-square overflow-hidden rounded-lg bg-muted">
                       <img
                         src={product.image}
                         alt={product.name}
-                        className="h-full w-full object-cover transition-transform duration-150 ease-out group-hover:scale-[1.03]"
+                        className={`h-full w-full object-cover transition-transform duration-150 ease-out ${
+                          isUnavailable ? '' : 'group-hover:scale-[1.03]'
+                        }`}
                       />
                     </div>
                     <h3 className="text-xs font-medium mb-0.5 line-clamp-1">{product.name}</h3>
