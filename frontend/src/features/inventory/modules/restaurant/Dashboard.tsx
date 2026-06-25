@@ -448,7 +448,7 @@ export function Dashboard() {
                 className="flex items-center justify-between p-4 bg-amber-50 border border-amber-200 rounded-xl"
               >
                 <div className="flex items-center gap-4">
-                  <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center border border-amber-200">
+                  <div className="w-10 h-10 bg-card rounded-lg flex items-center justify-center border border-amber-200">
                     <ShoppingCart className="w-5 h-5 text-amber-600" />
                   </div>
                   <div>

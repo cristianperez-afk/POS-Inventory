@@ -95,17 +95,17 @@ export function SuppliersManager({
 
   return (
     <div className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-[60]">
-      <div className="bg-white rounded-[14px] p-6 max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+      <div className="bg-card rounded-[14px] p-6 max-w-3xl w-full max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-2">
-            <Users className="size-6 text-[#007A5E]" />
+            <Users className="size-6 text-primary" />
             <div>
-              <h3 className="text-[22px] font-bold text-[#323B42]">Suppliers Directory</h3>
-              <p className="text-[13px] text-[#6b7280]">{suppliers.length} registered</p>
+              <h3 className="text-[22px] font-bold text-foreground">Suppliers Directory</h3>
+              <p className="text-[13px] text-muted-foreground">{suppliers.length} registered</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-[#F8FAFB] rounded-[6px] transition-colors">
-            <X className="size-5 text-[#323B42]" />
+          <button onClick={onClose} className="p-2 hover:bg-background rounded-[6px] transition-colors">
+            <X className="size-5 text-foreground" />
           </button>
         </div>
 
@@ -124,7 +124,7 @@ export function SuppliersManager({
                   setError(null);
                   setMode('add');
                 }}
-                className="px-4 py-2 bg-[#007A5E] text-white rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-[#008967]"
+                className="px-4 py-2 bg-primary text-white rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-primary/90"
               >
                 <Plus className="size-4" /> Add Supplier
               </button>
@@ -132,25 +132,25 @@ export function SuppliersManager({
 
             {suppliers.length === 0 ? (
               <div className="text-center py-12">
-                <Building2 className="size-14 text-[#d1d5dc] mx-auto mb-3" />
-                <p className="text-[14px] text-[#6b7280]">No suppliers registered yet.</p>
+                <Building2 className="size-14 text-muted-foreground mx-auto mb-3" />
+                <p className="text-[14px] text-muted-foreground">No suppliers registered yet.</p>
               </div>
             ) : (
               <div className="space-y-3">
                 {suppliers.map((s, idx) => (
                   <div
                     key={s.id ?? idx}
-                    className="bg-[#F8FAFB] border border-[rgba(0,0,0,0.1)] rounded-[12px] p-4"
+                    className="bg-background border border-[rgba(0,0,0,0.1)] rounded-[12px] p-4"
                   >
                     <div className="flex items-start justify-between mb-2">
                       <div className="flex items-center gap-3">
-                        <div className="size-9 bg-[#007A5E] rounded-[8px] flex items-center justify-center text-white font-bold">
+                        <div className="size-9 bg-primary rounded-[8px] flex items-center justify-center text-white font-bold">
                           {s.name.charAt(0).toUpperCase()}
                         </div>
                         <div>
-                          <h4 className="text-[15px] font-semibold text-[#323B42]">{s.name}</h4>
+                          <h4 className="text-[15px] font-semibold text-foreground">{s.name}</h4>
                           {s.category && (
-                            <span className="text-[11px] bg-[#E0F5F1] text-[#008967] px-2 py-0.5 rounded font-medium">
+                            <span className="text-[11px] bg-primary/10 text-primary px-2 py-0.5 rounded font-medium">
                               {s.category}
                             </span>
                           )}
@@ -159,7 +159,7 @@ export function SuppliersManager({
                       {onSelectSupplier && (
                         <button
                           onClick={() => onSelectSupplier(s)}
-                          className="px-3 py-1.5 bg-[#007A5E] text-white rounded-[6px] text-[13px] font-medium hover:bg-[#008967]"
+                          className="px-3 py-1.5 bg-primary text-white rounded-[6px] text-[13px] font-medium hover:bg-primary/90"
                         >
                           {selectLabel}
                         </button>
@@ -183,7 +183,7 @@ export function SuppliersManager({
             <div className="space-y-3">
               {fields.map((f) => (
                 <div key={f.key}>
-                  <label className="block text-[12px] font-medium text-[#323B42] mb-1">
+                  <label className="block text-[12px] font-medium text-foreground mb-1">
                     {f.label} {f.required && <span className="text-[#E7000B]">*</span>}
                   </label>
                   {f.type === 'textarea' ? (
@@ -192,7 +192,7 @@ export function SuppliersManager({
                       onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
                       placeholder={f.placeholder}
                       rows={2}
-                      className="w-full px-3 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E] resize-none"
+                      className="w-full px-3 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary resize-none"
                     />
                   ) : (
                     <input
@@ -200,7 +200,7 @@ export function SuppliersManager({
                       value={form[f.key] ?? ''}
                       onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
                       placeholder={f.placeholder}
-                      className="w-full px-3 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+                      className="w-full px-3 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary"
                     />
                   )}
                 </div>
@@ -213,14 +213,14 @@ export function SuppliersManager({
                   setError(null);
                 }}
                 disabled={saving}
-                className="flex-1 px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] font-medium text-[#323B42] hover:bg-[#F8FAFB] disabled:opacity-50"
+                className="flex-1 px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] font-medium text-foreground hover:bg-background disabled:opacity-50"
               >
                 Back
               </button>
               <button
                 onClick={handleSubmit}
                 disabled={saving}
-                className="flex-1 px-4 py-2 bg-[#007A5E] text-white rounded-[8px] text-[14px] font-medium hover:bg-[#008967] disabled:opacity-60"
+                className="flex-1 px-4 py-2 bg-primary text-white rounded-[8px] text-[14px] font-medium hover:bg-primary/90 disabled:opacity-60"
               >
                 {saving ? 'Saving…' : 'Add Supplier'}
               </button>
@@ -235,8 +235,8 @@ export function SuppliersManager({
 function Field({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <p className="text-[11px] text-[#6b7280] mb-0.5">{label}</p>
-      <p className="text-[13px] font-medium text-[#323B42] break-words">{value}</p>
+      <p className="text-[11px] text-muted-foreground mb-0.5">{label}</p>
+      <p className="text-[13px] font-medium text-foreground break-words">{value}</p>
     </div>
   );
 }

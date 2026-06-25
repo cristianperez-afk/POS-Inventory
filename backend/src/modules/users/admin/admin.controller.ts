@@ -182,6 +182,42 @@ class UpdateStoreSettingsDto {
   @IsOptional()
   @IsBoolean()
   enable_receipt_printing?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  auto_deduct_inventory_on_sale?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  allow_negative_stock?: boolean;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  default_low_stock_threshold?: number;
+
+  @IsOptional()
+  @IsString()
+  default_inventory_unit?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  cycle_count_interval_days?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  auto_reorder_threshold_percent?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  enable_expiry_tracking?: boolean;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  default_markup_percent?: number;
 }
 
 class DiscountSettingDto {
@@ -307,6 +343,14 @@ export class AdminController {
       enableIngredientCustomization: body.enable_ingredient_customization,
       enableReceiptPrinting: body.enable_receipt_printing,
       enabledPaymentMethods: body.enabled_payment_methods,
+      autoDeductInventoryOnSale: body.auto_deduct_inventory_on_sale,
+      allowNegativeStock: body.allow_negative_stock,
+      defaultLowStockThreshold: body.default_low_stock_threshold,
+      defaultInventoryUnit: body.default_inventory_unit,
+      cycleCountIntervalDays: body.cycle_count_interval_days,
+      autoReorderThresholdPercent: body.auto_reorder_threshold_percent,
+      enableExpiryTracking: body.enable_expiry_tracking,
+      defaultMarkupPercent: body.default_markup_percent,
     });
   }
 

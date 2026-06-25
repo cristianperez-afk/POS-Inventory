@@ -92,35 +92,35 @@ export function InventoryView() {
     <div className="p-8">
       <div className="flex flex-wrap items-start justify-between gap-4 mb-6">
         <div>
-          <h2 className="text-[30px] font-bold text-[#323B42]">Inventory</h2>
+          <h2 className="text-[30px] font-bold text-foreground">Inventory</h2>
           <div className="flex items-center gap-3 mt-1">
-            <p className="text-[#323B42] text-[14px]">{totalItems} items total</p>
+            <p className="text-foreground text-[14px]">{totalItems} items total</p>
             {recentlyAddedCount > 0 && (
               <button
                 type="button"
                 onClick={() => setShowRecentModal(true)}
                 title="View recently added items"
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[12px] font-medium bg-[#E0F5F1] text-[#007A5E] hover:bg-[#c8ece3] transition-colors cursor-pointer"
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[12px] font-medium bg-primary/10 text-primary hover:bg-[#c8ece3] transition-colors cursor-pointer"
               >
                 <Sparkles className="size-3.5" />
                 {recentlyAddedCount} recently added
               </button>
             )}
           </div>
-          <p className="text-[#6b7280] text-[12px] mt-0.5">Edit item details in Product Management • adjust stock in Stock Adjustments • move stock in Transfers.</p>
+          <p className="text-muted-foreground text-[12px] mt-0.5">Edit item details in Product Management • adjust stock in Stock Adjustments • move stock in Transfers.</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[#323B42] size-5" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-foreground size-5" />
             <input
               type="text"
               placeholder="Search items..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-10 pr-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] w-[300px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+              className="pl-10 pr-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] w-[300px] text-[14px] focus:outline-none focus:border-primary"
             />
           </div>
-          <label className="flex items-center gap-2 px-3 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] text-[#323B42] cursor-pointer whitespace-nowrap">
+          <label className="flex items-center gap-2 px-3 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] text-foreground cursor-pointer whitespace-nowrap">
             <input
               type="checkbox"
               checked={showArchived}
@@ -132,7 +132,7 @@ export function InventoryView() {
           {isAdmin && (
             <button
               onClick={() => setShowInitialStockModal(true)}
-              className="px-4 py-2 bg-[#007A5E] text-white rounded-[8px] text-[14px] font-medium hover:bg-[#008967] transition-colors flex items-center gap-2"
+              className="px-4 py-2 bg-primary text-white rounded-[8px] text-[14px] font-medium hover:bg-primary/90 transition-colors flex items-center gap-2"
             >
               <PackagePlus className="size-5" />
               Initial Stock Setup
@@ -142,8 +142,8 @@ export function InventoryView() {
       </div>
 
       {categories.length === 0 ? (
-        <div className="bg-white border border-[rgba(0,0,0,0.1)] rounded-[14px] p-6">
-          <div className="py-12 text-center text-[#323B42]">No items found</div>
+        <div className="bg-card border border-[rgba(0,0,0,0.1)] rounded-[14px] p-6">
+          <div className="py-12 text-center text-foreground">No items found</div>
         </div>
       ) : (
         <div>
@@ -159,19 +159,19 @@ export function InventoryView() {
                   onClick={() => setActiveCategory(category)}
                   className={`flex items-center gap-2 px-5 py-3 rounded-t-[12px] border border-b-0 transition-colors ${
                     isActive
-                      ? 'bg-white border-[rgba(0,0,0,0.1)] text-[#007A5E] -mb-px relative z-10'
-                      : 'bg-[#EEF4F3] border-transparent text-[#323B42] hover:bg-[#E0F5F1]'
+                      ? 'bg-card border-[rgba(0,0,0,0.1)] text-primary -mb-px relative z-10'
+                      : 'bg-primary/10 border-transparent text-foreground hover:bg-primary/15'
                   }`}
                 >
                   {isActive ? (
-                    <FolderOpen className="size-5 text-[#007A5E]" />
+                    <FolderOpen className="size-5 text-primary" />
                   ) : (
-                    <Folder className="size-5 text-[#00A7A5]" />
+                    <Folder className="size-5 text-accent" />
                   )}
                   <span className="text-[15px] font-semibold">{category}</span>
                   <span
                     className={`text-[12px] px-2 py-0.5 rounded-full font-medium ${
-                      isActive ? 'bg-[#E0F5F1] text-[#007A5E]' : 'bg-white text-[#323B42]'
+                      isActive ? 'bg-primary/10 text-primary' : 'bg-card text-foreground'
                     }`}
                   >
                     {categoryItemCount}
@@ -182,7 +182,7 @@ export function InventoryView() {
           </div>
 
           {/* Active category panel — subcategory folders inside */}
-          <div className="bg-white border border-[rgba(0,0,0,0.1)] rounded-b-[14px] rounded-tr-[14px] p-6">
+          <div className="bg-card border border-[rgba(0,0,0,0.1)] rounded-b-[14px] rounded-tr-[14px] p-6">
             <div className="space-y-2">
               {Object.entries(groupedInventory[currentCategory]).map(([subcategory, items]) => {
                 const subcategoryKey = `${currentCategory} > ${subcategory}`;
@@ -193,20 +193,20 @@ export function InventoryView() {
                     {/* Subcategory Folder */}
                     <button
                       onClick={() => toggleSubcategory(subcategoryKey)}
-                      className="w-full flex items-center gap-3 px-5 py-3 bg-[#F8FAFB] hover:bg-[#EEF4F3] transition-colors group"
+                      className="w-full flex items-center gap-3 px-5 py-3 bg-background hover:bg-primary/15 transition-colors group"
                     >
                       {isSubcategoryExpanded ? (
-                        <ChevronDown className="size-5 text-[#323B42]" />
+                        <ChevronDown className="size-5 text-foreground" />
                       ) : (
-                        <ChevronRight className="size-5 text-[#323B42]" />
+                        <ChevronRight className="size-5 text-foreground" />
                       )}
                       {isSubcategoryExpanded ? (
-                        <FolderOpen className="size-6 text-[#00A7A5]" />
+                        <FolderOpen className="size-6 text-accent" />
                       ) : (
-                        <Folder className="size-6 text-[#00A7A5]" />
+                        <Folder className="size-6 text-accent" />
                       )}
-                      <span className="text-[15px] font-semibold text-[#323B42]">{subcategory}</span>
-                      <span className="ml-auto text-[13px] text-[#323B42] bg-white group-hover:bg-[#F8FAFB] px-3 py-1 rounded-full font-medium">
+                      <span className="text-[15px] font-semibold text-foreground">{subcategory}</span>
+                      <span className="ml-auto text-[13px] text-foreground bg-card group-hover:bg-background px-3 py-1 rounded-full font-medium">
                         {items.length} items
                       </span>
                     </button>
@@ -217,49 +217,49 @@ export function InventoryView() {
                         {items.map((item: InventoryItem) => (
                           <div
                             key={item.id}
-                            className="flex items-center gap-4 px-4 py-3 hover:bg-[#F8FAFB] rounded-[8px] transition-colors border border-transparent hover:border-[rgba(0,0,0,0.05)]"
+                            className="flex items-center gap-4 px-4 py-3 hover:bg-background rounded-[8px] transition-colors border border-transparent hover:border-[rgba(0,0,0,0.05)]"
                           >
                             <div className="flex-1 grid grid-cols-6 gap-4 items-center">
                               <div className="col-span-2">
                                 <div className="flex items-center gap-2">
-                                  <p className="text-[14px] font-medium text-[#323B42]">{item.name}</p>
+                                  <p className="text-[14px] font-medium text-foreground">{item.name}</p>
                                   {item.isRecent && (
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-[#E0F5F1] text-[#007A5E]">
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-primary/10 text-primary">
                                       <Sparkles className="size-3" />
                                       New
                                     </span>
                                   )}
                                 </div>
-                                <p className="text-[12px] text-[#6b7280]">{item.location}</p>
+                                <p className="text-[12px] text-muted-foreground">{item.location}</p>
                               </div>
-                              <div className="text-[13px] text-[#323B42]">
+                              <div className="text-[13px] text-foreground">
                                 Size: <span className="font-medium">{item.size}</span>
                               </div>
                               <div className="flex items-center gap-1.5">
                                 <span className={`px-2 py-1 rounded-full text-[11px] font-medium ${
-                                  item.condition === 'Excellent' ? 'bg-[#E0F5F1] text-[#008967]' :
-                                  item.condition === 'Good' ? 'bg-[#E0F2F2] text-[#007A5E]' :
+                                  item.condition === 'Excellent' ? 'bg-primary/10 text-primary' :
+                                  item.condition === 'Good' ? 'bg-primary/10 text-primary' :
                                   item.condition === 'Fair' ? 'bg-[#fef3c6] text-[#92400e]' :
                                   'bg-[#ffe2e2] text-[#991b1b]'
                                 }`}>
                                   {item.condition}
                                 </span>
                                 {item.isActive === false && (
-                                  <span className="px-2 py-1 rounded-full text-[11px] font-medium bg-[#f3f4f6] text-[#6b7280]">
+                                  <span className="px-2 py-1 rounded-full text-[11px] font-medium bg-muted text-muted-foreground">
                                     Archived
                                   </span>
                                 )}
                               </div>
                               <div className="text-[13px]">
-                                <span className="text-[#6b7280]">Qty: </span>
-                                <span className="text-[#323B42] font-semibold">{item.quantity}</span>
-                                <span className="text-[#6b7280] mx-2">•</span>
-                                <span className="text-[#323B42] font-semibold">₱{item.price}</span>
+                                <span className="text-muted-foreground">Qty: </span>
+                                <span className="text-foreground font-semibold">{item.quantity}</span>
+                                <span className="text-muted-foreground mx-2">•</span>
+                                <span className="text-foreground font-semibold">₱{item.price}</span>
                               </div>
                               <div className="flex items-center gap-1 justify-end">
                                 <button
                                   onClick={() => setCostHistoryItem({ id: item.id, name: item.name })}
-                                  className="p-2 hover:bg-[#E0F5F1] rounded-[6px] text-[#007A5E] transition-colors"
+                                  className="p-2 hover:bg-primary/15 rounded-[6px] text-primary transition-colors"
                                   title="View cost history"
                                 >
                                   <History className="size-4" />
@@ -267,7 +267,7 @@ export function InventoryView() {
                                 {item.isActive === false ? (
                                   <button
                                     onClick={() => onReactivate(item.id)}
-                                    className="p-2 hover:bg-[#E0F5F1] rounded-[6px] text-[#008967] transition-colors"
+                                    className="p-2 hover:bg-primary/15 rounded-[6px] text-primary transition-colors"
                                     title="Reactivate"
                                   >
                                     <ArchiveRestore className="size-4" />
@@ -307,20 +307,20 @@ export function InventoryView() {
       {/* Recently Added Items Modal */}
       {showRecentModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[85vh] overflow-y-auto">
-            <div className="sticky top-0 bg-white border-b border-[rgba(0,0,0,0.1)] px-6 py-4 flex items-center justify-between z-10">
+          <div className="bg-card rounded-2xl shadow-xl w-full max-w-2xl max-h-[85vh] overflow-y-auto">
+            <div className="sticky top-0 bg-card border-b border-[rgba(0,0,0,0.1)] px-6 py-4 flex items-center justify-between z-10">
               <div className="flex items-center gap-3">
-                <div className="p-2 bg-[#E0F5F1] rounded-xl">
-                  <Sparkles className="size-5 text-[#007A5E]" />
+                <div className="p-2 bg-primary/10 rounded-xl">
+                  <Sparkles className="size-5 text-primary" />
                 </div>
                 <div>
-                  <h2 className="text-[18px] font-bold text-[#323B42]">Recently Added Items</h2>
-                  <p className="text-[13px] text-[#6b7280]">Items added in the last 7 days</p>
+                  <h2 className="text-[18px] font-bold text-foreground">Recently Added Items</h2>
+                  <p className="text-[13px] text-muted-foreground">Items added in the last 7 days</p>
                 </div>
               </div>
               <button
                 onClick={() => setShowRecentModal(false)}
-                className="p-2 hover:bg-[#F8FAFB] rounded-xl transition-colors text-[#6b7280]"
+                className="p-2 hover:bg-background rounded-xl transition-colors text-muted-foreground"
                 aria-label="Close recently added"
               >
                 <X className="size-5" />
@@ -330,27 +330,27 @@ export function InventoryView() {
             <div className="p-6">
               {recentlyAddedItems.length === 0 ? (
                 <div className="py-12 flex flex-col items-center gap-3 text-center">
-                  <Package className="size-10 text-[#d1d5dc]" />
-                  <p className="text-[14px] text-[#6b7280]">No recently added items.</p>
+                  <Package className="size-10 text-muted-foreground" />
+                  <p className="text-[14px] text-muted-foreground">No recently added items.</p>
                 </div>
               ) : (
                 <div className="space-y-2">
                   {recentlyAddedItems.map((item: InventoryItem) => (
                     <div
                       key={item.id}
-                      className="flex items-center gap-3 p-3 bg-[#F8FAFB] border border-[rgba(0,0,0,0.1)] rounded-xl"
+                      className="flex items-center gap-3 p-3 bg-background border border-[rgba(0,0,0,0.1)] rounded-xl"
                     >
-                      <Package className="size-5 text-[#007A5E] flex-shrink-0" />
+                      <Package className="size-5 text-primary flex-shrink-0" />
                       <div className="min-w-0 flex-1">
-                        <p className="text-[14px] font-medium text-[#323B42] truncate">{item.name}</p>
-                        <p className="text-[12px] text-[#6b7280] truncate">
+                        <p className="text-[14px] font-medium text-foreground truncate">{item.name}</p>
+                        <p className="text-[12px] text-muted-foreground truncate">
                           {item.category}
                           {item.subcategory ? ` • ${item.subcategory}` : ''}
                         </p>
                       </div>
                       <div className="text-right flex-shrink-0">
-                        <p className="text-[14px] font-semibold text-[#323B42]">{item.quantity}</p>
-                        <p className="text-[12px] text-[#6b7280]">{item.dateAdded || '—'}</p>
+                        <p className="text-[14px] font-semibold text-foreground">{item.quantity}</p>
+                        <p className="text-[12px] text-muted-foreground">{item.dateAdded || '—'}</p>
                       </div>
                     </div>
                   ))}
@@ -364,12 +364,12 @@ export function InventoryView() {
       {/* Initial Stock Setup Modal */}
       {showInitialStockModal && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-[14px] shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-            <div className="sticky top-0 bg-white border-b border-[rgba(0,0,0,0.1)] px-6 py-3 flex items-center justify-between z-10">
-              <p className="text-[14px] font-medium text-[#6b7280]">Admin — Initial Stock Setup</p>
+          <div className="bg-card rounded-[14px] shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-card border-b border-[rgba(0,0,0,0.1)] px-6 py-3 flex items-center justify-between z-10">
+              <p className="text-[14px] font-medium text-muted-foreground">Admin — Initial Stock Setup</p>
               <button
                 onClick={() => setShowInitialStockModal(false)}
-                className="p-2 hover:bg-[#F8FAFB] rounded-[8px] transition-colors text-[#6b7280] hover:text-[#323B42]"
+                className="p-2 hover:bg-background rounded-[8px] transition-colors text-muted-foreground hover:text-foreground"
               >
                 <X className="size-5" />
               </button>
@@ -399,12 +399,12 @@ function AddItemsView({ formData, setFormData, onSubmit, editingId, onCancel }: 
   return (
     <form onSubmit={onSubmit} className="space-y-5">
           <div>
-            <label className="block text-[14px] font-medium text-[#323B42] mb-2">Item Name</label>
+            <label className="block text-[14px] font-medium text-foreground mb-2">Item Name</label>
             <input
               type="text"
               value={formData.name}
               onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-              className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+              className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary"
               placeholder="e.g., Vintage Denim Jacket"
               required
             />
@@ -412,11 +412,11 @@ function AddItemsView({ formData, setFormData, onSubmit, editingId, onCancel }: 
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-[14px] font-medium text-[#323B42] mb-2">Category</label>
+              <label className="block text-[14px] font-medium text-foreground mb-2">Category</label>
               <select
                 value={formData.category}
                 onChange={(e) => setFormData({ ...formData, category: e.target.value, subcategory: '' })}
-                className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+                className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary"
                 required
               >
                 <option value="">Select category</option>
@@ -430,11 +430,11 @@ function AddItemsView({ formData, setFormData, onSubmit, editingId, onCancel }: 
             </div>
 
             <div>
-              <label className="block text-[14px] font-medium text-[#323B42] mb-2">Subcategory</label>
+              <label className="block text-[14px] font-medium text-foreground mb-2">Subcategory</label>
               <select
                 value={formData.subcategory}
                 onChange={(e) => setFormData({ ...formData, subcategory: e.target.value })}
-                className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+                className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary"
                 required
                 disabled={!formData.category}
               >
@@ -447,11 +447,11 @@ function AddItemsView({ formData, setFormData, onSubmit, editingId, onCancel }: 
           </div>
 
           <div>
-            <label className="block text-[14px] font-medium text-[#323B42] mb-2">Target Customer</label>
+            <label className="block text-[14px] font-medium text-foreground mb-2">Target Customer</label>
             <select
               value={formData.targetCustomer}
               onChange={(e) => setFormData({ ...formData, targetCustomer: e.target.value as any })}
-              className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+              className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary"
               required
             >
               <option value="Male">Male</option>
@@ -462,23 +462,23 @@ function AddItemsView({ formData, setFormData, onSubmit, editingId, onCancel }: 
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-[14px] font-medium text-[#323B42] mb-2">Size</label>
+              <label className="block text-[14px] font-medium text-foreground mb-2">Size</label>
               <input
                 type="text"
                 value={formData.size}
                 onChange={(e) => setFormData({ ...formData, size: e.target.value })}
-                className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+                className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary"
                 placeholder="e.g., M, L, XL"
                 required
               />
             </div>
 
             <div>
-              <label className="block text-[14px] font-medium text-[#323B42] mb-2">Condition</label>
+              <label className="block text-[14px] font-medium text-foreground mb-2">Condition</label>
               <select
                 value={formData.condition}
                 onChange={(e) => setFormData({ ...formData, condition: e.target.value as any })}
-                className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+                className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary"
               >
                 <option value="Excellent">Excellent</option>
                 <option value="Good">Good</option>
@@ -490,26 +490,26 @@ function AddItemsView({ formData, setFormData, onSubmit, editingId, onCancel }: 
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-[14px] font-medium text-[#323B42] mb-2">Quantity</label>
+              <label className="block text-[14px] font-medium text-foreground mb-2">Quantity</label>
               <input
                 type="number"
                 min="1"
                 value={formData.quantity}
                 onChange={(e) => setFormData({ ...formData, quantity: parseInt(e.target.value) })}
-                className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+                className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary"
                 required
               />
             </div>
 
             <div>
-              <label className="block text-[14px] font-medium text-[#323B42] mb-2">Price (₱)</label>
+              <label className="block text-[14px] font-medium text-foreground mb-2">Price (₱)</label>
               <input
                 type="number"
                 min="0"
                 step="0.01"
                 value={formData.price}
                 onChange={(e) => setFormData({ ...formData, price: parseFloat(e.target.value) })}
-                className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+                className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary"
                 required
               />
             </div>
@@ -517,11 +517,11 @@ function AddItemsView({ formData, setFormData, onSubmit, editingId, onCancel }: 
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-[14px] font-medium text-[#323B42] mb-2">Location</label>
+              <label className="block text-[14px] font-medium text-foreground mb-2">Location</label>
               <select
                 value={formData.location}
                 onChange={(e) => setFormData({ ...formData, location: e.target.value })}
-                className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+                className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary"
               >
                 <option value="Main Store">Main Store</option>
                 <option value="Warehouse">Warehouse</option>
@@ -534,7 +534,7 @@ function AddItemsView({ formData, setFormData, onSubmit, editingId, onCancel }: 
           <div className="flex gap-3 pt-4">
             <button
               type="submit"
-              className="flex-1 bg-[#007A5E] text-white px-6 py-3 rounded-[8px] text-[14px] font-medium hover:bg-[#008967] transition-colors flex items-center justify-center gap-2"
+              className="flex-1 bg-primary text-white px-6 py-3 rounded-[8px] text-[14px] font-medium hover:bg-primary/90 transition-colors flex items-center justify-center gap-2"
             >
               <Plus className="size-5" />
               {editingId ? 'Update Item' : 'Add Item'}
@@ -542,7 +542,7 @@ function AddItemsView({ formData, setFormData, onSubmit, editingId, onCancel }: 
             <button
               type="button"
               onClick={onCancel}
-              className="px-6 py-3 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] font-medium text-[#323B42] hover:bg-[#F8FAFB] transition-colors"
+              className="px-6 py-3 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] font-medium text-foreground hover:bg-background transition-colors"
             >
               Cancel
             </button>

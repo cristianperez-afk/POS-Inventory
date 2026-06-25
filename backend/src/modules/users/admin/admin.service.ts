@@ -90,6 +90,14 @@ export class AdminService {
     enableIngredientCustomization?: boolean;
     enableReceiptPrinting?: boolean;
     enabledPaymentMethods?: string[];
+    autoDeductInventoryOnSale?: boolean;
+    allowNegativeStock?: boolean;
+    defaultLowStockThreshold?: number;
+    defaultInventoryUnit?: string;
+    cycleCountIntervalDays?: number;
+    autoReorderThresholdPercent?: number;
+    enableExpiryTracking?: boolean;
+    defaultMarkupPercent?: number;
   }) {
     return this.databaseService.updateStoreSettingsForAdmin(input);
   }

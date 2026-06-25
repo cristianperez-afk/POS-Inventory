@@ -125,7 +125,7 @@ export function StockAlertsView() {
 
       {/* Stats Cards */}
       <div className="grid grid-cols-3 gap-4 mb-6">
-        <div className="bg-white border border-border rounded-[14px] p-6">
+        <div className="bg-card border border-border rounded-[14px] p-6">
           <div className="flex items-start justify-between mb-3">
             <div>
               <p className="text-foreground text-[14px] mb-1">Available Stock</p>
@@ -137,7 +137,7 @@ export function StockAlertsView() {
           </div>
           <p className="text-foreground text-[12px]">pieces</p>
         </div>
-        <div className="bg-white border border-border rounded-[14px] p-6">
+        <div className="bg-card border border-border rounded-[14px] p-6">
           <div className="flex items-start justify-between mb-3">
             <div>
               <p className="text-foreground text-[14px] mb-1">Stock Value</p>
@@ -151,7 +151,7 @@ export function StockAlertsView() {
           </div>
           <p className="text-foreground text-[12px]">total inventory value</p>
         </div>
-        <div className="bg-white border border-border rounded-[14px] p-6">
+        <div className="bg-card border border-border rounded-[14px] p-6">
           <div className="flex items-start justify-between mb-3">
             <div>
               <p className="text-foreground text-[14px] mb-1">Categories</p>
@@ -168,7 +168,7 @@ export function StockAlertsView() {
       </div>
 
       {/* Tabs */}
-      <div className="bg-white border border-border rounded-[14px] overflow-hidden">
+      <div className="bg-card border border-border rounded-[14px] overflow-hidden">
         <div className="flex border-b border-border">
           <button
             onClick={() => setActiveTab('low-stock')}
@@ -246,7 +246,7 @@ export function StockAlertsView() {
             <select
               value={filterCategory}
               onChange={(e) => setFilterCategory(e.target.value)}
-              className="px-3 py-1.5 border border-border rounded-[6px] text-[14px] bg-white focus:outline-none focus:border-secondary"
+              className="px-3 py-1.5 border border-border rounded-[6px] text-[14px] bg-card focus:outline-none focus:border-secondary"
             >
               {categories.map(cat => (
                 <option key={cat} value={cat}>{cat === 'all' ? 'All Categories' : cat}</option>
@@ -258,7 +258,7 @@ export function StockAlertsView() {
             <select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value as 'name' | 'quantity' | 'category')}
-              className="px-3 py-1.5 border border-border rounded-[6px] text-[14px] bg-white focus:outline-none focus:border-secondary"
+              className="px-3 py-1.5 border border-border rounded-[6px] text-[14px] bg-card focus:outline-none focus:border-secondary"
             >
               <option value="quantity">Stock Level</option>
               <option value="name">Name</option>
@@ -362,7 +362,7 @@ export function StockAlertsView() {
                   {filteredStockItems.map(item => (
                     <div
                       key={item.id}
-                      className="flex items-center gap-4 px-4 py-4 rounded-[8px] border border-border bg-white hover:bg-muted transition-colors"
+                      className="flex items-center gap-4 px-4 py-4 rounded-[8px] border border-border bg-card hover:bg-muted transition-colors"
                     >
                       {/* Item Icon */}
                       <div className="rounded-full size-[48px] flex items-center justify-center shrink-0 bg-secondary/10">

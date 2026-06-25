@@ -113,13 +113,13 @@ export function Sidebar({ currentPage, onNavigate, onLogout, isAdmin = false, st
   };
   const getMenuButtonClasses = (active: boolean, isOpen: boolean) =>
     active
-      ? 'border-[#00a7a5]/25 text-white'
+      ? 'border-primary/25 text-white'
       : isOpen
         ? 'border-white/15 bg-white/10 text-white'
-        : 'border-transparent text-white hover:bg-[#007a5e]/15 hover:text-slate-100';
+        : 'border-transparent text-white hover:bg-primary/15 hover:text-slate-100';
   const getMenuButtonStyle = (active: boolean, isOpen: boolean) =>
     active
-      ? { background: 'linear-gradient(135deg, #008967 0%, #007a5e 100%)', boxShadow: '0 0 18px rgba(0,167,165,0.16)' }
+      ? { background: 'linear-gradient(135deg, var(--primary) 0%, var(--secondary-accent) 100%)', boxShadow: '0 0 18px color-mix(in srgb, var(--primary) 35%, transparent)' }
       : isOpen
         ? { boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.04)' }
         : undefined;
@@ -127,7 +127,7 @@ export function Sidebar({ currentPage, onNavigate, onLogout, isAdmin = false, st
   return (
     <div
       className={`sticky top-0 flex h-screen shrink-0 flex-col text-white transition-[width] duration-300 ease-in-out ${isCollapsed ? 'w-20 overflow-visible' : 'w-80 overflow-hidden'}`}
-      style={{ background: 'linear-gradient(180deg, #003534 0%, #007a5e 100%)' }}
+      style={{ background: 'linear-gradient(180deg, var(--sidebar) 0%, var(--primary) 100%)' }}
     >
       <div className={`relative shrink-0 border-b border-white/10 transition-all duration-300 ease-in-out ${isCollapsed ? 'px-3 py-4' : 'px-6 pb-4 pt-5'}`}>
         <button
@@ -215,7 +215,7 @@ export function Sidebar({ currentPage, onNavigate, onLogout, isAdmin = false, st
                               childIsActive ? 'text-white' : 'text-slate-200 hover:text-white'
                             }`}
                           >
-                            <child.icon className={`h-4 w-4 shrink-0 ${childIsActive ? 'text-[#b5fff1]' : 'text-slate-300/70'}`} strokeWidth={1.8} />
+                            <child.icon className={`h-4 w-4 shrink-0 ${childIsActive ? 'text-white' : 'text-slate-300/70'}`} strokeWidth={1.8} />
                             <span className={`truncate text-sm font-medium transition-all duration-300 ease-in-out ${isCollapsed ? 'w-0 opacity-0' : 'opacity-100'}`}>{!isCollapsed && child.label}</span>
                           </button>
                         </li>
@@ -281,7 +281,7 @@ export function Sidebar({ currentPage, onNavigate, onLogout, isAdmin = false, st
                                   childIsActive ? 'text-white' : 'text-slate-200 hover:text-white'
                                 }`}
                               >
-                                <child.icon className={`h-4 w-4 shrink-0 ${childIsActive ? 'text-[#b5fff1]' : 'text-slate-300/70'}`} strokeWidth={1.8} />
+                                <child.icon className={`h-4 w-4 shrink-0 ${childIsActive ? 'text-white' : 'text-slate-300/70'}`} strokeWidth={1.8} />
                                 <span className={`truncate text-sm font-medium transition-all duration-300 ease-in-out ${isCollapsed ? 'w-0 opacity-0' : 'opacity-100'}`}>{!isCollapsed && child.label}</span>
                               </button>
                             </li>
@@ -299,7 +299,7 @@ export function Sidebar({ currentPage, onNavigate, onLogout, isAdmin = false, st
         {flattenedInventoryItems.length > 0 && (
           <div className={`${visibleMenuItems.length > 0 ? 'mt-4 border-t border-white/10 pt-3' : ''}`}>
             {!isCollapsed && (
-              <div className="mb-2 px-4 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#b5fff1]/80">
+              <div className="mb-2 px-4 text-[11px] font-semibold uppercase tracking-[0.08em] text-white/80">
                 Inventory
               </div>
             )}
@@ -407,6 +407,7 @@ function getInventoryItems(isRetail: boolean, canManageUsers: boolean): MenuItem
     { icon: ArrowRightLeft, label: 'Transfers', page: 'inventory-transfers' as Page },
     { icon: MapPin, label: 'Multilocation', page: 'inventory-multilocation' as Page },
     { icon: FileText, label: 'Reports', page: 'inventory-reports' as Page },
+    { icon: Settings, label: 'Inventory Settings', page: 'inventory-settings' as Page },
   ];
 
   const restaurantItems = [
@@ -420,6 +421,7 @@ function getInventoryItems(isRetail: boolean, canManageUsers: boolean): MenuItem
     { icon: ArrowRightLeft, label: 'Transfers & Adjustments', page: 'inventory-transfers' as Page },
     { icon: MapPin, label: 'Multi-Location', page: 'inventory-multilocation' as Page },
     { icon: FileText, label: 'Reports', page: 'inventory-reports' as Page },
+    { icon: Settings, label: 'Inventory Settings', page: 'inventory-settings' as Page },
   ];
 
   if (isRetail) {

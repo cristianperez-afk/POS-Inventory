@@ -174,28 +174,28 @@ export default function MultilocationView() {
 
       {/* Overall Stats */}
       <div className="grid grid-cols-4 gap-4 mb-6">
-        <div className="bg-white border border-border rounded-[14px] p-4">
+        <div className="bg-card border border-border rounded-[14px] p-4">
           <div className="flex items-center justify-between mb-2">
             <p className="text-foreground text-[12px]">Total Locations</p>
             <MapPin className="size-5 text-secondary" />
           </div>
           <p className="text-foreground text-[24px] font-bold">{overallStats.totalLocations}</p>
         </div>
-        <div className="bg-white border border-border rounded-[14px] p-4">
+        <div className="bg-card border border-border rounded-[14px] p-4">
           <div className="flex items-center justify-between mb-2">
             <p className="text-foreground text-[12px]">Total Items</p>
             <Package className="size-5 text-secondary" />
           </div>
           <p className="text-foreground text-[24px] font-bold">{overallStats.totalItems}</p>
         </div>
-        <div className="bg-white border border-border rounded-[14px] p-4">
+        <div className="bg-card border border-border rounded-[14px] p-4">
           <div className="flex items-center justify-between mb-2">
             <p className="text-foreground text-[12px]">Total Value</p>
             <TrendingUp className="size-5 text-accent" />
           </div>
           <p className="text-secondary text-[24px] font-bold">₱{(overallStats.totalInventoryValue / 1000).toFixed(1)}K</p>
         </div>
-        <div className="bg-white border border-border rounded-[14px] p-4">
+        <div className="bg-card border border-border rounded-[14px] p-4">
           <div className="flex items-center justify-between mb-2">
             <p className="text-foreground text-[12px]">Active Transfers</p>
             <ArrowRightLeft className="size-5 text-warning" />
@@ -205,7 +205,7 @@ export default function MultilocationView() {
       </div>
 
       {/* Search and View Toggle */}
-      <div className="bg-white border border-border rounded-[14px] mb-4 p-4">
+      <div className="bg-card border border-border rounded-[14px] mb-4 p-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 flex-1">
             <Search className="size-5 text-muted-foreground" />
@@ -240,7 +240,7 @@ export default function MultilocationView() {
 
       {/* Locations */}
       {filteredLocations.length === 0 ? (
-        <div className="bg-white border border-border rounded-[14px] p-12 text-center">
+        <div className="bg-card border border-border rounded-[14px] p-12 text-center">
           <MapPin className="size-16 text-muted mx-auto mb-4" />
           <p className="text-[16px] text-foreground font-medium">No locations found</p>
           <p className="text-[14px] text-muted-foreground mt-1">Add your first location to get started</p>
@@ -251,7 +251,7 @@ export default function MultilocationView() {
             const stats = getLocationStats(location.name);
 
             return (
-              <div key={location.id} className="bg-white border border-border rounded-[14px] p-6 hover:shadow-lg transition-shadow">
+              <div key={location.id} className="bg-card border border-border rounded-[14px] p-6 hover:shadow-lg transition-shadow">
                 <div className="flex items-start justify-between mb-4">
                   <div className="bg-secondary/10 rounded-full size-[48px] flex items-center justify-center">
                     <MapPin className="size-6 text-secondary" />
@@ -339,7 +339,7 @@ export default function MultilocationView() {
             const stats = getLocationStats(location.name);
 
             return (
-              <div key={location.id} className="bg-white border border-border rounded-[14px] p-6">
+              <div key={location.id} className="bg-card border border-border rounded-[14px] p-6">
                 <div className="flex items-start justify-between">
                   <div className="flex gap-4 flex-1">
                     <div className="bg-secondary/10 rounded-full size-[56px] flex items-center justify-center">
@@ -404,7 +404,7 @@ export default function MultilocationView() {
       {/* Add Location Modal */}
       {showAddModal && (
         <div className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white rounded-[14px] p-6 max-w-lg w-full">
+          <div className="bg-card rounded-[14px] p-6 max-w-lg w-full">
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-[24px] font-bold text-foreground">Add New Location</h3>
               <button
@@ -485,7 +485,7 @@ export default function MultilocationView() {
       {/* Edit Location Modal */}
       {showEditModal && selectedLocation && (
         <div className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white rounded-[14px] p-6 max-w-lg w-full">
+          <div className="bg-card rounded-[14px] p-6 max-w-lg w-full">
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-[24px] font-bold text-foreground">Edit Location</h3>
               <button
@@ -564,7 +564,7 @@ export default function MultilocationView() {
       {/* Location Details Modal */}
       {showDetailsModal && selectedLocation && (
         <div className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white rounded-[14px] p-6 max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+          <div className="bg-card rounded-[14px] p-6 max-w-4xl w-full max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-3">
                 <div className="bg-secondary/10 rounded-full size-[56px] flex items-center justify-center">
@@ -621,7 +621,7 @@ export default function MultilocationView() {
                     <h4 className="text-[18px] font-semibold text-foreground mb-4">Category Breakdown</h4>
                     <div className="grid grid-cols-2 gap-3">
                       {Object.entries(stats.categoryBreakdown).map(([category, count]) => (
-                        <div key={category} className="bg-white border border-border rounded-[8px] p-3 flex items-center justify-between">
+                        <div key={category} className="bg-card border border-border rounded-[8px] p-3 flex items-center justify-between">
                           <span className="text-[14px] text-foreground">{category}</span>
                           <span className="text-[14px] font-semibold text-secondary">{count} items</span>
                         </div>
@@ -635,7 +635,7 @@ export default function MultilocationView() {
                       <h4 className="text-[18px] font-semibold text-foreground mb-4">Active Transfers</h4>
                       <div className="space-y-3">
                         {locationTransfers.map(transfer => (
-                          <div key={transfer.id} className="bg-white border border-border rounded-[8px] p-4">
+                          <div key={transfer.id} className="bg-card border border-border rounded-[8px] p-4">
                             <div className="flex items-center justify-between mb-2">
                               <div className="flex items-center gap-2">
                                 <span className="text-[14px] font-semibold text-foreground">{transfer.transferNumber}</span>
@@ -670,7 +670,7 @@ export default function MultilocationView() {
                         .sort((a, b) => b.quantity - a.quantity)
                         .slice(0, 10)
                         .map(item => (
-                          <div key={item.id} className="bg-white border border-border rounded-[8px] p-3 flex items-center justify-between">
+                          <div key={item.id} className="bg-card border border-border rounded-[8px] p-3 flex items-center justify-between">
                             <div className="flex-1">
                               <p className="text-[14px] font-medium text-foreground">{item.name}</p>
                               <p className="text-[12px] text-muted-foreground">{item.category} • {item.condition}</p>

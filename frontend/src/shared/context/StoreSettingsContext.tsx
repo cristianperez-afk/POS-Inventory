@@ -15,6 +15,14 @@ export interface StoreSettingValues {
   tax_rate: number;
   enable_discount: boolean;
   enabled_payment_methods: string[];
+  auto_deduct_inventory_on_sale: boolean;
+  allow_negative_stock: boolean;
+  default_low_stock_threshold: number;
+  default_inventory_unit: string;
+  cycle_count_interval_days: number;
+  auto_reorder_threshold_percent: number;
+  enable_expiry_tracking: boolean;
+  default_markup_percent: number;
 }
 
 export interface DiscountSetting {
@@ -45,6 +53,14 @@ export const defaultStoreSettings: StoreSettingValues = {
   tax_rate: 0,
   enable_discount: true,
   enabled_payment_methods: ['Cash', 'GCash', 'Maya', 'Bank Transfer'],
+  auto_deduct_inventory_on_sale: true,
+  allow_negative_stock: false,
+  default_low_stock_threshold: 3,
+  default_inventory_unit: 'unit',
+  cycle_count_interval_days: 30,
+  auto_reorder_threshold_percent: 20,
+  enable_expiry_tracking: false,
+  default_markup_percent: 30,
 };
 
 const StoreSettingsContext = createContext<StoreSettingsContextValue>({
@@ -113,6 +129,14 @@ export function normalizeStoreSettings(data: any): StoreSettingValues {
     tax_rate: Number(data?.tax_rate ?? 0),
     enable_discount: data?.enable_discount ?? true,
     enabled_payment_methods: normalizePaymentMethods(data?.enabled_payment_methods),
+    auto_deduct_inventory_on_sale: data?.auto_deduct_inventory_on_sale ?? true,
+    allow_negative_stock: data?.allow_negative_stock ?? false,
+    default_low_stock_threshold: Number(data?.default_low_stock_threshold ?? 3),
+    default_inventory_unit: typeof data?.default_inventory_unit === 'string' && data.default_inventory_unit.trim() ? data.default_inventory_unit : 'unit',
+    cycle_count_interval_days: Number(data?.cycle_count_interval_days ?? 30),
+    auto_reorder_threshold_percent: Number(data?.auto_reorder_threshold_percent ?? 20),
+    enable_expiry_tracking: data?.enable_expiry_tracking ?? false,
+    default_markup_percent: Number(data?.default_markup_percent ?? 30),
   };
 }
 

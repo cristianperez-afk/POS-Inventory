@@ -14,6 +14,10 @@
   --primary-foreground: #ffffff;
   --secondary: #64748b;
   --secondary-foreground: #ffffff;
+  /* Gradient pairing for primary buttons/sidebar; independent of --secondary
+     (the actual secondary-button/badge token) so customizing one doesn't
+     recolor the other. Customizable via Secondary Color in General Settings. */
+  --secondary-accent: #005656;
   --muted: #f1f5f9;
   --muted-foreground: #94a3b8;
   --accent: #008967;
@@ -97,6 +101,7 @@
   --primary-foreground: oklch(0.205 0 0);
   --secondary: oklch(0.269 0 0);
   --secondary-foreground: oklch(0.985 0 0);
+  --secondary-accent: #005656;
   --muted: oklch(0.269 0 0);
   --muted-foreground: oklch(0.708 0 0);
   --accent: oklch(0.269 0 0);
@@ -105,6 +110,7 @@
   --destructive-foreground: oklch(0.637 0.237 25.331);
   --border: oklch(0.269 0 0);
   --input: oklch(0.269 0 0);
+  --input-background: oklch(0.269 0 0);
   --ring: oklch(0.439 0 0);
   --font-weight-medium: 500;
   --font-weight-normal: 400;
@@ -121,6 +127,37 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(0.269 0 0);
   --sidebar-ring: oklch(0.439 0 0);
+
+  /* Status Colors */
+  --status-pending: #fbbf24;
+  --status-pending-bg: rgba(245, 158, 11, 0.16);
+  --status-confirmed: #60a5fa;
+  --status-confirmed-bg: rgba(59, 130, 246, 0.16);
+  --status-preparing: #a78bfa;
+  --status-preparing-bg: rgba(139, 92, 246, 0.16);
+  --status-ready: #34d399;
+  --status-ready-bg: rgba(0, 137, 103, 0.18);
+  --status-paid: #4ade80;
+  --status-paid-bg: rgba(21, 128, 61, 0.18);
+  --status-cancelled: #f87171;
+  --status-cancelled-bg: rgba(239, 68, 68, 0.16);
+
+  /* Order Type Colors */
+  --order-dinein: #60a5fa;
+  --order-dinein-bg: rgba(59, 130, 246, 0.16);
+  --order-takeout: #fb923c;
+  --order-takeout-bg: rgba(217, 119, 6, 0.16);
+
+  /* Alert Colors */
+  --alert-success: #34d399;
+  --alert-success-bg: rgba(0, 137, 103, 0.16);
+  --alert-success-border: rgba(0, 137, 103, 0.35);
+  --alert-warning: #fbbf24;
+  --alert-warning-bg: rgba(245, 158, 11, 0.16);
+  --alert-warning-border: rgba(245, 158, 11, 0.35);
+  --alert-error: #f87171;
+  --alert-error-bg: rgba(220, 38, 38, 0.16);
+  --alert-error-border: rgba(220, 38, 38, 0.35);
 }
 
 @theme inline {
@@ -135,6 +172,7 @@
   --color-primary-foreground: var(--primary-foreground);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary-accent: var(--secondary-accent);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);
@@ -208,6 +246,15 @@
   --color-alert-error-border: var(--alert-error-border);
 }
 
+/*
+ * Hardcoded to #008967/#005656 previously, which silently overrode every
+ * primary button's color regardless of the user's Primary/Secondary Color
+ * picker (General Settings). Using var(--primary)/var(--secondary-accent)
+ * keeps the gradient look while letting it track the chosen brand colors.
+ * --secondary-accent (not --secondary) on purpose: --secondary is the
+ * unrelated design-system token for secondary buttons/badges and shouldn't
+ * be recolored just because the gradient changes.
+ */
 button.bg-primary,
 button.bg-green-500,
 button.bg-green-600,
@@ -215,8 +262,8 @@ button.bg-emerald-700,
 button.bg-\[\#008967\],
 button.bg-\[\#00a7a5\] {
   background-color: transparent;
-  background-image: linear-gradient(to right, #008967, #005656);
-  color: #ffffff;
+  background-image: linear-gradient(to right, var(--primary), var(--secondary-accent));
+  color: var(--primary-foreground);
 }
 
 button.bg-primary:hover,
@@ -226,7 +273,7 @@ button.bg-emerald-700:hover,
 button.bg-\[\#008967\]:hover,
 button.bg-\[\#00a7a5\]:hover {
   background-color: transparent;
-  background-image: linear-gradient(to right, #008967, #005656);
+  background-image: linear-gradient(to right, var(--primary), var(--secondary-accent));
   opacity: 0.95;
 }
 

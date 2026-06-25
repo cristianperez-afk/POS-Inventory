@@ -136,22 +136,22 @@ function CriteriaManager({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-2 rounded-[8px] border border-[rgba(0,0,0,0.1)] bg-white px-3 py-2 text-[13px] font-medium text-[#323B42] hover:bg-[#F8FAFB]"
+        className="inline-flex items-center gap-2 rounded-[8px] border border-[rgba(0,0,0,0.1)] bg-card px-3 py-2 text-[13px] font-medium text-foreground hover:bg-background"
       >
-        <Settings className="size-4 text-[#007A5E]" />
+        <Settings className="size-4 text-primary" />
         Manage Criteria
       </button>
 
       {open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm">
-          <div className="w-full max-w-2xl rounded-[14px] bg-white p-6 shadow-xl">
+          <div className="w-full max-w-2xl rounded-[14px] bg-card p-6 shadow-xl">
             <div className="mb-5 flex items-start justify-between gap-4">
               <div>
-                <h3 className="text-[22px] font-bold text-[#323B42]">Quality Criteria</h3>
-                <p className="mt-1 text-[13px] text-[#6b7280]">Used for new Goods Received quality checks.</p>
+                <h3 className="text-[22px] font-bold text-foreground">Quality Criteria</h3>
+                <p className="mt-1 text-[13px] text-muted-foreground">Used for new Goods Received quality checks.</p>
               </div>
-              <button type="button" onClick={() => setOpen(false)} className="rounded p-2 hover:bg-[#F8FAFB]">
-                <X className="size-5 text-[#323B42]" />
+              <button type="button" onClick={() => setOpen(false)} className="rounded p-2 hover:bg-background">
+                <X className="size-5 text-foreground" />
               </button>
             </div>
 
@@ -161,12 +161,12 @@ function CriteriaManager({
                 value={draftLabel}
                 onChange={(event) => setDraftLabel(event.target.value)}
                 placeholder="Criteria name"
-                className="flex-1 rounded-[8px] border border-[rgba(0,0,0,0.1)] px-3 py-2 text-[14px] focus:border-[#007A5E] focus:outline-none"
+                className="flex-1 rounded-[8px] border border-[rgba(0,0,0,0.1)] px-3 py-2 text-[14px] focus:border-primary focus:outline-none"
               />
               <button
                 type="button"
                 onClick={saveCriterion}
-                className="inline-flex items-center gap-2 rounded-[8px] bg-[#007A5E] px-4 py-2 text-[13px] font-medium text-white hover:bg-[#008967]"
+                className="inline-flex items-center gap-2 rounded-[8px] bg-primary px-4 py-2 text-[13px] font-medium text-white hover:bg-primary/90"
               >
                 <Plus className="size-4" />
                 {editingKey ? 'Save' : 'Add'}
@@ -175,7 +175,7 @@ function CriteriaManager({
 
             <div className="space-y-2">
               {criteria.length === 0 ? (
-                <div className="rounded-[10px] border border-dashed border-[rgba(0,0,0,0.16)] p-5 text-center text-[14px] text-[#6b7280]">
+                <div className="rounded-[10px] border border-dashed border-[rgba(0,0,0,0.16)] p-5 text-center text-[14px] text-muted-foreground">
                   No quality criteria yet.
                 </div>
               ) : (
@@ -184,12 +184,12 @@ function CriteriaManager({
                     key={criterion.key}
                     className="flex items-center justify-between gap-3 rounded-[10px] border border-[rgba(0,0,0,0.1)] p-3"
                   >
-                    <p className="text-[14px] font-medium text-[#323B42]">{criterion.label}</p>
+                    <p className="text-[14px] font-medium text-foreground">{criterion.label}</p>
                     <div className="flex items-center gap-1">
                       <button
                         type="button"
                         onClick={() => startEdit(criterion)}
-                        className="rounded p-2 text-[#007A5E] hover:bg-[#E0F5F1]"
+                        className="rounded p-2 text-primary hover:bg-primary/15"
                         aria-label={`Edit ${criterion.label}`}
                       >
                         <Pencil className="size-4" />
@@ -340,10 +340,10 @@ export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
           },
         });
       return (
-        <div className="rounded-[8px] border border-[rgba(0,0,0,0.1)] bg-white p-3 mt-1">
-          <p className="mb-3 text-[12px] font-semibold text-[#323B42]">Inspection criteria score</p>
+        <div className="rounded-[8px] border border-[rgba(0,0,0,0.1)] bg-card p-3 mt-1">
+          <p className="mb-3 text-[12px] font-semibold text-foreground">Inspection criteria score</p>
           {qualityCriteria.length === 0 ? (
-            <div className="rounded-[8px] border border-dashed border-[rgba(0,0,0,0.16)] p-3 text-[12px] text-[#6b7280]">
+            <div className="rounded-[8px] border border-dashed border-[rgba(0,0,0,0.16)] p-3 text-[12px] text-muted-foreground">
               No quality criteria configured.
             </div>
           ) : (
@@ -352,22 +352,22 @@ export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
               const s = scores[c.key] ?? { passed: '', total: '', remarks: '' };
               return (
                 <div key={c.key} className="grid grid-cols-[1.2fr_70px_16px_70px_1.4fr] items-center gap-2">
-                  <p className="text-[12px] text-[#323B42]">{c.label}</p>
+                  <p className="text-[12px] text-foreground">{c.label}</p>
                   <input
                     type="number"
                     min="0"
                     value={s.passed}
                     onChange={(e) => setScore(c.key, 'passed', e.target.value)}
-                    className="rounded-[6px] border border-[rgba(0,0,0,0.1)] px-2 py-1.5 text-[13px] focus:outline-none focus:border-[#007A5E]"
+                    className="rounded-[6px] border border-[rgba(0,0,0,0.1)] px-2 py-1.5 text-[13px] focus:outline-none focus:border-primary"
                     aria-label={`${c.label} passed`}
                   />
-                  <span className="text-center text-[12px] text-[#6b7280]">/</span>
+                  <span className="text-center text-[12px] text-muted-foreground">/</span>
                   <input
                     type="number"
                     min="1"
                     value={s.total}
                     onChange={(e) => setScore(c.key, 'total', e.target.value)}
-                    className="rounded-[6px] border border-[rgba(0,0,0,0.1)] px-2 py-1.5 text-[13px] focus:outline-none focus:border-[#007A5E]"
+                    className="rounded-[6px] border border-[rgba(0,0,0,0.1)] px-2 py-1.5 text-[13px] focus:outline-none focus:border-primary"
                     aria-label={`${c.label} total`}
                   />
                   <input
@@ -375,7 +375,7 @@ export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
                     value={s.remarks}
                     onChange={(e) => setScore(c.key, 'remarks', e.target.value)}
                     placeholder="Criterion remarks"
-                    className="rounded-[6px] border border-[rgba(0,0,0,0.1)] px-2 py-1.5 text-[13px] focus:outline-none focus:border-[#007A5E]"
+                    className="rounded-[6px] border border-[rgba(0,0,0,0.1)] px-2 py-1.5 text-[13px] focus:outline-none focus:border-primary"
                   />
                 </div>
               );
@@ -456,11 +456,11 @@ export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
 
     historyStatusClass: (status) =>
       status === 'verified'
-        ? 'bg-[#E0F5F1] text-[#008967]'
+        ? 'bg-primary/10 text-primary'
         : status === 'rejected'
           ? 'bg-[#ffe2e2] text-[#991B1B]'
         : status === 'cancelled'
-          ? 'bg-[#f3f4f6] text-[#374151]'
+          ? 'bg-muted text-foreground'
       : status === 'partial'
         ? 'bg-[#fff4e6] text-[#d08700]'
         : 'bg-[#ffe2e2] text-[#E7000B]',
@@ -482,7 +482,7 @@ export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
               <col className="w-[360px]" />
               <col className="w-[180px]" />
             </colgroup>
-            <thead className="bg-[#F8FAFB] text-[#323B42]">
+            <thead className="bg-background text-foreground">
               <tr>
                 <th className="px-3 py-2 text-left font-medium">Product</th>
                 <th className="px-3 py-2 text-left font-medium">Category</th>
@@ -498,14 +498,14 @@ export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
             <tbody className="divide-y divide-[rgba(0,0,0,0.08)]">
               {items.map((it, i) => (
                 <tr key={i}>
-                  <td className="px-3 py-2 text-[#323B42] break-words">{it.productName}</td>
-                  <td className="px-3 py-2 text-[#323B42] break-words">{it.category || '—'}</td>
-                  <td className="px-3 py-2 text-right text-[#008967] font-medium">{it.acceptedQuantity ?? it.quantity}</td>
+                  <td className="px-3 py-2 text-foreground break-words">{it.productName}</td>
+                  <td className="px-3 py-2 text-foreground break-words">{it.category || '—'}</td>
+                  <td className="px-3 py-2 text-right text-primary font-medium">{it.acceptedQuantity ?? it.quantity}</td>
                   <td className="px-3 py-2 text-right text-[#E7000B]">{it.rejectedQuantity ?? 0}</td>
-                  <td className="px-3 py-2 text-[#323B42]">{it.expiryDate || '—'}</td>
-                  <td className="px-3 py-2 text-[#323B42]">{it.expiryPeriod || '—'}</td>
-                  <td className="px-3 py-2 text-[#323B42] break-words">{it.storageTemperature || '—'}</td>
-                  <td className="px-3 py-2 text-[#323B42] align-top">
+                  <td className="px-3 py-2 text-foreground">{it.expiryDate || '—'}</td>
+                  <td className="px-3 py-2 text-foreground">{it.expiryPeriod || '—'}</td>
+                  <td className="px-3 py-2 text-foreground break-words">{it.storageTemperature || '—'}</td>
+                  <td className="px-3 py-2 text-foreground align-top">
                     {it.qualityScores ? (
                       <div className={`grid gap-1.5 ${(it.qualityCriteria ?? qualityCriteria).length > 4 ? 'grid-cols-2' : 'grid-cols-1'}`}>
                         {(it.qualityCriteria ?? qualityCriteria).map((c: QualityCriterion) => {
@@ -514,10 +514,10 @@ export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
                           return (
                             <div
                               key={c.key}
-                              className="flex items-center justify-between gap-3 rounded-md border border-[rgba(0,0,0,0.08)] bg-[#F8FAFB] px-2 py-1"
+                              className="flex items-center justify-between gap-3 rounded-md border border-[rgba(0,0,0,0.08)] bg-background px-2 py-1"
                             >
-                              <span className="min-w-0 text-[12px] text-[#323B42] break-words">{c.label}</span>
-                              <span className="shrink-0 rounded-full bg-[#E0F5F1] px-2 py-0.5 text-[11px] font-semibold text-[#008967]">
+                              <span className="min-w-0 text-[12px] text-foreground break-words">{c.label}</span>
+                              <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">
                                 {s.passed}/{s.total}
                               </span>
                             </div>
@@ -526,7 +526,7 @@ export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
                       </div>
                     ) : '—'}
                   </td>
-                  <td className="px-3 py-2 text-[#323B42] align-top break-words">{it.qualityRemarks || '—'}</td>
+                  <td className="px-3 py-2 text-foreground align-top break-words">{it.qualityRemarks || '—'}</td>
                 </tr>
               ))}
             </tbody>

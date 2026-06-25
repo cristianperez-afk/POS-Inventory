@@ -268,7 +268,7 @@ export function MultiLocation() {
 
     if (!style || !label) {
       return (
-        <span className="px-2 py-1 rounded-full text-xs font-medium border bg-gray-100 text-gray-700 border-gray-200">
+        <span className="px-2 py-1 rounded-full text-xs font-medium border bg-muted text-muted-foreground border-border">
           {status}
         </span>
       );
@@ -291,7 +291,7 @@ export function MultiLocation() {
 
     if (!style) {
       return (
-        <span className="px-2 py-1 rounded text-xs font-medium border bg-gray-100 text-gray-700 border-gray-200">
+        <span className="px-2 py-1 rounded text-xs font-medium border bg-muted text-muted-foreground border-border">
           {type.charAt(0).toUpperCase() + type.slice(1)}
         </span>
       );

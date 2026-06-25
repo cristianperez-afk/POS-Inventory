@@ -107,7 +107,7 @@ export function DashboardView() {
           <button
             onClick={handleRefresh}
             disabled={isRefreshing}
-            className="bg-white border border-border text-foreground px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="bg-card border border-border text-foreground px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <RefreshCw className={`size-4 ${isRefreshing ? 'animate-spin' : ''}`} />
             {isRefreshing ? 'Refreshing...' : 'Refresh'}
@@ -155,7 +155,7 @@ export function DashboardView() {
       {/* Charts Row */}
       <div className="grid grid-cols-2 gap-4 mb-6">
         {/* Stock Trend Chart */}
-        <div className="bg-white border border-border rounded-[14px] p-6">
+        <div className="bg-card border border-border rounded-[14px] p-6">
           <h3 className="text-[18px] font-semibold text-foreground mb-4">Stock Trend (2026)</h3>
           <LineChart width={400} height={250} data={stockTrendData}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" key="grid-trend" />
@@ -171,7 +171,7 @@ export function DashboardView() {
         </div>
 
         {/* Category Distribution Chart */}
-        <div className="bg-white border border-border rounded-[14px] p-6">
+        <div className="bg-card border border-border rounded-[14px] p-6">
           <h3 className="text-[18px] font-semibold text-foreground mb-4">Inventory by Category</h3>
           {categoryData.length > 0 ? (
             <div className="flex items-center gap-4">
@@ -226,7 +226,7 @@ export function DashboardView() {
       {/* Second Charts Row */}
       <div className="grid grid-cols-2 gap-4 mb-6">
         {/* Condition Breakdown Chart */}
-        <div className="bg-white border border-border rounded-[14px] p-6">
+        <div className="bg-card border border-border rounded-[14px] p-6">
           <h3 className="text-[18px] font-semibold text-foreground mb-4">Items by Condition</h3>
           <BarChart width={400} height={250} data={conditionData}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" key="grid-condition" />
@@ -241,7 +241,7 @@ export function DashboardView() {
         </div>
 
         {/* Quick Stats Grid */}
-        <div className="bg-white border border-border rounded-[14px] p-6">
+        <div className="bg-card border border-border rounded-[14px] p-6">
           <h3 className="text-[18px] font-semibold text-foreground mb-4">Quick Stats</h3>
           <div className="space-y-4">
             <div className="flex items-center justify-between p-3 bg-muted rounded-[8px]">
@@ -284,7 +284,7 @@ export function DashboardView() {
       {/* Recent Activity & Alerts */}
       <div className="grid grid-cols-2 gap-4">
         {/* Recent Receipts */}
-        <div className="bg-white border border-border rounded-[14px] p-6">
+        <div className="bg-card border border-border rounded-[14px] p-6">
           <h3 className="text-[18px] font-semibold text-foreground mb-4">Recent Receipts</h3>
           {recentReceipts.length === 0 ? (
             <p className="text-[14px] text-muted-foreground text-center py-8">No recent receipts</p>
@@ -307,7 +307,7 @@ export function DashboardView() {
         </div>
 
         {/* Low Stock Alerts */}
-        <div className="bg-white border border-border rounded-[14px] p-6">
+        <div className="bg-card border border-border rounded-[14px] p-6">
           <h3 className="text-[18px] font-semibold text-foreground mb-4">Low Stock Alerts</h3>
           {stockAlerts.length === 0 ? (
             <p className="text-[14px] text-muted-foreground text-center py-8">No low stock alerts</p>
@@ -339,7 +339,7 @@ export function DashboardView() {
 // Stat Card Component
 function StatCard({ title, value, change, subtitle, color, iconColor, isWarning, icon }: any) {
   return (
-    <div className="bg-white border border-border rounded-[14px] p-6">
+    <div className="bg-card border border-border rounded-[14px] p-6">
       <div className="flex items-start justify-between mb-3">
         <div>
           <p className="text-foreground text-[14px] leading-[20px] mb-1">{title}</p>

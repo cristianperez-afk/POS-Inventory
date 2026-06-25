@@ -530,15 +530,15 @@ export function AddProduct({ onClose }: { onClose?: () => void } = {}) {
               <h3 className="font-semibold text-sm mb-6">Storage Tips</h3>
               <ul className="space-y-3 text-sm">
                 <li className="flex items-start gap-2">
-                  <div className="w-1.5 h-1.5 bg-white rounded-full mt-1 flex-shrink-0"></div>
+                  <div className="w-1.5 h-1.5 bg-card rounded-full mt-1 flex-shrink-0"></div>
                   <span>Enter accurate expiry dates</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <div className="w-1.5 h-1.5 bg-white rounded-full mt-1 flex-shrink-0"></div>
+                  <div className="w-1.5 h-1.5 bg-card rounded-full mt-1 flex-shrink-0"></div>
                   <span>Monitor temperature requirements</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <div className="w-1.5 h-1.5 bg-white rounded-full mt-1 flex-shrink-0"></div>
+                  <div className="w-1.5 h-1.5 bg-card rounded-full mt-1 flex-shrink-0"></div>
                   <span>List all allergens in description</span>
                 </li>
               </ul>

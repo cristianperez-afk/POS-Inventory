@@ -175,7 +175,7 @@ export function Transfers() {
 
     if (!style) {
       return (
-        <span className="px-3 py-1 rounded-full text-xs font-medium border bg-gray-100 text-gray-700 border-gray-200">
+        <span className="px-3 py-1 rounded-full text-xs font-medium border bg-muted text-muted-foreground border-border">
           {status.charAt(0).toUpperCase() + status.slice(1)}
         </span>
       );
@@ -192,7 +192,7 @@ export function Transfers() {
     const styles = {
       damage: { bg: "bg-red-100", text: "text-red-700", border: "border-red-200", icon: AlertCircle },
       shrinkage: { bg: "bg-orange-100", text: "text-orange-700", border: "border-orange-200", icon: TrendingDown },
-      waste: { bg: "bg-gray-100", text: "text-gray-700", border: "border-gray-200", icon: X },
+      waste: { bg: "bg-muted", text: "text-muted-foreground", border: "border-border", icon: X },
       found: { bg: "bg-green-100", text: "text-green-700", border: "border-green-200", icon: TrendingUp },
       correction: { bg: "bg-blue-100", text: "text-blue-700", border: "border-blue-200", icon: FileText },
     };
@@ -200,7 +200,7 @@ export function Transfers() {
 
     if (!style) {
       return (
-        <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium border bg-gray-100 text-gray-700 border-gray-200">
+        <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium border bg-muted text-muted-foreground border-border">
           {type.charAt(0).toUpperCase() + type.slice(1)}
         </span>
       );
@@ -222,7 +222,7 @@ export function Transfers() {
       damage: { bg: "bg-yellow-100", text: "text-yellow-700", border: "border-yellow-200" },
       spillage: { bg: "bg-blue-100", text: "text-blue-700", border: "border-blue-200" },
       contamination: { bg: "bg-purple-100", text: "text-purple-700", border: "border-purple-200" },
-      overproduction: { bg: "bg-gray-100", text: "text-gray-700", border: "border-gray-200" },
+      overproduction: { bg: "bg-muted", text: "text-muted-foreground", border: "border-border" },
     };
     const style = styles[type];
     return (
@@ -238,7 +238,7 @@ export function Transfers() {
         Auto (Recipe BOM)
       </span>
     ) : (
-      <span className="px-2 py-1 rounded text-xs font-medium bg-gray-100 text-gray-700 border border-gray-200">
+      <span className="px-2 py-1 rounded text-xs font-medium bg-muted text-muted-foreground border border-border">
         Manual
       </span>
     );
@@ -360,7 +360,7 @@ export function Transfers() {
             onClick={() => setWasteView("logs")}
             className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
               wasteView === "logs"
-                ? "bg-white text-foreground shadow-sm"
+                ? "bg-card text-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
@@ -370,7 +370,7 @@ export function Transfers() {
             onClick={() => setWasteView("report")}
             className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
               wasteView === "report"
-                ? "bg-white text-foreground shadow-sm"
+                ? "bg-card text-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >

@@ -26,18 +26,18 @@ const statusPill = (status: string) => {
     approved: 'bg-blue-100 text-blue-700',
     partial: 'bg-yellow-100 text-yellow-700',
     rejected: 'bg-red-100 text-red-700',
-    cancelled: 'bg-gray-100 text-gray-600',
+    cancelled: 'bg-muted text-muted-foreground',
     completed: 'bg-green-100 text-green-700',
     'in-transit': 'bg-blue-100 text-blue-700',
     pending: 'bg-yellow-100 text-yellow-700',
     verified: 'bg-green-100 text-green-700',
     admin: 'bg-red-100 text-red-700',
     manager: 'bg-blue-100 text-blue-700',
-    staff: 'bg-gray-100 text-gray-700',
+    staff: 'bg-muted text-muted-foreground',
     active: 'bg-green-100 text-green-700',
-    inactive: 'bg-gray-100 text-gray-600',
+    inactive: 'bg-muted text-muted-foreground',
   };
-  return map[status?.toLowerCase()] ?? 'bg-gray-100 text-gray-600';
+  return map[status?.toLowerCase()] ?? 'bg-muted text-muted-foreground';
 };
 
 const formatAuditDate = (value?: string) => {

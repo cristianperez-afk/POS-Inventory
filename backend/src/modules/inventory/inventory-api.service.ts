@@ -2060,8 +2060,9 @@ export class InventoryApiService {
   // reorder threshold (downward only), de-duped against existing unread alerts,
   // to every Admin/Manager in the business.
   private async notifyLowStock(businessId: string, items: LowStockCandidate[]) {
+    const defaultThreshold = await this.databaseService.getDefaultLowStockThreshold(Number(businessId));
     const crossed = items.filter((item) => {
-      const threshold = item.reorderPoint ?? item.minStock ?? 0;
+      const threshold = item.reorderPoint ?? item.minStock ?? defaultThreshold;
       return threshold > 0 && item.previousQuantity > threshold && item.newQuantity <= threshold;
     });
     if (crossed.length === 0) return;
@@ -2086,7 +2087,7 @@ export class InventoryApiService {
       if (existing[0]) continue;
 
       const unit = item.unit ? ` ${item.unit}` : '';
-      const threshold = item.reorderPoint ?? item.minStock;
+      const threshold = item.reorderPoint ?? item.minStock ?? defaultThreshold;
       const message = `"${item.name}" is low — ${item.newQuantity}${unit} left (reorder at ${threshold}${unit}).`;
 
       for (const userId of recipientIds) {

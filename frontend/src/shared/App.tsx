@@ -29,6 +29,7 @@ import type { AuthenticatedUser } from '../auth/types/auth';
 import { getDefaultStoreLogo } from './utils/defaultStoreLogo';
 import { AppAlertProvider } from './components/AppAlertProvider';
 import { appQueryClient } from '../query/appQueryClient';
+import { applyUserPreferences, loadUserPreferences } from './utils/themePreferences';
 
 const SESSION_USER_KEY = 'bukolabs-pos-current-user';
 const SESSION_PAGE_KEY = 'bukolabs-pos-current-page';
@@ -66,7 +67,8 @@ export type Page =
   | 'inventory-transfers'
   | 'inventory-multilocation'
   | 'inventory-reports'
-  | 'inventory-user-management';
+  | 'inventory-user-management'
+  | 'inventory-settings';
 
 export interface StoreBrand {
   name: string | null;
@@ -85,6 +87,10 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<AuthenticatedUser | null>(null);
   const [currentOrder, setCurrentOrder] = useState<any>(null);
   const [storeBrand, setStoreBrand] = useState<StoreBrand>({ name: null, logo: null });
+
+  useEffect(() => {
+    applyUserPreferences(loadUserPreferences(currentUser?.id));
+  }, [currentUser?.id]);
 
   useEffect(() => {
     const savedUser = window.sessionStorage.getItem(SESSION_USER_KEY);

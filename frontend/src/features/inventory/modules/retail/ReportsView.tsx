@@ -476,12 +476,12 @@ export function ReportsView() {
           <label className="text-[12px] text-muted-foreground">
             From
             <input type="date" value={soldFrom} onChange={e => setSoldFrom(e.target.value)}
-              className="block mt-1 bg-white border border-border rounded-[8px] px-3 py-2 text-[14px] text-foreground" />
+              className="block mt-1 bg-card border border-border rounded-[8px] px-3 py-2 text-[14px] text-foreground" />
           </label>
           <label className="text-[12px] text-muted-foreground">
             To
             <input type="date" value={soldTo} onChange={e => setSoldTo(e.target.value)}
-              className="block mt-1 bg-white border border-border rounded-[8px] px-3 py-2 text-[14px] text-foreground" />
+              className="block mt-1 bg-card border border-border rounded-[8px] px-3 py-2 text-[14px] text-foreground" />
           </label>
           {(soldFrom || soldTo) && (
             <button onClick={() => { setSoldFrom(''); setSoldTo(''); }}
@@ -490,7 +490,7 @@ export function ReportsView() {
           <select
             value={selectedLocation}
             onChange={(e) => setSelectedLocation(e.target.value)}
-            className="bg-white border border-border rounded-[8px] px-4 py-2 text-[14px] text-foreground"
+            className="bg-card border border-border rounded-[8px] px-4 py-2 text-[14px] text-foreground"
           >
             <option value="all">All Locations</option>
             {locations.map(loc => (
@@ -605,35 +605,35 @@ export function ReportsView() {
 
           {/* Overview Stats */}
           <div className="grid grid-cols-4 gap-4 mb-6">
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Total Inventory Value</p>
               <p className="text-foreground text-[24px] font-bold">₱{overviewStats.totalValue.toLocaleString()}</p>
             </div>
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Total Items</p>
               <p className="text-foreground text-[24px] font-bold">{overviewStats.totalItems.toLocaleString()}</p>
             </div>
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Unique Items</p>
               <p className="text-foreground text-[24px] font-bold">{overviewStats.uniqueItems}</p>
             </div>
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Active Locations</p>
               <p className="text-foreground text-[24px] font-bold">{overviewStats.totalLocations}</p>
             </div>
           </div>
 
           <div className="grid grid-cols-3 gap-4 mb-6">
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Total Transfers</p>
               <p className="text-foreground text-[24px] font-bold">{overviewStats.totalTransfers}</p>
               <p className="text-success text-[12px] mt-1">{overviewStats.completedTransfers} completed</p>
             </div>
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Total Adjustments</p>
               <p className="text-foreground text-[24px] font-bold">{overviewStats.totalAdjustments}</p>
             </div>
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Average Item Price</p>
               <p className="text-foreground text-[24px] font-bold">₱{Math.round(overviewStats.avgPrice)}</p>
             </div>
@@ -641,7 +641,7 @@ export function ReportsView() {
 
           {/* Charts */}
           <div className="grid grid-cols-2 gap-4">
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <h4 className="text-[16px] font-semibold text-foreground mb-4">Inventory by Category</h4>
               {Object.keys(inventoryReportData.categoryStats).length > 0 ? (
                 <div className="flex items-center gap-4">
@@ -689,7 +689,7 @@ export function ReportsView() {
               )}
             </div>
 
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <h4 className="text-[16px] font-semibold text-foreground mb-4">Items by Condition</h4>
               <BarChart width={400} height={250} data={Object.entries(inventoryReportData.conditionStats).map(([name, value]) => ({ condition: name, count: value }))}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" key="inventory-condition-grid" />
@@ -716,7 +716,7 @@ export function ReportsView() {
           </div>
 
           {/* Category Breakdown */}
-          <div className="bg-white border border-border rounded-[14px] p-6 mb-4">
+          <div className="bg-card border border-border rounded-[14px] p-6 mb-4">
             <h4 className="text-[16px] font-semibold text-foreground mb-4">Inventory by Category</h4>
             <div className="space-y-3">
               {Object.entries(inventoryReportData.categoryStats)
@@ -743,7 +743,7 @@ export function ReportsView() {
           </div>
 
           {/* Location Breakdown */}
-          <div className="bg-white border border-border rounded-[14px] p-6 mb-4">
+          <div className="bg-card border border-border rounded-[14px] p-6 mb-4">
             <h4 className="text-[16px] font-semibold text-foreground mb-4">Inventory by Location</h4>
             <div className="space-y-3">
               {Object.entries(inventoryReportData.locationStats)
@@ -770,7 +770,7 @@ export function ReportsView() {
           </div>
 
           {/* Condition Analysis */}
-          <div className="bg-white border border-border rounded-[14px] p-6">
+          <div className="bg-card border border-border rounded-[14px] p-6">
             <h4 className="text-[16px] font-semibold text-foreground mb-4">Stock Condition Analysis</h4>
             <div className="grid grid-cols-4 gap-4">
               {Object.entries(inventoryReportData.conditionStats).map(([condition, count]) => (
@@ -881,7 +881,7 @@ export function ReportsView() {
           {/* Transfer Stats */}
           <div className="grid grid-cols-4 gap-4 mb-4">
             {Object.entries(transferReportData.statusBreakdown).map(([status, count]) => (
-              <div key={status} className="bg-white border border-border rounded-[14px] p-6">
+              <div key={status} className="bg-card border border-border rounded-[14px] p-6">
                 <p className="text-muted-foreground text-[12px] mb-2">{status}</p>
                 <p className="text-foreground text-[24px] font-bold">{count}</p>
                 <p className="text-muted-foreground text-[12px] mt-1">
@@ -892,7 +892,7 @@ export function ReportsView() {
           </div>
 
           {/* Route Analysis */}
-          <div className="bg-white border border-border rounded-[14px] p-6 mb-4">
+          <div className="bg-card border border-border rounded-[14px] p-6 mb-4">
             <h4 className="text-[16px] font-semibold text-foreground mb-4">Transfer Routes Analysis</h4>
             <div className="space-y-3">
               {Object.entries(transferReportData.routeStats)
@@ -909,7 +909,7 @@ export function ReportsView() {
           </div>
 
           {/* Transfer Summary */}
-          <div className="bg-white border border-border rounded-[14px] p-6">
+          <div className="bg-card border border-border rounded-[14px] p-6">
             <h4 className="text-[16px] font-semibold text-foreground mb-4">Transfer Summary</h4>
             <div className="grid grid-cols-3 gap-4">
               <div className="p-4 bg-secondary/10 rounded-[8px]">
@@ -934,7 +934,7 @@ export function ReportsView() {
       )}
 
       {activeTab === 'financial' && !isAdmin && (
-        <div className="bg-white border border-border rounded-[14px] p-12 text-center">
+        <div className="bg-card border border-border rounded-[14px] p-12 text-center">
           <div className="bg-destructive/10 size-20 rounded-full flex items-center justify-center mx-auto mb-4">
             <Eye className="size-10 text-destructive" />
           </div>
@@ -960,26 +960,26 @@ export function ReportsView() {
 
           {/* Financial Overview */}
           <div className="grid grid-cols-4 gap-4 mb-4">
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Total Asset Value</p>
               <p className="text-foreground text-[24px] font-bold">₱{financialReportData.totalInventoryValue.toLocaleString()}</p>
             </div>
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Purchase Orders Value</p>
               <p className="text-foreground text-[24px] font-bold">₱{financialReportData.poValue.toLocaleString()}</p>
             </div>
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Pending PO Value</p>
               <p className="text-warning text-[24px] font-bold">₱{financialReportData.pendingPOValue.toLocaleString()}</p>
             </div>
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Damaged Stock Value</p>
               <p className="text-destructive text-[24px] font-bold">₱{financialReportData.damagedValue.toLocaleString()}</p>
             </div>
           </div>
 
           {/* Value by Category */}
-          <div className="bg-white border border-border rounded-[14px] p-6 mb-4">
+          <div className="bg-card border border-border rounded-[14px] p-6 mb-4">
             <h4 className="text-[16px] font-semibold text-foreground mb-4">Value by Category</h4>
             <div className="space-y-3">
               {Object.entries(financialReportData.categoryValue)
@@ -1003,7 +1003,7 @@ export function ReportsView() {
 
           {/* Financial Charts */}
           <div className="grid grid-cols-2 gap-4">
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <h4 className="text-[16px] font-semibold text-foreground mb-4">Value Distribution</h4>
               {Object.keys(financialReportData.categoryValue).length > 0 ? (
                 <PieChart width={400} height={250}>
@@ -1028,7 +1028,7 @@ export function ReportsView() {
               )}
             </div>
 
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <h4 className="text-[16px] font-semibold text-foreground mb-4">Financial Health Indicators</h4>
               <div className="space-y-4">
                 <div className="p-4 bg-secondary/10 rounded-[8px]">
@@ -1073,26 +1073,26 @@ export function ReportsView() {
 
           {/* Operations Overview */}
           <div className="grid grid-cols-4 gap-4 mb-4">
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Total Receipts</p>
               <p className="text-foreground text-[24px] font-bold">{operationsReportData.totalReceipts}</p>
             </div>
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Items Received</p>
               <p className="text-foreground text-[24px] font-bold">{operationsReportData.receivedItems}</p>
             </div>
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Approved Adjustments</p>
               <p className="text-success text-[24px] font-bold">{operationsReportData.approvedAdjustments}</p>
             </div>
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Low Stock Alerts</p>
               <p className="text-destructive text-[24px] font-bold">{operationsReportData.lowStockItems}</p>
             </div>
           </div>
 
           {/* Adjustment Analysis */}
-          <div className="bg-white border border-border rounded-[14px] p-6 mb-4">
+          <div className="bg-card border border-border rounded-[14px] p-6 mb-4">
             <h4 className="text-[16px] font-semibold text-foreground mb-4">Adjustments by Type</h4>
             <div className="space-y-3">
               {Object.entries(operationsReportData.adjustmentsByType)
@@ -1115,7 +1115,7 @@ export function ReportsView() {
 
           {/* Operational Metrics */}
           <div className="grid grid-cols-2 gap-4">
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <h4 className="text-[16px] font-semibold text-foreground mb-4">Adjustment Status</h4>
               <BarChart
                 width={400}
@@ -1134,7 +1134,7 @@ export function ReportsView() {
               </BarChart>
             </div>
 
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <h4 className="text-[16px] font-semibold text-foreground mb-4">Stock Health</h4>
               <div className="space-y-4 mt-6">
                 <div className="p-4 bg-secondary/10 rounded-[8px]">
@@ -1175,25 +1175,25 @@ export function ReportsView() {
           </div>
 
           <div className="grid grid-cols-4 gap-4 mb-4">
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Total Events</p>
               <p className="text-foreground text-[24px] font-bold">{visibleAuditTrail.length}</p>
             </div>
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Purchase Orders</p>
               <p className="text-secondary text-[24px] font-bold">{auditSummary.byModule['Purchase Order'] || 0}</p>
             </div>
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Goods Received</p>
               <p className="text-success text-[24px] font-bold">{auditSummary.byModule['Goods Received'] || 0}</p>
             </div>
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Latest Activity</p>
               <p className="text-[12px] font-semibold text-foreground break-words">{auditSummary.latest}</p>
             </div>
           </div>
 
-          <div className="bg-white border border-border rounded-[14px] p-6">
+          <div className="bg-card border border-border rounded-[14px] p-6">
             <div className="flex items-center justify-between mb-4">
               <h4 className="text-[16px] font-semibold text-foreground">Recent Activity</h4>
               <p className="text-[12px] text-muted-foreground">{visibleAuditTrail.length} record{visibleAuditTrail.length !== 1 ? 's' : ''}</p>
@@ -1274,7 +1274,7 @@ export function ReportsView() {
           </div>
 
           {/* System Audit */}
-          <div className="bg-white border border-border rounded-[14px] p-6 mb-4">
+          <div className="bg-card border border-border rounded-[14px] p-6 mb-4">
             <h4 className="text-[16px] font-semibold text-foreground mb-4">System Audit Summary</h4>
             <div className="grid grid-cols-3 gap-4">
               <div className="p-4 bg-muted rounded-[8px]">
@@ -1303,7 +1303,7 @@ export function ReportsView() {
           </div>
 
           {/* Financial Summary */}
-          <div className="bg-white border border-border rounded-[14px] p-6 mb-4">
+          <div className="bg-card border border-border rounded-[14px] p-6 mb-4">
             <h4 className="text-[16px] font-semibold text-foreground mb-4">Confidential Financial Summary</h4>
             <div className="grid grid-cols-2 gap-4">
               <div className="p-4 bg-secondary/10 rounded-[8px]">
@@ -1338,7 +1338,7 @@ export function ReportsView() {
           </div>
 
           {/* User Activity Log */}
-          <div className="bg-white border border-border rounded-[14px] p-6 mb-4">
+          <div className="bg-card border border-border rounded-[14px] p-6 mb-4">
             <h4 className="text-[16px] font-semibold text-foreground mb-4">User Activity Log</h4>
             <div className="space-y-2">
               {confidentialReportData.userActivityLog.map(user => (
@@ -1377,7 +1377,7 @@ export function ReportsView() {
           </div>
 
           {/* Critical Events */}
-          <div className="bg-white border border-border rounded-[14px] p-6 mb-4">
+          <div className="bg-card border border-border rounded-[14px] p-6 mb-4">
             <h4 className="text-[16px] font-semibold text-foreground mb-4">Critical Events & Incidents</h4>
             <div className="space-y-2">
               {confidentialReportData.criticalEvents.length === 0 ? (
@@ -1411,7 +1411,7 @@ export function ReportsView() {
           </div>
 
           {/* Purchase Orders History */}
-          <div className="bg-white border border-border rounded-[14px] p-6 mb-4">
+          <div className="bg-card border border-border rounded-[14px] p-6 mb-4">
             <h4 className="text-[16px] font-semibold text-foreground mb-4">Purchase Orders History</h4>
             <div className="overflow-x-auto">
               <table className="w-full">
@@ -1461,7 +1461,7 @@ export function ReportsView() {
           </div>
 
           {/* Products Received History */}
-          <div className="bg-white border border-border rounded-[14px] p-6">
+          <div className="bg-card border border-border rounded-[14px] p-6">
             <h4 className="text-[16px] font-semibold text-foreground mb-4">Products Received History</h4>
             <div className="overflow-x-auto">
               <table className="w-full">
@@ -1519,7 +1519,7 @@ export function ReportsView() {
       )}
 
       {activeTab === 'confidential' && !isAdmin && (
-        <div className="bg-white border border-border rounded-[14px] p-12 text-center">
+        <div className="bg-card border border-border rounded-[14px] p-12 text-center">
           <div className="bg-destructive/10 size-20 rounded-full flex items-center justify-center mx-auto mb-4">
             <Eye className="size-10 text-destructive" />
           </div>
