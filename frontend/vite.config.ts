@@ -49,7 +49,7 @@ export default defineConfig({
     },
     proxy: {
       '/api': {
-        target: process.env.VITE_INVENTORY_API_BASE_URL ?? process.env.VITE_API_BASE_URL ?? 'http://localhost:3001',
+        target: process.env.VITE_INVENTORY_API_BASE_URL ?? process.env.VITE_API_BASE_URL ?? 'http://localhost:3000',
         changeOrigin: true,
       },
     },
