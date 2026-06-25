@@ -81,6 +81,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
   const [clock, setClock] = useState(() => Date.now());
   const [isCompletingPayment, setIsCompletingPayment] = useState(false);
   const showTableManagementColumns = settings.enable_table_management;
+  const showEstimatedPrepTime = settings.enable_estimated_prep_time;
   const canProcessTransactions = !isAdmin && staffType === 'POS_STAFF';
 
   useEffect(() => {
@@ -227,7 +228,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
   const paginatedOrders = filteredOrders.slice(pageStartIndex, pageStartIndex + ORDERS_PER_PAGE);
   const visibleStart = filteredOrders.length === 0 ? 0 : pageStartIndex + 1;
   const visibleEnd = Math.min(pageStartIndex + ORDERS_PER_PAGE, filteredOrders.length);
-  const tableColumnCount = showTableManagementColumns ? 12 : 9;
+  const tableColumnCount = (showTableManagementColumns ? 12 : 9) + (showEstimatedPrepTime ? 1 : 0);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -343,6 +344,9 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                   <th className="w-[9%] text-right px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Total</th>
                   <th className="w-[8%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Payments</th>
                   <th className="w-[9%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Date and Time</th>
+                  {showEstimatedPrepTime && (
+                    <th className="w-[8%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Est. Prep</th>
+                  )}
                   <th className="w-[8%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Stay</th>
                   <th className="w-[9%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Time Served</th>
                   <th className="w-[14%] text-center px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Action</th>
@@ -411,6 +415,14 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                       <div className="text-xs text-gray-600 whitespace-nowrap">{order.date}</div>
                       <div className="text-xs text-gray-400 whitespace-nowrap">{order.time}</div>
                     </td>
+                    {showEstimatedPrepTime && (
+                      <td className="px-4 py-5 text-xs text-gray-600 whitespace-nowrap">
+                        {order.estimatedPrepMinutes ? `${order.estimatedPrepMinutes} mins` : '-'}
+                        {order.estimatedReadyAt && (
+                          <div className="text-xs text-gray-400">{new Date(order.estimatedReadyAt).toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })}</div>
+                        )}
+                      </td>
+                    )}
                     <td className="px-4 py-5 text-xs text-gray-600 whitespace-nowrap">
                       {order.type === 'Dine-In' || order.type === 'Mixed'
                         ? formatElapsed(order.tableStartedAt, order.tableEndedAt, undefined, clock)
@@ -582,6 +594,15 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                   <p className="text-xs text-gray-400 mb-1">Payment Time</p>
                   <p className="text-sm text-gray-800">{selectedOrder.paymentAt ? new Date(selectedOrder.paymentAt).toLocaleString('en-PH') : '-'}</p>
                 </div>
+                {showEstimatedPrepTime && (
+                  <div className="bg-muted rounded-xl p-3">
+                    <p className="text-xs text-gray-400 mb-1">Estimated Preparation</p>
+                    <p className="text-sm text-gray-800">
+                      {selectedOrder.estimatedPrepMinutes ? `${selectedOrder.estimatedPrepMinutes} mins` : '-'}
+                      {selectedOrder.estimatedReadyAt ? `, ready around ${new Date(selectedOrder.estimatedReadyAt).toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })}` : ''}
+                    </p>
+                  </div>
+                )}
                 <div className="bg-muted rounded-xl p-3">
                   <p className="text-xs text-gray-400 mb-1">Preparing Start</p>
                   <p className="text-sm text-gray-800">{selectedOrder.preparingStartedAt ? new Date(selectedOrder.preparingStartedAt).toLocaleString('en-PH') : '-'}</p>
@@ -879,6 +900,8 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
               time={selectedOrder.time}
               receiptId={selectedOrder.receiptId || currentReceiptId}
               paymentId={selectedOrder.paymentId || currentPaymentId}
+              estimatedPrepMinutes={selectedOrder.estimatedPrepMinutes}
+              estimatedReadyAt={selectedOrder.estimatedReadyAt}
               cashier={selectedOrder.cashier ?? userName ?? 'Staff'}
               storeBrand={storeBrand}
             />

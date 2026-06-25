@@ -1004,6 +1004,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     enableRefund?: boolean;
     enableVoid?: boolean;
     enableDiscount?: boolean;
+    enableEstimatedPrepTime?: boolean;
+    prepTimeStrategy?: string;
+    customizationPrepTimeMinutes?: number;
     enableServiceCharge?: boolean;
     serviceChargeRate?: number;
     enableTax?: boolean;
@@ -1032,21 +1035,24 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           enable_refund = COALESCE($3, enable_refund),
           enable_void = COALESCE($4, enable_void),
           enable_discount = COALESCE($5, enable_discount),
-          enable_service_charge = COALESCE($6, enable_service_charge),
-          service_charge_rate = COALESCE($7, service_charge_rate),
-          service_charge_percentage = COALESCE($7, service_charge_percentage),
-          enable_tax = COALESCE($8, enable_tax),
-          tax_rate = COALESCE($9, tax_rate),
-          enable_dine_in = COALESCE($10, enable_dine_in),
-          enable_takeout = COALESCE($11, enable_takeout),
-          enable_ingredient_customization = COALESCE($12, enable_ingredient_customization),
-          enable_receipt_printing = COALESCE($13, enable_receipt_printing),
-          enabled_payment_methods = COALESCE($14, enabled_payment_methods),
-          payment_method_accounts = COALESCE($15, payment_method_accounts),
-          store_type = COALESCE(store_type, $16),
+          enable_estimated_prep_time = COALESCE($6, enable_estimated_prep_time),
+          prep_time_strategy = COALESCE($7, prep_time_strategy),
+          customization_prep_time_minutes = COALESCE($8, customization_prep_time_minutes),
+          enable_service_charge = COALESCE($9, enable_service_charge),
+          service_charge_rate = COALESCE($10, service_charge_rate),
+          service_charge_percentage = COALESCE($10, service_charge_percentage),
+          enable_tax = COALESCE($11, enable_tax),
+          tax_rate = COALESCE($12, tax_rate),
+          enable_dine_in = COALESCE($13, enable_dine_in),
+          enable_takeout = COALESCE($14, enable_takeout),
+          enable_ingredient_customization = COALESCE($15, enable_ingredient_customization),
+          enable_receipt_printing = COALESCE($16, enable_receipt_printing),
+          enabled_payment_methods = COALESCE($17, enabled_payment_methods),
+          payment_method_accounts = COALESCE($18, payment_method_accounts),
+          store_type = COALESCE(store_type, $19),
           updated_at = CURRENT_TIMESTAMP
-        WHERE store_id = $17
-          AND (store_type = $16 OR store_type IS NULL)
+        WHERE store_id = $20
+          AND (store_type = $19 OR store_type IS NULL)
         RETURNING *
       `,
       [
@@ -1055,6 +1061,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         input.enableRefund,
         input.enableVoid,
         input.enableDiscount,
+        input.enableEstimatedPrepTime,
+        input.prepTimeStrategy === 'sequential' ? 'sequential' : input.prepTimeStrategy === 'parallel' ? 'parallel' : null,
+        input.customizationPrepTimeMinutes,
         input.enableServiceCharge,
         input.serviceChargeRate,
         input.enableTax,
@@ -3065,9 +3074,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
               party_size, subtotal, discount_amount, discount_type, tax_amount, service_charge,
               total_amount, order_status, payment_status, payment_at, completed_at,
               table_started_at, preparing_started_at, ready_at, service_started_at, served_at, service_duration,
-              running_time_start, running_time_end, running_duration, is_running
+              running_time_start, running_time_end, running_duration, is_running, estimated_prep_minutes, estimated_ready_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
             RETURNING id
           `,
           [
@@ -3101,6 +3110,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             runningTimeEnd,
             runningTimeEnd ? 0 : null,
             shouldStartTimerAtConfirmation && !stopsOnConfirmation,
+            Number.isFinite(Number(input.estimatedPrepMinutes ?? input.estimated_prep_minutes)) ? Number(input.estimatedPrepMinutes ?? input.estimated_prep_minutes) : null,
+            input.estimatedReadyAt ?? input.estimated_ready_at ?? null,
           ],
         );
         const orderId = orderRows[0].id;
@@ -3112,9 +3123,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           `
             INSERT INTO order_items (
               order_id, product_id, variant_id, product_name, category_name, size, color,
-              quantity, unit_price, line_total, item_type, notes
+              quantity, unit_price, line_total, item_type, notes, prep_time_minutes, customization_prep_minutes
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
             RETURNING id
           `,
           [
@@ -3130,6 +3141,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             (item.price ?? 0) * (item.quantity ?? 1),
             item.orderType ?? null,
             item.notes ?? null,
+            Number.isFinite(Number(item.prepTimeMinutes ?? item.prep_time_minutes)) ? Number(item.prepTimeMinutes ?? item.prep_time_minutes) : null,
+            Number.isFinite(Number(item.customizationPrepMinutes ?? item.customization_prep_minutes)) ? Number(item.customizationPrepMinutes ?? item.customization_prep_minutes) : 0,
           ],
         );
         const orderItemId = itemRows[0].id;
@@ -3492,6 +3505,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           o.running_time_end,
           o.running_duration,
           o.is_running,
+          o.estimated_prep_minutes,
+          o.estimated_ready_at,
           p.payment_number,
           p.payment_method,
           p.amount_paid,
@@ -3512,7 +3527,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
                 'line_total', oi.line_total,
                 'image_url', COALESCE(pv.image_url, prod.image_url),
                 'item_type', oi.item_type,
-                'notes', oi.notes
+                'notes', oi.notes,
+                'prep_time_minutes', oi.prep_time_minutes,
+                'customization_prep_minutes', oi.customization_prep_minutes
               )
               ORDER BY oi.id ASC
             ) FILTER (WHERE oi.id IS NOT NULL),
@@ -4649,6 +4666,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           enable_refund,
           enable_void,
           enable_discount,
+          enable_estimated_prep_time,
+          prep_time_strategy,
+          customization_prep_time_minutes,
           enable_service_charge,
           service_charge_rate,
           service_charge_percentage,
@@ -4661,7 +4681,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           enabled_payment_methods,
           payment_method_accounts
         )
-        VALUES ($1, $2, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, 0, 0, TRUE, 0, TRUE, TRUE, TRUE, TRUE, ARRAY['Cash', 'GCash', 'Maya', 'Bank Transfer']::TEXT[], '{}'::JSONB)
+        VALUES ($1, $2, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, 'parallel', 2, TRUE, 0, 0, TRUE, 0, TRUE, TRUE, TRUE, TRUE, ARRAY['Cash', 'GCash', 'Maya', 'Bank Transfer']::TEXT[], '{}'::JSONB)
         ON CONFLICT (store_id) DO UPDATE
         SET store_type = COALESCE(store_settings.store_type, EXCLUDED.store_type),
             service_charge_rate = COALESCE(store_settings.service_charge_rate, store_settings.service_charge_percentage, 0),
@@ -4684,6 +4704,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ADD COLUMN IF NOT EXISTS enable_refund BOOLEAN DEFAULT TRUE,
           ADD COLUMN IF NOT EXISTS enable_void BOOLEAN DEFAULT TRUE,
           ADD COLUMN IF NOT EXISTS enable_discount BOOLEAN DEFAULT TRUE,
+          ADD COLUMN IF NOT EXISTS enable_estimated_prep_time BOOLEAN DEFAULT TRUE,
+          ADD COLUMN IF NOT EXISTS prep_time_strategy VARCHAR(20) DEFAULT 'parallel',
+          ADD COLUMN IF NOT EXISTS customization_prep_time_minutes INT DEFAULT 2,
           ADD COLUMN IF NOT EXISTS enable_service_charge BOOLEAN DEFAULT TRUE,
           ADD COLUMN IF NOT EXISTS service_charge_rate DECIMAL(5,2) DEFAULT 0,
           ADD COLUMN IF NOT EXISTS service_charge_percentage DECIMAL(5,2) DEFAULT 0,
@@ -4785,6 +4808,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ADD COLUMN IF NOT EXISTS service_started_at TIMESTAMP,
           ADD COLUMN IF NOT EXISTS served_at TIMESTAMP,
           ADD COLUMN IF NOT EXISTS service_duration BIGINT,
+          ADD COLUMN IF NOT EXISTS estimated_prep_minutes INT,
+          ADD COLUMN IF NOT EXISTS estimated_ready_at TIMESTAMP,
           ADD COLUMN IF NOT EXISTS table_started_at TIMESTAMP,
           ADD COLUMN IF NOT EXISTS table_ended_at TIMESTAMP,
           ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP,
@@ -4804,6 +4829,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ADD COLUMN IF NOT EXISTS color VARCHAR(50),
           ADD COLUMN IF NOT EXISTS item_type VARCHAR(50),
           ADD COLUMN IF NOT EXISTS notes TEXT,
+          ADD COLUMN IF NOT EXISTS prep_time_minutes INT,
+          ADD COLUMN IF NOT EXISTS customization_prep_minutes INT DEFAULT 0,
           ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       `,
     );

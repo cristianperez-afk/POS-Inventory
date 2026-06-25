@@ -12,6 +12,8 @@ export interface OrderItem {
   itemType?: 'dine-in' | 'takeout';
   notes?: string;
   ingredients?: any[];
+  prepTimeMinutes?: number;
+  customizationPrepMinutes?: number;
 }
 
 export interface Order {
@@ -47,6 +49,8 @@ export interface Order {
   isRunning?: boolean;
   runningTimeMinutes?: number;
   customerStayMinutes?: number;
+  estimatedPrepMinutes?: number;
+  estimatedReadyAt?: string;
   items: OrderItem[];
   paymentId?: string;
   receiptId?: string;
@@ -489,6 +493,8 @@ function mapDatabaseRestaurantOrder(row: any): Order {
     // Kept for older consumers; runningDuration is the precise source of truth.
     runningTimeMinutes: minutesBetween(runningTimeStart ?? createdAt, runningTimeEnd),
     customerStayMinutes: tableStartedAt ? minutesBetween(tableStartedAt, tableEndedAt ?? completedAt) : undefined,
+    estimatedPrepMinutes: row.estimated_prep_minutes !== null && row.estimated_prep_minutes !== undefined ? Number(row.estimated_prep_minutes) : undefined,
+    estimatedReadyAt: row.estimated_ready_at ?? undefined,
     items: items.map((item: any) => ({
       name: item.product_name,
       quantity: Number(item.quantity ?? 0),
@@ -498,6 +504,8 @@ function mapDatabaseRestaurantOrder(row: any): Order {
       itemType: item.item_type === 'dine-in' || item.item_type === 'DINE_IN' ? 'dine-in' : 'takeout',
       notes: item.notes ?? undefined,
       ingredients: item.ingredients ?? undefined,
+      prepTimeMinutes: item.prep_time_minutes !== null && item.prep_time_minutes !== undefined ? Number(item.prep_time_minutes) : undefined,
+      customizationPrepMinutes: item.customization_prep_minutes !== null && item.customization_prep_minutes !== undefined ? Number(item.customization_prep_minutes) : undefined,
     })),
     paymentId: row.payment_number ?? undefined,
     receiptId: row.receipt_number ?? (row.payment_number ? String(row.payment_number).replace(/^PAY-/, 'REC-') : undefined),

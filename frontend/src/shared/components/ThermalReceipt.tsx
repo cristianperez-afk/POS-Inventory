@@ -30,6 +30,8 @@ interface ThermalReceiptProps {
   receiptId?: string;
   paymentId?: string;
   cashier?: string;
+  estimatedPrepMinutes?: number;
+  estimatedReadyAt?: string;
   storeBrand?: StoreBrand;
 }
 
@@ -53,6 +55,8 @@ export const ThermalReceipt = forwardRef<HTMLDivElement, ThermalReceiptProps>(
       receiptId,
       paymentId,
       cashier,
+      estimatedPrepMinutes,
+      estimatedReadyAt,
       storeBrand,
     },
     ref
@@ -136,6 +140,20 @@ export const ThermalReceipt = forwardRef<HTMLDivElement, ThermalReceiptProps>(
               <span className="text-gray-500">Table:</span>
               <span>{table}</span>
             </div>
+          )}
+          {estimatedPrepMinutes !== undefined && estimatedPrepMinutes > 0 && (
+            <>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Est. Prep:</span>
+                <span>{estimatedPrepMinutes} mins</span>
+              </div>
+              {estimatedReadyAt && (
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Ready Around:</span>
+                  <span>{new Date(estimatedReadyAt).toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })}</span>
+                </div>
+              )}
+            </>
           )}
         </div>
 
