@@ -4215,7 +4215,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           LEFT JOIN "InventoryItem" inv ON inv.id = ii.inventory_item_id
           WHERE ii.id = $1
             AND ii.store_id = $2
-          FOR UPDATE
+          FOR UPDATE OF ii
         `,
         [ingredientId, storeId],
       );
