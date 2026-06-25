@@ -34,12 +34,18 @@ type GoodsRecordSummary = {
   status: string;
 };
 
-const goToInventory = () =>
-  window.dispatchEvent(new CustomEvent('restaurant-navigate', { detail: 'restaurant-food-inventory' }));
+const navigateRestaurant = (target: string) =>
+  window.dispatchEvent(new CustomEvent('restaurant-navigate', { detail: target }));
+
+const goToInventory = () => navigateRestaurant('restaurant-food-inventory');
+
+const goToStockAlerts = () => navigateRestaurant('restaurant-stock-alerts');
+
+const goToKitchenOrders = () => navigateRestaurant('restaurant-pos-kitchen');
 
 const goToPurchaseOrders = () => {
   sessionStorage.setItem('po-open-approval', 'true');
-  window.dispatchEvent(new CustomEvent('restaurant-navigate', { detail: 'restaurant-purchase-orders' }));
+  navigateRestaurant('restaurant-purchase-orders');
 };
 
 const formatDuration = (minutes: number) => {
@@ -120,6 +126,7 @@ export function Dashboard() {
       trend: "up",
       icon: Apple,
       color: "from-orange-500 to-red-500",
+      onClick: goToInventory,
     },
     {
       title: "Expiring Soon",
@@ -128,6 +135,7 @@ export function Dashboard() {
       trend: "down",
       icon: Calendar,
       color: "from-orange-500 to-yellow-500",
+      onClick: goToStockAlerts,
     },
     {
       title: "Total Value",
@@ -136,6 +144,7 @@ export function Dashboard() {
       trend: "up",
       icon: PhilippinePeso,
       color: "from-green-500 to-lime-500",
+      onClick: goToInventory,
     },
     {
       title: userRole === "admin" ? "Pending Approvals" : "My Orders",
@@ -144,6 +153,7 @@ export function Dashboard() {
       trend: "up",
       icon: userRole === "admin" ? Clock : ShoppingCart,
       color: "from-amber-500 to-orange-500",
+      onClick: goToPurchaseOrders,
     },
     {
       title: "Avg Running Time",
@@ -152,6 +162,7 @@ export function Dashboard() {
       trend: "up",
       icon: Clock,
       color: "from-cyan-500 to-blue-500",
+      onClick: goToKitchenOrders,
     },
     {
       title: "Avg Dine-In Stay",
@@ -160,6 +171,7 @@ export function Dashboard() {
       trend: "up",
       icon: Clock,
       color: "from-violet-500 to-fuchsia-500",
+      onClick: goToKitchenOrders,
     },
   ];
 
@@ -282,7 +294,13 @@ export function Dashboard() {
         {stats.map((stat, index) => {
           const Icon = stat.icon;
           return (
-            <div key={`stat-${index}`} className="bg-card rounded-2xl p-6 shadow-sm border border-border hover:shadow-md transition-all duration-200">
+            <button
+              type="button"
+              key={`stat-${index}`}
+              onClick={stat.onClick}
+              aria-label={`View ${stat.title}`}
+              className="group text-left w-full bg-card rounded-2xl p-6 shadow-sm border border-border cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-xl hover:shadow-primary/25 hover:border-primary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-lg active:shadow-primary/30 active:border-primary"
+            >
               <div className="flex items-start justify-between mb-4">
                 <div className={`w-10 h-10 bg-gradient-to-br ${stat.color} rounded-xl flex items-center justify-center shadow-lg`}>
                   <Icon className="w-5 h-5 text-white" />
@@ -294,7 +312,7 @@ export function Dashboard() {
               </div>
               <h3 className="text-muted-foreground text-sm mb-1">{stat.title}</h3>
               <p className="text-2xl font-bold text-foreground">{stat.value}</p>
-            </div>
+            </button>
           );
         })}
       </div>

@@ -250,12 +250,18 @@ export function PurchaseOrders() {
   };
 
   const stats = [
-    { label: "Total Orders", value: orders.length, color: "#009BA5" },
-    { label: "Pending", value: orders.filter(o => o.status === "pending").length, color: "#F59E0B" },
-    { label: "Approved", value: orders.filter(o => o.status === "approved").length, color: "#007A5E" },
-    { label: "Partial", value: orders.filter(o => o.status === "partial").length, color: "#F59E0B" },
-    { label: "Rejected", value: orders.filter(o => o.status === "rejected").length, color: "#DC2626" },
+    { label: "Total Orders", value: orders.length, color: "#009BA5", status: "all" },
+    { label: "Pending", value: orders.filter(o => o.status === "pending").length, color: "#F59E0B", status: "pending" },
+    { label: "Approved", value: orders.filter(o => o.status === "approved").length, color: "#007A5E", status: "approved" },
+    { label: "Partial", value: orders.filter(o => o.status === "partial").length, color: "#F59E0B", status: "partial" },
+    { label: "Rejected", value: orders.filter(o => o.status === "rejected").length, color: "#DC2626", status: "rejected" },
   ];
+
+  // Cards toggle the shared status filter that drives the orders table below;
+  // clicking the active card (or Total Orders) clears it back to "all".
+  const toggleStatusFilter = (status: string) => {
+    setStatusFilter((current) => (current === status ? "all" : status));
+  };
 
   const approvalLevels = [
     {
@@ -624,12 +630,24 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
 
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-        {stats.map((stat, index) => (
-          <div key={index} className="bg-card rounded-2xl p-6 shadow-sm border border-border">
-            <p className="text-muted-foreground text-sm mb-1">{stat.label}</p>
-            <p className="text-2xl font-bold" style={{ color: stat.color }}>{stat.value}</p>
-          </div>
-        ))}
+        {stats.map((stat, index) => {
+          const isActive = statusFilter === stat.status;
+          return (
+            <button
+              type="button"
+              key={index}
+              onClick={() => toggleStatusFilter(stat.status)}
+              aria-pressed={isActive}
+              aria-label={`Filter by ${stat.label}`}
+              className={`group text-left w-full bg-card rounded-2xl p-6 shadow-sm border cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-xl hover:shadow-primary/25 hover:border-primary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-lg active:shadow-primary/30 ${
+                isActive ? "border-primary bg-primary/5 shadow-md shadow-primary/20" : "border-border"
+              }`}
+            >
+              <p className="text-muted-foreground text-sm mb-1">{stat.label}</p>
+              <p className="text-2xl font-bold" style={{ color: stat.color }}>{stat.value}</p>
+            </button>
+          );
+        })}
       </div>
 
       {userRole === "admin" && (

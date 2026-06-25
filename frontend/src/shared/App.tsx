@@ -208,6 +208,8 @@ export default function App() {
     const RESTAURANT_NAV_MAP: Record<string, Page> = {
       'restaurant-purchase-orders': 'inventory-purchase-orders',
       'restaurant-food-inventory': 'inventory-items',
+      'restaurant-stock-alerts': 'inventory-stock-alerts',
+      'restaurant-pos-kitchen': 'inventory-pos-kitchen',
     };
     const handleRestaurantNavigate = (event: Event) => {
       const detail = (event as CustomEvent<string>).detail;
