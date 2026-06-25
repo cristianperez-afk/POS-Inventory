@@ -10,7 +10,7 @@ import { ThermalReceipt } from '../../shared/components/ThermalReceipt';
 import { DeleteConfirmDialog } from '../../shared/components/DeleteConfirmDialog';
 import { getApiBaseUrl } from '../../auth/services/auth';
 import type { AuthenticatedUser } from '../../auth/types/auth';
-import { getLocalDateKey } from '../../shared/utils/date';
+import { formatManilaTime, getLocalDateKey } from '../../shared/utils/date';
 import { useCompletePaymentMutation, usePosIngredientsQuery, usePosMenuQuery, useProductRecipeQuery } from '../../features/pos/hooks/usePosMenuQuery';
 
 interface CreateOrderProps {
@@ -733,7 +733,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
     ? new Date(Date.now() + estimatedWaitingMinutes * 60000)
     : null;
   const estimatedReadyTimeLabel = estimatedReadyAt
-    ? estimatedReadyAt.toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })
+    ? formatManilaTime(estimatedReadyAt)
     : '';
   const subtotal = cart.reduce((sum, item) => sum + itemLineTotal(item), 0);
   const serviceFee = settings.enable_service_charge ? subtotal * (settings.service_charge_rate / 100) : 0;
@@ -2378,7 +2378,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                 {settings.enable_estimated_prep_time && successOrderDetails.estimatedPrepMinutes !== undefined && (
                   <p className="text-sm mb-2">
                     <strong>Estimated Ready:</strong> {successOrderDetails.estimatedPrepMinutes} minutes
-                    {successOrderDetails.estimatedReadyAt ? ` (${new Date(successOrderDetails.estimatedReadyAt).toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })})` : ''}
+                    {successOrderDetails.estimatedReadyAt ? ` (${formatManilaTime(successOrderDetails.estimatedReadyAt)})` : ''}
                   </p>
                 )}
                 <p className="text-sm mb-2">
