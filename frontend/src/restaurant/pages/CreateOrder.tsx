@@ -61,6 +61,7 @@ interface MenuProduct {
   categoryName?: string;
   image: string;
   availableQuantity?: number;
+  availableOrders?: number;
   servings?: number;
   prepTimeMinutes?: number;
   ingredients: Ingredient[];
@@ -73,6 +74,7 @@ interface CartItem {
   price: number;
   quantity: number;
   image: string;
+  availableQuantity?: number;
   prepTimeMinutes?: number;
   customizationPrepMinutes?: number;
   orderType: 'dine-in' | 'takeout';
@@ -212,7 +214,8 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       category: product.category_name ?? 'Uncategorized',
       categoryName: product.category_name ?? null,
       image: product.image_url || storeBrand?.logo || '',
-      availableQuantity: Number(product.available_quantity ?? 0),
+      availableQuantity: Number(product.available_orders ?? product.availableOrders ?? product.available_quantity ?? 0),
+      availableOrders: Number(product.available_orders ?? product.availableOrders ?? product.available_quantity ?? 0),
       servings: finiteNumberIncludingZeroOrUndefined(product.servings),
       prepTimeMinutes: finiteNumberIncludingZeroOrUndefined(product.prep_time_minutes),
       ingredients: (product.ingredients ?? []).map((ingredient: any) => ({
@@ -468,12 +471,23 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
   }, [customerName, orders, customerRecommendationEnabled, posProducts]);
 
   const addToCart = (product: MenuProduct, orderType?: 'dine-in' | 'takeout') => {
+    const availableQuantity = finiteNumberIncludingZeroOrUndefined(product.availableQuantity);
+    const quantityInCart = cart
+      .filter((item) => item.id === product.id)
+      .reduce((sum, item) => sum + Number(item.quantity ?? 0), 0);
+
+    if (availableQuantity !== undefined && quantityInCart >= availableQuantity) {
+      setValidationError(`${product.name} only has ${availableQuantity} available order${availableQuantity === 1 ? '' : 's'}.`);
+      return;
+    }
+
     const typeToUse = orderType || (diningOption === 'dine-in' || diningOption === 'takeout' ? diningOption : 'dine-in');
     const newItem: CartItem = {
       id: product.id,
       name: product.name,
       price: product.price,
       image: product.image,
+      availableQuantity,
       quantity: 1,
       prepTimeMinutes: product.prepTimeMinutes ?? 0,
       customizationPrepMinutes: 0,
@@ -492,8 +506,21 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
     if (newQuantity <= 0) {
       setCart(cart.filter((_, i) => i !== index));
     } else {
+      const targetItem = cart[index];
+      const sameProductQuantityOutsideLine = cart
+        .filter((item, itemIndex) => itemIndex !== index && item.id === targetItem?.id)
+        .reduce((sum, item) => sum + Number(item.quantity ?? 0), 0);
+      const maxLineQuantity = targetItem?.availableQuantity !== undefined
+        ? Math.max(0, targetItem.availableQuantity - sameProductQuantityOutsideLine)
+        : newQuantity;
+      const nextQuantity = Math.min(newQuantity, maxLineQuantity);
+
+      if (targetItem?.availableQuantity !== undefined && newQuantity > maxLineQuantity) {
+        setValidationError(`${targetItem.name} only has ${targetItem.availableQuantity} available order${targetItem.availableQuantity === 1 ? '' : 's'}.`);
+      }
+
       setCart(cart.map((item, i) =>
-        i === index ? { ...item, quantity: newQuantity } : item
+        i === index ? { ...item, quantity: nextQuantity } : item
       ));
     }
   };
@@ -1301,6 +1328,11 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
 
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
             {filteredProducts.map(product => {
+              const availableOrders = finiteNumberIncludingZeroOrUndefined(product.availableOrders ?? product.availableQuantity);
+              const cartQuantity = cart
+                .filter((item) => item.id === product.id)
+                .reduce((sum, item) => sum + Number(item.quantity ?? 0), 0);
+              const remainingOrders = availableOrders !== undefined ? Math.max(0, availableOrders - cartQuantity) : undefined;
               const hoveredRecipeDetails =
                 product.id === hoveredProductId
                   ? hoveredProductRecipeQuery.data as Record<string, unknown> | undefined
@@ -1320,7 +1352,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                 onMouseLeave={() => setHoveredProductId((current) => (current === product.id ? null : current))}
                 onFocus={() => setHoveredProductId(product.id)}
                 onBlur={() => setHoveredProductId((current) => (current === product.id ? null : current))}
-                disabled={product.availableQuantity !== undefined && product.availableQuantity <= 0}
+                disabled={remainingOrders !== undefined && remainingOrders <= 0}
                 className="group relative isolate overflow-visible rounded-2xl text-left transition-transform duration-300 ease-out hover:z-30 hover:-translate-y-3 hover:scale-[1.18] focus-visible:z-30 focus-visible:-translate-y-3 focus-visible:scale-[1.18] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <div className="overflow-hidden rounded-2xl border border-border bg-white p-2.5 shadow-sm transition-all duration-300 ease-out group-hover:border-primary/35 group-hover:shadow-[0_18px_38px_rgba(15,23,42,0.18)] group-focus-visible:border-primary/35 group-focus-visible:shadow-[0_18px_38px_rgba(15,23,42,0.18)]">
@@ -1332,6 +1364,11 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                   />
                 </div>
                 <h3 className="mt-3 line-clamp-2 text-sm font-semibold text-foreground">{product.name}</h3>
+                {remainingOrders !== undefined && (
+                  <p className={`mt-1 text-[11px] font-semibold ${remainingOrders > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                    Available Orders: {remainingOrders}
+                  </p>
+                )}
                 <p className="text-xs text-primary font-medium">₱ {product.price.toFixed(2)}</p>
                 </div>
                 <div className="pointer-events-none absolute left-1/2 top-1/2 z-20 w-[118%] max-w-[280px] -translate-x-1/2 -translate-y-1/2 opacity-0 transition-all duration-300 ease-out group-hover:opacity-100 group-focus-visible:opacity-100">
@@ -1353,6 +1390,10 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                       <p className="shrink-0 text-xs font-semibold text-primary">₱ {product.price.toFixed(2)}</p>
                     </div>
                     <div className="mx-4 mb-4 space-y-1.5 rounded-xl bg-slate-50 px-3 py-2.5 text-xs">
+                      <p className="text-foreground">
+                        <span className="font-semibold text-slate-700">Available Orders:</span>{' '}
+                        {remainingOrders !== undefined ? remainingOrders : 'N/A'}
+                      </p>
                       <p className="text-foreground">
                         <span className="font-semibold text-slate-700">Prep Time:</span>{' '}
                           {resolvedPrepTimeMinutes !== undefined
@@ -2118,13 +2159,21 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
               </div>
 
               <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3">
-                {filteredProducts.map(product => (
+                {filteredProducts.map(product => {
+                  const availableOrders = finiteNumberIncludingZeroOrUndefined(product.availableOrders ?? product.availableQuantity);
+                  const cartQuantity = cart
+                    .filter((item) => item.id === product.id)
+                    .reduce((sum, item) => sum + Number(item.quantity ?? 0), 0);
+                  const remainingOrders = availableOrders !== undefined ? Math.max(0, availableOrders - cartQuantity) : undefined;
+
+                  return (
                   <button
                     key={product.id}
                     onClick={() => {
                       addToCart(product, 'takeout');
                     }}
-                    className="group rounded-lg border border-border bg-white p-2.5 text-left shadow-sm transition-all duration-150 ease-out hover:-translate-y-0.5 hover:border-secondary/50 hover:bg-secondary/[0.03] hover:shadow-lg focus-visible:-translate-y-0.5 focus-visible:border-secondary/50 focus-visible:ring-2 focus-visible:ring-secondary/20"
+                    disabled={remainingOrders !== undefined && remainingOrders <= 0}
+                    className="group rounded-lg border border-border bg-white p-2.5 text-left shadow-sm transition-all duration-150 ease-out hover:-translate-y-0.5 hover:border-secondary/50 hover:bg-secondary/[0.03] hover:shadow-lg focus-visible:-translate-y-0.5 focus-visible:border-secondary/50 focus-visible:ring-2 focus-visible:ring-secondary/20 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <div className="mb-2 aspect-square overflow-hidden rounded-lg bg-muted">
                       <img
@@ -2134,10 +2183,16 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                       />
                     </div>
                     <h3 className="text-xs font-medium mb-0.5 line-clamp-1">{product.name}</h3>
+                    {remainingOrders !== undefined && (
+                      <p className={`mb-1 text-[11px] font-semibold ${remainingOrders > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                        Available Orders: {remainingOrders}
+                      </p>
+                    )}
                     {product.description && <p className="text-xs text-muted-foreground mb-1 line-clamp-2">{product.description}</p>}
                     <p className="text-xs text-secondary font-medium">₱ {product.price.toFixed(2)}</p>
                   </button>
-                ))}
+                  );
+                })}
               </div>
             </div>
             <div className="p-5 border-t border-border flex-shrink-0">

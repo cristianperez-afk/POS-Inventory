@@ -2354,7 +2354,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             pv.stock_quantity,
             pv.low_stock_limit,
             pv.is_active,
-            pv.stock_quantity AS available_quantity
+            pv.stock_quantity AS available_quantity,
+            pv.stock_quantity AS available_orders,
+            pv.stock_quantity AS "availableOrders"
           FROM products p
           JOIN product_variants pv ON pv.product_id = p.id
           LEFT JOIN product_categories c ON c.id = p.category_id
@@ -2396,7 +2398,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           CASE
             WHEN p.store_type = 'RESTAURANT' THEN COALESCE(availability.available_quantity, 0)
             ELSE COALESCE(p.stock_quantity, 0)
-          END AS available_quantity
+          END AS available_quantity,
+          CASE
+            WHEN p.store_type = 'RESTAURANT' THEN COALESCE(availability.available_quantity, 0)
+            ELSE COALESCE(p.stock_quantity, 0)
+          END AS available_orders,
+          CASE
+            WHEN p.store_type = 'RESTAURANT' THEN COALESCE(availability.available_quantity, 0)
+            ELSE COALESCE(p.stock_quantity, 0)
+          END AS "availableOrders"
         FROM products p
         LEFT JOIN product_categories c ON c.id = p.category_id
         LEFT JOIN LATERAL (
@@ -2511,6 +2521,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     return products.map((product) => ({
       ...product,
+      available_orders: product.available_orders ?? product.available_quantity,
+      availableOrders: product.availableOrders ?? product.available_quantity,
       ingredients: ingredientsByProduct.get(Number(product.id)) ?? [],
     }));
   }

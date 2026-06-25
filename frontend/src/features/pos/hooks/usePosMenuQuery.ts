@@ -51,6 +51,8 @@ export type PosMenuProduct = {
   stock_quantity?: number | string | null;
   low_stock_limit?: number | string | null;
   available_quantity?: number | string | null;
+  available_orders?: number | string | null;
+  availableOrders?: number | string | null;
   is_available?: boolean;
   is_active?: boolean;
   servings?: number | string | null;
