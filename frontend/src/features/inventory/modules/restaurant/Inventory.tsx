@@ -248,7 +248,7 @@ export function Inventory() {
         {userRole === "admin" && (
           <button
             onClick={() => setShowInitialStockModal(true)}
-            className="px-4 py-2 bg-muted text-foreground border border-border rounded-xl hover:bg-muted/80 transition-colors text-sm font-medium flex items-center gap-2"
+            className="px-4 py-2 bg-muted text-foreground border border-border rounded-xl hover:bg-muted/80 hover:-translate-y-0.5 hover:shadow-md hover:border-primary/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-sm transition-all duration-200 text-sm font-medium flex items-center gap-2"
           >
             <PlusCircle className="w-4 h-4" />
             Initial Stock Setup

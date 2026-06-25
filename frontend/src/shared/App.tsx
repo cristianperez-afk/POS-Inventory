@@ -352,7 +352,7 @@ export default function App() {
                   inventoryEnabled={INVENTORY_MODULES_ENABLED}
                 />
               </div>
-              <InventoryModulePage currentPage={currentPage} currentUser={currentUser} />
+              <InventoryModulePage currentPage={currentPage} currentUser={currentUser} onNavigate={navigateTo} />
             </div>
           )}
               </TableProvider>

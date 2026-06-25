@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Package, Search, TrendingDown, TrendingUp, AlertCircle, RefreshCw, Download, BarChart3, Calendar, Clock } from "lucide-react";
 import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   useRestaurantAdjustmentsQuery,
   useRestaurantInventoryMovementsQuery,
@@ -76,6 +77,7 @@ export function StockControl() {
   const { data: wasteLogs = [] } = useRestaurantWasteQuery();
   const { data: adjustments = [] } = useRestaurantAdjustmentsQuery();
   const { data: inventoryMovements = [] } = useRestaurantInventoryMovementsQuery();
+  const queryClient = useQueryClient();
 
   const getRecordedOutflowQuantity = (productName: string) => {
     const targetName = normalizeName(productName);
@@ -323,14 +325,17 @@ export function StockControl() {
     { label: "Expiring Soon", value: expiryItems.filter(i => i.daysUntilExpiry <= 3).length, icon: Calendar, color: "linear-gradient(to right, #F59E0B, #DC2626)", onClick: showExpiring },
   ];
 
-  const handleRefresh = () => {
+  const handleRefresh = async () => {
     setIsRefreshing(true);
-    // Simulate data refresh
-    setTimeout(() => {
-      setIsRefreshing(false);
-      // In a real app, this would fetch fresh data from the backend
+    try {
+      // Refetch stock data (inventory, waste, adjustments, movements) from the backend.
+      await queryClient.invalidateQueries();
       toast.success("Stock data refreshed successfully!");
-    }, 1000);
+    } catch {
+      toast.error("Failed to refresh stock data");
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
   const handleExportReport = () => {
@@ -392,14 +397,14 @@ export function StockControl() {
           <button
             onClick={handleRefresh}
             disabled={isRefreshing}
-            className="px-6 py-3 bg-muted text-foreground rounded-2xl hover:bg-muted/80 transition-all duration-200 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-6 py-3 bg-muted text-foreground rounded-2xl border border-transparent hover:bg-muted/80 hover:-translate-y-0.5 hover:shadow-md hover:border-primary/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-sm transition-all duration-200 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:translate-y-0 disabled:shadow-none disabled:border-transparent"
           >
             <RefreshCw className={`w-5 h-5 ${isRefreshing ? "animate-spin" : ""}`} />
             {isRefreshing ? "Refreshing..." : "Refresh"}
           </button>
           <button
             onClick={handleExportReport}
-            className="px-6 py-3 bg-gradient-to-r from-primary to-secondary text-white rounded-2xl hover:shadow-lg hover:shadow-primary/30 transition-all duration-200 flex items-center gap-2"
+            className="px-6 py-3 bg-gradient-to-r from-primary to-secondary text-white rounded-2xl hover:-translate-y-0.5 hover:shadow-lg hover:shadow-primary/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-md transition-all duration-200 flex items-center gap-2"
           >
             <Download className="w-5 h-5" />
             Export Report

@@ -100,6 +100,7 @@ export function RecipeBOM() {
   const isAdmin = currentUser?.role === "Admin";
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [activeFilter, setActiveFilter] = useState<"all" | "active">("all");
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingRecipe, setEditingRecipe] = useState<Recipe | null>(null);
   const [showViewModal, setShowViewModal] = useState(false);
@@ -165,7 +166,8 @@ export function RecipeBOM() {
     const matchesSearch = (recipe.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
                          (recipe.id || '').toLowerCase().includes(searchQuery.toLowerCase());
     const matchesCategory = categoryFilter === "all" || recipe.category === categoryFilter;
-    return matchesSearch && matchesCategory;
+    const matchesActive = activeFilter === "all" || (recipe.isActive ?? true);
+    return matchesSearch && matchesCategory && matchesActive;
   });
 
   const handleAddIngredient = () => {
@@ -628,11 +630,22 @@ export function RecipeBOM() {
     return (cost * scaleMultiplier).toFixed(2);
   };
 
-  const stats = [
-    { label: "Total Recipes", value: recipes.length, color: "text-blue-600" },
-    { label: "Active Menu Items", value: recipes.filter(r => r.isActive ?? true).length, color: "text-purple-600" },
-    { label: "Avg Cost/Serving", value: formatMoney(recipes.length ? recipes.reduce((sum, r) => sum + r.costPerServing, 0) / recipes.length : 0), color: "text-green-600" },
-    { label: "Avg Menu Price", value: formatMoney(recipes.length ? recipes.reduce((sum, r) => sum + (r.sellingPrice ?? r.suggestedSellingPrice ?? 0), 0) / recipes.length : 0), color: "text-orange-600" },
+  // Count cards toggle the recipe list filter; clicking the active card (or Total
+  // Recipes) clears it back to "all". Average cards are metrics, not filters.
+  const toggleActiveFilter = (filter: "all" | "active") => {
+    setActiveFilter((current) => (current === filter ? "all" : filter));
+  };
+
+  const stats: Array<{
+    label: string;
+    value: number | string;
+    color: string;
+    filter: "all" | "active" | null;
+  }> = [
+    { label: "Total Recipes", value: recipes.length, color: "text-blue-600", filter: "all" },
+    { label: "Active Menu Items", value: recipes.filter(r => r.isActive ?? true).length, color: "text-purple-600", filter: "active" },
+    { label: "Avg Cost/Serving", value: formatMoney(recipes.length ? recipes.reduce((sum, r) => sum + r.costPerServing, 0) / recipes.length : 0), color: "text-green-600", filter: null },
+    { label: "Avg Menu Price", value: formatMoney(recipes.length ? recipes.reduce((sum, r) => sum + (r.sellingPrice ?? r.suggestedSellingPrice ?? 0), 0) / recipes.length : 0), color: "text-orange-600", filter: null },
   ];
 
   return (
@@ -650,7 +663,7 @@ export function RecipeBOM() {
         {isAdmin && (
           <button
             onClick={handleOpenCreateModal}
-            className="mt-4 md:mt-0 px-6 py-3 bg-gradient-to-r from-primary to-secondary text-white rounded-2xl hover:shadow-lg hover:shadow-primary/30 transition-all duration-200 flex items-center gap-2"
+            className="mt-4 md:mt-0 px-6 py-3 bg-gradient-to-r from-primary to-secondary text-white rounded-2xl hover:-translate-y-0.5 hover:shadow-lg hover:shadow-primary/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-md transition-all duration-200 flex items-center gap-2"
           >
             <Plus className="w-5 h-5" />
             Create Recipe
@@ -660,12 +673,32 @@ export function RecipeBOM() {
 
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-        {stats.map((stat, index) => (
-          <div key={index} className="bg-card rounded-2xl p-6 shadow-sm border border-border">
-            <p className="text-muted-foreground text-sm mb-2">{stat.label}</p>
-            <p className={`text-2xl font-bold ${stat.color}`}>{stat.value}</p>
-          </div>
-        ))}
+        {stats.map((stat, index) => {
+          if (!stat.filter) {
+            return (
+              <div key={index} className="bg-card rounded-2xl p-6 shadow-sm border border-border">
+                <p className="text-muted-foreground text-sm mb-2">{stat.label}</p>
+                <p className={`text-2xl font-bold ${stat.color}`}>{stat.value}</p>
+              </div>
+            );
+          }
+          const isActive = activeFilter === stat.filter;
+          return (
+            <button
+              key={index}
+              type="button"
+              onClick={() => toggleActiveFilter(stat.filter!)}
+              aria-pressed={isActive}
+              aria-label={`Filter by ${stat.label}`}
+              className={`group text-left w-full bg-card rounded-2xl p-6 shadow-sm border cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-xl hover:shadow-primary/25 hover:border-primary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-lg active:shadow-primary/30 ${
+                isActive ? "border-primary bg-primary/5 shadow-md shadow-primary/20" : "border-border"
+              }`}
+            >
+              <p className="text-muted-foreground text-sm mb-2">{stat.label}</p>
+              <p className={`text-2xl font-bold ${stat.color}`}>{stat.value}</p>
+            </button>
+          );
+        })}
       </div>
 
       {/* Search and Filter */}

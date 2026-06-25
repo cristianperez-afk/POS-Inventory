@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   Search,
   X,
@@ -151,6 +151,25 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
   const [quickActionReason, setQuickActionReason] = useState('');
   const [proofImages, setProofImages] = useState<string[]>([]);
   const [proofImageNames, setProofImageNames] = useState<string[]>([]);
+  const pendingRef = useRef<HTMLDivElement | null>(null);
+  const historyRef = useRef<HTMLDivElement | null>(null);
+
+  // Stat cards toggle the outcome filter that drives the receiving history below;
+  // clicking the active card (or Total Receipts) clears it back to "all".
+  const toggleOutcome = (outcome: 'all' | 'accepted' | 'rejected') => {
+    setOutcomeFilter((current) => (current === outcome ? 'all' : outcome));
+    historyRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  // Pending QC has no history outcome — it jumps to the quality-check queue.
+  const scrollToPending = () => {
+    (pendingRef.current ?? historyRef.current)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const statCardClass = (active: boolean) =>
+    `group text-left w-full bg-white rounded-[14px] p-4 border shadow-sm cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-lg hover:border-[#007A5E]/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#007A5E]/40 active:translate-y-0 active:shadow-md ${
+      active ? 'border-[#007A5E] bg-[#007A5E]/5 shadow-md' : 'border-[rgba(0,0,0,0.1)]'
+    }`;
 
   const formatReceivedDateTime = (record: ReceiptRecord) => {
     const value = record.receivedAt || record.receivedDate;
@@ -400,27 +419,50 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
 
       {/* Stats */}
       <div className="grid grid-cols-4 gap-4 mb-6">
-        <div className="bg-white border border-[rgba(0,0,0,0.1)] rounded-[14px] p-4">
+        <button
+          type="button"
+          onClick={scrollToPending}
+          aria-label="Go to pending quality check queue"
+          className={statCardClass(false)}
+        >
           <p className="text-[#323B42] text-[12px] mb-1">Pending QC</p>
           <p className="text-[#FFA500] text-[24px] font-bold">{loading ? '—' : stats.pending}</p>
-        </div>
-        <div className="bg-white border border-[rgba(0,0,0,0.1)] rounded-[14px] p-4">
+        </button>
+        <button
+          type="button"
+          onClick={() => toggleOutcome('all')}
+          aria-pressed={outcomeFilter === 'all'}
+          aria-label="Show all receipts"
+          className={statCardClass(outcomeFilter === 'all')}
+        >
           <p className="text-[#323B42] text-[12px] mb-1">Total Receipts</p>
           <p className="text-[#323B42] text-[24px] font-bold">{loading ? '—' : stats.received}</p>
-        </div>
-        <div className="bg-white border border-[rgba(0,0,0,0.1)] rounded-[14px] p-4">
+        </button>
+        <button
+          type="button"
+          onClick={() => toggleOutcome('accepted')}
+          aria-pressed={outcomeFilter === 'accepted'}
+          aria-label="Filter by fully accepted"
+          className={statCardClass(outcomeFilter === 'accepted')}
+        >
           <p className="text-[#323B42] text-[12px] mb-1">Fully Accepted</p>
           <p className="text-[#008967] text-[24px] font-bold">{loading ? '—' : stats.fullyAccepted}</p>
-        </div>
-        <div className="bg-white border border-[rgba(0,0,0,0.1)] rounded-[14px] p-4">
+        </button>
+        <button
+          type="button"
+          onClick={() => toggleOutcome('rejected')}
+          aria-pressed={outcomeFilter === 'rejected'}
+          aria-label="Filter by with rejections"
+          className={statCardClass(outcomeFilter === 'rejected')}
+        >
           <p className="text-[#323B42] text-[12px] mb-1">With Rejections</p>
           <p className="text-[#E7000B] text-[24px] font-bold">{loading ? '—' : stats.withRejections}</p>
-        </div>
+        </button>
       </div>
 
       {/* Pending Quality Check queue */}
       {pending.length > 0 && (
-        <div className="bg-white border border-[rgba(0,0,0,0.1)] rounded-[14px] p-5 mb-6">
+        <div ref={pendingRef} className="bg-white border border-[rgba(0,0,0,0.1)] rounded-[14px] p-5 mb-6">
           <div className="flex items-center gap-2 mb-1">
             <PackageCheck className="size-5 text-[#FFA500]" />
             <h3 className="text-[16px] font-semibold text-[#323B42]">Pending Quality Check</h3>
@@ -486,7 +528,7 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
       )}
 
       {/* Receiving history + filters */}
-      <div className="flex flex-col gap-3 mb-4 sm:flex-row sm:items-center sm:justify-between">
+      <div ref={historyRef} className="flex flex-col gap-3 mb-4 sm:flex-row sm:items-center sm:justify-between">
         <h3 className="text-[16px] font-semibold text-[#323B42]">Receiving History</h3>
         <div className="flex flex-wrap items-center gap-2">
           <label className="text-[13px] text-[#6b7280]">Outcome</label>

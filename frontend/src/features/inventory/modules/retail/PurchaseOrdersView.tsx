@@ -373,7 +373,13 @@ export default function PurchaseOrdersView({
     }
   };
 
-  const filteredOrders = orders.filter(o => filterStatus === 'all' || o.status === filterStatus);
+  const filteredOrders = orders.filter(o =>
+    filterStatus === 'all'
+      ? true
+      : filterStatus === 'pending'
+        ? ['DRAFT', 'SUBMITTED'].includes(o.status)
+        : o.status === filterStatus,
+  );
   const submittedPOs = orders.filter(o => o.status === 'SUBMITTED');
   const isAdmin = currentUser?.role === 'Admin';
 
@@ -395,6 +401,16 @@ export default function PurchaseOrdersView({
     received: orders.filter(o => o.status === 'RECEIVED').length,
   };
 
+  // Stat cards toggle the status filter that drives the orders list; clicking the
+  // active card (or Total Orders) clears it back to "all".
+  const toggleFilterStatus = (status: string) => {
+    setFilterStatus((current) => (current === status ? 'all' : status));
+  };
+  const statCardClass = (active: boolean) =>
+    `text-left w-full bg-white rounded-[14px] p-4 border shadow-sm cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-lg hover:border-[#007A5E]/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#007A5E]/40 active:translate-y-0 active:shadow-md ${
+      active ? 'border-[#007A5E] bg-[#007A5E]/5 shadow-md' : 'border-[rgba(0,0,0,0.1)]'
+    }`;
+
   if (loading) {
     return <div className="flex items-center justify-center h-64 text-[#6b7280]">Loading purchase orders…</div>;
   }
@@ -409,7 +425,7 @@ export default function PurchaseOrdersView({
         <div className="flex gap-3">
           <button
             onClick={() => setShowSuppliersModal(true)}
-            className="bg-white border border-[rgba(0,0,0,0.1)] text-[#323B42] px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-[#F8FAFB] transition-colors"
+            className="bg-white border border-[rgba(0,0,0,0.1)] text-[#323B42] px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-[#F8FAFB] hover:-translate-y-0.5 hover:shadow-md hover:border-[#007A5E]/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#007A5E]/40 active:translate-y-0 active:shadow-sm transition-all duration-200"
           >
             <Users className="size-4" />
             View Suppliers
@@ -428,7 +444,7 @@ export default function PurchaseOrdersView({
           )}
           <button
             onClick={() => setShowNewPOModal(true)}
-            className="bg-[#007A5E] text-white px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-[#008967] transition-colors"
+            className="bg-[#007A5E] text-white px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-[#008967] hover:-translate-y-0.5 hover:shadow-md hover:shadow-[#007A5E]/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#007A5E]/50 active:translate-y-0 active:shadow-sm transition-all duration-200"
           >
             <Plus className="size-4" />
             New Purchase Order
@@ -954,10 +970,18 @@ export default function PurchaseOrdersView({
 
       {/* Stats */}
       <div className="grid grid-cols-4 gap-4 mb-6">
-        <div className="bg-white border border-[rgba(0,0,0,0.1)] rounded-[14px] p-4"><p className="text-[#323B42] text-[12px] mb-1">Total Orders</p><p className="text-[#323B42] text-[24px] font-bold">{stats.total}</p></div>
-        <div className="bg-white border border-[rgba(0,0,0,0.1)] rounded-[14px] p-4"><p className="text-[#323B42] text-[12px] mb-1">Pending</p><p className="text-[#FFA500] text-[24px] font-bold">{stats.pending}</p></div>
-        <div className="bg-white border border-[rgba(0,0,0,0.1)] rounded-[14px] p-4"><p className="text-[#323B42] text-[12px] mb-1">Approved</p><p className="text-[#007A5E] text-[24px] font-bold">{stats.approved}</p></div>
-        <div className="bg-white border border-[rgba(0,0,0,0.1)] rounded-[14px] p-4"><p className="text-[#323B42] text-[12px] mb-1">Received</p><p className="text-[#008967] text-[24px] font-bold">{stats.received}</p></div>
+        <button type="button" onClick={() => toggleFilterStatus('all')} aria-pressed={filterStatus === 'all'} aria-label="Show all orders" className={statCardClass(filterStatus === 'all')}>
+          <p className="text-[#323B42] text-[12px] mb-1">Total Orders</p><p className="text-[#323B42] text-[24px] font-bold">{stats.total}</p>
+        </button>
+        <button type="button" onClick={() => toggleFilterStatus('pending')} aria-pressed={filterStatus === 'pending'} aria-label="Filter by pending" className={statCardClass(filterStatus === 'pending')}>
+          <p className="text-[#323B42] text-[12px] mb-1">Pending</p><p className="text-[#FFA500] text-[24px] font-bold">{stats.pending}</p>
+        </button>
+        <button type="button" onClick={() => toggleFilterStatus('APPROVED')} aria-pressed={filterStatus === 'APPROVED'} aria-label="Filter by approved" className={statCardClass(filterStatus === 'APPROVED')}>
+          <p className="text-[#323B42] text-[12px] mb-1">Approved</p><p className="text-[#007A5E] text-[24px] font-bold">{stats.approved}</p>
+        </button>
+        <button type="button" onClick={() => toggleFilterStatus('RECEIVED')} aria-pressed={filterStatus === 'RECEIVED'} aria-label="Filter by received" className={statCardClass(filterStatus === 'RECEIVED')}>
+          <p className="text-[#323B42] text-[12px] mb-1">Received</p><p className="text-[#008967] text-[24px] font-bold">{stats.received}</p>
+        </button>
       </div>
 
       {/* Filter */}
@@ -966,6 +990,7 @@ export default function PurchaseOrdersView({
           <label className="text-[14px] text-[#323B42] font-medium">Status:</label>
           <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className="px-3 py-1.5 border border-[rgba(0,0,0,0.1)] rounded-[6px] text-[14px] bg-white focus:outline-none focus:border-[#007A5E]">
             <option value="all">All Orders</option>
+            <option value="pending">Pending</option>
             <option value="DRAFT">Draft</option>
             <option value="SUBMITTED">Submitted</option>
             <option value="APPROVED">Approved</option>

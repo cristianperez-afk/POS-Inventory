@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Apple, TrendingUp, AlertTriangle, PhilippinePeso, ShoppingCart, ArrowUp, ArrowDown, Calendar, Filter, Clock, ArrowRight } from "lucide-react";
+import { Apple, TrendingUp, AlertTriangle, PhilippinePeso, ShoppingCart, ArrowUp, ArrowDown, Calendar, Filter, Clock, ArrowRight, ChevronDown } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import {
   useRestaurantGoodsRecordsQuery,
@@ -255,34 +255,36 @@ export function Dashboard() {
           </div>
 
           {/* Category Filters */}
-          <div className="flex gap-6">
+          <div className="flex gap-3">
             <div className="relative">
-              <Filter className="absolute left-1.5 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+              <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
               <select
                 value={selectedMainCategory}
                 onChange={(e) => handleMainCategoryChange(e.target.value)}
-                className="pl-6 pr-4 py-2 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary transition-all appearance-none cursor-pointer min-w-[120px] text-sm"
+                className="pl-9 pr-9 py-2 bg-input-background border border-input rounded-xl hover:border-primary/60 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all duration-200 appearance-none cursor-pointer min-w-[150px] text-sm"
               >
                 <option value="all">All Categories</option>
                 {mainCategories.map((cat) => (
                   <option key={cat} value={cat}>{cat}</option>
                 ))}
               </select>
+              <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
             </div>
 
             {selectedMainCategory !== "all" && (
               <div className="relative">
-                <Filter className="absolute left-1.5 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+                <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
                 <select
                   value={selectedSubCategory}
                   onChange={(e) => setSelectedSubCategory(e.target.value)}
-                  className="pl-6 pr-4 py-2 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary transition-all appearance-none cursor-pointer min-w-[120px] text-sm"
+                  className="pl-9 pr-9 py-2 bg-input-background border border-input rounded-xl hover:border-primary/60 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all duration-200 appearance-none cursor-pointer min-w-[150px] text-sm"
                 >
                   <option value="all">All {selectedMainCategory}</option>
                   {currentSubCategories.map((subCat) => (
                     <option key={subCat} value={subCat}>{subCat}</option>
                   ))}
                 </select>
+                <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
               </div>
             )}
           </div>

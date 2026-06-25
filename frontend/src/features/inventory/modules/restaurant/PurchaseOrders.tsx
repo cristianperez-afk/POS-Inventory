@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Plus, Search, Filter, Eye, Download, CheckCircle, Clock, XCircle, X, Save, Trash2, Edit, Building2, Users, AlertCircle, Check } from "lucide-react";
+import { Plus, Search, Filter, Eye, Download, CheckCircle, Clock, XCircle, X, Save, Trash2, Edit, Building2, Users, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "../../app/hooks/useSession";
 import { PurchaseOrderItemInput, PurchaseOrderItemInputValue } from "./PurchaseOrderItemInput";
@@ -255,6 +255,7 @@ export function PurchaseOrders() {
     { label: "Approved", value: orders.filter(o => o.status === "approved").length, color: "#007A5E", status: "approved" },
     { label: "Partial", value: orders.filter(o => o.status === "partial").length, color: "#F59E0B", status: "partial" },
     { label: "Rejected", value: orders.filter(o => o.status === "rejected").length, color: "#DC2626", status: "rejected" },
+    { label: "Received", value: orders.filter(o => o.status === "received").length, color: "#007A5E", status: "received" },
   ];
 
   // Cards toggle the shared status filter that drives the orders table below;
@@ -262,59 +263,6 @@ export function PurchaseOrders() {
   const toggleStatusFilter = (status: string) => {
     setStatusFilter((current) => (current === status ? "all" : status));
   };
-
-  const approvalLevels = [
-    {
-      label: "For Review",
-      status: "pending",
-      value: orders.filter(o => o.status === "pending").length,
-      description: "Needs admin approval or rejection",
-      icon: Clock,
-      color: "#92400E",
-      bg: "#FEF3C7",
-      border: "#F59E0B",
-    },
-    {
-      label: "Approved",
-      status: "approved",
-      value: orders.filter(o => o.status === "approved").length,
-      description: "Ready for goods receiving",
-      icon: CheckCircle,
-      color: "#007A5E",
-      bg: "#D1F2E8",
-      border: "#008967",
-    },
-    {
-      label: "Partial",
-      status: "partial",
-      value: orders.filter(o => o.status === "partial").length,
-      description: "Partially received or accepted",
-      icon: AlertCircle,
-      color: "#9A3412",
-      bg: "#FED7AA",
-      border: "#F59E0B",
-    },
-    {
-      label: "Rejected",
-      status: "rejected",
-      value: orders.filter(o => o.status === "rejected").length,
-      description: "Stopped by admin review",
-      icon: XCircle,
-      color: "#991B1B",
-      bg: "#FEE2E2",
-      border: "#DC2626",
-    },
-    {
-      label: "Received",
-      status: "received",
-      value: orders.filter(o => o.status === "received").length,
-      description: "Completed through goods receiving",
-      icon: Check,
-      color: "#007A5E",
-      bg: "#D1F2E8",
-      border: "#008967",
-    },
-  ];
 
   const { data: suppliers = [] } = useRestaurantSuppliersQuery();
   const saveOrder = useSaveRestaurantPurchaseOrderMutation();
@@ -599,7 +547,7 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
         <div className="flex gap-3 mt-4 md:mt-0">
           <button
             onClick={() => setShowSuppliersListModal(true)}
-            className="px-6 py-3 bg-muted text-foreground rounded-2xl hover:bg-muted/80 transition-all duration-200 flex items-center gap-2 border border-border"
+            className="px-6 py-3 bg-muted text-foreground rounded-2xl hover:bg-muted/80 hover:-translate-y-0.5 hover:shadow-md hover:border-primary/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-sm transition-all duration-200 flex items-center gap-2 border border-border"
           >
             <Users className="w-5 h-5" />
             View Suppliers
@@ -607,7 +555,7 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
           {userRole === "admin" && (
             <button
               onClick={() => setShowApprovalModal(true)}
-              className="px-6 py-3 bg-muted text-foreground rounded-2xl hover:bg-muted/80 transition-all duration-200 flex items-center gap-2 border border-border relative"
+              className="px-6 py-3 bg-muted text-foreground rounded-2xl hover:bg-muted/80 hover:-translate-y-0.5 hover:shadow-md hover:border-primary/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-sm transition-all duration-200 flex items-center gap-2 border border-border relative"
             >
               <Clock className="w-5 h-5" />
               Pending Approval
@@ -620,7 +568,7 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
           )}
           <button
             onClick={() => setShowCreateModal(true)}
-            className="px-6 py-3 bg-gradient-to-r from-primary to-secondary text-white rounded-2xl hover:shadow-lg hover:shadow-primary/30 transition-all duration-200 flex items-center gap-2"
+            className="px-6 py-3 bg-gradient-to-r from-primary to-secondary text-white rounded-2xl hover:-translate-y-0.5 hover:shadow-lg hover:shadow-primary/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-md transition-all duration-200 flex items-center gap-2"
           >
             <Plus className="w-5 h-5" />
             Create New Order
@@ -649,42 +597,6 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
           );
         })}
       </div>
-
-      {userRole === "admin" && (
-        <div className="bg-card rounded-2xl p-4 shadow-sm border border-border mb-8">
-          <div className="flex items-center justify-between gap-3 mb-4">
-            <div>
-              <h2 className="text-lg font-bold text-foreground">Admin Approval Level</h2>
-              <p className="text-sm text-muted-foreground">Monitor purchase orders by approval decision before goods receiving.</p>
-            </div>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-            {approvalLevels.map((level) => {
-              const Icon = level.icon;
-              return (
-                <button
-                  key={level.status}
-                  type="button"
-                  onClick={() => setStatusFilter(level.status)}
-                  className={`text-left rounded-xl border p-4 transition-all hover:shadow-sm ${
-                    statusFilter === level.status ? "ring-2 ring-primary/40" : ""
-                  }`}
-                  style={{ borderColor: level.border, backgroundColor: level.bg }}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-semibold" style={{ color: level.color }}>{level.label}</p>
-                      <p className="text-xs text-muted-foreground mt-1">{level.description}</p>
-                    </div>
-                    <Icon className="w-5 h-5" style={{ color: level.color }} />
-                  </div>
-                  <p className="text-2xl font-bold mt-4" style={{ color: level.color }}>{level.value}</p>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
 
       {/* Search and Filter */}
       <div className="bg-card rounded-2xl p-6 shadow-sm border border-border mb-8">

@@ -45,6 +45,7 @@ export function ReportsView() {
     loadUsers: currentUser?.role === 'Admin',
   });
   const [activeTab, setActiveTab] = useState<'overview' | 'inventory' | 'sold' | 'transfers' | 'financial' | 'operations' | 'audit' | 'confidential'>('overview');
+  const [auditModuleFilter, setAuditModuleFilter] = useState('all');
   const [soldFrom, setSoldFrom] = useState('');
   const [soldTo, setSoldTo] = useState('');
   const soldQuery = useQuery({
@@ -324,6 +325,23 @@ export function ReportsView() {
     return { byModule, latest };
   }, [visibleAuditTrail]);
 
+  // Summary cards filter the activity table below by module; clicking the active
+  // card (or Total Events) clears it back to "all".
+  const toggleAuditModule = (module: string) => {
+    setAuditModuleFilter((current) => (current === module ? 'all' : module));
+  };
+  const filteredAuditTrail = useMemo(
+    () =>
+      auditModuleFilter === 'all'
+        ? visibleAuditTrail
+        : visibleAuditTrail.filter((entry) => entry.module === auditModuleFilter),
+    [visibleAuditTrail, auditModuleFilter],
+  );
+  const auditCardClass = (active: boolean) =>
+    `text-left w-full bg-white rounded-[14px] p-6 border shadow-sm cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-lg hover:border-secondary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/40 active:translate-y-0 active:shadow-md ${
+      active ? 'border-secondary bg-secondary/5 shadow-md' : 'border-border'
+    }`;
+
   const handleExportReport = (reportType: string) => {
     let csvContent = '';
     const timestamp = new Date().toISOString().split('T')[0];
@@ -474,12 +492,12 @@ export function ReportsView() {
           <label className="text-[12px] text-muted-foreground">
             From
             <input type="date" value={soldFrom} onChange={e => setSoldFrom(e.target.value)}
-              className="block mt-1 bg-white border border-border rounded-[8px] px-3 py-2 text-[14px] text-foreground" />
+              className="block mt-1 bg-white border border-border rounded-[8px] px-3 py-2 text-[14px] text-foreground cursor-pointer hover:border-secondary/60 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-secondary/40 focus:border-secondary transition-all duration-200" />
           </label>
           <label className="text-[12px] text-muted-foreground">
             To
             <input type="date" value={soldTo} onChange={e => setSoldTo(e.target.value)}
-              className="block mt-1 bg-white border border-border rounded-[8px] px-3 py-2 text-[14px] text-foreground" />
+              className="block mt-1 bg-white border border-border rounded-[8px] px-3 py-2 text-[14px] text-foreground cursor-pointer hover:border-secondary/60 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-secondary/40 focus:border-secondary transition-all duration-200" />
           </label>
           {(soldFrom || soldTo) && (
             <button onClick={() => { setSoldFrom(''); setSoldTo(''); }}
@@ -488,7 +506,7 @@ export function ReportsView() {
           <select
             value={selectedLocation}
             onChange={(e) => setSelectedLocation(e.target.value)}
-            className="bg-white border border-border rounded-[8px] px-4 py-2 text-[14px] text-foreground"
+            className="bg-white border border-border rounded-[8px] px-4 py-2 text-[14px] text-foreground cursor-pointer hover:border-secondary/60 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-secondary/40 focus:border-secondary transition-all duration-200"
           >
             <option value="all">All Locations</option>
             {locations.map(loc => (
@@ -502,40 +520,40 @@ export function ReportsView() {
       <div className="flex gap-2 mb-6 border-b border-border">
         <button
           onClick={() => setActiveTab('overview')}
-          className={`px-6 py-3 text-[14px] font-medium border-b-2 transition-colors ${
+          className={`px-6 py-3 text-[14px] font-medium border-b-2 rounded-t-lg transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 ${
             activeTab === 'overview'
               ? 'text-secondary border-secondary'
-              : 'text-muted-foreground border-transparent hover:text-foreground'
+              : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/40 hover:border-border'
           }`}
         >
           Overview
         </button>
         <button
           onClick={() => setActiveTab('inventory')}
-          className={`px-6 py-3 text-[14px] font-medium border-b-2 transition-colors ${
+          className={`px-6 py-3 text-[14px] font-medium border-b-2 rounded-t-lg transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 ${
             activeTab === 'inventory'
               ? 'text-secondary border-secondary'
-              : 'text-muted-foreground border-transparent hover:text-foreground'
+              : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/40 hover:border-border'
           }`}
         >
           Inventory Report
         </button>
         <button
           onClick={() => setActiveTab('sold')}
-          className={`px-6 py-3 text-[14px] font-medium border-b-2 transition-colors ${
+          className={`px-6 py-3 text-[14px] font-medium border-b-2 rounded-t-lg transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 ${
             activeTab === 'sold'
               ? 'text-secondary border-secondary'
-              : 'text-muted-foreground border-transparent hover:text-foreground'
+              : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/40 hover:border-border'
           }`}
         >
           Goods Sold
         </button>
         <button
           onClick={() => setActiveTab('transfers')}
-          className={`px-6 py-3 text-[14px] font-medium border-b-2 transition-colors ${
+          className={`px-6 py-3 text-[14px] font-medium border-b-2 rounded-t-lg transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 ${
             activeTab === 'transfers'
               ? 'text-secondary border-secondary'
-              : 'text-muted-foreground border-transparent hover:text-foreground'
+              : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/40 hover:border-border'
           }`}
         >
           Transfer Report
@@ -543,10 +561,10 @@ export function ReportsView() {
         {isAdmin && (
           <button
             onClick={() => setActiveTab('financial')}
-            className={`px-6 py-3 text-[14px] font-medium border-b-2 transition-colors ${
+            className={`px-6 py-3 text-[14px] font-medium border-b-2 rounded-t-lg transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 ${
               activeTab === 'financial'
                 ? 'text-secondary border-secondary'
-                : 'text-muted-foreground border-transparent hover:text-foreground'
+                : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/40 hover:border-border'
             }`}
           >
             Financial Report
@@ -554,20 +572,20 @@ export function ReportsView() {
         )}
         <button
           onClick={() => setActiveTab('operations')}
-          className={`px-6 py-3 text-[14px] font-medium border-b-2 transition-colors ${
+          className={`px-6 py-3 text-[14px] font-medium border-b-2 rounded-t-lg transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 ${
             activeTab === 'operations'
               ? 'text-secondary border-secondary'
-              : 'text-muted-foreground border-transparent hover:text-foreground'
+              : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/40 hover:border-border'
           }`}
         >
           Operations Report
         </button>
         <button
           onClick={() => setActiveTab('audit')}
-          className={`px-6 py-3 text-[14px] font-medium border-b-2 transition-colors flex items-center gap-2 ${
+          className={`px-6 py-3 text-[14px] font-medium border-b-2 rounded-t-lg transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 flex items-center gap-2 ${
             activeTab === 'audit'
               ? 'text-secondary border-secondary'
-              : 'text-muted-foreground border-transparent hover:text-foreground'
+              : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/40 hover:border-border'
           }`}
         >
           <ClipboardList className="size-4" />
@@ -576,10 +594,10 @@ export function ReportsView() {
         {isAdmin && (
           <button
             onClick={() => setActiveTab('confidential')}
-            className={`px-6 py-3 text-[14px] font-medium border-b-2 transition-colors flex items-center gap-2 ${
+            className={`px-6 py-3 text-[14px] font-medium border-b-2 rounded-t-lg transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 flex items-center gap-2 ${
               activeTab === 'confidential'
                 ? 'text-destructive border-destructive'
-                : 'text-muted-foreground border-transparent hover:text-foreground'
+                : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/40 hover:border-border'
             }`}
           >
             <Eye className="size-4" />
@@ -1173,18 +1191,18 @@ export function ReportsView() {
           </div>
 
           <div className="grid grid-cols-4 gap-4 mb-4">
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <button type="button" onClick={() => toggleAuditModule('all')} aria-pressed={auditModuleFilter === 'all'} aria-label="Show all audit events" className={auditCardClass(auditModuleFilter === 'all')}>
               <p className="text-muted-foreground text-[12px] mb-2">Total Events</p>
               <p className="text-foreground text-[24px] font-bold">{visibleAuditTrail.length}</p>
-            </div>
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            </button>
+            <button type="button" onClick={() => toggleAuditModule('Purchase Order')} aria-pressed={auditModuleFilter === 'Purchase Order'} aria-label="Filter by purchase order events" className={auditCardClass(auditModuleFilter === 'Purchase Order')}>
               <p className="text-muted-foreground text-[12px] mb-2">Purchase Orders</p>
               <p className="text-secondary text-[24px] font-bold">{auditSummary.byModule['Purchase Order'] || 0}</p>
-            </div>
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            </button>
+            <button type="button" onClick={() => toggleAuditModule('Goods Received')} aria-pressed={auditModuleFilter === 'Goods Received'} aria-label="Filter by goods received events" className={auditCardClass(auditModuleFilter === 'Goods Received')}>
               <p className="text-muted-foreground text-[12px] mb-2">Goods Received</p>
               <p className="text-success text-[24px] font-bold">{auditSummary.byModule['Goods Received'] || 0}</p>
-            </div>
+            </button>
             <div className="bg-white border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Latest Activity</p>
               <p className="text-[12px] font-semibold text-foreground break-words">{auditSummary.latest}</p>
@@ -1194,7 +1212,10 @@ export function ReportsView() {
           <div className="bg-white border border-border rounded-[14px] p-6">
             <div className="flex items-center justify-between mb-4">
               <h4 className="text-[16px] font-semibold text-foreground">Recent Activity</h4>
-              <p className="text-[12px] text-muted-foreground">{visibleAuditTrail.length} record{visibleAuditTrail.length !== 1 ? 's' : ''}</p>
+              <p className="text-[12px] text-muted-foreground">
+                {auditModuleFilter === 'all' ? '' : `${auditModuleFilter} • `}
+                {filteredAuditTrail.length} record{filteredAuditTrail.length !== 1 ? 's' : ''}
+              </p>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[900px]">
@@ -1211,14 +1232,14 @@ export function ReportsView() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/50">
-                  {visibleAuditTrail.length === 0 ? (
+                  {filteredAuditTrail.length === 0 ? (
                     <tr>
                       <td colSpan={8} className="px-4 py-8 text-center text-[14px] text-muted-foreground">
                         No audit trail records found
                       </td>
                     </tr>
                   ) : (
-                    visibleAuditTrail.slice(0, 100).map(entry => (
+                    filteredAuditTrail.slice(0, 100).map(entry => (
                       <tr key={entry.id} className="hover:bg-muted transition-colors">
                         <td className="px-4 py-3 text-[12px] text-muted-foreground whitespace-nowrap">{formatAuditDate(entry.date)}</td>
                         <td className="px-4 py-3">

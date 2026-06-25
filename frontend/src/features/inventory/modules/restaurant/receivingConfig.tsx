@@ -136,9 +136,9 @@ function CriteriaManager({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-2 rounded-[8px] border border-[rgba(0,0,0,0.1)] bg-white px-3 py-2 text-[13px] font-medium text-[#323B42] hover:bg-[#F8FAFB]"
+        className="group inline-flex items-center gap-2 rounded-[8px] border border-[rgba(0,0,0,0.1)] bg-white px-3 py-2 text-[13px] font-medium text-[#323B42] shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-[#007A5E]/60 hover:bg-[#F8FAFB] hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-[#007A5E]/40 active:translate-y-0 active:shadow-sm"
       >
-        <Settings className="size-4 text-[#007A5E]" />
+        <Settings className="size-4 text-[#007A5E] transition-transform duration-200 group-hover:rotate-45" />
         Manage Criteria
       </button>
 
