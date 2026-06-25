@@ -68,6 +68,7 @@ const domainInvalidationDependencies = new Map<string, QueryKey[]>([
     domainQueryKeys.bundles,
     domainQueryKeys.purchaseOrders,
     domainQueryKeys.goodsReceipts,
+    domainQueryKeys.recipes,
   ]],
   ['locations', [
     domainQueryKeys.inventory,

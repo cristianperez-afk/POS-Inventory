@@ -22,6 +22,39 @@ const parseOrderModifiers = (notes?: string | null) => {
   return modifierText ? modifierText.split(',').map((item) => item.trim()).filter(Boolean) : [];
 };
 
+const isExpiredDate = (value?: string | null) => {
+  if (!value) return false;
+  const expiryDate = new Date(value);
+  if (Number.isNaN(expiryDate.getTime())) return false;
+  expiryDate.setHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return expiryDate < today;
+};
+
+const calculateAvailableOrders = (
+  ingredients: {
+    inventoryQuantity?: number;
+    quantity: number;
+    inventoryStock?: number;
+    inventoryUsableStock?: number;
+    inventoryExpiry?: string | null;
+  }[],
+) => {
+  if (ingredients.length === 0) return 0;
+  const values = ingredients.map((ingredient) => {
+    const required = Number(ingredient.inventoryQuantity ?? ingredient.quantity);
+    const stock = ingredient.inventoryUsableStock != null
+      ? Number(ingredient.inventoryUsableStock)
+      : isExpiredDate(ingredient.inventoryExpiry)
+      ? 0
+      : Number(ingredient.inventoryStock ?? 0);
+    if (!Number.isFinite(required) || required <= 0) return 0;
+    return Math.max(0, Math.floor(stock / required));
+  });
+  return Math.min(...values);
+};
+
 export function useRestaurantRecipesQuery() {
   return useRecipesQuery(undefined, {
     select: (recipes) =>
@@ -36,6 +69,13 @@ export function useRestaurantRecipesQuery() {
           unit: ingredient.unit ?? ingredient.item?.unit ?? 'pcs',
           inventoryQuantity: ingredient.quantity,
           inventoryUnit: ingredient.item?.unit ?? ingredient.unit ?? 'pcs',
+          inventoryStock: Number(ingredient.physicalStock ?? ingredient.item?.quantity ?? 0),
+          inventoryUsableStock: Number(
+            ingredient.usableStock ??
+            (isExpiredDate(ingredient.item?.expiryDate) ? 0 : ingredient.item?.quantity ?? 0),
+          ),
+          inventoryExpiry: ingredient.item?.expiryDate ?? null,
+          stockStatus: ingredient.stockStatus ?? (isExpiredDate(ingredient.item?.expiryDate) ? 'expired' : 'available'),
           unitCost: ingredient.unitCost ?? ingredient.item?.price ?? 0,
           totalCost:
             (ingredient.unitCost ?? ingredient.item?.price ?? 0) *
@@ -65,6 +105,7 @@ export function useRestaurantRecipesQuery() {
           sellingPrice: recipe.sellingPrice ?? 0,
           grossMargin: 0,
           isActive: recipe.isActive,
+          availableOrders: calculateAvailableOrders(ingredients),
           modifiers: Array.isArray((recipe as any).modifiers)
             ? (recipe as any).modifiers.map((modifier: any) => ({
                 id: modifier.id,

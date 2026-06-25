@@ -274,6 +274,9 @@ export interface ApiRecipeIngredient {
   unit?: string | null;
   unitCost?: number | null;
   totalCost?: number | null;
+  physicalStock?: number;
+  usableStock?: number;
+  stockStatus?: 'available' | 'low' | 'insufficient' | 'expired' | 'missing';
 }
 
 export interface ApiRecipe {
@@ -298,6 +301,7 @@ export interface ApiRecipe {
   menuItemId?: string | null;
   menuItem?: ApiInventoryItem | null;
   ingredients: ApiRecipeIngredient[];
+  availableOrders: number;
   createdAt: string;
   updatedAt?: string;
 }

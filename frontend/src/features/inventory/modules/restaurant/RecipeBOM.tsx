@@ -20,6 +20,10 @@ type Ingredient = {
   unit: string;
   inventoryQuantity?: number;
   inventoryUnit?: string;
+  inventoryStock?: number;
+  inventoryUsableStock?: number;
+  inventoryExpiry?: string | null;
+  stockStatus?: "available" | "low" | "insufficient" | "expired" | "missing";
   unitCost: number;
   totalCost: number;
 };
@@ -55,6 +59,7 @@ type Recipe = {
   sellingPrice?: number;
   grossMargin?: number;
   isActive?: boolean;
+  availableOrders?: number;
   modifiers?: RecipeModifier[];
   instructions: string;
 };
@@ -85,6 +90,45 @@ const toInventoryQuantity = (quantity: number, recipeUnit: string, inventoryUnit
 };
 
 const formatMoney = (value: number) => `₱${Number.isFinite(value) ? value.toFixed(2) : "0.00"}`;
+
+const isExpiredInventoryItem = (item: InventoryItem) => {
+  if (!item.expiry) return false;
+  const expiryDate = new Date(`${item.expiry}T00:00:00`);
+  if (Number.isNaN(expiryDate.getTime())) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return expiryDate < today;
+};
+
+const isExpiredDate = (value?: string | null) => {
+  if (!value) return false;
+  const expiryDate = new Date(value.includes('T') ? value : `${value}T00:00:00`);
+  if (Number.isNaN(expiryDate.getTime())) return false;
+  expiryDate.setHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return expiryDate < today;
+};
+
+const formatNumber = (value: number) =>
+  Number.isFinite(value) ? value.toLocaleString(undefined, { maximumFractionDigits: 2 }) : "0";
+
+const calculateIngredientAvailableOrders = (ingredient: Ingredient) => {
+  const requiredQuantity = ingredient.inventoryQuantity ?? ingredient.quantity;
+  const usableStock = ingredient.inventoryUsableStock ?? (isExpiredDate(ingredient.inventoryExpiry) ? 0 : ingredient.inventoryStock);
+  if (!Number.isFinite(requiredQuantity) || requiredQuantity <= 0) return 0;
+  return Math.max(0, Math.floor(Number(usableStock ?? 0) / requiredQuantity));
+};
+
+const getIngredientStockStatus = (ingredient: Ingredient) => {
+  if (ingredient.stockStatus) return ingredient.stockStatus;
+  if (isExpiredDate(ingredient.inventoryExpiry)) return "expired";
+  const stock = Number(ingredient.inventoryStock ?? 0);
+  const requiredQuantity = Number(ingredient.inventoryQuantity ?? ingredient.quantity);
+  if (!Number.isFinite(stock) || stock <= 0) return "missing";
+  if (Number.isFinite(requiredQuantity) && requiredQuantity > 0 && stock < requiredQuantity) return "insufficient";
+  return "available";
+};
 
 const calculateRecipeYieldAdjustedCost = (recipe: Recipe) => {
   return recipe.yieldAdjustedCost ?? recipe.totalCost / Math.max((recipe.yieldPercentage || 100) / 100, 0.01);
@@ -138,8 +182,8 @@ export function RecipeBOM() {
 
   const { data: inventoryItems = [] } = useRestaurantInventoryQuery<InventoryItem[]>();
 
-  // Only show products that are actually in stock.
-  const availableInventoryItems = inventoryItems.filter(item => item.stock > 0);
+  // Only show products that are actually in stock and not expired.
+  const availableInventoryItems = inventoryItems.filter(item => item.stock > 0 && !isExpiredInventoryItem(item));
 
   const { data: recipes = [] } = useRestaurantRecipesQuery();
   const saveRecipe = useSaveRestaurantRecipeMutation();
@@ -186,6 +230,10 @@ export function RecipeBOM() {
         toast.error("Ingredient quantity must be greater than zero");
         return;
       }
+      if (isExpiredInventoryItem(selectedItem)) {
+        toast.error(`${selectedItem.name} is expired and cannot be used in a recipe.`);
+        return;
+      }
 
       const inventoryQuantity = toInventoryQuantity(quantity, currentIngredient.unit, selectedItem.unit);
       if (inventoryQuantity === null) {
@@ -208,6 +256,10 @@ export function RecipeBOM() {
         unit: currentIngredient.unit,
         inventoryQuantity,
         inventoryUnit: selectedItem.unit,
+        inventoryStock: selectedItem.stock,
+        inventoryUsableStock: selectedItem.stock,
+        inventoryExpiry: selectedItem.expiry || null,
+        stockStatus: "available",
         unitCost: unitCost,
         totalCost: totalCost,
       };
@@ -631,6 +683,7 @@ export function RecipeBOM() {
   const stats = [
     { label: "Total Recipes", value: recipes.length, color: "text-blue-600" },
     { label: "Active Menu Items", value: recipes.filter(r => r.isActive ?? true).length, color: "text-purple-600" },
+    { label: "Recipes In Stock", value: recipes.filter(r => (r.availableOrders ?? 0) > 0).length, color: "text-emerald-600" },
     { label: "Avg Cost/Serving", value: formatMoney(recipes.length ? recipes.reduce((sum, r) => sum + r.costPerServing, 0) / recipes.length : 0), color: "text-green-600" },
     { label: "Avg Menu Price", value: formatMoney(recipes.length ? recipes.reduce((sum, r) => sum + (r.sellingPrice ?? r.suggestedSellingPrice ?? 0), 0) / recipes.length : 0), color: "text-orange-600" },
   ];
@@ -659,7 +712,7 @@ export function RecipeBOM() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-6 mb-8">
         {stats.map((stat, index) => (
           <div key={index} className="bg-card rounded-2xl p-6 shadow-sm border border-border">
             <p className="text-muted-foreground text-sm mb-2">{stat.label}</p>
@@ -745,6 +798,12 @@ export function RecipeBOM() {
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">Ingredients:</span>
                 <span className="font-medium text-foreground">{recipe.ingredients.length}</span>
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">Available Orders:</span>
+                <span className={`font-semibold ${(recipe.availableOrders ?? 0) > 0 ? "text-emerald-600" : "text-red-600"}`}>
+                  {recipe.availableOrders ?? 0}
+                </span>
               </div>
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">Menu Status:</span>
@@ -1370,6 +1429,12 @@ export function RecipeBOM() {
                   <p className="text-lg font-bold text-foreground">{selectedRecipe.ingredients.length}</p>
                 </div>
                 <div className="bg-muted/30 rounded-xl p-4">
+                  <p className="text-xs text-muted-foreground mb-1">Available Orders</p>
+                  <p className={`text-lg font-bold ${(selectedRecipe.availableOrders ?? 0) > 0 ? "text-emerald-600" : "text-red-600"}`}>
+                    {selectedRecipe.availableOrders ?? 0}
+                  </p>
+                </div>
+                <div className="bg-muted/30 rounded-xl p-4">
                   <p className="text-xs text-muted-foreground mb-1">Menu Price</p>
                   <p className="text-lg font-bold text-foreground">{formatMoney(selectedRecipe.sellingPrice ?? selectedRecipe.suggestedSellingPrice ?? 0)}</p>
                 </div>
@@ -1414,30 +1479,63 @@ export function RecipeBOM() {
                         <th className="px-4 py-3 text-left text-sm font-medium text-foreground">Ingredient</th>
                         <th className="px-4 py-3 text-right text-sm font-medium text-foreground">Quantity</th>
                         <th className="px-4 py-3 text-right text-sm font-medium text-foreground">Inventory Qty</th>
+                        <th className="px-4 py-3 text-right text-sm font-medium text-foreground">Max Orders</th>
                         <th className="px-4 py-3 text-right text-sm font-medium text-foreground">Unit Cost</th>
                         <th className="px-4 py-3 text-right text-sm font-medium text-foreground">Total</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
-                      {selectedRecipe.ingredients.map((ing) => (
-                        <tr key={ing.id}>
-                          <td className="px-4 py-3 text-foreground">{ing.name}</td>
-                          <td className="px-4 py-3 text-right text-foreground">
-                            {getScaledQuantity(ing.quantity)} {ing.unit}
-                          </td>
-                          <td className="px-4 py-3 text-right text-foreground">
-                            {getScaledQuantity(ing.inventoryQuantity ?? ing.quantity)} {ing.inventoryUnit || ing.unit}
-                          </td>
-                          <td className="px-4 py-3 text-right text-foreground">{formatMoney(ing.unitCost)}</td>
-                          <td className="px-4 py-3 text-right font-medium text-foreground">
-                            {formatMoney(Number(getScaledCost(ing.totalCost)))}
-                          </td>
-                        </tr>
-                      ))}
+                      {selectedRecipe.ingredients.map((ing) => {
+                        const stockStatus = getIngredientStockStatus(ing);
+                        const physicalStock = Number(ing.inventoryStock ?? 0);
+                        const usableStock = Number(
+                          ing.inventoryUsableStock ?? (stockStatus === "expired" ? 0 : physicalStock),
+                        );
+                        return (
+                          <tr key={ing.id}>
+                            <td className="px-4 py-3 text-foreground">
+                              <div className="flex items-center gap-2">
+                                <p>{ing.name}</p>
+                                {stockStatus !== "available" && (
+                                  <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${
+                                    stockStatus === "expired"
+                                      ? "bg-red-100 text-red-700"
+                                      : "bg-amber-100 text-amber-700"
+                                  }`}>
+                                    {stockStatus}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs text-muted-foreground">
+                                Stock: {formatNumber(physicalStock)} {ing.inventoryUnit || ing.unit}
+                                {usableStock !== physicalStock && (
+                                  <> | Usable: {formatNumber(usableStock)} {ing.inventoryUnit || ing.unit}</>
+                                )}
+                                {stockStatus === "expired" && ing.inventoryExpiry && (
+                                  <> | Expired: {new Date(ing.inventoryExpiry).toLocaleDateString()}</>
+                                )}
+                              </p>
+                            </td>
+                            <td className="px-4 py-3 text-right text-foreground">
+                              {getScaledQuantity(ing.quantity)} {ing.unit}
+                            </td>
+                            <td className="px-4 py-3 text-right text-foreground">
+                              {getScaledQuantity(ing.inventoryQuantity ?? ing.quantity)} {ing.inventoryUnit || ing.unit}
+                            </td>
+                            <td className="px-4 py-3 text-right font-semibold text-foreground">
+                              {calculateIngredientAvailableOrders(ing)}
+                            </td>
+                            <td className="px-4 py-3 text-right text-foreground">{formatMoney(ing.unitCost)}</td>
+                            <td className="px-4 py-3 text-right font-medium text-foreground">
+                              {formatMoney(Number(getScaledCost(ing.totalCost)))}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                     <tfoot className="bg-muted/50 border-t border-border">
                       <tr>
-                        <td colSpan={4} className="px-4 py-3 text-right font-semibold text-foreground">
+                        <td colSpan={5} className="px-4 py-3 text-right font-semibold text-foreground">
                           Raw ingredient total:
                         </td>
                         <td className="px-4 py-3 text-right text-xl font-bold text-primary">
@@ -1445,7 +1543,7 @@ export function RecipeBOM() {
                         </td>
                       </tr>
                       <tr>
-                        <td colSpan={4} className="px-4 py-3 text-right font-semibold text-foreground">
+                        <td colSpan={5} className="px-4 py-3 text-right font-semibold text-foreground">
                           Yield-adjusted total:
                         </td>
                         <td className="px-4 py-3 text-right text-xl font-bold text-green-600">
