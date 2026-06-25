@@ -362,11 +362,15 @@ export interface ApiKitchenOrder {
   paymentAt?: string | null;
   preparingStartedAt?: string | null;
   readyAt?: string | null;
+  servedAt?: string | null;
+  serviceDuration?: number | string | null;
   estimatedPrepMinutes?: number | string | null;
   estimatedReadyAt?: string | null;
   completedAt?: string | null;
   tableStartedAt?: string | null;
   tableEndedAt?: string | null;
+  stayStartedAt?: string | null;
+  stayEndedAt?: string | null;
   runningTimeStart?: string | null;
   runningTimeEnd?: string | null;
   runningDuration?: number | string | null;
