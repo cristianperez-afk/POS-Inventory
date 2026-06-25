@@ -761,6 +761,7 @@ export class InventoryApiService {
                   o.order_status,
                   o.total_amount,
                   o.payment_status,
+                  o.ordered_at,
                   o.created_at,
                   o.completed_at,
                   o.payment_at,
@@ -872,6 +873,7 @@ export class InventoryApiService {
                   WHEN order_status = 'SERVED' THEN 'SERVED'
                   ELSE order_status
                 END AS status,
+                ordered_at AS "orderedAt",
                 created_at AS "createdAt",
                 COALESCE(completed_at, created_at) AS "updatedAt",
                 payment_at AS "paymentAt",
@@ -936,13 +938,26 @@ export class InventoryApiService {
           )
           UPDATE orders
           SET order_status = $3::varchar,
-              preparing_started_at = CASE WHEN $3::varchar = 'PREPARING' THEN COALESCE(preparing_started_at, CURRENT_TIMESTAMP) ELSE preparing_started_at END,
+              ordered_at = CASE WHEN $3::varchar IN ('PREPARING', 'READY', 'SERVED', 'COMPLETED') THEN COALESCE(ordered_at, CURRENT_TIMESTAMP) ELSE ordered_at END,
+              preparing_started_at = CASE WHEN $3::varchar IN ('PREPARING', 'READY', 'SERVED', 'COMPLETED') THEN COALESCE(preparing_started_at, ordered_at, CURRENT_TIMESTAMP) ELSE preparing_started_at END,
               ready_at = CASE WHEN $3::varchar = 'READY' THEN COALESCE(ready_at, CURRENT_TIMESTAMP) ELSE ready_at END,
-              service_started_at = CASE WHEN $3::varchar = 'READY' THEN COALESCE(service_started_at, CURRENT_TIMESTAMP) ELSE service_started_at END,
-              table_started_at = CASE WHEN $3::varchar = 'READY' AND order_type IN ('DINE_IN', 'MIXED') THEN COALESCE(table_started_at, CURRENT_TIMESTAMP) ELSE table_started_at END,
+              service_started_at = CASE WHEN $3::varchar IN ('PREPARING', 'READY', 'SERVED', 'COMPLETED') THEN COALESCE(service_started_at, ordered_at, preparing_started_at, CURRENT_TIMESTAMP) ELSE service_started_at END,
+              table_started_at = CASE WHEN $3::varchar IN ('PREPARING', 'READY', 'SERVED', 'COMPLETED') AND order_type IN ('DINE_IN', 'MIXED') THEN COALESCE(table_started_at, ordered_at, running_time_start, CURRENT_TIMESTAMP) ELSE table_started_at END,
               served_at = CASE WHEN $3::varchar = 'SERVED' THEN COALESCE(served_at, CURRENT_TIMESTAMP) ELSE served_at END,
-              service_duration = CASE WHEN $3::varchar = 'SERVED' AND service_started_at IS NOT NULL THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - service_started_at)))::BIGINT) ELSE service_duration END,
-              completed_at = CASE WHEN $3::varchar IN ('SERVED', 'COMPLETED') THEN COALESCE(completed_at, CURRENT_TIMESTAMP) ELSE completed_at END,
+              running_time_start = CASE
+                WHEN $3::varchar IN ('PREPARING', 'READY', 'SERVED', 'COMPLETED')
+                  THEN COALESCE(running_time_start, ordered_at, CURRENT_TIMESTAMP)
+                ELSE running_time_start
+              END,
+              service_duration = CASE
+                WHEN (
+                  (order_type IN ('DINE_IN', 'MIXED') AND $3::varchar = 'SERVED')
+                  OR (order_type = 'TAKEOUT' AND $3::varchar IN ('READY', 'COMPLETED'))
+                )
+                  THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - COALESCE(ordered_at, CURRENT_TIMESTAMP))))::BIGINT)
+                ELSE service_duration
+              END,
+              completed_at = CASE WHEN $3::varchar IN ('COMPLETED', 'CANCELLED') THEN COALESCE(completed_at, CURRENT_TIMESTAMP) ELSE completed_at END,
               table_ended_at = CASE WHEN $3::varchar IN ('COMPLETED', 'CANCELLED') THEN COALESCE(table_ended_at, CURRENT_TIMESTAMP) ELSE table_ended_at END,
               -- Kitchen status updates must respect the restaurant lifecycle:
               -- a takeout stops at completion; a dine-in Pay Later order only
@@ -950,10 +965,10 @@ export class InventoryApiService {
               -- marked completed (or later when its table is released).
               running_time_end = CASE
                 WHEN COALESCE(is_running, FALSE) = TRUE
-                  AND running_time_start IS NOT NULL
+                  AND COALESCE(running_time_start, CURRENT_TIMESTAMP) IS NOT NULL
                   AND (
                     $3::varchar = 'CANCELLED'
-                    OR (order_type = 'TAKEOUT' AND $3::varchar IN ('SERVED', 'COMPLETED'))
+                    OR (order_type = 'TAKEOUT' AND $3::varchar IN ('READY', 'SERVED', 'COMPLETED'))
                     OR (order_type IN ('DINE_IN', 'MIXED') AND payment_status = 'PAID' AND $3::varchar = 'COMPLETED')
                   )
                   THEN CURRENT_TIMESTAMP
@@ -961,21 +976,21 @@ export class InventoryApiService {
               END,
               running_duration = CASE
                 WHEN COALESCE(is_running, FALSE) = TRUE
-                  AND running_time_start IS NOT NULL
+                  AND COALESCE(running_time_start, CURRENT_TIMESTAMP) IS NOT NULL
                   AND (
                     $3::varchar = 'CANCELLED'
-                    OR (order_type = 'TAKEOUT' AND $3::varchar IN ('SERVED', 'COMPLETED'))
+                    OR (order_type = 'TAKEOUT' AND $3::varchar IN ('READY', 'SERVED', 'COMPLETED'))
                     OR (order_type IN ('DINE_IN', 'MIXED') AND payment_status = 'PAID' AND $3::varchar = 'COMPLETED')
                   )
-                  THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - running_time_start)))::BIGINT)
+                  THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - COALESCE(ordered_at, running_time_start, CURRENT_TIMESTAMP))))::BIGINT)
                 ELSE running_duration
               END,
               is_running = CASE
                 WHEN COALESCE(is_running, FALSE) = TRUE
-                  AND running_time_start IS NOT NULL
+                  AND COALESCE(running_time_start, CURRENT_TIMESTAMP) IS NOT NULL
                   AND (
                     $3::varchar = 'CANCELLED'
-                    OR (order_type = 'TAKEOUT' AND $3::varchar IN ('SERVED', 'COMPLETED'))
+                    OR (order_type = 'TAKEOUT' AND $3::varchar IN ('READY', 'SERVED', 'COMPLETED'))
                     OR (order_type IN ('DINE_IN', 'MIXED') AND payment_status = 'PAID' AND $3::varchar = 'COMPLETED')
                   )
                   THEN FALSE
@@ -2405,8 +2420,16 @@ export class InventoryApiService {
   private async ensurePosKitchenEstimateColumns() {
     await this.safeQuery(`
       ALTER TABLE orders
+        ADD COLUMN IF NOT EXISTS ordered_at TIMESTAMP,
         ADD COLUMN IF NOT EXISTS estimated_prep_minutes INT,
         ADD COLUMN IF NOT EXISTS estimated_ready_at TIMESTAMP
+    `);
+    await this.safeQuery(`
+      UPDATE orders
+      SET ordered_at = COALESCE(running_time_start, preparing_started_at, created_at)
+      WHERE ordered_at IS NULL
+        AND order_type <> 'RETAIL'
+        AND COALESCE(running_time_start, preparing_started_at, created_at) IS NOT NULL
     `);
     await this.safeQuery(`
       ALTER TABLE order_items

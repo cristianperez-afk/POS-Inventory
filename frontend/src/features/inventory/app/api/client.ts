@@ -300,11 +300,16 @@ export function voidKitchenOrder(id: string, voidReason: string) {
   });
 }
 
-export function updateKitchenOrderStatus(id: string, status: KitchenOrderStatus) {
-  return request<ApiKitchenOrder>(`/api/kitchen-orders/${id}/status`, {
+export async function updateKitchenOrderStatus(id: string, status: KitchenOrderStatus) {
+  const order = await request<ApiKitchenOrder>(`/api/kitchen-orders/${id}/status`, {
     method: 'PATCH',
     body: JSON.stringify({ status }),
   });
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('pos-order-updated', { detail: { id, status } }));
+    window.localStorage.setItem('pos-order-updated-at', String(Date.now()));
+  }
+  return order;
 }
 
 export function getLocations() {

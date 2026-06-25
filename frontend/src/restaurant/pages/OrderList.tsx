@@ -43,17 +43,51 @@ function formatDuration(minutes?: number) {
   return `${hours} hr${hours === 1 ? '' : 's'}${rest ? ` ${rest} mins` : ''}`;
 }
 
-function formatElapsed(start?: string, end?: string, duration?: number, now = Date.now()) {
-  const seconds = duration !== undefined && end
-    ? duration
-    : start
-      ? Math.max(0, Math.floor(((end ? parseDatabaseTimestamp(end).getTime() : now) - parseDatabaseTimestamp(start).getTime()) / 1000))
-      : null;
-  if (seconds === null || !Number.isFinite(seconds)) return '-';
+function formatElapsed(start?: string, end?: string, _duration?: number, now = Date.now()) {
+  const seconds = start
+    ? Math.max(0, Math.floor(((end ? parseDatabaseTimestamp(end).getTime() : now) - parseDatabaseTimestamp(start).getTime()) / 1000))
+    : 0;
+  if (!Number.isFinite(seconds)) return '00:00:00';
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
   return [hours, minutes, seconds % 60].map((value) => String(value).padStart(2, '0')).join(':');
 }
+
+function preparationEnd(order: Order) {
+  if (order.type === 'Takeout') {
+    return order.servedAt ?? order.readyAt ?? (Number(order.serviceDuration ?? 0) > 0 ? order.completedAt : undefined);
+  }
+
+  return order.servedAt;
+}
+
+function estimatedOrderPrepMinutes(order: Order, strategy: 'parallel' | 'sequential') {
+  const itemMinutes = order.items.map((item) => {
+    const baseMinutes = Math.max(0, Number(item.prepTimeMinutes ?? 0));
+    const customizationMinutes = Math.max(0, Number(item.customizationPrepMinutes ?? 0));
+    const lineMinutes = baseMinutes + customizationMinutes;
+    const quantity = Math.max(1, Number(item.quantity ?? 1));
+    return lineMinutes > 0
+      ? strategy === 'sequential' ? lineMinutes * quantity : lineMinutes
+      : 5 * quantity;
+  });
+  if (itemMinutes.length === 0) return 0;
+  return strategy === 'sequential'
+    ? itemMinutes.reduce((sum, minutes) => sum + minutes, 0)
+    : Math.max(0, ...itemMinutes);
+}
+
+function estimatedWaitDisplay(order: Order, strategy: 'parallel' | 'sequential') {
+  if (!['Pending', 'Preparing'].includes(order.orderStatus)) return null;
+  const estimate = estimatedOrderPrepMinutes(order, strategy);
+  if (!Number.isFinite(estimate) || estimate <= 0) return null;
+  const elapsed = order.runningTimeMinutes ?? 0;
+  return {
+    minutes: Math.max(0, Math.ceil(estimate - elapsed)),
+    readyAt: undefined,
+  };
+}
+
 export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, userName, userRole, storeType, staffType }: OrderListProps) {
   const { orders, completePayment, completeTableOrder, voidOrder, refundOrder, reloadOrders } = useOrders();
   const { settings } = useStoreSettings();
@@ -93,6 +127,13 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
     return () => window.clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    setSelectedOrder((current) => {
+      if (!current) return current;
+      return orders.find((order) => order.id === current.id) ?? current;
+    });
+  }, [orders]);
+
   const openModal = (order: Order, modal: ActiveModal) => {
     if (!canProcessTransactions && ['payment', 'refund', 'void'].includes(String(modal))) return;
     if (modal === 'refund' && !settings.enable_refund) return;
@@ -130,7 +171,19 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
 
     try {
       await completePayment(selectedOrder.id, { cashReceived: cash, changeGiven: change, cashier: userName ?? undefined, paymentId: pId, receiptId: rId });
-      const updates = { paymentStatus: 'Paid' as const, paymentAt: new Date().toISOString(), paymentId: pId, receiptId: rId, cashReceived: cash, changeGiven: change, cashier: userName ?? undefined };
+      const paidAt = new Date().toISOString();
+      const updates = {
+        paymentStatus: 'Paid' as const,
+        paymentAt: paidAt,
+        tableEndedAt: selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed' ? (selectedOrder.tableEndedAt ?? paidAt) : selectedOrder.tableEndedAt,
+        runningTimeEnd: selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed' ? (selectedOrder.runningTimeEnd ?? paidAt) : selectedOrder.runningTimeEnd,
+        isRunning: selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed' ? false : selectedOrder.isRunning,
+        paymentId: pId,
+        receiptId: rId,
+        cashReceived: cash,
+        changeGiven: change,
+        cashier: userName ?? undefined,
+      };
       setSelectedOrder(prev => prev ? { ...prev, ...updates } : null);
       setActiveModal('payment-success');
     } catch (error) {
@@ -348,7 +401,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                     <th className="w-[8%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Est. Prep</th>
                   )}
                   <th className="w-[8%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Stay</th>
-                  <th className="w-[9%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Time Served</th>
+                  <th className="w-[9%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Serve Time</th>
                   <th className="w-[14%] text-center px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Action</th>
                 </tr>
               </thead>
@@ -361,6 +414,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                   </tr>
                 ) : paginatedOrders.map((order) => {
                   const waitingTime = order.isQueued ? Math.floor((new Date().getTime() - new Date(`${order.date} ${order.time}`).getTime()) / 60000) : 0;
+                  const estimatedWait = estimatedWaitDisplay(order, settings.prep_time_strategy);
 
                   return (<tr key={order.id} className="hover:bg-muted/20 transition-colors">
                     <td className="px-5 py-5 text-sm font-mono text-primary whitespace-nowrap overflow-hidden text-ellipsis">
@@ -417,21 +471,19 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                     </td>
                     {showEstimatedPrepTime && (
                       <td className="px-4 py-5 text-xs text-gray-600 whitespace-nowrap">
-                        {order.estimatedPrepMinutes ? `${order.estimatedPrepMinutes} mins` : '-'}
-                        {order.estimatedReadyAt && (
-                          <div className="text-xs text-gray-400">{new Date(order.estimatedReadyAt).toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })}</div>
+                        {estimatedWait ? `${estimatedWait.minutes} mins` : '-'}
+                        {estimatedWait?.readyAt && (
+                          <div className="text-xs text-gray-400">{new Date(estimatedWait.readyAt).toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })}</div>
                         )}
                       </td>
                     )}
                     <td className="px-4 py-5 text-xs text-gray-600 whitespace-nowrap">
                       {order.type === 'Dine-In' || order.type === 'Mixed'
-                        ? formatElapsed(order.tableStartedAt, order.tableEndedAt, undefined, clock)
+                        ? formatElapsed(order.orderedAt, order.tableEndedAt, undefined, clock)
                         : '-'}
                     </td>
                     <td className="px-4 py-5 text-xs text-gray-600 whitespace-nowrap">
-                      {order.type === 'Takeout'
-                        ? formatElapsed(order.serviceStartedAt, order.servedAt, order.serviceDuration, clock)
-                        : '-'}
+                      {formatElapsed(order.orderedAt, preparationEnd(order), order.serviceDuration, clock)}
                     </td>
                     <td className="px-4 py-5">
                       <div className="flex items-center justify-center gap-1 whitespace-nowrap">
@@ -582,13 +634,13 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                   <p className="text-xs text-gray-400 mb-1">Customer Stay Duration</p>
                   <p className="text-sm text-gray-800">
                     {selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed'
-                      ? formatElapsed(selectedOrder.tableStartedAt, selectedOrder.tableEndedAt, undefined, clock)
+                      ? formatElapsed(selectedOrder.orderedAt, selectedOrder.tableEndedAt, undefined, clock)
                       : '-'}
                   </p>
                 </div>
                 <div className="bg-muted rounded-xl p-3">
-                  <p className="text-xs text-gray-400 mb-1">Time Served</p>
-                  <p className="text-sm text-gray-800">{selectedOrder.type === 'Takeout' ? formatElapsed(selectedOrder.serviceStartedAt, selectedOrder.servedAt, selectedOrder.serviceDuration, clock) : '-'}</p>
+                  <p className="text-xs text-gray-400 mb-1">Serve Time</p>
+                  <p className="text-sm text-gray-800">{formatElapsed(selectedOrder.orderedAt, preparationEnd(selectedOrder), selectedOrder.serviceDuration, clock)}</p>
                 </div>
                 <div className="bg-muted rounded-xl p-3">
                   <p className="text-xs text-gray-400 mb-1">Payment Time</p>
@@ -598,8 +650,11 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                   <div className="bg-muted rounded-xl p-3">
                     <p className="text-xs text-gray-400 mb-1">Estimated Preparation</p>
                     <p className="text-sm text-gray-800">
-                      {selectedOrder.estimatedPrepMinutes ? `${selectedOrder.estimatedPrepMinutes} mins` : '-'}
-                      {selectedOrder.estimatedReadyAt ? `, ready around ${new Date(selectedOrder.estimatedReadyAt).toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })}` : ''}
+                      {(() => {
+                        const estimatedWait = estimatedWaitDisplay(selectedOrder, settings.prep_time_strategy);
+                        if (!estimatedWait) return '-';
+                        return `${estimatedWait.minutes} mins${estimatedWait.readyAt ? `, ready around ${new Date(estimatedWait.readyAt).toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })}` : ''}`;
+                      })()}
                     </p>
                   </div>
                 )}
