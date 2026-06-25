@@ -51,6 +51,8 @@ export function Payment({ currentUser, onNavigate, currentOrder, onLogout, store
             serviceFee: currentOrder.serviceFee ?? 0,
             tax: currentOrder.tax ?? 0,
             total,
+            estimatedPrepMinutes: currentOrder.estimatedPrepMinutes ?? null,
+            estimatedReadyAt: currentOrder.estimatedReadyAt ?? null,
             items: currentOrder.items.map((item: any) => ({ ...item, productId: item.id })),
             payment: {
               paymentNumber: `PAY-${orderNumber}`,
@@ -94,6 +96,9 @@ export function Payment({ currentUser, onNavigate, currentOrder, onLogout, store
                   <div className="space-y-2">
                     <p><strong>Customer:</strong> {currentOrder.customerName}</p>
                     <p><strong>Order Type:</strong> {currentOrder.orderType}</p>
+                    {currentOrder.estimatedPrepMinutes !== undefined && (
+                      <p><strong>Estimated preparation time:</strong> {currentOrder.estimatedPrepMinutes} minutes</p>
+                    )}
                     <div className="border-t border-border pt-4 mt-4">
                       <p className="mb-2"><strong>Items:</strong></p>
                       {currentOrder.items?.map((item: any, idx: number) => (

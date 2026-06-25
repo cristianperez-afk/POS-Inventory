@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, useRef, ReactNode } from 'react';
 import { getApiBaseUrl } from '../../auth/services/auth';
 import type { AuthenticatedUser } from '../../auth/types/auth';
-import { getLocalDateKey } from '../utils/date';
+import { getLocalDateKey, parseDatabaseTimestamp } from '../utils/date';
 
 export interface OrderItem {
   name: string;
@@ -12,6 +12,8 @@ export interface OrderItem {
   itemType?: 'dine-in' | 'takeout';
   notes?: string;
   ingredients?: any[];
+  prepTimeMinutes?: number;
+  customizationPrepMinutes?: number;
 }
 
 export interface Order {
@@ -34,11 +36,21 @@ export interface Order {
   paymentAt?: string;
   preparingStartedAt?: string;
   readyAt?: string;
+  serviceStartedAt?: string;
+  servedAt?: string;
+  serviceDuration?: number;
   completedAt?: string;
   tableStartedAt?: string;
   tableEndedAt?: string;
+  runningTimeStart?: string;
+  runningTimeEnd?: string;
+  /** Persisted elapsed seconds once the restaurant order is finalized. */
+  runningDuration?: number;
+  isRunning?: boolean;
   runningTimeMinutes?: number;
   customerStayMinutes?: number;
+  estimatedPrepMinutes?: number;
+  estimatedReadyAt?: string;
   items: OrderItem[];
   paymentId?: string;
   receiptId?: string;
@@ -407,10 +419,16 @@ export function useOrders() {
 }
 
 function mapDatabaseRestaurantOrder(row: any): Order {
-  const createdAt = row.created_at ? new Date(row.created_at) : new Date();
-  const rawCompletedAt = row.completed_at ? new Date(row.completed_at) : null;
-  const tableStartedAt = row.table_started_at ? new Date(row.table_started_at) : null;
-  const tableEndedAt = row.table_ended_at ? new Date(row.table_ended_at) : null;
+  const createdAt = row.created_at ? parseDatabaseTimestamp(row.created_at) : new Date();
+  const rawCompletedAt = row.completed_at ? parseDatabaseTimestamp(row.completed_at) : null;
+  const runningTimeStart = row.running_time_start ? parseDatabaseTimestamp(row.running_time_start) : null;
+  const runningTimeEnd = row.running_time_end ? parseDatabaseTimestamp(row.running_time_end) : null;
+  const tableStartedAt = row.table_started_at ? parseDatabaseTimestamp(row.table_started_at) : null;
+  const tableEndedAt = row.table_ended_at ? parseDatabaseTimestamp(row.table_ended_at) : null;
+  const normalizedTimestamp = (value: unknown) => {
+    const timestamp = parseDatabaseTimestamp(value);
+    return Number.isNaN(timestamp.getTime()) ? undefined : timestamp.toISOString();
+  };
   const minutesBetween = (start: Date | null, end: Date | null) => {
     if (!start) return undefined;
     const endTime = end ?? new Date();
@@ -458,15 +476,25 @@ function mapDatabaseRestaurantOrder(row: any): Order {
     orderStatus,
     date: getLocalDateKey(createdAt),
     time: createdAt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-    createdAt: row.created_at ?? undefined,
-    paymentAt: row.payment_at ?? undefined,
-    preparingStartedAt: row.preparing_started_at ?? undefined,
-    readyAt: row.ready_at ?? undefined,
-    completedAt: orderStatus === 'Completed' ? row.completed_at ?? undefined : undefined,
-    tableStartedAt: row.table_started_at ?? undefined,
-    tableEndedAt: row.table_ended_at ?? undefined,
-    runningTimeMinutes: minutesBetween(createdAt, completedAt),
+    createdAt: normalizedTimestamp(row.created_at),
+    paymentAt: normalizedTimestamp(row.payment_at),
+    preparingStartedAt: normalizedTimestamp(row.preparing_started_at),
+    readyAt: normalizedTimestamp(row.ready_at),
+    serviceStartedAt: normalizedTimestamp(row.service_started_at),
+    servedAt: normalizedTimestamp(row.served_at),
+    serviceDuration: row.service_duration !== null && row.service_duration !== undefined ? Number(row.service_duration) : undefined,
+    completedAt: completedAt ? normalizedTimestamp(row.completed_at) : undefined,
+    tableStartedAt: normalizedTimestamp(row.table_started_at),
+    tableEndedAt: normalizedTimestamp(row.table_ended_at),
+    runningTimeStart: normalizedTimestamp(row.running_time_start),
+    runningTimeEnd: normalizedTimestamp(row.running_time_end),
+    runningDuration: row.running_duration !== null && row.running_duration !== undefined ? Number(row.running_duration) : undefined,
+    isRunning: Boolean(row.is_running),
+    // Kept for older consumers; runningDuration is the precise source of truth.
+    runningTimeMinutes: minutesBetween(runningTimeStart ?? createdAt, runningTimeEnd),
     customerStayMinutes: tableStartedAt ? minutesBetween(tableStartedAt, tableEndedAt ?? completedAt) : undefined,
+    estimatedPrepMinutes: row.estimated_prep_minutes !== null && row.estimated_prep_minutes !== undefined ? Number(row.estimated_prep_minutes) : undefined,
+    estimatedReadyAt: row.estimated_ready_at ?? undefined,
     items: items.map((item: any) => ({
       name: item.product_name,
       quantity: Number(item.quantity ?? 0),
@@ -476,6 +504,8 @@ function mapDatabaseRestaurantOrder(row: any): Order {
       itemType: item.item_type === 'dine-in' || item.item_type === 'DINE_IN' ? 'dine-in' : 'takeout',
       notes: item.notes ?? undefined,
       ingredients: item.ingredients ?? undefined,
+      prepTimeMinutes: item.prep_time_minutes !== null && item.prep_time_minutes !== undefined ? Number(item.prep_time_minutes) : undefined,
+      customizationPrepMinutes: item.customization_prep_minutes !== null && item.customization_prep_minutes !== undefined ? Number(item.customization_prep_minutes) : undefined,
     })),
     paymentId: row.payment_number ?? undefined,
     receiptId: row.receipt_number ?? (row.payment_number ? String(row.payment_number).replace(/^PAY-/, 'REC-') : undefined),

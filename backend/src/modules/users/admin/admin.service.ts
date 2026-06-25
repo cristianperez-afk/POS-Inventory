@@ -81,6 +81,9 @@ export class AdminService {
     enableRefund?: boolean;
     enableVoid?: boolean;
     enableDiscount?: boolean;
+    enableEstimatedPrepTime?: boolean;
+    prepTimeStrategy?: string;
+    customizationPrepTimeMinutes?: number;
     enableServiceCharge?: boolean;
     serviceChargeRate?: number;
     enableTax?: boolean;

@@ -141,6 +141,19 @@ class UpdateStoreSettingsDto {
 
   @IsOptional()
   @IsBoolean()
+  enable_estimated_prep_time?: boolean;
+
+  @IsOptional()
+  @IsString()
+  prep_time_strategy?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  customization_prep_time_minutes?: number;
+
+  @IsOptional()
+  @IsBoolean()
   enable_service_charge?: boolean;
 
   @IsOptional()
@@ -302,6 +315,9 @@ export class AdminController {
       enableRefund: body.enable_refund,
       enableVoid: body.enable_void,
       enableDiscount: body.enable_discount,
+      enableEstimatedPrepTime: body.enable_estimated_prep_time,
+      prepTimeStrategy: body.prep_time_strategy,
+      customizationPrepTimeMinutes: body.customization_prep_time_minutes,
       enableServiceCharge: body.enable_service_charge,
       serviceChargeRate: body.service_charge_rate ?? body.service_charge_percentage,
       enableTax: body.enable_tax,

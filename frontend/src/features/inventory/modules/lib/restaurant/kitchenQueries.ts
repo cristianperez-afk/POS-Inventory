@@ -144,6 +144,8 @@ export function useRestaurantKitchenOrdersQuery() {
         paymentAt: order.paymentAt ?? null,
         preparingStartedAt: order.preparingStartedAt ?? null,
         readyAt: order.readyAt ?? null,
+        estimatedPrepMinutes: Number(order.estimatedPrepMinutes ?? 0),
+        estimatedReadyAt: order.estimatedReadyAt ?? null,
         completedAt: order.completedAt ?? null,
         tableStartedAt: order.tableStartedAt ?? null,
         tableEndedAt: order.tableEndedAt ?? null,
