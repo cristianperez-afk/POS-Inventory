@@ -13,7 +13,25 @@ import {
 type ProductType = 'GENERAL' | 'THRIFT';
 
 // Units a general-merchandise item is stocked in (a sack of rice, a case of cans, etc.)
-const GENERAL_UNITS = ['pcs', 'box', 'case', 'pack', 'dozen', 'set', 'roll', 'sack', 'kg'];
+const GENERAL_UNITS = [
+  'pcs',
+  'box',
+  'case',
+  'pack',
+  'dozen',
+  'set',
+  'roll',
+  'kg',
+  'liter',
+  'milliliter',
+  'bottle',
+  'can',
+  'bag',
+  'sack',
+  'carton',
+  'tray',
+  'gallon',
+];
 
 // Thrift/apparel items are kept simple — "Size" only makes sense for clothing.
 const isThriftCategory = (category: string) => category in categorySubcategories;

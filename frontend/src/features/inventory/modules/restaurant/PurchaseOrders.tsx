@@ -44,6 +44,9 @@ const blankOrderItemInput = (): OrderItemInput => ({
   category: "",
   subCategory: "",
   unit: "",
+  purchaseUnit: "",
+  baseUnit: "",
+  conversionFactor: "1",
   quantity: "",
   unitPrice: "",
   isNewProduct: false,
@@ -60,6 +63,9 @@ type OrderItem = {
   category: string;
   subCategory: string;
   unit: string;
+  purchaseUnit: string;
+  baseUnit: string;
+  conversionFactor: number;
 };
 
 type Order = {
@@ -92,6 +98,9 @@ type GlobalProduct = {
   category?: string;
   subCategory?: string;
   unit?: string;
+  purchaseUnit?: string;
+  baseUnit?: string;
+  conversionFactor?: number;
 };
 
 type SupplierProduct = {
@@ -291,6 +300,9 @@ export function PurchaseOrders() {
     category: string;
     subCategory: string;
     unit: string;
+    purchaseUnit?: string;
+    baseUnit?: string;
+    conversionFactor?: number;
   }) => {
     const normalized = normalizeProductName(payload.name);
 
@@ -308,14 +320,24 @@ export function PurchaseOrders() {
       sku: payload.sku?.trim(),
       category: payload.category || "Other",
       subCategory: payload.subCategory,
-      unit: payload.unit || "pcs",
+      unit: payload.purchaseUnit || payload.unit || "pcs",
+      purchaseUnit: payload.purchaseUnit || payload.unit || "pcs",
+      baseUnit: payload.baseUnit || payload.unit || payload.purchaseUnit || "pcs",
+      conversionFactor: payload.conversionFactor || 1,
     };
 
     return newProduct;
   };
 
   const handleAddItem = () => {
-if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentItem.unitPrice.trim() || !currentItem.unit.trim()) {
+if (
+  !currentItem.productName.trim() ||
+  !currentItem.quantity.trim() ||
+  !currentItem.unitPrice.trim() ||
+  !currentItem.purchaseUnit.trim() ||
+  !currentItem.baseUnit.trim() ||
+  Number(currentItem.conversionFactor || 0) <= 0
+) {
       return;
     }
 
@@ -323,7 +345,10 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
     let inventoryId = currentItem.inventoryId;
     let category = currentItem.category;
     let subCategory = currentItem.subCategory;
-    let unit = currentItem.unit;
+    let unit = currentItem.purchaseUnit || currentItem.unit;
+    let purchaseUnit = currentItem.purchaseUnit || currentItem.unit;
+    let baseUnit = currentItem.baseUnit || currentItem.unit;
+    let conversionFactor = Number(currentItem.conversionFactor || 1);
 
     if (currentItem.isNewProduct || !productId) {
       const created = handleCreateNewProduct({
@@ -331,13 +356,19 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
         sku: currentItem.sku,
         category: currentItem.category || "Other",
         subCategory: currentItem.subCategory,
-        unit: currentItem.unit || "pcs",
+        unit: currentItem.purchaseUnit || currentItem.unit || "pcs",
+        purchaseUnit,
+        baseUnit,
+        conversionFactor,
       });
       productId = created.id;
       inventoryId = created.inventoryId;
       category = created.category || "Other";
       subCategory = created.subCategory || "General";
-      unit = created.unit || "pcs";
+      unit = created.purchaseUnit || created.unit || "pcs";
+      purchaseUnit = created.purchaseUnit || unit;
+      baseUnit = created.baseUnit || unit;
+      conversionFactor = created.conversionFactor || 1;
     }
 
     const newItem: OrderItem = {
@@ -345,11 +376,14 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
       inventoryId,
       sku: currentItem.sku?.trim(),
       productName: normalizeProductName(currentItem.productName),
-      quantity: parseInt(currentItem.quantity, 10),
+      quantity: parseFloat(currentItem.quantity),
       unitPrice: parseFloat(currentItem.unitPrice),
       category: category || "",
       subCategory: subCategory || "",
       unit: unit || "",
+      purchaseUnit: purchaseUnit || unit || "",
+      baseUnit: baseUnit || unit || "",
+      conversionFactor,
     };
 
     setOrderItems([...orderItems, newItem]);

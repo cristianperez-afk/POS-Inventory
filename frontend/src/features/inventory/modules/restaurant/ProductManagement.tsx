@@ -75,7 +75,23 @@ type CatalogProduct = {
   supplierNames: string[];
 };
 
-const units = ["kg", "g", "pcs", "liter", "bottle", "pack", "box", "dozen"];
+const units = [
+  "kg",
+  "g",
+  "pcs",
+  "liter",
+  "milliliter",
+  "bottle",
+  "can",
+  "pack",
+  "box",
+  "bag",
+  "sack",
+  "carton",
+  "tray",
+  "dozen",
+  "gallon",
+];
 const normalizeName = (value: string | undefined) => (value || '').trim().toLowerCase();
 
 function splitCategory(value?: string) {

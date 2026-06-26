@@ -93,7 +93,10 @@ export function mapRestaurantPurchaseOrders(orders: ApiPurchaseOrder[]) {
       unitPrice: item.unitPrice,
       category: item.inventoryItem?.category ?? '',
       subCategory: item.inventoryItem?.subcategory ?? '',
-      unit: item.inventoryItem?.unit ?? 'pcs',
+      unit: item.purchaseUnit ?? item.inventoryItem?.purchaseUnit ?? item.inventoryItem?.unit ?? 'pcs',
+      purchaseUnit: item.purchaseUnit ?? item.inventoryItem?.purchaseUnit ?? item.inventoryItem?.unit ?? 'pcs',
+      baseUnit: item.baseUnit ?? item.inventoryItem?.baseUnit ?? item.inventoryItem?.unit ?? 'pcs',
+      conversionFactor: item.conversionFactor ?? item.inventoryItem?.conversionFactor ?? 1,
     })),
     total: order.totalAmount,
     status:
@@ -150,6 +153,9 @@ export function mapRestaurantGlobalProducts(
       category?: string;
       subCategory?: string;
       unit?: string;
+      purchaseUnit?: string;
+      baseUnit?: string;
+      conversionFactor?: number;
     }
   >();
 
@@ -172,7 +178,10 @@ export function mapRestaurantGlobalProducts(
         sku: override?.sku ?? item.sku ?? undefined,
         category,
         subCategory,
-        unit: override?.unit ?? item.unit ?? 'pcs',
+        unit: override?.unit ?? item.purchaseUnit ?? item.unit ?? 'pcs',
+        purchaseUnit: item.purchaseUnit ?? override?.unit ?? item.unit ?? 'pcs',
+        baseUnit: item.baseUnit ?? item.unit ?? 'pcs',
+        conversionFactor: item.conversionFactor ?? 1,
       });
     }
   });
@@ -282,7 +291,10 @@ export function useRestaurantGoodsRecordsQuery() {
             quantity: line.receivedQty + line.rejectedQty,
             acceptedQuantity: line.receivedQty,
             rejectedQuantity: line.rejectedQty,
-            unit: line.inventoryItem?.unit ?? 'pcs',
+            unit: line.purchaseOrderItem?.purchaseUnit ?? line.inventoryItem?.purchaseUnit ?? line.inventoryItem?.unit ?? 'pcs',
+            purchaseUnit: line.purchaseOrderItem?.purchaseUnit ?? line.inventoryItem?.purchaseUnit ?? line.inventoryItem?.unit ?? 'pcs',
+            baseUnit: line.purchaseOrderItem?.baseUnit ?? line.inventoryItem?.baseUnit ?? line.inventoryItem?.unit ?? 'pcs',
+            conversionFactor: line.purchaseOrderItem?.conversionFactor ?? line.inventoryItem?.conversionFactor ?? 1,
             unitPrice: line.purchaseOrderItem?.unitPrice ?? 0,
             expiryDate: toDateInput(quality.expiryDate ?? line.inventoryItem?.expiryDate),
             expiryPeriod: quality.expiryPeriod ?? '',
@@ -340,7 +352,10 @@ export function useRestaurantGoodsRecordsQuery() {
             backendItemId: item.id,
             productName: item.name,
             quantity: item.quantity - item.receivedQty - item.rejectedQty,
-            unit: item.inventoryItem?.unit ?? 'pcs',
+            unit: item.purchaseUnit ?? item.inventoryItem?.purchaseUnit ?? item.inventoryItem?.unit ?? 'pcs',
+            purchaseUnit: item.purchaseUnit ?? item.inventoryItem?.purchaseUnit ?? item.inventoryItem?.unit ?? 'pcs',
+            baseUnit: item.baseUnit ?? item.inventoryItem?.baseUnit ?? item.inventoryItem?.unit ?? 'pcs',
+            conversionFactor: item.conversionFactor ?? item.inventoryItem?.conversionFactor ?? 1,
             unitPrice: item.unitPrice,
             condition: 'Pending Check',
           })),
@@ -372,12 +387,19 @@ type SaveRestaurantPurchaseOrderLine = {
   quantity: number;
   unitPrice: number;
   unit?: string;
+  purchaseUnit?: string;
+  baseUnit?: string;
+  conversionFactor?: number;
 };
 
 type RestaurantPurchaseOrderProduct = {
   id: string;
   backendId?: string;
   inventoryId?: string | number;
+  purchaseUnit?: string;
+  baseUnit?: string;
+  unit?: string;
+  conversionFactor?: number;
 };
 
 export function useSaveRestaurantPurchaseOrderMutation() {
@@ -418,6 +440,9 @@ export function useSaveRestaurantPurchaseOrderMutation() {
             : undefined);
 
         if (!inventoryItemId) {
+          const purchaseUnit = line.purchaseUnit || line.unit || 'pcs';
+          const baseUnit = line.baseUnit || line.unit || purchaseUnit;
+          const conversionFactor = line.conversionFactor || 1;
           const created = await createInventoryItem({
             name: line.productName,
             itemType: 'INGREDIENT',
@@ -425,7 +450,10 @@ export function useSaveRestaurantPurchaseOrderMutation() {
             category: `${line.category || 'Other'} > ${line.subCategory || 'General'}`,
             quantity: 0,
             price: line.unitPrice,
-            unit: line.unit || 'pcs',
+            unit: baseUnit,
+            purchaseUnit,
+            baseUnit,
+            conversionFactor,
             minStock: 0,
             maxStock: 0,
             reorderPoint: 0,
@@ -439,6 +467,10 @@ export function useSaveRestaurantPurchaseOrderMutation() {
           name: line.productName,
           quantity: line.quantity,
           unitPrice: line.unitPrice,
+          unit: line.purchaseUnit || line.unit,
+          purchaseUnit: line.purchaseUnit || line.unit,
+          baseUnit: line.baseUnit || product?.baseUnit || product?.unit || line.unit,
+          conversionFactor: line.conversionFactor || product?.conversionFactor || 1,
         });
       }
 

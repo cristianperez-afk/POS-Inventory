@@ -61,6 +61,97 @@ export class InventoryApiService {
     await this.safeQuery(
       `ALTER TABLE "InventoryItem" ADD COLUMN IF NOT EXISTS "isActive" BOOLEAN NOT NULL DEFAULT true`,
     );
+    await this.safeQuery(
+      `ALTER TABLE "InventoryItem" ADD COLUMN IF NOT EXISTS "purchaseUnit" TEXT`,
+    );
+    await this.safeQuery(
+      `ALTER TABLE "InventoryItem" ADD COLUMN IF NOT EXISTS "baseUnit" TEXT`,
+    );
+    await this.safeQuery(
+      `ALTER TABLE "InventoryItem" ADD COLUMN IF NOT EXISTS "conversionFactor" DOUBLE PRECISION NOT NULL DEFAULT 1`,
+    );
+    await this.safeQuery(
+      `UPDATE "InventoryItem"
+       SET "baseUnit" = COALESCE(NULLIF("baseUnit", ''), unit),
+           "purchaseUnit" = COALESCE(NULLIF("purchaseUnit", ''), unit),
+           "conversionFactor" = CASE WHEN "conversionFactor" IS NULL OR "conversionFactor" <= 0 THEN 1 ELSE "conversionFactor" END
+       WHERE "baseUnit" IS NULL OR "purchaseUnit" IS NULL OR "conversionFactor" IS NULL OR "conversionFactor" <= 0`,
+    );
+  }
+
+  private async ensurePurchaseOrderItemOperationalColumns() {
+    await this.safeQuery(
+      `ALTER TABLE "PurchaseOrderItem" ADD COLUMN IF NOT EXISTS "purchaseUnit" TEXT`,
+    );
+    await this.safeQuery(
+      `ALTER TABLE "PurchaseOrderItem" ADD COLUMN IF NOT EXISTS "baseUnit" TEXT`,
+    );
+    await this.safeQuery(
+      `ALTER TABLE "PurchaseOrderItem" ADD COLUMN IF NOT EXISTS "conversionFactor" DOUBLE PRECISION NOT NULL DEFAULT 1`,
+    );
+    await this.safeQuery(
+      `UPDATE "PurchaseOrderItem"
+       SET "purchaseUnit" = COALESCE(NULLIF("purchaseUnit", ''), NULLIF("baseUnit", ''), 'pcs'),
+           "baseUnit" = COALESCE(NULLIF("baseUnit", ''), NULLIF("purchaseUnit", ''), 'pcs'),
+           "conversionFactor" = CASE WHEN "conversionFactor" IS NULL OR "conversionFactor" <= 0 THEN 1 ELSE "conversionFactor" END
+       WHERE "purchaseUnit" IS NULL OR "baseUnit" IS NULL OR "conversionFactor" IS NULL OR "conversionFactor" <= 0`,
+    );
+  }
+
+  private normalizeUnit(value: unknown) {
+    const raw = String(value ?? '').trim().toLowerCase();
+    if (!raw) return '';
+    const compact = raw.replace(/\./g, '').replace(/\s+/g, ' ');
+    const aliases: Record<string, string> = {
+      can: 'can',
+      cans: 'can',
+      bottle: 'bottle',
+      bottles: 'bottle',
+      bag: 'bag',
+      bags: 'bag',
+      sack: 'sack',
+      sacks: 'sack',
+      carton: 'carton',
+      cartons: 'carton',
+      tray: 'tray',
+      trays: 'tray',
+      pack: 'pack',
+      packs: 'pack',
+      box: 'box',
+      boxes: 'box',
+      gallon: 'gallon',
+      gallons: 'gallon',
+      milliliter: 'ml',
+      milliliters: 'ml',
+      millilitre: 'ml',
+      millilitres: 'ml',
+      ml: 'ml',
+      liter: 'l',
+      liters: 'l',
+      litre: 'l',
+      litres: 'l',
+      l: 'l',
+      kilogram: 'kg',
+      kilograms: 'kg',
+      kilo: 'kg',
+      kilos: 'kg',
+      kg: 'kg',
+      gram: 'g',
+      grams: 'g',
+      g: 'g',
+      piece: 'pcs',
+      pieces: 'pcs',
+      pc: 'pcs',
+      pcs: 'pcs',
+      dozen: 'dozen',
+      dozens: 'dozen',
+    };
+    return aliases[compact] ?? compact;
+  }
+
+  private normalizeConversionFactor(value: unknown) {
+    const factor = Number(value ?? 1);
+    return Number.isFinite(factor) && factor > 0 ? factor : 1;
   }
 
   async getCurrentUser(headers: HeadersLike) {
@@ -90,6 +181,7 @@ export class InventoryApiService {
           i.id, i.name, i.description, i."itemType", i.sku, i.barcode, i.category,
           i."targetCustomer", i.subcategory, i.size, i.condition,
           i.quantity, i.price, i."costPrice", i."imageUrl", i.unit,
+          i."purchaseUnit", i."baseUnit", i."conversionFactor",
           i."minStock", i."maxStock", i."reorderPoint", i."expiryDate",
           i."expiryPeriod", i."storageTemperature", i."dateAdded", i."locationId",
           i."isActive", i."createdAt", i."updatedAt",
@@ -136,6 +228,9 @@ export class InventoryApiService {
 
     const locationId = String(body.locationId ?? (await this.getDefaultLocationId(scope.businessId)));
     const id = randomUUID();
+    const baseUnit = this.normalizeUnit(body.baseUnit ?? body.unit) || null;
+    const purchaseUnit = this.normalizeUnit(body.purchaseUnit ?? body.unit ?? baseUnit) || baseUnit;
+    const conversionFactor = this.normalizeConversionFactor(body.conversionFactor);
 
     // Restaurant items are grouped by a "Main > Sub" category tree. Normalize the
     // incoming category into that shape and make sure the resolved Main/Sub exist
@@ -155,7 +250,8 @@ export class InventoryApiService {
         INSERT INTO "InventoryItem" (
           id, name, description, "itemType", sku, barcode, category, "targetCustomer",
           subcategory, size, condition, quantity, price, "costPrice",
-          "imageUrl", unit, "minStock", "maxStock", "reorderPoint",
+          "imageUrl", unit, "purchaseUnit", "baseUnit", "conversionFactor",
+          "minStock", "maxStock", "reorderPoint",
           "expiryDate", "expiryPeriod", "storageTemperature", "locationId", "businessId",
           "updatedAt"
         )
@@ -163,7 +259,7 @@ export class InventoryApiService {
           $1, $2, $3, $4::"InventoryItemType", $5, $6, $7, $8,
           $9, $10, $11, $12, $13, $14,
           $15, $16, $17, $18, $19,
-          $20, $21, $22, $23, $24,
+          $20, $21, $22, $23, $24, $25, $26, $27,
           CURRENT_TIMESTAMP
         )
         RETURNING *
@@ -184,7 +280,10 @@ export class InventoryApiService {
         Number(body.price ?? 0),
         body.costPrice === undefined ? null : Number(body.costPrice),
         body.imageUrl ?? null,
-        body.unit ?? null,
+        baseUnit,
+        purchaseUnit,
+        baseUnit,
+        conversionFactor,
         body.minStock === undefined ? null : Number(body.minStock),
         body.maxStock === undefined ? null : Number(body.maxStock),
         body.reorderPoint === undefined ? null : Number(body.reorderPoint),
@@ -222,6 +321,15 @@ export class InventoryApiService {
       quantityChange = null;
     }
 
+    const baseUnit =
+      body.baseUnit !== undefined || body.unit !== undefined
+        ? this.normalizeUnit(body.baseUnit ?? body.unit)
+        : null;
+    const purchaseUnit =
+      body.purchaseUnit !== undefined ? this.normalizeUnit(body.purchaseUnit) : null;
+    const conversionFactor =
+      body.conversionFactor === undefined ? null : this.normalizeConversionFactor(body.conversionFactor);
+
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
         UPDATE "InventoryItem"
@@ -248,6 +356,9 @@ export class InventoryApiService {
           "expiryPeriod" = CASE WHEN $24 THEN NULL ELSE COALESCE($21, "expiryPeriod") END,
           "storageTemperature" = COALESCE($22, "storageTemperature"),
           "isActive" = COALESCE($23, "isActive"),
+          "purchaseUnit" = COALESCE($25, "purchaseUnit"),
+          "baseUnit" = COALESCE($26, "baseUnit"),
+          "conversionFactor" = COALESCE($27, "conversionFactor"),
           "updatedAt" = CURRENT_TIMESTAMP
         WHERE id = $1
         RETURNING *
@@ -261,7 +372,7 @@ export class InventoryApiService {
         body.price === undefined ? null : Number(body.price),
         body.costPrice === undefined ? null : Number(body.costPrice),
         body.imageUrl ?? null,
-        body.unit ?? null,
+        baseUnit,
         body.minStock === undefined ? null : Number(body.minStock),
         body.maxStock === undefined ? null : Number(body.maxStock),
         body.reorderPoint === undefined ? null : Number(body.reorderPoint),
@@ -277,6 +388,9 @@ export class InventoryApiService {
         body.storageTemperature ?? null,
         body.isActive === undefined ? null : Boolean(body.isActive),
         Boolean(body.noExpiry),
+        purchaseUnit,
+        baseUnit,
+        conversionFactor,
       ],
     );
 
@@ -290,6 +404,7 @@ export class InventoryApiService {
   // (quantity received, unit cost from the PO line, total cost, date received) plus
   // the weighted-average cost used as the default inventory cost display.
   async getItemCostHistory(headers: HeadersLike, id: string) {
+    await this.ensurePurchaseOrderItemOperationalColumns();
     const scope = await this.resolveScope(headers);
 
     const itemRows = await this.safeQuery<{
@@ -315,8 +430,8 @@ export class InventoryApiService {
       `
         SELECT
           gri.id                                  AS id,
-          gri."receivedQty"                       AS "quantityReceived",
-          poi."unitPrice"                         AS "unitCost",
+          (gri."receivedQty" * COALESCE(NULLIF(poi."conversionFactor", 0), 1)) AS "quantityReceived",
+          (poi."unitPrice" / COALESCE(NULLIF(poi."conversionFactor", 0), 1))   AS "unitCost",
           (gri."receivedQty" * poi."unitPrice")   AS "totalCost",
           gr."createdAt"                          AS "dateReceived",
           gr."receiptNumber"                      AS "receiptNumber",
@@ -1338,6 +1453,7 @@ export class InventoryApiService {
   }
 
   async listPurchaseOrders(headers: HeadersLike, query: Record<string, string | undefined>) {
+    await this.ensurePurchaseOrderItemOperationalColumns();
     const scope = await this.resolveScope(headers);
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
@@ -1363,6 +1479,8 @@ export class InventoryApiService {
   }
 
   async listGoodsReceipts(headers: HeadersLike, query: Record<string, string | undefined>) {
+    await this.ensureInventoryItemOperationalColumns();
+    await this.ensurePurchaseOrderItemOperationalColumns();
     const scope = await this.resolveScope(headers);
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
@@ -1422,6 +1540,7 @@ export class InventoryApiService {
   }
 
   private async getPurchaseOrderRow(scope: Scope, id: string) {
+    await this.ensurePurchaseOrderItemOperationalColumns();
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
         SELECT
@@ -1450,6 +1569,7 @@ export class InventoryApiService {
   }
 
   async createPurchaseOrder(headers: HeadersLike, body: Record<string, unknown>) {
+    await this.ensurePurchaseOrderItemOperationalColumns();
     const scope = await this.resolveScope(headers);
     const items = Array.isArray(body.items) ? (body.items as Record<string, unknown>[]) : [];
     if (items.length === 0) {
@@ -1489,14 +1609,29 @@ export class InventoryApiService {
       for (const item of items) {
         const qty = Number(item.quantity ?? 0);
         const price = Number(item.unitPrice ?? 0);
+        const purchaseUnit = this.normalizeUnit(item.purchaseUnit ?? item.unit ?? item.baseUnit) || null;
+        const baseUnit = this.normalizeUnit(item.baseUnit ?? item.unit ?? item.purchaseUnit) || purchaseUnit;
+        const conversionFactor = this.normalizeConversionFactor(item.conversionFactor);
         await client.query(
           `
             INSERT INTO "PurchaseOrderItem" (
-              id, "purchaseOrderId", "inventoryItemId", name, quantity, "unitPrice", "totalPrice", "updatedAt"
+              id, "purchaseOrderId", "inventoryItemId", name, quantity, "unitPrice", "totalPrice",
+              "purchaseUnit", "baseUnit", "conversionFactor", "updatedAt"
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
           `,
-          [randomUUID(), poId, item.inventoryItemId ?? null, String(item.name ?? ''), qty, price, qty * price],
+          [
+            randomUUID(),
+            poId,
+            item.inventoryItemId ?? null,
+            String(item.name ?? ''),
+            qty,
+            price,
+            qty * price,
+            purchaseUnit,
+            baseUnit,
+            conversionFactor,
+          ],
         );
       }
     });
@@ -1505,6 +1640,7 @@ export class InventoryApiService {
   }
 
   async updatePurchaseOrder(headers: HeadersLike, id: string, body: Record<string, unknown>) {
+    await this.ensurePurchaseOrderItemOperationalColumns();
     const scope = await this.resolveScope(headers);
     const existing = await this.safeQuery<{ status: string }>(
       `SELECT status FROM "PurchaseOrder" WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule" LIMIT 1`,
@@ -1544,15 +1680,30 @@ export class InventoryApiService {
         for (const item of items) {
           const qty = Number(item.quantity ?? 0);
           const price = Number(item.unitPrice ?? 0);
+          const purchaseUnit = this.normalizeUnit(item.purchaseUnit ?? item.unit ?? item.baseUnit) || null;
+          const baseUnit = this.normalizeUnit(item.baseUnit ?? item.unit ?? item.purchaseUnit) || purchaseUnit;
+          const conversionFactor = this.normalizeConversionFactor(item.conversionFactor);
           total += qty * price;
           await client.query(
             `
               INSERT INTO "PurchaseOrderItem" (
-                id, "purchaseOrderId", "inventoryItemId", name, quantity, "unitPrice", "totalPrice", "updatedAt"
+                id, "purchaseOrderId", "inventoryItemId", name, quantity, "unitPrice", "totalPrice",
+                "purchaseUnit", "baseUnit", "conversionFactor", "updatedAt"
               )
-              VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
             `,
-            [randomUUID(), id, item.inventoryItemId ?? null, String(item.name ?? ''), qty, price, qty * price],
+            [
+              randomUUID(),
+              id,
+              item.inventoryItemId ?? null,
+              String(item.name ?? ''),
+              qty,
+              price,
+              qty * price,
+              purchaseUnit,
+              baseUnit,
+              conversionFactor,
+            ],
           );
         }
         await client.query(`UPDATE "PurchaseOrder" SET "totalAmount" = $1 WHERE id = $2`, [total, id]);
@@ -1750,6 +1901,7 @@ export class InventoryApiService {
   // costing, writes a GoodsReceipt + StockMovements, and advances PO status.
   async receivePurchaseOrder(headers: HeadersLike, id: string, body: Record<string, unknown>) {
     await this.ensureInventoryItemOperationalColumns();
+    await this.ensurePurchaseOrderItemOperationalColumns();
     const scope = await this.resolveScope(headers);
     const dtoItems = Array.isArray(body.items) ? (body.items as Record<string, unknown>[]) : [];
 
@@ -1772,8 +1924,14 @@ export class InventoryApiService {
         rejectedQty: number;
         inventoryItemId: string | null;
         unitPrice: number;
+        purchaseUnit: string | null;
+        baseUnit: string | null;
+        conversionFactor: number;
       }>(
-        `SELECT id, name, quantity, "receivedQty", "rejectedQty", "inventoryItemId", "unitPrice" FROM "PurchaseOrderItem" WHERE "purchaseOrderId" = $1`,
+        `SELECT id, name, quantity, "receivedQty", "rejectedQty", "inventoryItemId", "unitPrice",
+                "purchaseUnit", "baseUnit", "conversionFactor"
+         FROM "PurchaseOrderItem"
+         WHERE "purchaseOrderId" = $1`,
         [id],
       );
       const poItems = new Map(poItemRows.rows.map((r) => [r.id, r]));
@@ -1804,24 +1962,47 @@ export class InventoryApiService {
         }
 
         if (receivedQty > 0 && poItem.inventoryItemId) {
-          const invRows = await client.query<{ quantity: number; price: number; unit: string | null; locationId: string }>(
-            `SELECT quantity, price, unit, "locationId" FROM "InventoryItem" WHERE id = $1 AND "businessId" = $2 FOR UPDATE`,
+          const invRows = await client.query<{
+            quantity: number;
+            price: number;
+            unit: string | null;
+            purchaseUnit: string | null;
+            baseUnit: string | null;
+            conversionFactor: number;
+            locationId: string;
+          }>(
+            `SELECT quantity, price, unit, "purchaseUnit", "baseUnit", "conversionFactor", "locationId"
+             FROM "InventoryItem"
+             WHERE id = $1 AND "businessId" = $2
+             FOR UPDATE`,
             [poItem.inventoryItemId, scope.businessId],
           );
           const inv = invRows.rows[0];
           if (!inv) throw new BadRequestException(`Inventory item for "${poItem.name}" is unavailable.`);
 
           const previousQuantity = Number(inv.quantity);
-          const newQuantity = previousQuantity + receivedQty;
+          const conversionFactor = this.normalizeConversionFactor(
+            poItem.conversionFactor ?? inv.conversionFactor ?? 1,
+          );
+          const baseReceivedQty = receivedQty * conversionFactor;
+          const baseUnit =
+            this.normalizeUnit(poItem.baseUnit ?? inv.baseUnit ?? inv.unit) || inv.unit;
+          const purchaseUnit =
+            this.normalizeUnit(poItem.purchaseUnit ?? inv.purchaseUnit ?? baseUnit) || baseUnit;
+          const unitCostPerBase = Number(poItem.unitPrice) / conversionFactor;
+          const newQuantity = previousQuantity + baseReceivedQty;
           const wacPrice =
             newQuantity > 0
-              ? (previousQuantity * Number(inv.price) + receivedQty * Number(poItem.unitPrice)) / newQuantity
+              ? (previousQuantity * Number(inv.price) + baseReceivedQty * unitCostPerBase) / newQuantity
               : Number(inv.price);
 
           await client.query(
             `
               UPDATE "InventoryItem"
-              SET quantity = $1, price = $2,
+              SET quantity = $1, price = $2, unit = COALESCE($7, unit),
+                  "purchaseUnit" = COALESCE($8, "purchaseUnit"),
+                  "baseUnit" = COALESCE($7, "baseUnit"),
+                  "conversionFactor" = $9,
                   "expiryDate" = COALESCE($3, "expiryDate"),
                   "expiryPeriod" = COALESCE($4, "expiryPeriod"),
                   "storageTemperature" = COALESCE($5, "storageTemperature"),
@@ -1835,6 +2016,9 @@ export class InventoryApiService {
               ri.expiryPeriod ?? null,
               ri.storageTemperature ?? null,
               poItem.inventoryItemId,
+              baseUnit,
+              purchaseUnit,
+              conversionFactor,
             ],
           );
 
@@ -1849,12 +2033,12 @@ export class InventoryApiService {
             `,
             [
               randomUUID(),
-              receivedQty,
+              baseReceivedQty,
               previousQuantity,
               newQuantity,
-              inv.unit,
+              baseUnit,
               po.id,
-              `Received from PO ${po.orderNumber}`,
+              `Received ${receivedQty} ${purchaseUnit} (${baseReceivedQty} ${baseUnit}) from PO ${po.orderNumber}`,
               poItem.inventoryItemId,
               inv.locationId,
               scope.businessId,
@@ -2602,6 +2786,9 @@ export class InventoryApiService {
 
   async upsertRestaurantSetting(headers: HeadersLike, key: string, value: unknown) {
     const scope = await this.resolveScope(headers);
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can customize inventory settings.');
+    }
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
         INSERT INTO "RestaurantSetting" (id, key, value, "businessId", "updatedAt")

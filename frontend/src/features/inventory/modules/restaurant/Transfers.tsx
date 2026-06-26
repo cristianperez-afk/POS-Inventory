@@ -96,7 +96,24 @@ export function Transfers() {
   const { data: locations = [] } = useRestaurantLocationsQuery();
   const { data: inventoryItems = [] } = useRestaurantInventoryQuery();
   const availableItems = inventoryItems.filter(item => item.backendId && item.stock > 0);
-  const units = ["kg", "g", "L", "ml", "pcs"];
+  const units = [
+    "kg",
+    "g",
+    "L",
+    "ml",
+    "milliliter",
+    "pcs",
+    "liter",
+    "bottle",
+    "can",
+    "pack",
+    "box",
+    "bag",
+    "sack",
+    "carton",
+    "tray",
+    "gallon",
+  ];
   const saveTransfer = useCreateRestaurantTransferMutation();
   const moveTransfer = useRestaurantTransferActionMutation();
   const saveMovement = useCreateRestaurantStockMovementMutation();

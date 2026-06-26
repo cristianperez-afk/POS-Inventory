@@ -80,7 +80,26 @@ type Recipe = {
 // Use the actual inventory product structure from the restaurant inventory query.
 type InventoryItem = InventoryProduct & { backendId?: string };
 
-const UNIT_OPTIONS = ["kg", "g", "L", "ml", "pcs", "piece", "liter", "bottle", "pack", "box", "dozen"];
+const UNIT_OPTIONS = [
+  "kg",
+  "g",
+  "L",
+  "ml",
+  "milliliter",
+  "pcs",
+  "piece",
+  "liter",
+  "bottle",
+  "can",
+  "pack",
+  "box",
+  "bag",
+  "sack",
+  "carton",
+  "tray",
+  "dozen",
+  "gallon",
+];
 const MODIFIER_GROUPS = [
   "Protein Choice",
   "Flavor Adjustment",
@@ -272,6 +291,7 @@ const modifierNeedsStock = (group: string, name: string) => {
 const normalizeUnit = (unit: string | undefined) => {
   const normalized = (unit || '').trim().toLowerCase();
   if (normalized === "ltr" || normalized === "litre" || normalized === "liters" || normalized === "liter") return "l";
+  if (normalized === "milliliter" || normalized === "millilitre" || normalized === "milliliters" || normalized === "millilitres") return "ml";
   if (normalized === "pc" || normalized === "piece" || normalized === "pieces") return "pcs";
   return normalized;
 };

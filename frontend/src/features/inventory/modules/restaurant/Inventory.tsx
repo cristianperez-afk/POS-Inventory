@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Search, Edit, Archive, ArchiveRestore, AlertCircle, X, Save, ChevronRight, ChevronDown, Folder, FolderOpen, Package, PlusCircle, History, Sparkles } from "lucide-react";
+import { Search, Edit, Archive, ArchiveRestore, AlertCircle, X, Save, ChevronRight, ChevronDown, Folder, FolderOpen, Package, PlusCircle, History, Sparkles, SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "../../app/hooks/useSession";
 import { formatQuantity } from "../lib/inventoryLogic";
@@ -10,6 +10,7 @@ import {
   useRestaurantLocationsQuery,
   useRestaurantStorageTemperatureOptionsQuery,
   useUpdateRestaurantInventoryMutation,
+  useUpsertRestaurantCategoryHierarchyMutation,
 } from "../lib/restaurant";
 import { AddProduct } from "./AddProduct";
 
@@ -29,6 +30,9 @@ type Product = {
   expiryPeriod?: string;
   location?: string;
   unit: string;
+  purchaseUnit?: string;
+  baseUnit?: string;
+  conversionFactor?: number;
   storageTemperature?: string;
   isActive?: boolean;
   isRecent?: boolean;
@@ -58,6 +62,11 @@ export function Inventory() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [costHistoryItem, setCostHistoryItem] = useState<{ id: string; name: string } | null>(null);
   const [showRecentModal, setShowRecentModal] = useState(false);
+  const [showCategoryManager, setShowCategoryManager] = useState(false);
+  const [editingCategoryName, setEditingCategoryName] = useState("");
+  const [categoryDraftName, setCategoryDraftName] = useState("");
+  const [editingSubCategory, setEditingSubCategory] = useState<{ category: string; subCategory: string } | null>(null);
+  const [subCategoryDraftName, setSubCategoryDraftName] = useState("");
 
   // Hierarchical category structure — read from persisted backend settings so
   // categories added via Initial Stock Setup appear here immediately.
@@ -67,6 +76,7 @@ export function Inventory() {
   const { data: products = [] } = useRestaurantInventoryQuery<Product[]>();
   const { data: locations = [] } = useRestaurantLocationsQuery();
   const updateProduct = useUpdateRestaurantInventoryMutation();
+  const saveCategoryHierarchy = useUpsertRestaurantCategoryHierarchyMutation();
 
   // Inventory lists raw ingredients/supplies only. "Menu Items" is a menu/recipe
   // grouping (present in the default hierarchy) and must not appear as an
@@ -205,6 +215,118 @@ export function Inventory() {
     }
   };
 
+  const startCategoryRename = (category: string) => {
+    setEditingCategoryName(category);
+    setCategoryDraftName(category);
+  };
+
+  const startSubCategoryRename = (category: string, subCategory: string) => {
+    setEditingSubCategory({ category, subCategory });
+    setSubCategoryDraftName(subCategory);
+  };
+
+  const handleRenameCategory = async () => {
+    const oldName = editingCategoryName;
+    const nextName = categoryDraftName.trim();
+    if (!oldName || !nextName || oldName === nextName) {
+      setEditingCategoryName("");
+      setCategoryDraftName("");
+      return;
+    }
+    if (categoryHierarchy[nextName]) {
+      toast.error(`Category "${nextName}" already exists`);
+      return;
+    }
+
+    const nextHierarchy = Object.fromEntries(
+      Object.entries(categoryHierarchy).map(([category, subCategories]) => [
+        category === oldName ? nextName : category,
+        subCategories,
+      ]),
+    );
+
+    const affectedProducts = products.filter((product) =>
+      product.category.startsWith(`${oldName} > `),
+    );
+
+    try {
+      await saveCategoryHierarchy.mutateAsync(nextHierarchy);
+      await Promise.all(
+        affectedProducts.map((product) =>
+          updateProduct.mutateAsync({
+            id: product.backendId ?? String(product.id),
+            data: {
+              category: product.category.replace(`${oldName} > `, `${nextName} > `),
+            },
+          }),
+        ),
+      );
+      setExpandedMainCategories((current) => {
+        const next = new Set(current);
+        if (next.delete(oldName)) next.add(nextName);
+        return next;
+      });
+      setExpandedSubCategories((current) => {
+        const next = new Set<string>();
+        current.forEach((key) => {
+          next.add(key.startsWith(`${oldName} > `) ? key.replace(`${oldName} > `, `${nextName} > `) : key);
+        });
+        return next;
+      });
+      setEditingCategoryName("");
+      setCategoryDraftName("");
+      toast.success(`Category renamed to "${nextName}"`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to rename category");
+    }
+  };
+
+  const handleRenameSubCategory = async () => {
+    if (!editingSubCategory) return;
+    const { category, subCategory } = editingSubCategory;
+    const nextName = subCategoryDraftName.trim();
+    if (!nextName || subCategory === nextName) {
+      setEditingSubCategory(null);
+      setSubCategoryDraftName("");
+      return;
+    }
+    const siblings = categoryHierarchy[category] || [];
+    if (siblings.some((item) => item.toLowerCase() === nextName.toLowerCase() && item !== subCategory)) {
+      toast.error(`Subcategory "${nextName}" already exists in ${category}`);
+      return;
+    }
+
+    const oldCategoryKey = `${category} > ${subCategory}`;
+    const nextCategoryKey = `${category} > ${nextName}`;
+    const nextHierarchy = {
+      ...categoryHierarchy,
+      [category]: siblings.map((item) => (item === subCategory ? nextName : item)),
+    };
+    const affectedProducts = products.filter((product) => product.category === oldCategoryKey);
+
+    try {
+      await saveCategoryHierarchy.mutateAsync(nextHierarchy);
+      await Promise.all(
+        affectedProducts.map((product) =>
+          updateProduct.mutateAsync({
+            id: product.backendId ?? String(product.id),
+            data: { category: nextCategoryKey },
+          }),
+        ),
+      );
+      setExpandedSubCategories((current) => {
+        const next = new Set(current);
+        if (next.delete(oldCategoryKey)) next.add(nextCategoryKey);
+        return next;
+      });
+      setEditingSubCategory(null);
+      setSubCategoryDraftName("");
+      toast.success(`Subcategory renamed to "${nextName}"`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to rename subcategory");
+    }
+  };
+
   const getStockStatus = (stock: number, maxStock: number, minStock?: number, reorderPoint?: number) => {
     if (stock <= 0) {
       return { color: "bg-black text-white border-black", label: "Out of Stock", textColor: "text-black" };
@@ -246,13 +368,22 @@ export function Inventory() {
           )}
         </div>
         {userRole === "admin" && (
-          <button
-            onClick={() => setShowInitialStockModal(true)}
-            className="px-4 py-2 bg-muted text-foreground border border-border rounded-xl hover:bg-muted/80 hover:-translate-y-0.5 hover:shadow-md hover:border-primary/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-sm transition-all duration-200 text-sm font-medium flex items-center gap-2"
-          >
-            <PlusCircle className="w-4 h-4" />
-            Initial Stock Setup
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setShowCategoryManager(true)}
+              className="px-4 py-2 bg-muted text-foreground border border-border rounded-xl hover:bg-muted/80 hover:-translate-y-0.5 hover:shadow-md hover:border-primary/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-sm transition-all duration-200 text-sm font-medium flex items-center gap-2"
+            >
+              <SlidersHorizontal className="w-4 h-4" />
+              Customize Categories
+            </button>
+            <button
+              onClick={() => setShowInitialStockModal(true)}
+              className="px-4 py-2 bg-muted text-foreground border border-border rounded-xl hover:bg-muted/80 hover:-translate-y-0.5 hover:shadow-md hover:border-primary/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-sm transition-all duration-200 text-sm font-medium flex items-center gap-2"
+            >
+              <PlusCircle className="w-4 h-4" />
+              Initial Stock Setup
+            </button>
+          </div>
         )}
       </div>
 
@@ -348,6 +479,21 @@ export function Inventory() {
                     <Folder className="w-7 h-7 text-orange-500 flex-shrink-0" />
                   )}
                   <span className="font-semibold text-foreground flex-1 text-base">{mainCategory}</span>
+                  {userRole === "admin" && (
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        startCategoryRename(mainCategory);
+                        setShowCategoryManager(true);
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted"
+                      aria-label={`Rename ${mainCategory}`}
+                    >
+                      <Edit className="w-3.5 h-3.5" />
+                      Rename
+                    </button>
+                  )}
                   <span className="text-sm text-muted-foreground bg-background px-3 py-1 rounded-full">
                     {mainCategoryCount}
                   </span>
@@ -382,6 +528,21 @@ export function Inventory() {
                               <Folder className="w-6 h-6 text-yellow-500 flex-shrink-0" />
                             )}
                             <span className="font-medium text-foreground flex-1">{subCategory}</span>
+                            {userRole === "admin" && (
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  startSubCategoryRename(mainCategory, subCategory);
+                                  setShowCategoryManager(true);
+                                }}
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-1 text-xs font-medium text-foreground hover:bg-muted"
+                                aria-label={`Rename ${subCategory}`}
+                              >
+                                <Edit className="w-3.5 h-3.5" />
+                                Rename
+                              </button>
+                            )}
                             <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded-full">
                               {subCount}
                             </span>
@@ -419,6 +580,11 @@ export function Inventory() {
                                       <p className={`text-[13px] font-bold ${getStockStatus(product.stock, product.maxStock, product.minStock, product.reorderPoint).textColor}`}>
                                         {formatQuantity(product.stock, product.unit)} / {formatQuantity(product.maxStock, product.unit)}
                                       </p>
+                                      {product.purchaseUnit && product.conversionFactor && product.conversionFactor > 1 && (
+                                        <p className="text-[10px] leading-tight text-muted-foreground truncate">
+                                          {formatQuantity(product.stock / product.conversionFactor, product.purchaseUnit)} packages
+                                        </p>
+                                      )}
                                     </div>
 
                                     <div className="min-w-0">
@@ -508,6 +674,134 @@ export function Inventory() {
           itemName={costHistoryItem.name}
           onClose={() => setCostHistoryItem(null)}
         />
+      )}
+
+      {/* Category Manager Modal */}
+      {showCategoryManager && userRole === "admin" && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-card rounded-2xl shadow-xl border border-border w-full max-w-3xl max-h-[85vh] overflow-y-auto">
+            <div className="sticky top-0 bg-card border-b border-border px-6 py-4 flex items-center justify-between z-10">
+              <div>
+                <h2 className="text-xl font-bold text-foreground">Customize Categories</h2>
+                <p className="text-sm text-muted-foreground">Rename main categories and subcategories used by Food Inventory.</p>
+              </div>
+              <button
+                onClick={() => {
+                  setShowCategoryManager(false);
+                  setEditingCategoryName("");
+                  setCategoryDraftName("");
+                  setEditingSubCategory(null);
+                  setSubCategoryDraftName("");
+                }}
+                className="p-2 hover:bg-muted rounded-xl transition-colors"
+                aria-label="Close category manager"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              {mainCategories.map((category) => (
+                <div key={category} className="rounded-xl border border-border bg-muted/20 p-4">
+                  <div className="flex items-center gap-3">
+                    <Folder className="w-5 h-5 text-orange-500 flex-shrink-0" />
+                    {editingCategoryName === category ? (
+                      <div className="flex flex-1 items-center gap-2">
+                        <input
+                          value={categoryDraftName}
+                          onChange={(event) => setCategoryDraftName(event.target.value)}
+                          className="min-w-0 flex-1 rounded-lg border border-input bg-input-background px-3 py-2 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/30"
+                          autoFocus
+                        />
+                        <button
+                          type="button"
+                          onClick={handleRenameCategory}
+                          disabled={!categoryDraftName.trim()}
+                          className="px-3 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
+                        >
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingCategoryName("");
+                            setCategoryDraftName("");
+                          }}
+                          className="px-3 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <span className="flex-1 font-semibold text-foreground">{category}</span>
+                        <button
+                          type="button"
+                          onClick={() => startCategoryRename(category)}
+                          className="px-3 py-1.5 bg-white border border-border rounded-lg text-sm font-medium text-foreground hover:bg-muted inline-flex items-center gap-1.5"
+                        >
+                          <Edit className="w-3.5 h-3.5" />
+                          Rename
+                        </button>
+                      </>
+                    )}
+                  </div>
+
+                  <div className="mt-3 space-y-2 pl-8">
+                    {(categoryHierarchy[category] || []).map((subCategory) => {
+                      const isEditing = editingSubCategory?.category === category && editingSubCategory.subCategory === subCategory;
+                      return (
+                        <div key={`${category} > ${subCategory}`} className="flex items-center gap-2 rounded-lg bg-background border border-border px-3 py-2">
+                          <FolderOpen className="w-4 h-4 text-primary flex-shrink-0" />
+                          {isEditing ? (
+                            <>
+                              <input
+                                value={subCategoryDraftName}
+                                onChange={(event) => setSubCategoryDraftName(event.target.value)}
+                                className="min-w-0 flex-1 rounded-lg border border-input bg-input-background px-3 py-2 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/30"
+                                autoFocus
+                              />
+                              <button
+                                type="button"
+                                onClick={handleRenameSubCategory}
+                                disabled={!subCategoryDraftName.trim()}
+                                className="px-3 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
+                              >
+                                Save
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingSubCategory(null);
+                                  setSubCategoryDraftName("");
+                                }}
+                                className="px-3 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted"
+                              >
+                                Cancel
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <span className="flex-1 text-sm font-medium text-foreground">{subCategory}</span>
+                              <button
+                                type="button"
+                                onClick={() => startSubCategoryRename(category, subCategory)}
+                                className="px-3 py-1.5 bg-white border border-border rounded-lg text-sm font-medium text-foreground hover:bg-muted inline-flex items-center gap-1.5"
+                              >
+                                <Edit className="w-3.5 h-3.5" />
+                                Rename
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Recently Added Items Modal */}
