@@ -9,7 +9,7 @@ import {
   OnModuleInit,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { Pool, PoolClient, QueryResultRow } from 'pg';
+import { Pool, PoolClient, QueryResultRow, types } from 'pg';
 import * as bcrypt from 'bcryptjs';
 import { randomInt, randomUUID } from 'crypto';
 import { AuthenticatedUser } from '../common/types';
@@ -86,6 +86,8 @@ const STORE_STAFF_ROLES = ['STAFF'] as const;
 const STORE_USER_ROLES = [...STORE_STAFF_ROLES, ...STORE_MANAGER_ROLES] as const;
 const STORE_USER_ROLES_WITH_LEGACY_SQL = "'STAFF', 'POS_MANAGER', 'INVENTORY_MANAGER', 'POS_ADMIN', 'INVENTORY_ADMIN'";
 const STORE_ADMIN_ROLES_WITH_LEGACY_SQL = "'POS_MANAGER', 'INVENTORY_MANAGER', 'ADMIN'";
+
+types.setTypeParser(1114, (value: string) => value);
 
 @Injectable()
 export class DatabaseService implements OnModuleInit, OnModuleDestroy {
