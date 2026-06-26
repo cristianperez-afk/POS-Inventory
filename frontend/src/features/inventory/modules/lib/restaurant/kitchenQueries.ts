@@ -6,6 +6,7 @@ import {
   completeKitchenOrder,
   createRecipe,
   deleteRecipe,
+  restoreRecipe,
   updateRecipe,
   updateKitchenOrderStatus,
   voidKitchenOrder,
@@ -55,8 +56,8 @@ const calculateAvailableOrders = (
   return Math.min(...values);
 };
 
-export function useRestaurantRecipesQuery() {
-  return useRecipesQuery(undefined, {
+export function useRestaurantRecipesQuery(params?: { archived?: boolean }) {
+  return useRecipesQuery(params, {
     select: (recipes) =>
       recipes.map((recipe: ApiRecipe) => {
         const ingredients = (recipe.ingredients ?? []).map((ingredient) => ({
@@ -106,6 +107,7 @@ export function useRestaurantRecipesQuery() {
           grossMargin: 0,
           isActive: recipe.isActive,
           availableOrders: calculateAvailableOrders(ingredients),
+          archivedAt: recipe.archivedAt ?? null,
           modifiers: Array.isArray((recipe as any).modifiers)
             ? (recipe as any).modifiers.map((modifier: any) => ({
                 id: modifier.id,
@@ -205,7 +207,15 @@ export function useUpdateRestaurantRecipeMutation() {
 }
 
 export function useDeleteRestaurantRecipeMutation() {
-  return useDomainMutation(deleteRecipe, [domainQueryKeys.recipes]);
+  return useDomainMutation(
+    ({ id, permanent }: { id: string; permanent?: boolean }) =>
+      deleteRecipe(id, permanent ?? false),
+    [domainQueryKeys.recipes],
+  );
+}
+
+export function useRestoreRestaurantRecipeMutation() {
+  return useDomainMutation(restoreRecipe, [domainQueryKeys.recipes]);
 }
 
 export function useSaveRestaurantRecipeMutation() {

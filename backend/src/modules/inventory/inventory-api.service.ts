@@ -519,9 +519,15 @@ export class InventoryApiService {
         ) availability ON TRUE
         WHERE r."businessId" = $1
           AND ($2::text IS NULL OR r."isActive" = ($2::boolean))
+          AND (
+            CASE
+              WHEN $3::text = 'true' THEN r."archivedAt" IS NOT NULL
+              ELSE r."archivedAt" IS NULL
+            END
+          )
         ORDER BY r.name ASC
       `,
-      [scope.businessId, query.active ?? null],
+      [scope.businessId, query.active ?? null, query.archived ?? null],
     );
     return this.paged(rows);
   }
@@ -539,8 +545,69 @@ export class InventoryApiService {
     return this.saveRecipe(scope, id, body);
   }
 
-  async deleteRecipe(headers: HeadersLike, id: string) {
+  /**
+   * Soft-delete: archives the recipe so it can be restored later. A recipe that has
+   * ever been sold (referenced by a KitchenOrder) cannot be hard-deleted without
+   * destroying sales history, so archiving is the default. Pass `permanent` only for
+   * recipes that have never been used — that is enforced below.
+   */
+  async deleteRecipe(headers: HeadersLike, id: string, permanent = false) {
     const scope = await this.resolveScope(headers);
+    if (permanent) return this.purgeRecipe(scope, id);
+
+    const rows = await this.safeQuery<{ id: string; menuItemId: string | null }>(
+      `UPDATE "Recipe"
+         SET "archivedAt" = CURRENT_TIMESTAMP, "isActive" = FALSE, "updatedAt" = CURRENT_TIMESTAMP
+       WHERE id = $1 AND "businessId" = $2
+       RETURNING id, "menuItemId"`,
+      [id, scope.businessId],
+    );
+    if (!rows[0]) throw new NotFoundException('Recipe was not found.');
+
+    // Hide the linked menu item from the POS, but keep the row so historical
+    // orders that reference it still resolve.
+    if (rows[0].menuItemId) {
+      await this.safeQuery(
+        `UPDATE products SET is_available = FALSE, updated_at = CURRENT_TIMESTAMP WHERE inventory_item_id = $1`,
+        [rows[0].menuItemId],
+      );
+    }
+    return rows[0];
+  }
+
+  /** Bring an archived recipe back and re-list its menu item on the POS. */
+  async restoreRecipe(headers: HeadersLike, id: string) {
+    const scope = await this.resolveScope(headers);
+    const rows = await this.safeQuery<{ id: string; menuItemId: string | null }>(
+      `UPDATE "Recipe"
+         SET "archivedAt" = NULL, "isActive" = TRUE, "updatedAt" = CURRENT_TIMESTAMP
+       WHERE id = $1 AND "businessId" = $2
+       RETURNING id, "menuItemId"`,
+      [id, scope.businessId],
+    );
+    if (!rows[0]) throw new NotFoundException('Recipe was not found.');
+
+    if (rows[0].menuItemId) {
+      await this.safeQuery(
+        `UPDATE products SET is_available = TRUE, updated_at = CURRENT_TIMESTAMP WHERE inventory_item_id = $1`,
+        [rows[0].menuItemId],
+      );
+    }
+    return rows[0];
+  }
+
+  /** Hard-delete — only allowed when the recipe has no sales history. */
+  private async purgeRecipe(scope: Scope, id: string) {
+    const usage = await this.safeQuery<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM "KitchenOrder" WHERE "recipeId" = $1 AND "businessId" = $2`,
+      [id, scope.businessId],
+    );
+    if (Number(usage[0]?.count ?? 0) > 0) {
+      throw new BadRequestException(
+        'This recipe has sales history and cannot be permanently deleted. Archive it instead.',
+      );
+    }
+
     const rows = await this.safeQuery<{ id: string; menuItemId: string | null }>(
       `DELETE FROM "Recipe" WHERE id = $1 AND "businessId" = $2 RETURNING id, "menuItemId"`,
       [id, scope.businessId],
