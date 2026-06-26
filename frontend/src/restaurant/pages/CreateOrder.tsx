@@ -61,6 +61,8 @@ interface MenuProduct {
   categoryName?: string;
   image: string;
   availableQuantity?: number;
+  servings?: number;
+  prepTimeMinutes?: number;
   ingredients: Ingredient[];
   modifiers: Modifier[];
 }
@@ -71,6 +73,8 @@ interface CartItem {
   price: number;
   quantity: number;
   image: string;
+  prepTimeMinutes?: number;
+  customizationPrepMinutes?: number;
   orderType: 'dine-in' | 'takeout';
   notes: string;
   ingredients: Ingredient[];
@@ -83,6 +87,11 @@ interface CartItem {
 const finiteNumberOrUndefined = (value: unknown) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+};
+
+const finiteNumberIncludingZeroOrUndefined = (value: unknown) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 };
 
 function toOrderListFormat(order: any, paid: boolean) {
@@ -128,12 +137,16 @@ function toOrderListFormat(order: any, paid: boolean) {
       itemType: item.orderType,
       notes: item.notes,
       ingredients: item.ingredients,
+      prepTimeMinutes: item.prepTimeMinutes,
+      customizationPrepMinutes: item.customizationPrepMinutes,
     })),
     isQueued: order.isQueued || false,
     queuePosition: order.queuePosition,
     partySize: order.partySize,
     tableNumbers: order.tableNumbers,
     table: tableLabel,
+    estimatedPrepMinutes: order.estimatedPrepMinutes,
+    estimatedReadyAt: order.estimatedReadyAt,
   };
 }
 
@@ -186,9 +199,12 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
   const receiptRef = useRef<HTMLDivElement>(null);
   const [isInQueue, setIsInQueue] = useState(false);
   const [queuePosition, setQueuePosition] = useState<number | null>(null);
+  const [hoveredProductId, setHoveredProductId] = useState<number | null>(null);
   const customizeProductId = customizeItemIndex !== null ? cart[customizeItemIndex]?.id : null;
   const productRecipeQuery = useProductRecipeQuery(currentUser?.id, customizeProductId);
+  const hoveredProductRecipeQuery = useProductRecipeQuery(currentUser?.id, hoveredProductId);
   const enabledPaymentMethods = settings.enabled_payment_methods.length > 0 ? settings.enabled_payment_methods : ['Cash'];
+  const selectedPaymentAccount = settings.payment_method_accounts[paymentMethod];
   const posProducts = useMemo<MenuProduct[]>(() => {
     return (posMenuQuery.data ?? []).map((product: any) => ({
       id: Number(product.id),
@@ -199,6 +215,8 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       categoryName: product.category_name ?? null,
       image: product.image_url || storeBrand?.logo || '',
       availableQuantity: Number(product.available_quantity ?? 0),
+      servings: finiteNumberIncludingZeroOrUndefined(product.servings),
+      prepTimeMinutes: finiteNumberIncludingZeroOrUndefined(product.prep_time_minutes),
       ingredients: (product.ingredients ?? []).map((ingredient: any) => ({
         id: finiteNumberOrUndefined(ingredient.id) ?? finiteNumberOrUndefined(ingredient.product_ingredient_id) ?? finiteNumberOrUndefined(ingredient.ingredient_id) ?? 0,
         itemId: ingredient.inventory_item_id ?? ingredient.itemId,
@@ -453,40 +471,23 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
 
   const addToCart = (product: MenuProduct, orderType?: 'dine-in' | 'takeout') => {
     const typeToUse = orderType || (diningOption === 'dine-in' || diningOption === 'takeout' ? diningOption : 'dine-in');
+    const newItem: CartItem = {
+      id: product.id,
+      name: product.name,
+      price: product.price,
+      image: product.image,
+      quantity: 1,
+      prepTimeMinutes: product.prepTimeMinutes ?? 0,
+      customizationPrepMinutes: 0,
+      orderType: typeToUse,
+      notes: '',
+      ingredients: JSON.parse(JSON.stringify(product.ingredients)),
+      originalIngredients: JSON.parse(JSON.stringify(product.ingredients)),
+      modifiers: product.modifiers,
+      selectedModifierIds: [],
+    };
 
-    // Check if item already exists in cart with same id and orderType
-    const existingItemIndex = cart.findIndex(item =>
-      item.id === product.id &&
-      item.orderType === typeToUse &&
-      item.notes === '' && // Only merge if no customization
-      (item.selectedModifierIds ?? []).length === 0 &&
-      JSON.stringify(item.ingredients) === JSON.stringify(product.ingredients) // Same ingredients
-    );
-
-    if (existingItemIndex !== -1) {
-      // Item exists, increment quantity
-      setCart(cart.map((item, index) =>
-        index === existingItemIndex
-          ? { ...item, quantity: item.quantity + 1 }
-          : item
-      ));
-    } else {
-      // Item doesn't exist, add new
-      const newItem: CartItem = {
-        id: product.id,
-        name: product.name,
-        price: product.price,
-        image: product.image,
-        quantity: 1,
-        orderType: typeToUse,
-        notes: '',
-        ingredients: JSON.parse(JSON.stringify(product.ingredients)),
-        originalIngredients: JSON.parse(JSON.stringify(product.ingredients)),
-        modifiers: product.modifiers,
-        selectedModifierIds: [],
-      };
-      setCart([...cart, newItem]);
-    }
+    setCart((items) => [...items, newItem]);
   };
 
   const updateQuantity = (index: number, newQuantity: number) => {
@@ -680,6 +681,47 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       selectedModifiers: (item.modifiers ?? []).filter((modifier) => (item.selectedModifierIds ?? []).includes(modifier.id)),
     };
   };
+  const hasItemCustomization = (item: CartItem) => {
+    const { addedIngredients, removedIngredients, replacedIngredients, quantityChanges, selectedModifiers } = getIngredientChanges(item);
+    return Boolean(item.notes?.trim()) ||
+      selectedModifiers.length > 0 ||
+      addedIngredients.length > 0 ||
+      removedIngredients.length > 0 ||
+      replacedIngredients.length > 0 ||
+      quantityChanges.length > 0;
+  };
+  const estimateItemMinutes = (item: CartItem) => {
+    const baseMinutes = Math.max(0, Number(item.prepTimeMinutes ?? 0));
+    const customizationMinutes = hasItemCustomization(item)
+      ? Math.max(0, Number(settings.customization_prep_time_minutes ?? 0))
+      : 0;
+    const lineMinutes = baseMinutes + customizationMinutes;
+    return settings.prep_time_strategy === 'sequential'
+      ? lineMinutes * Math.max(1, Number(item.quantity ?? 1))
+      : lineMinutes;
+  };
+  const cartPrepMinutes = settings.prep_time_strategy === 'sequential'
+    ? cart.reduce((sum, item) => sum + estimateItemMinutes(item), 0)
+    : cart.reduce((max, item) => Math.max(max, estimateItemMinutes(item)), 0);
+  const activeKitchenWorkloadMinutes = settings.enable_estimated_prep_time
+    ? orders
+        .filter((order) => order.orderStatus !== 'Completed' && order.orderStatus !== 'Ready')
+        .reduce((sum, order) => {
+          const estimate = Number(order.estimatedPrepMinutes ?? 0);
+          if (!Number.isFinite(estimate) || estimate <= 0) return sum;
+          const elapsed = order.runningTimeMinutes ?? 0;
+          return sum + Math.max(0, estimate - elapsed);
+        }, 0)
+    : 0;
+  const estimatedWaitingMinutes = settings.enable_estimated_prep_time
+    ? Math.max(0, Math.ceil(cartPrepMinutes + activeKitchenWorkloadMinutes))
+    : 0;
+  const estimatedReadyAt = settings.enable_estimated_prep_time && estimatedWaitingMinutes > 0
+    ? new Date(Date.now() + estimatedWaitingMinutes * 60000)
+    : null;
+  const estimatedReadyTimeLabel = estimatedReadyAt
+    ? estimatedReadyAt.toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })
+    : '';
   const subtotal = cart.reduce((sum, item) => sum + itemLineTotal(item), 0);
   const serviceFee = settings.enable_service_charge ? subtotal * (settings.service_charge_rate / 100) : 0;
   const tax = 0;
@@ -725,6 +767,8 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
     notes: item.notes,
     modifiers: (item.modifiers ?? []).filter((modifier) => (item.selectedModifierIds ?? []).includes(modifier.id)),
     ingredients: applySelectedModifiers(item).map(serializeIngredientForOrder),
+    prepTimeMinutes: item.prepTimeMinutes ?? 0,
+    customizationPrepMinutes: hasItemCustomization(item) ? settings.customization_prep_time_minutes : 0,
   });
 
   const persistRestaurantOrder = async (
@@ -753,6 +797,8 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       serviceFee: orderDetails.serviceFee,
       tax: orderDetails.tax,
       total: orderDetails.total,
+      estimatedPrepMinutes: orderDetails.estimatedPrepMinutes ?? null,
+      estimatedReadyAt: orderDetails.estimatedReadyAt ?? null,
       orderStatus: 'PENDING',
       paymentStatus: paid ? 'PAID' : 'NOT_PAID',
       items: orderDetails.items.map(serializeItemForOrder),
@@ -830,6 +876,8 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       partySize: parseInt(partySize) || undefined,
       isQueued: isInQueue,
       queuePosition,
+      estimatedPrepMinutes: settings.enable_estimated_prep_time ? estimatedWaitingMinutes : undefined,
+      estimatedReadyAt: estimatedReadyAt?.toISOString(),
     };
 
     console.log('Order data:', order); // Debug log
@@ -1239,25 +1287,81 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-            {filteredProducts.map(product => (
-              <button
+            {filteredProducts.map(product => {
+              const hoveredRecipeDetails =
+                product.id === hoveredProductId
+                  ? hoveredProductRecipeQuery.data as Record<string, unknown> | undefined
+                  : undefined;
+              const resolvedPrepTimeMinutes = finiteNumberIncludingZeroOrUndefined(
+                hoveredRecipeDetails?.prep_time_minutes ?? hoveredRecipeDetails?.prepTimeMinutes ?? product.prepTimeMinutes,
+              );
+              const resolvedServings = finiteNumberIncludingZeroOrUndefined(
+                hoveredRecipeDetails?.servings ?? product.servings,
+              );
+
+              return (
+                <button
                 key={product.id}
                 onClick={() => addToCart(product)}
+                onMouseEnter={() => setHoveredProductId(product.id)}
+                onMouseLeave={() => setHoveredProductId((current) => (current === product.id ? null : current))}
+                onFocus={() => setHoveredProductId(product.id)}
+                onBlur={() => setHoveredProductId((current) => (current === product.id ? null : current))}
                 disabled={product.availableQuantity !== undefined && product.availableQuantity <= 0}
-                className="bg-white rounded-lg p-2.5 hover:shadow-md transition-shadow text-left disabled:cursor-not-allowed disabled:opacity-50"
+                className="group relative isolate overflow-visible rounded-2xl text-left transition-transform duration-300 ease-out hover:z-30 hover:-translate-y-3 hover:scale-[1.18] focus-visible:z-30 focus-visible:-translate-y-3 focus-visible:scale-[1.18] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <div className="aspect-square bg-muted rounded-lg mb-2 overflow-hidden">
+                <div className="overflow-hidden rounded-2xl border border-border bg-white p-2.5 shadow-sm transition-all duration-300 ease-out group-hover:border-primary/35 group-hover:shadow-[0_18px_38px_rgba(15,23,42,0.18)] group-focus-visible:border-primary/35 group-focus-visible:shadow-[0_18px_38px_rgba(15,23,42,0.18)]">
+                  <div className="aspect-square overflow-hidden rounded-xl bg-muted">
                   <img
                     src={product.image}
                     alt={product.name}
-                    className="w-full h-full object-cover"
+                    className="h-full w-full object-cover transition-transform duration-300 ease-out group-hover:scale-[1.06] group-focus-visible:scale-[1.06]"
                   />
                 </div>
-                <h3 className="text-xs font-medium mb-0.5 line-clamp-1">{product.name}</h3>
-                {product.description && <p className="text-xs text-muted-foreground mb-1 line-clamp-2">{product.description}</p>}
+                <h3 className="mt-3 line-clamp-2 text-sm font-semibold text-foreground">{product.name}</h3>
                 <p className="text-xs text-primary font-medium">₱ {product.price.toFixed(2)}</p>
-              </button>
-            ))}
+                </div>
+                <div className="pointer-events-none absolute left-1/2 top-1/2 z-20 w-[118%] max-w-[280px] -translate-x-1/2 -translate-y-1/2 opacity-0 transition-all duration-300 ease-out group-hover:opacity-100 group-focus-visible:opacity-100">
+                  <div className="overflow-hidden rounded-[1.35rem] border border-primary/20 bg-white shadow-[0_24px_48px_rgba(15,23,42,0.22)] ring-1 ring-primary/10">
+                    <div className="aspect-[16/10] overflow-hidden bg-slate-100">
+                      <img
+                        src={product.image}
+                        alt={product.name}
+                        className="h-full w-full object-contain p-2"
+                      />
+                    </div>
+                    <div className="space-y-3 p-4">
+                      <div className="min-w-0 space-y-2">
+                        <h3 className="text-base font-semibold leading-5 text-foreground">{product.name}</h3>
+                        <p className="text-xs leading-5 text-muted-foreground">
+                          {product.description || 'No description available.'}
+                        </p>
+                      </div>
+                      <p className="shrink-0 text-xs font-semibold text-primary">₱ {product.price.toFixed(2)}</p>
+                    </div>
+                    <div className="mx-4 mb-4 space-y-1.5 rounded-xl bg-slate-50 px-3 py-2.5 text-xs">
+                      <p className="text-foreground">
+                        <span className="font-semibold text-slate-700">Prep Time:</span>{' '}
+                          {resolvedPrepTimeMinutes !== undefined
+                            ? `${resolvedPrepTimeMinutes} mins`
+                            : hoveredProductRecipeQuery.isFetching && product.id === hoveredProductId
+                              ? 'Loading...'
+                              : 'N/A'}
+                      </p>
+                      <p className="text-foreground">
+                        <span className="font-semibold text-slate-700">Servings:</span>{' '}
+                          {resolvedServings !== undefined
+                            ? resolvedServings
+                            : hoveredProductRecipeQuery.isFetching && product.id === hoveredProductId
+                              ? 'Loading...'
+                              : 'N/A'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>
@@ -1594,6 +1698,12 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
             <span>TOTAL:</span>
             <span className="text-primary">₱ {total.toFixed(2)}</span>
           </div>
+          {settings.enable_estimated_prep_time && cart.length > 0 && (
+            <div className="rounded-lg border border-primary/20 bg-primary/5 p-2 text-primary">
+              <p className="font-medium">Estimated waiting time: {estimatedWaitingMinutes} minutes</p>
+              {estimatedReadyTimeLabel && <p className="text-[11px] text-muted-foreground">Approx. ready by {estimatedReadyTimeLabel}</p>}
+            </div>
+          )}
         </div>
 
         {validationError && (
@@ -1651,6 +1761,12 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                   </p>
                 )}
                 {isInQueue && <p className="text-sm"><strong>Queue Position:</strong> #{queuePosition}</p>}
+                {settings.enable_estimated_prep_time && (
+                  <p className="text-sm">
+                    <strong>Estimated preparation time:</strong> {estimatedWaitingMinutes} minutes
+                    {estimatedReadyTimeLabel ? ` (ready around ${estimatedReadyTimeLabel})` : ''}
+                  </p>
+                )}
               </div>
 
               {/* Dine-In Order List */}
@@ -1995,13 +2111,13 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                     onClick={() => {
                       addToCart(product, 'takeout');
                     }}
-                    className="bg-white rounded-lg p-2.5 hover:shadow-md transition-shadow text-left border border-border"
+                    className="group rounded-lg border border-border bg-white p-2.5 text-left shadow-sm transition-all duration-150 ease-out hover:-translate-y-0.5 hover:border-secondary/50 hover:bg-secondary/[0.03] hover:shadow-lg focus-visible:-translate-y-0.5 focus-visible:border-secondary/50 focus-visible:ring-2 focus-visible:ring-secondary/20"
                   >
-                    <div className="aspect-square bg-muted rounded-lg mb-2 overflow-hidden">
+                    <div className="mb-2 aspect-square overflow-hidden rounded-lg bg-muted">
                       <img
                         src={product.image}
                         alt={product.name}
-                        className="w-full h-full object-cover"
+                        className="h-full w-full object-cover transition-transform duration-150 ease-out group-hover:scale-[1.03]"
                       />
                     </div>
                     <h3 className="text-xs font-medium mb-0.5 line-clamp-1">{product.name}</h3>
@@ -2044,6 +2160,11 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                 <p className="mt-2 text-sm text-muted-foreground">
                   Choose Pay Later if the table should stay occupied until the customer pays.
                 </p>
+                {settings.enable_estimated_prep_time && (
+                  <p className="mt-2 text-sm font-medium text-primary">
+                    Estimated preparation time: {successOrderDetails.estimatedPrepMinutes ?? estimatedWaitingMinutes} minutes
+                  </p>
+                )}
               </div>
               <div className="grid gap-3">
                 <button
@@ -2089,6 +2210,9 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
               <div className="mb-4">
                 <p className="text-sm mb-2"><strong>Order Number:</strong> {currentOrderNumber}</p>
                 <p className="text-sm mb-2"><strong>Customer:</strong> {customerName}</p>
+                {settings.enable_estimated_prep_time && (
+                  <p className="text-sm mb-2"><strong>Estimated waiting time:</strong> {estimatedWaitingMinutes} minutes</p>
+                )}
                 <div className="bg-muted rounded-lg p-3 mb-3">
                   <h4 className="text-xs font-medium mb-2">Ordered Items:</h4>
                   <div className="space-y-1">
@@ -2166,6 +2290,15 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                 </div>
               )}
 
+              {paymentMethod !== 'Cash' && selectedPaymentAccount && (
+                <div className="mb-4 rounded-lg border border-primary/20 bg-primary/5 p-4 text-sm">
+                  {selectedPaymentAccount.qr_image && <img src={selectedPaymentAccount.qr_image} alt={`${paymentMethod} QR code`} className="mb-3 h-40 w-40 rounded-lg border border-border bg-white object-contain p-2" />}
+                  {selectedPaymentAccount.account_name && <p><span className="font-medium">Account Name:</span> {selectedPaymentAccount.account_name}</p>}
+                  {selectedPaymentAccount.account_number && <p><span className="font-medium">Account Details:</span> {selectedPaymentAccount.account_number}</p>}
+                  {selectedPaymentAccount.instructions && <p className="mt-2 text-muted-foreground">{selectedPaymentAccount.instructions}</p>}
+                </div>
+              )}
+
               {paymentMethod === 'Cash' && cashAmount && parseFloat(cashAmount) >= total && (
                 <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-4">
                   <p className="text-sm text-muted-foreground mb-1">Change</p>
@@ -2229,6 +2362,12 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                   }
                 </p>
                 <p className="text-sm mb-2"><strong>Total Amount:</strong> ₱{successOrderDetails.total?.toFixed(2)}</p>
+                {settings.enable_estimated_prep_time && successOrderDetails.estimatedPrepMinutes !== undefined && (
+                  <p className="text-sm mb-2">
+                    <strong>Estimated Ready:</strong> {successOrderDetails.estimatedPrepMinutes} minutes
+                    {successOrderDetails.estimatedReadyAt ? ` (${new Date(successOrderDetails.estimatedReadyAt).toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })})` : ''}
+                  </p>
+                )}
                 <p className="text-sm mb-2">
                   <strong>Payment Status:</strong>{' '}
                   <span className={successOrderDetails.paid ? 'text-green-600' : 'text-orange-600'}>
@@ -2816,6 +2955,8 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                 total={successOrderDetails.total}
                 cashReceived={successOrderDetails.cashReceived}
                 changeGiven={successOrderDetails.changeGiven}
+                estimatedPrepMinutes={successOrderDetails.estimatedPrepMinutes}
+                estimatedReadyAt={successOrderDetails.estimatedReadyAt}
                 cashier={successOrderDetails.cashier || userName || 'Staff'}
                 storeBrand={storeBrand}
               />

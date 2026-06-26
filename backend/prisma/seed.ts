@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import * as bcrypt from 'bcrypt';
+import * as bcrypt from 'bcryptjs';
 import { PrismaClient } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 
@@ -566,8 +566,8 @@ async function main() {
 
   await prisma.user.upsert({
     where: { email: 'manager@restaurant.com' },
-    update: { name: 'Floor Manager', role: 'Manager', status: 'Active', passwordHash: staffPasswordHash, businessId: restaurantBusiness.id },
-    create: { name: 'Floor Manager', email: 'manager@restaurant.com', role: 'Manager', status: 'Active', passwordHash: staffPasswordHash, businessId: restaurantBusiness.id },
+    update: { name: 'Inventory Manager', role: 'Admin', status: 'Active', passwordHash: staffPasswordHash, businessId: restaurantBusiness.id },
+    create: { name: 'Inventory Manager', email: 'manager@restaurant.com', role: 'Admin', status: 'Active', passwordHash: staffPasswordHash, businessId: restaurantBusiness.id },
   });
 
   // ─── Restaurant-Only: More Ingredients ───────────────────────────────────

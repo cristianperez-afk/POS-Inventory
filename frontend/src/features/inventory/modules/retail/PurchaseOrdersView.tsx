@@ -375,7 +375,7 @@ export default function PurchaseOrdersView({
 
   const filteredOrders = orders.filter(o => filterStatus === 'all' || o.status === filterStatus);
   const submittedPOs = orders.filter(o => o.status === 'SUBMITTED');
-  const isAdmin = currentUser?.role === 'Admin' || currentUser?.role === 'Manager';
+  const isAdmin = currentUser?.role === 'Admin';
 
   const getDeliveryDelayBadge = (order: { expectedDelivery?: string | null; status: string }) => {
     if (!isPurchaseOrderDelayed(order.expectedDelivery, order.status, now)) return null;
@@ -1127,3 +1127,4 @@ export default function PurchaseOrdersView({
 }
 
 // Products Received View
+

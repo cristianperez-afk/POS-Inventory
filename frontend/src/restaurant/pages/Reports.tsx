@@ -34,11 +34,12 @@ interface ReportsProps {
   isAdmin?: boolean;
   storeBrand?: StoreBrand;
   userName?: string | null;
+  userRole?: string | null;
   storeType?: StoreType;
   staffType?: StaffType;
 }
 
-export function Reports({ onNavigate, onLogout, isAdmin = false, storeBrand, userName, storeType, staffType }: ReportsProps) {
+export function Reports({ onNavigate, onLogout, isAdmin = false, storeBrand, userName, userRole, storeType, staffType }: ReportsProps) {
   const { orders } = useOrders();
   const todayString = getLocalDateKey();
   const [selectedDate, setSelectedDate] = useState('');
@@ -225,13 +226,39 @@ export function Reports({ onNavigate, onLogout, isAdmin = false, storeBrand, use
   const totalVatCollected = filteredOrders.reduce((sum, order) => sum + calculateVatBreakdown(order.amountNumber).vatAmount, 0);
   const totalServiceFees = filteredOrders.reduce((sum, order) => sum + (order.serviceFee || 0), 0);
 
+  const secondsBetween = (start?: string, end?: string) => {
+    if (!start || !end) return null;
+    const duration = Math.floor((new Date(end).getTime() - new Date(start).getTime()) / 1000);
+    return Number.isFinite(duration) && duration >= 0 ? duration : null;
+  };
+  const averageSeconds = (values: Array<number | null>) => {
+    const valid = values.filter((value): value is number => value !== null);
+    return valid.length === 0 ? null : Math.round(valid.reduce((sum, value) => sum + value, 0) / valid.length);
+  };
+  const formatElapsed = (seconds: number | null) => {
+    if (seconds === null) return '-';
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const remainingSeconds = seconds % 60;
+    return [hours, minutes, remainingSeconds].map((value) => String(value).padStart(2, '0')).join(':');
+  };
+  // Preparation is kitchen work (Preparing → Ready); completion is the
+  // persisted restaurant running time from confirmation to the true lifecycle end.
+  const averagePreparationSeconds = averageSeconds(filteredOrders.map((order) =>
+    secondsBetween(order.preparingStartedAt, order.readyAt),
+  ));
+  const averageCompletionSeconds = averageSeconds(filteredOrders.map((order) => {
+    if (order.isRunning || order.runningDuration === undefined) return null;
+    return Math.max(0, order.runningDuration);
+  }));
+
   const handlePrint = () => {
     window.print();
   };
 
   return (
     <div className="flex h-screen">
-      <Sidebar currentPage="reports" onNavigate={onNavigate} onLogout={onLogout} isAdmin={isAdmin} storeBrand={storeBrand} userName={userName} storeType={storeType} staffType={staffType} />
+      <Sidebar currentPage="reports" onNavigate={onNavigate} onLogout={onLogout} isAdmin={isAdmin} storeBrand={storeBrand} userName={userName} userRole={userRole} storeType={storeType} staffType={staffType} />
 
       <div className="flex-1 overflow-auto bg-background">
         <div className="p-4 sm:p-6 lg:p-8">
@@ -262,7 +289,7 @@ export function Reports({ onNavigate, onLogout, isAdmin = false, storeBrand, use
           </div>
 
           {/* Sales Overview Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-6 mb-8">
             <div className="bg-card rounded-lg shadow-sm border border-border p-6">
               <div className="flex items-center justify-between mb-2">
                 <p className="text-sm text-muted-foreground">
@@ -319,6 +346,28 @@ export function Reports({ onNavigate, onLogout, isAdmin = false, storeBrand, use
                 <TrendingDown className="w-3 h-3 mr-1" />
                 <span>{discountData.length} discounts</span>
               </div>
+            </div>
+
+            <div className="bg-card rounded-lg shadow-sm border border-border p-6">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-sm text-muted-foreground">Avg. Preparation Time</p>
+                <div className="w-10 h-10 rounded-full bg-cyan-100 flex items-center justify-center">
+                  <Calendar className="w-5 h-5 text-cyan-600" />
+                </div>
+              </div>
+              <h2 className="text-2xl font-bold text-primary mb-1">{formatElapsed(averagePreparationSeconds)}</h2>
+              <div className="text-xs text-cyan-700">Preparing to Ready</div>
+            </div>
+
+            <div className="bg-card rounded-lg shadow-sm border border-border p-6">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-sm text-muted-foreground">Avg. Completion Time</p>
+                <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center">
+                  <Calendar className="w-5 h-5 text-emerald-600" />
+                </div>
+              </div>
+              <h2 className="text-2xl font-bold text-primary mb-1">{formatElapsed(averageCompletionSeconds)}</h2>
+              <div className="text-xs text-emerald-700">Confirmed to lifecycle end</div>
             </div>
           </div>
 

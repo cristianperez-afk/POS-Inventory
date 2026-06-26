@@ -99,8 +99,11 @@ export default function App() {
     try {
       const parsedUser = JSON.parse(savedUser) as AuthenticatedUser;
       const savedPage = window.sessionStorage.getItem(SESSION_PAGE_KEY) as Page | null;
+      const defaultPage = getDefaultPageForUser(parsedUser);
+      const nextPage = savedPage && savedPage !== 'login' && canAccessPage(parsedUser, savedPage) ? savedPage : defaultPage;
       setCurrentUser(parsedUser);
-      setCurrentPage(savedPage && savedPage !== 'login' && canAccessPage(parsedUser, savedPage) ? savedPage : getDefaultPageForUser(parsedUser));
+      setCurrentPage(nextPage);
+      window.sessionStorage.setItem(SESSION_PAGE_KEY, nextPage);
     } catch {
       window.sessionStorage.removeItem(SESSION_USER_KEY);
       window.sessionStorage.removeItem(SESSION_PAGE_KEY);
@@ -158,22 +161,7 @@ export default function App() {
       return;
     }
 
-    if (user.role === 'ADMIN' && user.store_type === 'RETAIL_STORE') {
-      navigateTo('retail-pos-dashboard');
-      return;
-    }
-
-    if (user.role === 'ADMIN' && user.store_type === 'RESTAURANT') {
-      navigateTo('pos-dashboard');
-      return;
-    }
-
-    if (user.role === 'POS_ADMIN') {
-      navigateTo(getDefaultPageForUser(user));
-      return;
-    }
-
-    if (user.role === 'INVENTORY_ADMIN') {
+    if (isPosManagerUser(user) || isInventoryManagerUser(user)) {
       navigateTo(getDefaultPageForUser(user));
       return;
     }
@@ -241,6 +229,7 @@ export default function App() {
   const updateCurrentUser = (updates: Partial<AuthenticatedUser>) => {
     setCurrentUser((user) => (user ? { ...user, ...updates } : user));
   };
+  const isPosAdminUser = isPosManagerUser(currentUser);
 
   return (
     <QueryClientProvider client={appQueryClient}>
@@ -267,9 +256,10 @@ export default function App() {
                 <RetailPOSDashboard
                   onLogout={handleLogout}
                   onNavigate={navigateTo}
-                  isAdmin={currentUser?.role === 'ADMIN'}
+                  isAdmin={isPosAdminUser}
                   storeBrand={storeBrand}
                   userName={currentUser?.full_name}
+                  userRole={currentUser?.role}
                   storeType={currentUser?.store_type}
                   staffType={currentUser?.staff_type}
                 />
@@ -282,6 +272,7 @@ export default function App() {
                   onLogout={handleLogout}
                   storeBrand={storeBrand}
                   userName={currentUser?.full_name}
+                  userRole={currentUser?.role}
                   storeType={currentUser?.store_type}
                   staffType={currentUser?.staff_type}
                 />
@@ -290,9 +281,10 @@ export default function App() {
                 <RetailOrderList
                   onNavigate={navigateTo}
                   onLogout={handleLogout}
-                  isAdmin={currentUser?.role === 'ADMIN'}
+                  isAdmin={isPosAdminUser}
                   storeBrand={storeBrand}
                   userName={currentUser?.full_name}
+                  userRole={currentUser?.role}
                   storeType={currentUser?.store_type}
                   staffType={currentUser?.staff_type}
                 />
@@ -301,7 +293,7 @@ export default function App() {
                 <RetailReports
                   onNavigate={navigateTo}
                   onLogout={handleLogout}
-                  isAdmin={currentUser?.role === 'ADMIN'}
+                  isAdmin={isPosAdminUser}
                   storeBrand={storeBrand}
                   userName={currentUser?.full_name}
                   storeType={currentUser?.store_type}
@@ -311,7 +303,7 @@ export default function App() {
             </RetailOrderProvider>
           )}
           {currentPage === 'pos-dashboard' && (
-            <POSDashboard onLogout={handleLogout} onNavigate={navigateTo} isAdmin={currentUser?.role === 'ADMIN'} storeBrand={storeBrand} userName={currentUser?.full_name} storeType={currentUser?.store_type} staffType={currentUser?.staff_type} />
+            <POSDashboard onLogout={handleLogout} onNavigate={navigateTo} isAdmin={isPosAdminUser} storeBrand={storeBrand} userName={currentUser?.full_name} userRole={currentUser?.role} storeType={currentUser?.store_type} staffType={currentUser?.staff_type} />
           )}
           {currentPage === 'create-order' && (
             <CreateOrder currentUser={currentUser} onNavigate={navigateTo} onOrderCreated={setCurrentOrder} onLogout={handleLogout} storeBrand={storeBrand} userName={currentUser?.full_name} storeType={currentUser?.store_type} staffType={currentUser?.staff_type} />
@@ -332,10 +324,10 @@ export default function App() {
             <Receipt onNavigate={navigateTo} currentOrder={currentOrder} onLogout={handleLogout} storeBrand={storeBrand} userName={currentUser?.full_name} storeType={currentUser?.store_type} staffType={currentUser?.staff_type} />
           )}
           {currentPage === 'order-list' && (
-            <OrderList onNavigate={navigateTo} onLogout={handleLogout} isAdmin={currentUser?.role === 'ADMIN'} storeBrand={storeBrand} userName={currentUser?.full_name} storeType={currentUser?.store_type} staffType={currentUser?.staff_type} />
+            <OrderList onNavigate={navigateTo} onLogout={handleLogout} isAdmin={isPosAdminUser} storeBrand={storeBrand} userName={currentUser?.full_name} userRole={currentUser?.role} storeType={currentUser?.store_type} staffType={currentUser?.staff_type} />
           )}
           {currentPage === 'reports' && (
-            <Reports onNavigate={navigateTo} onLogout={handleLogout} isAdmin={currentUser?.role === 'ADMIN'} storeBrand={storeBrand} userName={currentUser?.full_name} storeType={currentUser?.store_type} staffType={currentUser?.staff_type} />
+            <Reports onNavigate={navigateTo} onLogout={handleLogout} isAdmin={isPosAdminUser} storeBrand={storeBrand} userName={currentUser?.full_name} userRole={currentUser?.role} storeType={currentUser?.store_type} staffType={currentUser?.staff_type} />
           )}
           {currentPage === 'store-information' && (
             <StoreInformation
@@ -361,7 +353,7 @@ export default function App() {
                   storeBrand={storeBrand}
                   onLogout={handleLogout}
                   onNavigate={navigateTo}
-                  isAdmin={currentUser?.role === 'ADMIN'}
+                  isAdmin={isPosAdminUser}
                   userName={currentUser?.full_name}
                   userRole={currentUser?.role}
                   storeType={currentUser?.store_type}
@@ -383,14 +375,25 @@ export default function App() {
 
 function getDefaultPageForUser(user: AuthenticatedUser): Page {
   if (user.role === 'SUPERADMIN') return 'superadmin-dashboard';
-  if (user.role === 'INVENTORY_ADMIN') return INVENTORY_MODULES_ENABLED ? 'inventory-dashboard' : 'login';
-  if (user.role === 'POS_ADMIN' && user.store_type === 'RETAIL_STORE') return 'retail-pos-dashboard';
-  if (user.role === 'POS_ADMIN' && user.store_type === 'RESTAURANT') return 'pos-dashboard';
+  if (isInventoryManagerUser(user)) return INVENTORY_MODULES_ENABLED ? 'inventory-dashboard' : 'login';
+  if (isPosManagerUser(user) && user.store_type === 'RETAIL_STORE') return 'retail-pos-dashboard';
+  if (isPosManagerUser(user) && user.store_type === 'RESTAURANT') return 'pos-dashboard';
   if (INVENTORY_MODULES_ENABLED && user.role === 'STAFF' && user.staff_type === 'INVENTORY_STAFF') return 'inventory-dashboard';
-  if (INVENTORY_MODULES_ENABLED && user.role === 'STAFF' && user.staff_type === 'MANAGER') return 'inventory-dashboard';
   if (user.store_type === 'RETAIL_STORE') return 'retail-pos-dashboard';
   if (user.store_type === 'RESTAURANT') return 'pos-dashboard';
   return 'login';
+}
+
+function isPosManagerUser(user: AuthenticatedUser | null | undefined) {
+  if (!user) return false;
+  if (user.role === 'POS_MANAGER' || user.role === 'POS_ADMIN') return true;
+  return user.role === 'ADMIN' && user.staff_type !== 'INVENTORY_STAFF';
+}
+
+function isInventoryManagerUser(user: AuthenticatedUser | null | undefined) {
+  if (!user) return false;
+  if (user.role === 'INVENTORY_MANAGER' || user.role === 'INVENTORY_ADMIN') return true;
+  return user.role === 'ADMIN' && user.staff_type === 'INVENTORY_STAFF';
 }
 
 function isInventoryPage(page: Page) {
@@ -408,14 +411,6 @@ function canAccessPage(user: AuthenticatedUser, page: Page) {
 
   if (page === 'login') return true;
   if (user.role === 'SUPERADMIN') return page === 'superadmin-dashboard';
-  if (user.role === 'POS_ADMIN') {
-    return isPosPage(page);
-  }
-
-  if (user.role === 'INVENTORY_ADMIN') {
-    return isInventoryPage(page);
-  }
-
   if (user.role === 'ADMIN') {
     return [
       'admin-dashboard',
@@ -431,12 +426,26 @@ function canAccessPage(user: AuthenticatedUser, page: Page) {
     ].includes(page) || isInventoryPage(page);
   }
 
-  if (user.staff_type === 'INVENTORY_STAFF') {
+  if (isPosManagerUser(user)) {
+    return [
+      'admin-dashboard',
+      'retail-pos-dashboard',
+      'retail-transactions',
+      'retail-reports',
+      'pos-dashboard',
+      'order-list',
+      'reports',
+      'store-information',
+      'store-settings',
+    ].includes(page);
+  }
+
+  if (isInventoryManagerUser(user)) {
     return isInventoryPage(page);
   }
 
-  if (user.staff_type === 'MANAGER') {
-    return isInventoryPage(page) || isPosPage(page);
+  if (user.staff_type === 'INVENTORY_STAFF') {
+    return isInventoryPage(page);
   }
 
   return isPosPage(page);

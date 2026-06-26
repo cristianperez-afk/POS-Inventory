@@ -10,7 +10,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { Pool, PoolClient, QueryResultRow } from 'pg';
-import * as bcrypt from 'bcrypt';
+import * as bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
 import { AuthenticatedUser } from '../common/types';
 
@@ -66,8 +66,15 @@ type StoreInformation = {
   updated_at: Date | string | null;
 };
 
-type StaffType = 'POS_STAFF' | 'INVENTORY_STAFF' | 'MANAGER';
-type StaffRole = 'STAFF' | 'POS_ADMIN' | 'INVENTORY_ADMIN';
+type StaffType = 'POS_STAFF' | 'INVENTORY_STAFF';
+type StaffRole = 'STAFF' | 'POS_MANAGER' | 'INVENTORY_MANAGER';
+
+const LEGACY_STORE_ADMIN_ROLES = ['ADMIN'] as const;
+const STORE_MANAGER_ROLES = ['POS_MANAGER', 'INVENTORY_MANAGER'] as const;
+const STORE_STAFF_ROLES = ['STAFF'] as const;
+const STORE_USER_ROLES = [...STORE_STAFF_ROLES, ...STORE_MANAGER_ROLES] as const;
+const STORE_USER_ROLES_WITH_LEGACY_SQL = "'STAFF', 'POS_MANAGER', 'INVENTORY_MANAGER', 'POS_ADMIN', 'INVENTORY_ADMIN'";
+const STORE_ADMIN_ROLES_WITH_LEGACY_SQL = "'POS_MANAGER', 'INVENTORY_MANAGER', 'ADMIN'";
 
 @Injectable()
 export class DatabaseService implements OnModuleInit, OnModuleDestroy {
@@ -193,6 +200,18 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  private isStoreManagerRole(role: unknown) {
+    return role === 'POS_MANAGER' || role === 'INVENTORY_MANAGER' || role === 'ADMIN';
+  }
+
+  private isPosManagerRole(role: unknown) {
+    return role === 'POS_MANAGER' || role === 'ADMIN';
+  }
+
+  private isInventoryManagerRole(role: unknown) {
+    return role === 'INVENTORY_MANAGER' || role === 'ADMIN';
+  }
+
   async getLoginUserByEmail(email: string): Promise<AuthenticatedUser & { password_hash: string } | null> {
     const schema = await this.getSchemaColumns();
     const userColumns = this.resolveUserColumns(schema.users);
@@ -237,7 +256,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           u.${this.quoteIdentifier(passwordColumn)} AS password_hash,
           ${storeTypeSelect},
           ${storeNameSelect},
-          ${userColumns.statusColumn ? `u.${this.quoteIdentifier(userColumns.statusColumn)} AS status` : `'ACTIVE' AS status`}
+          ${this.userStatusSelect(userColumns)}
         FROM users u
         ${storeJoin}
         WHERE LOWER(u.email) = LOWER($1)
@@ -292,10 +311,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ${storeTypeSelect},
           ${storeNameSelect},
           ${userColumns.staffTypeColumn ? `u.${this.quoteIdentifier(userColumns.staffTypeColumn)} AS staff_type` : 'NULL AS staff_type'},
-          ${userColumns.statusColumn ? `u.${this.quoteIdentifier(userColumns.statusColumn)} AS status` : `'ACTIVE' AS status`}
+          ${this.userStatusSelect(userColumns)}
         FROM users u
         ${storeJoin}
-        WHERE u.${this.quoteIdentifier(userColumns.roleColumn)} = 'ADMIN'
+        WHERE u.${this.quoteIdentifier(userColumns.roleColumn)} IN (${STORE_ADMIN_ROLES_WITH_LEGACY_SQL})
         ORDER BY u.id ASC
       `,
     );
@@ -346,7 +365,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       const storeId = storeRows[0]?.id ?? null;
 
       const userInsertColumns: string[] = [this.quoteIdentifier(userColumns.fullNameColumn!), 'email', this.quoteIdentifier(userColumns.roleColumn!), this.quoteIdentifier(userColumns.passwordColumn!)];
-      const userInsertValues: unknown[] = [input.fullName, input.email, 'ADMIN', passwordHash];
+      const userInsertValues: unknown[] = [input.fullName, input.email, 'POS_MANAGER', passwordHash];
       const userInsertPlaceholders: string[] = ['$1', '$2', '$3', '$4'];
 
       if (userColumns.storeIdColumn) {
@@ -402,7 +421,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async updateAdminAccount(input: { adminUserId: number; fullName: string; email: string; storeType: 'RESTAURANT' | 'RETAIL_STORE'; password?: string }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Admin account was not found.');
     }
 
@@ -468,7 +487,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     const admin = await this.getUserStoreScope(adminUserId);
 
-    if (admin.role !== 'ADMIN') {
+    if (!this.isStoreManagerRole(admin.role)) {
       throw new NotFoundException('Admin account was not found.');
     }
 
@@ -490,7 +509,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     const admin = await this.getUserStoreScope(adminUserId);
 
-    if (admin.role !== 'ADMIN') {
+    if (!this.isStoreManagerRole(admin.role)) {
       throw new NotFoundException('Admin account was not found.');
     }
 
@@ -521,14 +540,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     const admin = await this.getUserStoreScope(adminUserId);
 
-    if (admin.role !== 'ADMIN') {
+    if (!this.isStoreManagerRole(admin.role)) {
       throw new NotFoundException('Admin account was not found.');
     }
 
     const schema = await this.getSchemaColumns();
     const userColumns = this.resolveUserColumns(schema.users);
 
-    if (!userColumns.statusColumn || !userColumns.roleColumn) {
+    if ((!userColumns.statusColumn && !userColumns.activeColumn) || !userColumns.roleColumn) {
       throw new InternalServerErrorException('Users table is missing required status columns.');
     }
 
@@ -566,10 +585,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ${userColumns.staffTypeColumn ? `u.${this.quoteIdentifier(userColumns.staffTypeColumn)} AS staff_type` : 'NULL AS staff_type'},
           ${storeTypeSelect},
           ${storeNameSelect},
-          ${userColumns.statusColumn ? `u.${this.quoteIdentifier(userColumns.statusColumn)} AS status` : `'ACTIVE' AS status`}
+          ${this.userStatusSelect(userColumns)}
         FROM users u
         ${storeJoin}
-        WHERE u.${this.quoteIdentifier(userColumns.roleColumn)} IN ('STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN')
+        WHERE u.${this.quoteIdentifier(userColumns.roleColumn)} IN (${STORE_USER_ROLES_WITH_LEGACY_SQL})
           AND u.${this.quoteIdentifier(userColumns.storeIdColumn)} = $1
         ORDER BY u.id ASC
       `,
@@ -587,8 +606,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
-      throw new InternalServerErrorException('Only store admin accounts can create staff.');
+    if (!this.isPosManagerRole(admin.role) || !admin.store_id) {
+      throw new InternalServerErrorException('Only POS Manager accounts can create staff.');
     }
 
     const schema = await this.getSchemaColumns();
@@ -622,7 +641,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ${this.quoteIdentifier(userColumns.staffTypeColumn)} AS staff_type,
           $7::text AS store_type,
           $8::text AS store_name,
-          ${userColumns.statusColumn ? `${this.quoteIdentifier(userColumns.statusColumn)} AS status` : `'ACTIVE' AS status`}
+          ${this.userStatusSelect(userColumns, '')}
       `,
       [input.fullName, input.email, passwordHash, admin.store_id, staffType, role, admin.store_type, admin.store_name],
     );
@@ -641,8 +660,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
-      throw new InternalServerErrorException('Only store admin accounts can update staff.');
+    if (!this.isPosManagerRole(admin.role) || !admin.store_id) {
+      throw new InternalServerErrorException('Only POS Manager accounts can update staff.');
     }
 
     const schema = await this.getSchemaColumns();
@@ -686,7 +705,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             UPDATE users
             SET ${updates.join(', ')}
             WHERE id = ${staffIdParam}
-              AND ${this.quoteIdentifier(userColumns.roleColumn)} IN ('STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN')
+              AND ${this.quoteIdentifier(userColumns.roleColumn)} IN (${STORE_USER_ROLES_WITH_LEGACY_SQL})
               AND ${this.quoteIdentifier(userColumns.storeIdColumn)} = ${storeIdParam}
             RETURNING *
           )
@@ -699,7 +718,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             u.${this.quoteIdentifier(userColumns.staffTypeColumn)} AS staff_type,
             ${storeTypeSelect},
             ${storeNameSelect},
-            ${userColumns.statusColumn ? `u.${this.quoteIdentifier(userColumns.statusColumn)} AS status` : `'ACTIVE' AS status`}
+            ${this.userStatusSelect(userColumns)}
           FROM updated u
           ${storeJoin}
           LIMIT 1
@@ -732,8 +751,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
-      throw new ForbiddenException('Only store admin accounts can remove staff for their store.');
+    if (!this.isPosManagerRole(admin.role) || !admin.store_id) {
+      throw new ForbiddenException('Only POS Manager accounts can remove staff for their store.');
     }
 
     const schema = await this.getSchemaColumns();
@@ -743,7 +762,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       throw new InternalServerErrorException('Users table is missing required columns for staff deletion.');
     }
 
-    if (userColumns.statusColumn) {
+    if (userColumns.statusColumn || userColumns.activeColumn) {
       const rows = await this.deactivateStaffForStore(input.staffUserId, admin.store_id, userColumns);
 
       if (rows.length === 0) {
@@ -781,8 +800,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
-      throw new ForbiddenException('Only store admin accounts can remove staff for their store.');
+    if (!this.isPosManagerRole(admin.role) || !admin.store_id) {
+      throw new ForbiddenException('Only POS Manager accounts can remove staff for their store.');
     }
 
     const schema = await this.getSchemaColumns();
@@ -816,14 +835,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
-      throw new ForbiddenException('Only store admin accounts can activate staff for their store.');
+    if (!this.isPosManagerRole(admin.role) || !admin.store_id) {
+      throw new ForbiddenException('Only POS Manager accounts can activate staff for their store.');
     }
 
     const schema = await this.getSchemaColumns();
     const userColumns = this.resolveUserColumns(schema.users);
 
-    if (!userColumns.statusColumn || !userColumns.roleColumn || !userColumns.storeIdColumn) {
+    if ((!userColumns.statusColumn && !userColumns.activeColumn) || !userColumns.roleColumn || !userColumns.storeIdColumn) {
       throw new InternalServerErrorException('Users table is missing required columns for staff activation.');
     }
 
@@ -839,7 +858,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async getStoreInformationForAdmin(adminUserId: number): Promise<StoreInformation> {
     const user = await this.getUserStoreScope(adminUserId);
 
-    if (!['ADMIN', 'STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN'].includes(String(user.role)) || !user.store_id) {
+    if (![...LEGACY_STORE_ADMIN_ROLES, ...STORE_USER_ROLES, 'POS_ADMIN', 'INVENTORY_ADMIN'].includes(String(user.role) as any) || !user.store_id) {
       throw new InternalServerErrorException('Only store users can view store information.');
     }
 
@@ -896,7 +915,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   }): Promise<StoreInformation> {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can update store information.');
     }
 
@@ -990,6 +1009,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     enableRefund?: boolean;
     enableVoid?: boolean;
     enableDiscount?: boolean;
+    enableEstimatedPrepTime?: boolean;
+    prepTimeStrategy?: string;
+    customizationPrepTimeMinutes?: number;
     enableServiceCharge?: boolean;
     serviceChargeRate?: number;
     enableTax?: boolean;
@@ -999,6 +1021,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     enableIngredientCustomization?: boolean;
     enableReceiptPrinting?: boolean;
     enabledPaymentMethods?: string[];
+    paymentMethodAccounts?: Record<string, unknown>;
     autoDeductInventoryOnSale?: boolean;
     allowNegativeStock?: boolean;
     defaultLowStockThreshold?: number;
@@ -1010,7 +1033,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can update store settings.');
     }
 
@@ -1025,28 +1048,32 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           enable_refund = COALESCE($3, enable_refund),
           enable_void = COALESCE($4, enable_void),
           enable_discount = COALESCE($5, enable_discount),
-          enable_service_charge = COALESCE($6, enable_service_charge),
-          service_charge_rate = COALESCE($7, service_charge_rate),
-          service_charge_percentage = COALESCE($7, service_charge_percentage),
-          enable_tax = COALESCE($8, enable_tax),
-          tax_rate = COALESCE($9, tax_rate),
-          enable_dine_in = COALESCE($10, enable_dine_in),
-          enable_takeout = COALESCE($11, enable_takeout),
-          enable_ingredient_customization = COALESCE($12, enable_ingredient_customization),
-          enable_receipt_printing = COALESCE($13, enable_receipt_printing),
-          enabled_payment_methods = COALESCE($14, enabled_payment_methods),
-          auto_deduct_inventory_on_sale = COALESCE($15, auto_deduct_inventory_on_sale),
-          allow_negative_stock = COALESCE($16, allow_negative_stock),
-          default_low_stock_threshold = COALESCE($17, default_low_stock_threshold),
-          default_inventory_unit = COALESCE($18, default_inventory_unit),
-          cycle_count_interval_days = COALESCE($19, cycle_count_interval_days),
-          auto_reorder_threshold_percent = COALESCE($20, auto_reorder_threshold_percent),
-          enable_expiry_tracking = COALESCE($21, enable_expiry_tracking),
-          default_markup_percent = COALESCE($22, default_markup_percent),
-          store_type = COALESCE(store_type, $23),
+          enable_estimated_prep_time = COALESCE($6, enable_estimated_prep_time),
+          prep_time_strategy = COALESCE($7, prep_time_strategy),
+          customization_prep_time_minutes = COALESCE($8, customization_prep_time_minutes),
+          enable_service_charge = COALESCE($9, enable_service_charge),
+          service_charge_rate = COALESCE($10, service_charge_rate),
+          service_charge_percentage = COALESCE($10, service_charge_percentage),
+          enable_tax = COALESCE($11, enable_tax),
+          tax_rate = COALESCE($12, tax_rate),
+          enable_dine_in = COALESCE($13, enable_dine_in),
+          enable_takeout = COALESCE($14, enable_takeout),
+          enable_ingredient_customization = COALESCE($15, enable_ingredient_customization),
+          enable_receipt_printing = COALESCE($16, enable_receipt_printing),
+          enabled_payment_methods = COALESCE($17, enabled_payment_methods),
+          payment_method_accounts = COALESCE($18, payment_method_accounts),
+          auto_deduct_inventory_on_sale = COALESCE($19, auto_deduct_inventory_on_sale),
+          allow_negative_stock = COALESCE($20, allow_negative_stock),
+          default_low_stock_threshold = COALESCE($21, default_low_stock_threshold),
+          default_inventory_unit = COALESCE($22, default_inventory_unit),
+          cycle_count_interval_days = COALESCE($23, cycle_count_interval_days),
+          auto_reorder_threshold_percent = COALESCE($24, auto_reorder_threshold_percent),
+          enable_expiry_tracking = COALESCE($25, enable_expiry_tracking),
+          default_markup_percent = COALESCE($26, default_markup_percent),
+          store_type = COALESCE(store_type, $27),
           updated_at = CURRENT_TIMESTAMP
-        WHERE store_id = $24
-          AND (store_type = $23 OR store_type IS NULL)
+        WHERE store_id = $28
+          AND (store_type = $27 OR store_type IS NULL)
         RETURNING *
       `,
       [
@@ -1055,6 +1082,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         input.enableRefund,
         input.enableVoid,
         input.enableDiscount,
+        input.enableEstimatedPrepTime,
+        input.prepTimeStrategy === 'sequential' ? 'sequential' : input.prepTimeStrategy === 'parallel' ? 'parallel' : null,
+        input.customizationPrepTimeMinutes,
         input.enableServiceCharge,
         input.serviceChargeRate,
         input.enableTax,
@@ -1064,6 +1094,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         input.enableIngredientCustomization,
         input.enableReceiptPrinting,
         input.enabledPaymentMethods ?? null,
+        input.paymentMethodAccounts ? JSON.stringify(input.paymentMethodAccounts) : null,
         input.autoDeductInventoryOnSale,
         input.allowNegativeStock,
         input.defaultLowStockThreshold,
@@ -1137,7 +1168,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async createDiscountSettingForAdmin(input: { adminUserId: number; discountName: string; discountRate: number; isEnabled: boolean }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can create discount settings.');
     }
 
@@ -1156,7 +1187,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async updateDiscountSettingForAdmin(input: { adminUserId: number; discountId: number; discountName: string; discountRate: number; isEnabled: boolean }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can update discount settings.');
     }
 
@@ -1184,7 +1215,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async deleteDiscountSettingForAdmin(input: { adminUserId: number; discountId: number }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can delete discount settings.');
     }
 
@@ -1208,7 +1239,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async listCategoriesForAdmin(adminUserId: number) {
     const admin = await this.getUserStoreScope(adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can view categories.');
     }
 
@@ -1227,7 +1258,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async createCategoryForAdmin(input: { adminUserId: number; name: string; description: string | null }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id || !admin.store_type) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id || !admin.store_type) {
       throw new InternalServerErrorException('Only store admin accounts can create categories.');
     }
 
@@ -1246,7 +1277,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async updateCategoryForAdmin(input: { adminUserId: number; categoryId: number; name: string; description: string | null }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can update categories.');
     }
 
@@ -1273,7 +1304,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async deleteCategoryForAdmin(input: { adminUserId: number; categoryId: number }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can delete categories.');
     }
 
@@ -1293,7 +1324,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async listProductsForAdmin(adminUserId: number) {
     const admin = await this.getUserStoreScope(adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can view products.');
     }
 
@@ -1366,7 +1397,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async createProductForAdmin(input: any) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id || !admin.store_type) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id || !admin.store_type) {
       throw new InternalServerErrorException('Only store admin accounts can create products.');
     }
 
@@ -1419,7 +1450,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async updateProductForAdmin(input: any) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can update products.');
     }
 
@@ -1493,7 +1524,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async deleteProductForAdmin(input: { adminUserId: number; productId: number }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can delete products.');
     }
 
@@ -1513,7 +1544,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async listIngredientsForAdmin(adminUserId: number) {
     const admin = await this.getUserStoreScope(adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can view ingredients.');
     }
 
@@ -1531,7 +1562,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async createIngredientForAdmin(input: any) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can create ingredients.');
     }
 
@@ -1560,7 +1591,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async updateIngredientForAdmin(input: any) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can update ingredients.');
     }
 
@@ -1600,7 +1631,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async deleteIngredientForAdmin(input: { adminUserId: number; ingredientId: number }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can delete ingredients.');
     }
 
@@ -1620,7 +1651,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async listIngredientAlternativesForAdmin(adminUserId: number) {
     const admin = await this.getUserStoreScope(adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can view ingredient alternatives.');
     }
 
@@ -1652,7 +1683,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async createIngredientAlternativeForAdmin(input: any) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can create ingredient alternatives.');
     }
 
@@ -1700,7 +1731,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async updateIngredientAlternativeForAdmin(input: any) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can update ingredient alternatives.');
     }
 
@@ -1757,7 +1788,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async deleteIngredientAlternativeForAdmin(input: { adminUserId: number; alternativeId: number }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can delete ingredient alternatives.');
     }
 
@@ -1777,7 +1808,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async listInventoryDeductionsForAdmin(adminUserId: number) {
     const admin = await this.getUserStoreScope(adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can view inventory history.');
     }
 
@@ -1819,7 +1850,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async listProductIngredientsForAdmin(input: { adminUserId: number; productId: number }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can view product ingredients.');
     }
 
@@ -2349,6 +2380,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       await this.syncRetailInventoryIntoPosCatalog(user);
     }
 
+    const restaurantBusinessId =
+      user.store_type === 'RESTAURANT'
+        ? await this.resolveInventoryBusinessIdForStoreScope(user)
+        : null;
+
     if (user.store_type === 'RETAIL_STORE') {
       return this.query<any>(
         `
@@ -2412,15 +2448,33 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           p.updated_at,
           c.name AS category_name,
           COALESCE(r.modifiers, '[]'::jsonb) AS modifiers,
+          r.servings,
+          r."prepTimeMinutes" AS prep_time_minutes,
           CASE
             WHEN p.store_type = 'RESTAURANT' THEN COALESCE(availability.available_quantity, 0)
             ELSE COALESCE(p.stock_quantity, 0)
           END AS available_quantity
         FROM products p
         LEFT JOIN product_categories c ON c.id = p.category_id
-        LEFT JOIN "Recipe" r
-          ON r."menuItemId" = p.inventory_item_id
-         AND COALESCE(r."isActive", TRUE) = TRUE
+        LEFT JOIN LATERAL (
+          SELECT
+            recipe.modifiers,
+            recipe.servings,
+            recipe."prepTimeMinutes",
+            recipe.instructions,
+            recipe."imageUrl"
+          FROM "Recipe" recipe
+          WHERE COALESCE(recipe."isActive", TRUE) = TRUE
+            AND ($3::text IS NULL OR recipe."businessId"::text = $3::text)
+            AND (
+              recipe."menuItemId" = p.inventory_item_id
+              OR lower(trim(COALESCE(recipe.name, ''))) = lower(trim(COALESCE(p.name, '')))
+            )
+          ORDER BY
+            CASE WHEN recipe."menuItemId" = p.inventory_item_id THEN 0 ELSE 1 END,
+            recipe."updatedAt" DESC NULLS LAST
+          LIMIT 1
+        ) r ON TRUE
         LEFT JOIN "InventoryItem" menu_item
           ON menu_item.id = p.inventory_item_id
         LEFT JOIN LATERAL (
@@ -2437,8 +2491,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           AND COALESCE(p.is_available, TRUE) = TRUE
         ORDER BY p.name ASC
       `,
-      [user.store_id, user.store_type],
-    );
+        [user.store_id, user.store_type, restaurantBusinessId],
+      );
 
     const ingredientRows = user.store_type === 'RESTAURANT'
       ? await this.query<any>(
@@ -2519,6 +2573,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       await this.syncRestaurantRecipesIntoPosCatalog(user);
     }
 
+    const restaurantBusinessId =
+      user.store_type === 'RESTAURANT'
+        ? await this.resolveInventoryBusinessIdForStoreScope(user)
+        : null;
+
     const rows = await this.query<any>(
       `
         SELECT
@@ -2527,6 +2586,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           p.store_id,
           p.store_type,
           COALESCE(r.modifiers, '[]'::jsonb) AS modifiers,
+          r.servings,
+          r."prepTimeMinutes" AS prep_time_minutes,
           COALESCE(
             json_agg(
               json_build_object(
@@ -2554,9 +2615,23 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             '[]'::json
           ) AS ingredients
         FROM products p
-        LEFT JOIN "Recipe" r
-          ON r."menuItemId" = p.inventory_item_id
-         AND COALESCE(r."isActive", TRUE) = TRUE
+        LEFT JOIN LATERAL (
+          SELECT
+            recipe.modifiers,
+            recipe.servings,
+            recipe."prepTimeMinutes"
+          FROM "Recipe" recipe
+          WHERE COALESCE(recipe."isActive", TRUE) = TRUE
+            AND ($3::text IS NULL OR recipe."businessId"::text = $3::text)
+            AND (
+              recipe."menuItemId" = p.inventory_item_id
+              OR lower(trim(COALESCE(recipe.name, ''))) = lower(trim(COALESCE(p.name, '')))
+            )
+          ORDER BY
+            CASE WHEN recipe."menuItemId" = p.inventory_item_id THEN 0 ELSE 1 END,
+            recipe."updatedAt" DESC NULLS LAST
+          LIMIT 1
+        ) r ON TRUE
         LEFT JOIN product_ingredients pi
           ON pi.product_id = p.id
          AND pi.store_id = p.store_id
@@ -2565,10 +2640,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
          AND ii.store_id = p.store_id
         WHERE p.id = $1
           AND p.store_id = $2
-        GROUP BY p.id, p.name, p.store_id, p.store_type, r.modifiers
+        GROUP BY p.id, p.name, p.store_id, p.store_type, r.modifiers, r.servings, r."prepTimeMinutes"
         LIMIT 1
       `,
-      [input.productId, user.store_id],
+      [input.productId, user.store_id, restaurantBusinessId],
     );
 
     if (!rows[0]) {
@@ -2619,6 +2694,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       `
         SELECT
           id,
+          inventory_item_id,
           ingredient_name AS name,
           quantity_available,
           unit,
@@ -2854,6 +2930,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         `,
         [occupiedSeats, status, input.tableId, scope.businessId, scope.locationId],
       );
+      if (status === 'AVAILABLE') {
+        await this.stopRunningTimersForReleasedTable(client, user.store_id!, `Table ${table.tableNumber}`);
+      }
       return this.mapDiningTable(rows[0]);
     });
   }
@@ -2911,6 +2990,107 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       `UPDATE "DiningTable" SET "occupiedSeats" = $1, status = $2::"DiningTableStatus", "updatedAt" = NOW() WHERE id = $3`,
       [nextOccupied, status, table.id],
     );
+    if (status === 'AVAILABLE') {
+      await this.stopRunningTimersForReleasedTable(client, user.store_id!, `Table ${table.tableNumber}`);
+    }
+  }
+
+  /** Finalizes active paid dine-in timers when their table is released. */
+  private async stopRunningTimersForReleasedTable(client: PoolClient, storeId: number, tableLabel: string) {
+    await this.queryWithClient(
+      client,
+      `
+        UPDATE orders
+        SET running_time_end = NOW(),
+            running_duration = GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - running_time_start)))::BIGINT),
+            table_ended_at = COALESCE(table_ended_at, NOW()),
+            completed_at = COALESCE(completed_at, NOW()),
+            order_status = CASE WHEN order_status IN ('PENDING', 'PREPARING', 'READY', 'SERVED') THEN 'COMPLETED' ELSE order_status END,
+            is_running = FALSE
+        WHERE store_id = $1
+          AND order_type IN ('DINE_IN', 'MIXED')
+          AND UPPER(COALESCE(payment_status, '')) = 'PAID'
+          AND COALESCE(is_running, FALSE) = TRUE
+          AND running_time_start IS NOT NULL
+          AND EXISTS (
+            SELECT 1
+            FROM regexp_split_to_table(COALESCE(table_name, ''), '\\s*\\+\\s*') AS table_name_part
+            WHERE LOWER(TRIM(table_name_part)) = LOWER($2)
+          )
+      `,
+      [storeId, tableLabel],
+    );
+  }
+
+  /** Idempotently freezes a timer. Durations are persisted as elapsed seconds. */
+  private async stopOrderRunningTimer(client: PoolClient, orderId: number) {
+    await this.queryWithClient(
+      client,
+      `
+        UPDATE orders
+        SET running_time_end = NOW(),
+            running_duration = GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - running_time_start)))::BIGINT),
+            is_running = FALSE
+        WHERE id = $1
+          AND COALESCE(is_running, FALSE) = TRUE
+          AND running_time_start IS NOT NULL
+      `,
+      [orderId],
+    );
+  }
+
+  /**
+   * Handles orders created before the timer feature and table changes made in
+   * a different restaurant screen. A timer can never remain active after its
+   * terminal order state, or after a paid dine-in table is already available.
+   */
+  private async reconcileRestaurantRunningTimers(user: AuthenticatedUser) {
+    if (!user.store_id || user.store_type !== 'RESTAURANT') return;
+
+    await this.ensureDiningTableSchema();
+    const scope = await this.getDiningScope(user);
+    await this.query(
+      `
+        UPDATE orders o
+        SET running_time_end = NOW(),
+            running_duration = GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - o.running_time_start)))::BIGINT),
+            table_ended_at = CASE WHEN o.order_type IN ('DINE_IN', 'MIXED') THEN COALESCE(o.table_ended_at, NOW()) ELSE o.table_ended_at END,
+            completed_at = CASE WHEN o.order_type IN ('DINE_IN', 'MIXED') THEN COALESCE(o.completed_at, NOW()) ELSE o.completed_at END,
+            order_status = CASE
+              WHEN o.order_type IN ('DINE_IN', 'MIXED') AND o.order_status IN ('PENDING', 'PREPARING', 'READY', 'SERVED') THEN 'COMPLETED'
+              ELSE o.order_status
+            END,
+            is_running = FALSE
+        WHERE o.store_id = $1
+          AND o.order_type <> 'RETAIL'
+          AND COALESCE(o.is_running, FALSE) = TRUE
+          AND o.running_time_start IS NOT NULL
+          AND (
+            -- Takeout has no table stay: serving or completion ends it.
+            (o.order_type = 'TAKEOUT' AND o.order_status IN ('SERVED', 'COMPLETED', 'CANCELLED'))
+            -- An explicitly completed dine-in lifecycle is final as well.
+            OR (o.order_type IN ('DINE_IN', 'MIXED') AND o.order_status IN ('COMPLETED', 'CANCELLED'))
+            -- Pay Now remains active only while its assigned table is occupied.
+            OR (
+              o.order_type IN ('DINE_IN', 'MIXED')
+              AND UPPER(COALESCE(o.payment_status, '')) = 'PAID'
+              AND EXISTS (
+                SELECT 1
+                FROM "DiningTable" table_row
+                WHERE table_row."businessId" = $2
+                  AND table_row."locationId" = $3
+                  AND table_row.status = 'AVAILABLE'::"DiningTableStatus"
+                  AND EXISTS (
+                    SELECT 1
+                    FROM regexp_split_to_table(COALESCE(o.table_name, ''), '\\s*\\+\\s*') AS table_name_part
+                    WHERE LOWER(TRIM(table_name_part)) = LOWER('Table ' || table_row."tableNumber")
+                  )
+              )
+            )
+          )
+      `,
+      [user.store_id, scope.businessId, scope.locationId],
+    );
   }
 
   async createPaidPosOrder(input: any) {
@@ -2923,15 +3103,30 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     if (!user.store_id || !user.store_type) {
       throw new InternalServerErrorException('User account is not linked to a store.');
     }
-    if (user.role === 'ADMIN') {
-      throw new ForbiddenException('Admin accounts can only view orders and receipts. Payment processing is restricted to POS staff.');
+    if (this.isInventoryManagerRole(user.role)) {
+      throw new ForbiddenException('Inventory Manager accounts can only view inventory workflows. Payment processing is restricted to POS Manager or POS Staff accounts.');
     }
 
     try {
       return await this.withTransaction(async (client) => {
         const isPaid = Boolean(input.payment);
-        const orderStatus = input.orderStatus ?? (isPaid ? 'COMPLETED' : 'PENDING');
+        const orderType = input.orderType ?? (user.store_type === 'RETAIL_STORE' ? 'RETAIL' : 'TAKEOUT');
+        const hasDiningTable = Boolean(input.tableName && !String(input.tableName).toLowerCase().startsWith('queue'));
+        const isDineInOrder = ['DINE_IN', 'MIXED'].includes(orderType);
+        // A pay-now dine-in order remains active while the table is occupied.
+        const isPaidDineIn = isPaid && ['DINE_IN', 'MIXED'].includes(orderType) && hasDiningTable;
+        const orderStatus = input.orderStatus ?? (isPaid && !isPaidDineIn ? 'COMPLETED' : 'PENDING');
         const paymentStatus = input.paymentStatus ?? (isPaid ? 'PAID' : 'NOT_PAID');
+        const isRestaurantOrder = user.store_type === 'RESTAURANT' && orderType !== 'RETAIL';
+        const confirmedAt = new Date();
+        // Takeout runs from confirmation. A dine-in's customer-stay timer only
+        // begins once an actual table is occupied; queued orders have no timer.
+        const shouldStartTimerAtConfirmation = isRestaurantOrder && (!isDineInOrder || hasDiningTable);
+        const runningTimeStart = shouldStartTimerAtConfirmation ? confirmedAt : null;
+        const stopsOnConfirmation =
+          (orderType === 'TAKEOUT' && ['SERVED', 'COMPLETED'].includes(orderStatus)) ||
+          (['DINE_IN', 'MIXED'].includes(orderType) && orderStatus === 'COMPLETED');
+        const runningTimeEnd = isRestaurantOrder && stopsOnConfirmation ? runningTimeStart : null;
         const orderNumber = await this.createUniqueOrderNumber(client, input.orderNumber);
         const partySize = Number(input.partySize ?? input.party_size ?? input.requiredSeats ?? 0);
         const orderRows = await this.queryWithClient<{ id: number }>(
@@ -2941,9 +3136,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
               store_id, cashier_id, order_number, customer_name, order_type, table_name,
               party_size, subtotal, discount_amount, discount_type, tax_amount, service_charge,
               total_amount, order_status, payment_status, payment_at, completed_at,
-              table_started_at, preparing_started_at, ready_at
+              table_started_at, preparing_started_at, ready_at, service_started_at, served_at, service_duration,
+              running_time_start, running_time_end, running_duration, is_running, estimated_prep_minutes, estimated_ready_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
             RETURNING id
           `,
           [
@@ -2951,7 +3147,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             user.id,
             orderNumber,
             input.customerName ?? null,
-            input.orderType ?? (user.store_type === 'RETAIL_STORE' ? 'RETAIL' : 'TAKEOUT'),
+            orderType,
             input.tableName ?? null,
             Number.isFinite(partySize) && partySize > 0 ? partySize : null,
             input.subtotal ?? 0,
@@ -2962,11 +3158,23 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             input.total ?? 0,
             orderStatus,
             paymentStatus,
-            isPaid ? new Date() : null,
-            isPaid ? new Date() : null,
-            input.tableName && !String(input.tableName).toLowerCase().startsWith('queue') ? new Date() : null,
+            isPaid ? confirmedAt : null,
+            // A dine-in Pay Now order is paid at confirmation but is not
+            // completed while its table remains occupied. Its completion time
+            // (and running timer end) are set only when that table is released.
+            orderStatus === 'COMPLETED' ? confirmedAt : null,
+            null,
             orderStatus === 'PREPARING' ? new Date() : null,
             orderStatus === 'READY' ? new Date() : null,
+            orderStatus === 'READY' ? confirmedAt : null,
+            orderStatus === 'SERVED' ? confirmedAt : null,
+            orderStatus === 'SERVED' ? 0 : null,
+            runningTimeStart,
+            runningTimeEnd,
+            runningTimeEnd ? 0 : null,
+            shouldStartTimerAtConfirmation && !stopsOnConfirmation,
+            Number.isFinite(Number(input.estimatedPrepMinutes ?? input.estimated_prep_minutes)) ? Number(input.estimatedPrepMinutes ?? input.estimated_prep_minutes) : null,
+            input.estimatedReadyAt ?? input.estimated_ready_at ?? null,
           ],
         );
         const orderId = orderRows[0].id;
@@ -2981,9 +3189,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           `
             INSERT INTO order_items (
               order_id, product_id, variant_id, product_name, category_name, size, color,
-              quantity, unit_price, line_total, item_type, notes
+              quantity, unit_price, line_total, item_type, notes, prep_time_minutes, customization_prep_minutes
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
             RETURNING id
           `,
           [
@@ -2999,6 +3207,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             (item.price ?? 0) * (item.quantity ?? 1),
             item.orderType ?? null,
             item.notes ?? null,
+            Number.isFinite(Number(item.prepTimeMinutes ?? item.prep_time_minutes)) ? Number(item.prepTimeMinutes ?? item.prep_time_minutes) : null,
+            Number.isFinite(Number(item.customizationPrepMinutes ?? item.customization_prep_minutes)) ? Number(item.customizationPrepMinutes ?? item.customization_prep_minutes) : 0,
           ],
         );
         const orderItemId = itemRows[0].id;
@@ -3009,6 +3219,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           } else {
             await this.deductRestaurantIngredients(client, user.store_id!, orderId, orderItemId, item, inventorySaleMovements, inventorySyncSettings);
           }
+        } else if (user.store_type === 'RESTAURANT') {
+          await this.recordRestaurantIngredientCustomizations(client, user.store_id!, orderItemId, item);
         }
       }
 
@@ -3086,8 +3298,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       input.paymentStatus === 'PAID' ||
       input.paymentStatus === 'VOIDED' ||
       input.paymentStatus === 'REFUNDED';
-    if (user.role === 'ADMIN' && isRestrictedTransactionUpdate) {
-      throw new ForbiddenException('Admin accounts can only view orders and receipts. Payment, refund, and void processing is restricted to POS staff.');
+    if (this.isInventoryManagerRole(user.role) && isRestrictedTransactionUpdate) {
+      throw new ForbiddenException('Inventory Manager accounts can only view inventory workflows. Payment, refund, and void processing is restricted to POS Manager or POS Staff accounts.');
     }
 
     const updates: string[] = [];
@@ -3106,9 +3318,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     if (isPaymentUpdate || input.paymentStatus === 'PAID') addUpdate('payment_at', new Date());
     if (input.orderStatus === 'PREPARING') addUpdate('preparing_started_at', new Date());
     if (input.orderStatus === 'READY') addUpdate('ready_at', new Date());
+    if (input.orderStatus === 'SERVED') addUpdate('served_at', new Date());
     if (input.orderStatus === 'COMPLETED') addUpdate('completed_at', new Date());
     if (input.orderStatus === 'COMPLETED') addUpdate('table_ended_at', new Date());
-    if (input.tableName !== undefined && input.tableName && !String(input.tableName).toLowerCase().startsWith('queue')) addUpdate('table_started_at', new Date());
 
     if (updates.length === 0 && !isPaymentUpdate) {
       throw new BadRequestException('No order updates were provided.');
@@ -3130,9 +3342,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
       // Capture the payment status before the update so a void/refund only restocks
       // when the order was actually paid (and so a repeated void is a no-op).
-      const priorRows = await this.queryWithClient<{ payment_status: string | null; table_name: string | null; party_size: string | number | null }>(
+      const priorRows = await this.queryWithClient<{ payment_status: string | null; table_name: string | null; party_size: string | number | null; order_type: string | null }>(
         client,
-        `SELECT payment_status, table_name, party_size FROM orders WHERE store_id = $1 AND order_number = $2 LIMIT 1`,
+        `SELECT payment_status, table_name, party_size, order_type FROM orders WHERE store_id = $1 AND order_number = $2 LIMIT 1`,
         [user.store_id, input.orderNumber],
       );
       const priorPaymentStatus = priorRows[0]?.payment_status ?? null;
@@ -3171,6 +3383,67 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
       if (updatedRows.length === 0) {
         return updatedRows;
+      }
+
+      const orderType = String(priorRows[0]?.order_type ?? '').toUpperCase();
+      const nextStatus = String(input.orderStatus ?? '').toUpperCase();
+
+      if (nextStatus === 'READY') {
+        await this.queryWithClient(
+          client,
+          `UPDATE orders
+           SET service_started_at = COALESCE(service_started_at, NOW()),
+               table_started_at = CASE WHEN order_type IN ('DINE_IN', 'MIXED') THEN COALESCE(table_started_at, NOW()) ELSE table_started_at END
+           WHERE id = $1`,
+          [updatedRows[0].id],
+        );
+      }
+      if (nextStatus === 'SERVED') {
+        await this.queryWithClient(
+          client,
+          `UPDATE orders
+           SET served_at = COALESCE(served_at, NOW()),
+               service_duration = CASE WHEN service_started_at IS NOT NULL THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - service_started_at)))::BIGINT) ELSE service_duration END
+           WHERE id = $1`,
+          [updatedRows[0].id],
+        );
+      }
+
+      // A queued dine-in has no customer at a table yet. Its timer starts once
+      // it is assigned to an actual table and that table becomes occupied.
+      const priorTableName = String(priorRows[0]?.table_name ?? '');
+      const isActualTable = (tableName: string) => Boolean(tableName) && !tableName.toLowerCase().startsWith('queue');
+      if (
+        ['DINE_IN', 'MIXED'].includes(orderType) &&
+        input.tableName !== undefined &&
+        isActualTable(String(input.tableName)) &&
+        !isActualTable(priorTableName) &&
+        !['COMPLETED', 'CANCELLED'].includes(nextStatus)
+      ) {
+        await this.queryWithClient(
+          client,
+          `
+            UPDATE orders
+            SET running_time_start = COALESCE(running_time_start, NOW()),
+                is_running = CASE WHEN running_time_start IS NULL THEN TRUE ELSE is_running END
+            WHERE id = $1
+              AND running_time_start IS NULL
+              AND running_time_end IS NULL
+          `,
+          [updatedRows[0].id],
+        );
+      }
+      const paymentCompletedNow =
+        (isPaymentUpdate || String(input.paymentStatus ?? '').toUpperCase() === 'PAID') &&
+        String(priorPaymentStatus ?? '').toUpperCase() !== 'PAID';
+      const shouldStopRunningTimer =
+        (orderType === 'TAKEOUT' && ['SERVED', 'COMPLETED'].includes(nextStatus)) ||
+        (['DINE_IN', 'MIXED'].includes(orderType) && paymentCompletedNow) ||
+        (['DINE_IN', 'MIXED'].includes(orderType) && String(priorPaymentStatus ?? '').toUpperCase() === 'PAID' && nextStatus === 'COMPLETED') ||
+        // Cancellation is also a terminal lifecycle event; it never pauses a timer.
+        nextStatus === 'CANCELLED';
+      if (shouldStopRunningTimer) {
+        await this.stopOrderRunningTimer(client, updatedRows[0].id);
       }
 
       if (isPaymentUpdate) {
@@ -3212,7 +3485,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       if (hasDiningTable && input.orderStatus === 'COMPLETED' && !isPaymentUpdate && priorPaymentStatus !== 'PAID') {
         throw new BadRequestException('Cannot release a Pay Later table before payment is completed.');
       }
-      if ((isPaymentUpdate && priorPaymentStatus !== 'PAID') || (input.orderStatus === 'COMPLETED' && priorPaymentStatus === 'PAID')) {
+      if (input.orderStatus === 'COMPLETED') {
         await this.releaseDiningTable(client, user, nextTableName, Number.isFinite(nextPartySize) ? nextPartySize : 0);
       }
 
@@ -3265,6 +3538,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       throw new InternalServerErrorException('User account is not linked to a store.');
     }
 
+    await this.reconcileRestaurantRunningTimers(user);
+
     return this.query<any>(
       `
         SELECT
@@ -3287,8 +3562,17 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           o.payment_at,
           o.preparing_started_at,
           o.ready_at,
+          o.service_started_at,
+          o.served_at,
+          o.service_duration,
           o.table_started_at,
           o.table_ended_at,
+          o.running_time_start,
+          o.running_time_end,
+          o.running_duration,
+          o.is_running,
+          o.estimated_prep_minutes,
+          o.estimated_ready_at,
           p.payment_number,
           p.payment_method,
           p.amount_paid,
@@ -3309,7 +3593,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
                 'line_total', oi.line_total,
                 'image_url', COALESCE(pv.image_url, prod.image_url),
                 'item_type', oi.item_type,
-                'notes', oi.notes
+                'notes', oi.notes,
+                'prep_time_minutes', oi.prep_time_minutes,
+                'customization_prep_minutes', oi.customization_prep_minutes
               )
               ORDER BY oi.id ASC
             ) FILTER (WHERE oi.id IS NOT NULL),
@@ -3554,6 +3840,113 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  private async resolveProductIngredientId(
+    client: PoolClient,
+    storeId: number,
+    productId: number | null,
+    productIngredientId: number | null,
+    originalIngredientId: number | null,
+  ) {
+    if (!productId) return null;
+
+    if (productIngredientId) {
+      const rows = await this.queryWithClient<{ id: number }>(
+        client,
+        `
+          SELECT id
+          FROM product_ingredients
+          WHERE id = $1
+            AND store_id = $2
+            AND product_id = $3
+          LIMIT 1
+        `,
+        [productIngredientId, storeId, productId],
+      );
+      if (rows[0]?.id) return rows[0].id;
+    }
+
+    if (!originalIngredientId) return null;
+
+    const linkedRows = await this.queryWithClient<{ id: number }>(
+      client,
+      `
+        SELECT id
+        FROM product_ingredients
+        WHERE store_id = $1
+          AND product_id = $2
+          AND ingredient_id = $3
+        LIMIT 1
+      `,
+      [storeId, productId, originalIngredientId],
+    );
+    return linkedRows[0]?.id ?? null;
+  }
+
+  private async recordRestaurantIngredientCustomizations(client: PoolClient, storeId: number, orderItemId: number, item: any) {
+    const ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
+    const finiteNumberOrNull = (value: unknown) => {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    };
+
+    for (const ingredient of ingredients) {
+      const originalId = finiteNumberOrNull(ingredient.ingredient_id ?? ingredient.ingredientId);
+      const replacementId = finiteNumberOrNull(ingredient.replacement_ingredient_id ?? ingredient.replacementIngredientId);
+      const productIngredientId = await this.resolveProductIngredientId(
+        client,
+        storeId,
+        finiteNumberOrNull(item.productId ?? item.id),
+        finiteNumberOrNull(ingredient.product_ingredient_id ?? ingredient.productIngredientId ?? (originalId ? ingredient.id : null)),
+        originalId,
+      );
+
+      const removed = ingredient.removed === true || Number(ingredient.quantity ?? 0) <= 0;
+      const originalQuantity = Number(ingredient.original_quantity ?? ingredient.originalQuantity ?? ingredient.quantity ?? 0);
+      const ingredientQuantity = Number(ingredient.quantity ?? 0);
+      const additionalCost = Number(ingredient.additional_price ?? ingredient.additionalCost ?? 0);
+      const customizationType = ingredient.customization_type ?? ingredient.customizationType ?? null;
+      const hasCustomization = Boolean(
+        customizationType ||
+          removed ||
+          replacementId ||
+          additionalCost !== 0 ||
+          (Number.isFinite(originalQuantity) && Number.isFinite(ingredientQuantity) && ingredientQuantity !== originalQuantity),
+      );
+
+      if (!hasCustomization || (!originalId && !replacementId && !productIngredientId)) {
+        continue;
+      }
+
+      await this.queryWithClient(
+        client,
+        `
+          INSERT INTO order_item_customizations (
+            store_id, order_item_id, product_ingredient_id, original_ingredient_id,
+            replacement_ingredient_id, customization_type, original_ingredient_name,
+            replacement_ingredient_name, original_quantity, new_quantity, unit,
+            additional_cost, notes
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        `,
+        [
+          storeId,
+          orderItemId,
+          productIngredientId,
+          originalId,
+          replacementId,
+          customizationType ?? (removed ? 'REMOVE' : replacementId ? 'REPLACE' : 'CHANGE_QUANTITY'),
+          ingredient.original_name ?? ingredient.name ?? null,
+          ingredient.replacement_name ?? null,
+          Number.isFinite(originalQuantity) ? originalQuantity : null,
+          Number.isFinite(ingredientQuantity) ? ingredientQuantity : 0,
+          ingredient.unit ?? null,
+          additionalCost,
+          ingredient.notes ?? null,
+        ],
+      );
+    }
+  }
+
   private async deductRestaurantIngredients(
     client: PoolClient,
     storeId: number,
@@ -3562,9 +3955,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     item: any,
     movements: PosSaleMovement[],
     inventorySyncSettings: InventorySyncSettings,
+    options: { recordCustomizations?: boolean } = {},
   ) {
     const itemQuantity = Number(item.quantity ?? 1);
-    const ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
+    const shouldRecordCustomizations = options.recordCustomizations !== false;
+    let ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
     const finiteNumberOrNull = (value: unknown) => {
       const parsed = Number(value);
       return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
@@ -3613,25 +4008,37 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
+    if (ingredients.length === 0 && dishProductId) {
+      ingredients = await this.queryWithClient<any>(
+        client,
+        `
+          SELECT
+            pi.id AS product_ingredient_id,
+            pi.ingredient_id,
+            COALESCE(ii.ingredient_name, pi.ingredient_name) AS name,
+            pi.quantity_required AS quantity,
+            pi.quantity_required AS original_quantity,
+            pi.unit
+          FROM product_ingredients pi
+          LEFT JOIN ingredients_inventory ii ON ii.id = pi.ingredient_id
+          WHERE pi.store_id = $1
+            AND pi.product_id = $2
+          ORDER BY pi.id ASC
+        `,
+        [storeId, dishProductId],
+      );
+    }
+
     for (const ingredient of ingredients) {
       const originalId = finiteNumberOrNull(ingredient.ingredient_id ?? ingredient.ingredientId);
       const replacementId = finiteNumberOrNull(ingredient.replacement_ingredient_id ?? ingredient.replacementIngredientId);
-      let productIngredientId = finiteNumberOrNull(ingredient.product_ingredient_id ?? ingredient.productIngredientId ?? (originalId ? ingredient.id : null));
-      if (!productIngredientId && originalId) {
-        const linkedRows = await this.queryWithClient<{ id: number }>(
-          client,
-          `
-            SELECT id
-            FROM product_ingredients
-            WHERE store_id = $1
-              AND product_id = $2
-              AND ingredient_id = $3
-            LIMIT 1
-          `,
-          [storeId, item.productId ?? item.id ?? null, originalId],
-        );
-        productIngredientId = linkedRows[0]?.id ?? null;
-      }
+      const productIngredientId = await this.resolveProductIngredientId(
+        client,
+        storeId,
+        finiteNumberOrNull(item.productId ?? item.id),
+        finiteNumberOrNull(ingredient.product_ingredient_id ?? ingredient.productIngredientId ?? (originalId ? ingredient.id : null)),
+        originalId,
+      );
       const ingredientId = replacementId ?? originalId;
       const removed = ingredient.removed === true || Number(ingredient.quantity ?? 0) <= 0;
       const quantity = removed ? 0 : Number(ingredient.quantity ?? ingredient.quantity_required ?? 0) * itemQuantity;
@@ -3651,7 +4058,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
 
-      if (hasCustomization) {
+      if (shouldRecordCustomizations && hasCustomization) {
         await this.queryWithClient(
           client,
           `
@@ -3774,8 +4181,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   // Deducts stock and writes the inventory Sale/StockMovement records for an order
   // that is being paid AFTER creation (the deferred-payment path in updatePosOrder).
   // Items/ingredients aren't in the payment request, so they are loaded from the DB.
-  // Restaurant deductions use the product's standard recipe (per-order ingredient
-  // customizations made on an unpaid order are not persisted, so cannot be replayed).
+  // Restaurant deductions replay saved per-item customizations over the default recipe.
   // Idempotent: skips entirely if this order was already mirrored into "Sale".
   private async applyInventoryForPaidPosOrder(
     client: PoolClient,
@@ -3824,11 +4230,109 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           inventorySyncSettings,
         );
       } else {
-        const ingredients = await this.queryWithClient<{ ingredient_id: number; quantity: string | number; unit: string | null }>(
+        const ingredients = await this.queryWithClient<{
+          product_ingredient_id: number;
+          ingredient_id: number;
+          ingredient_name: string;
+          quantity: string | number;
+          unit: string | null;
+        }>(
           client,
-          `SELECT ingredient_id, quantity_required AS quantity, unit FROM product_ingredients WHERE product_id = $1 AND store_id = $2`,
+          `
+            SELECT id AS product_ingredient_id, ingredient_id, ingredient_name, quantity_required AS quantity, unit
+            FROM product_ingredients
+            WHERE product_id = $1
+              AND store_id = $2
+          `,
           [oi.product_id, user.store_id],
         );
+        const customizations = await this.queryWithClient<{
+          product_ingredient_id: number | null;
+          original_ingredient_id: number | null;
+          replacement_ingredient_id: number | null;
+          customization_type: string;
+          original_ingredient_name: string | null;
+          replacement_ingredient_name: string | null;
+          original_quantity: string | number | null;
+          new_quantity: string | number | null;
+          unit: string | null;
+          additional_cost: string | number | null;
+          notes: string | null;
+        }>(
+          client,
+          `
+            SELECT product_ingredient_id, original_ingredient_id, replacement_ingredient_id,
+                   customization_type, original_ingredient_name, replacement_ingredient_name,
+                   original_quantity, new_quantity, unit, additional_cost, notes
+            FROM order_item_customizations
+            WHERE order_item_id = $1
+          `,
+          [oi.id],
+        );
+        const customizedIngredients: any[] = ingredients.map((ingredient) => ({
+          product_ingredient_id: ingredient.product_ingredient_id,
+          ingredient_id: ingredient.ingredient_id,
+          name: ingredient.ingredient_name,
+          quantity: Number(ingredient.quantity ?? 0),
+          original_quantity: Number(ingredient.quantity ?? 0),
+          unit: ingredient.unit,
+        }));
+
+        for (const customization of customizations) {
+          const type = String(customization.customization_type ?? '').toUpperCase();
+          const matchIndex = customizedIngredients.findIndex((ingredient) =>
+            (customization.product_ingredient_id && Number(ingredient.product_ingredient_id) === Number(customization.product_ingredient_id)) ||
+            (customization.original_ingredient_id && Number(ingredient.ingredient_id) === Number(customization.original_ingredient_id)),
+          );
+          const newQuantity = Number(customization.new_quantity ?? 0);
+
+          if (type === 'REMOVE' && matchIndex >= 0) {
+            customizedIngredients[matchIndex] = {
+              ...customizedIngredients[matchIndex],
+              removed: true,
+              quantity: 0,
+              customization_type: 'REMOVE',
+              notes: customization.notes ?? undefined,
+            };
+            continue;
+          }
+
+          if (type === 'REPLACE' && matchIndex >= 0) {
+            customizedIngredients[matchIndex] = {
+              ...customizedIngredients[matchIndex],
+              replacement_ingredient_id: customization.replacement_ingredient_id,
+              replacement_name: customization.replacement_ingredient_name,
+              quantity: Number.isFinite(newQuantity) && newQuantity > 0 ? newQuantity : customizedIngredients[matchIndex].quantity,
+              customization_type: 'REPLACE',
+              notes: customization.notes ?? undefined,
+            };
+            continue;
+          }
+
+          if ((type === 'CHANGE_QUANTITY' || type === 'QUANTITY_CHANGE') && matchIndex >= 0) {
+            customizedIngredients[matchIndex] = {
+              ...customizedIngredients[matchIndex],
+              quantity: Number.isFinite(newQuantity) ? Math.max(0, newQuantity) : customizedIngredients[matchIndex].quantity,
+              customization_type: 'CHANGE_QUANTITY',
+              notes: customization.notes ?? undefined,
+            };
+            continue;
+          }
+
+          if ((type === 'ADD' || type === 'EXTRA') && customization.replacement_ingredient_id) {
+            customizedIngredients.push({
+              product_ingredient_id: null,
+              ingredient_id: customization.replacement_ingredient_id,
+              name: customization.replacement_ingredient_name ?? 'Added ingredient',
+              quantity: Number.isFinite(newQuantity) && newQuantity > 0 ? newQuantity : 1,
+              original_quantity: 0,
+              unit: customization.unit,
+              customization_type: 'ADD',
+              additional_price: Number(customization.additional_cost ?? 0),
+              notes: customization.notes ?? undefined,
+            });
+          }
+        }
         await this.deductRestaurantIngredients(
           client,
           user.store_id,
@@ -3839,10 +4343,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             name: oi.product_name,
             price: Number(oi.unit_price ?? 0),
             quantity: Number(oi.quantity ?? 1),
-            ingredients: ingredients.map((g) => ({ ingredient_id: g.ingredient_id, quantity: Number(g.quantity ?? 0), unit: g.unit })),
+            ingredients: customizedIngredients,
           },
           movements,
           inventorySyncSettings,
+          { recordCustomizations: false },
         );
       }
     }
@@ -4247,6 +4752,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           enable_refund,
           enable_void,
           enable_discount,
+          enable_estimated_prep_time,
+          prep_time_strategy,
+          customization_prep_time_minutes,
           enable_service_charge,
           service_charge_rate,
           service_charge_percentage,
@@ -4257,6 +4765,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           enable_ingredient_customization,
           enable_receipt_printing,
           enabled_payment_methods,
+          payment_method_accounts,
           auto_deduct_inventory_on_sale,
           allow_negative_stock,
           default_low_stock_threshold,
@@ -4266,12 +4775,13 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           enable_expiry_tracking,
           default_markup_percent
         )
-        VALUES ($1, $2, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, 0, 0, TRUE, 0, TRUE, TRUE, TRUE, TRUE, ARRAY['Cash', 'GCash', 'Maya', 'Bank Transfer']::TEXT[], TRUE, FALSE, 3, 'unit', 30, 20, FALSE, 30)
+        VALUES ($1, $2, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, 'parallel', 2, TRUE, 0, 0, TRUE, 0, TRUE, TRUE, TRUE, TRUE, ARRAY['Cash', 'GCash', 'Maya', 'Bank Transfer']::TEXT[], '{}'::JSONB, TRUE, FALSE, 3, 'unit', 30, 20, FALSE, 30)
         ON CONFLICT (store_id) DO UPDATE
         SET store_type = COALESCE(store_settings.store_type, EXCLUDED.store_type),
             service_charge_rate = COALESCE(store_settings.service_charge_rate, store_settings.service_charge_percentage, 0),
             service_charge_percentage = COALESCE(store_settings.service_charge_percentage, store_settings.service_charge_rate, 0),
             enabled_payment_methods = COALESCE(store_settings.enabled_payment_methods, EXCLUDED.enabled_payment_methods),
+            payment_method_accounts = COALESCE(store_settings.payment_method_accounts, EXCLUDED.payment_method_accounts),
             auto_deduct_inventory_on_sale = COALESCE(store_settings.auto_deduct_inventory_on_sale, EXCLUDED.auto_deduct_inventory_on_sale),
             allow_negative_stock = COALESCE(store_settings.allow_negative_stock, EXCLUDED.allow_negative_stock),
             default_low_stock_threshold = COALESCE(store_settings.default_low_stock_threshold, EXCLUDED.default_low_stock_threshold),
@@ -4296,6 +4806,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ADD COLUMN IF NOT EXISTS enable_refund BOOLEAN DEFAULT TRUE,
           ADD COLUMN IF NOT EXISTS enable_void BOOLEAN DEFAULT TRUE,
           ADD COLUMN IF NOT EXISTS enable_discount BOOLEAN DEFAULT TRUE,
+          ADD COLUMN IF NOT EXISTS enable_estimated_prep_time BOOLEAN DEFAULT TRUE,
+          ADD COLUMN IF NOT EXISTS prep_time_strategy VARCHAR(20) DEFAULT 'parallel',
+          ADD COLUMN IF NOT EXISTS customization_prep_time_minutes INT DEFAULT 2,
           ADD COLUMN IF NOT EXISTS enable_service_charge BOOLEAN DEFAULT TRUE,
           ADD COLUMN IF NOT EXISTS service_charge_rate DECIMAL(5,2) DEFAULT 0,
           ADD COLUMN IF NOT EXISTS service_charge_percentage DECIMAL(5,2) DEFAULT 0,
@@ -4306,6 +4819,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ADD COLUMN IF NOT EXISTS enable_ingredient_customization BOOLEAN DEFAULT TRUE,
           ADD COLUMN IF NOT EXISTS enable_receipt_printing BOOLEAN DEFAULT TRUE,
           ADD COLUMN IF NOT EXISTS enabled_payment_methods TEXT[] DEFAULT ARRAY['Cash', 'GCash', 'Maya', 'Bank Transfer'],
+          ADD COLUMN IF NOT EXISTS payment_method_accounts JSONB DEFAULT '{}'::JSONB,
           ADD COLUMN IF NOT EXISTS auto_deduct_inventory_on_sale BOOLEAN DEFAULT TRUE,
           ADD COLUMN IF NOT EXISTS allow_negative_stock BOOLEAN DEFAULT FALSE,
           ADD COLUMN IF NOT EXISTS default_low_stock_threshold INTEGER DEFAULT 3,
@@ -4401,9 +4915,18 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ADD COLUMN IF NOT EXISTS payment_at TIMESTAMP,
           ADD COLUMN IF NOT EXISTS preparing_started_at TIMESTAMP,
           ADD COLUMN IF NOT EXISTS ready_at TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS service_started_at TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS served_at TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS service_duration BIGINT,
+          ADD COLUMN IF NOT EXISTS estimated_prep_minutes INT,
+          ADD COLUMN IF NOT EXISTS estimated_ready_at TIMESTAMP,
           ADD COLUMN IF NOT EXISTS table_started_at TIMESTAMP,
           ADD COLUMN IF NOT EXISTS table_ended_at TIMESTAMP,
           ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS running_time_start TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS running_time_end TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS running_duration BIGINT,
+          ADD COLUMN IF NOT EXISTS is_running BOOLEAN NOT NULL DEFAULT FALSE,
           ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       `,
     );
@@ -4416,6 +4939,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ADD COLUMN IF NOT EXISTS color VARCHAR(50),
           ADD COLUMN IF NOT EXISTS item_type VARCHAR(50),
           ADD COLUMN IF NOT EXISTS notes TEXT,
+          ADD COLUMN IF NOT EXISTS prep_time_minutes INT,
+          ADD COLUMN IF NOT EXISTS customization_prep_minutes INT DEFAULT 0,
           ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       `,
     );
@@ -4576,15 +5101,39 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       staffTypeColumn: pick(['staff_type']),
       passwordColumn: pick(['hashed_password', 'password_hash', 'password']),
       statusColumn: pick(['status']),
+      activeColumn: pick(['is_active']),
     };
   }
 
-  private activeUsersWhereClause(userColumns: { statusColumn: string | null }, alias = 'u') {
-    if (!userColumns.statusColumn) {
-      return '';
+  private userStatusSelect(userColumns: { statusColumn: string | null; activeColumn?: string | null }, alias = 'u') {
+    const prefix = alias ? `${alias}.` : '';
+    if (userColumns.statusColumn) {
+      return `${prefix}${this.quoteIdentifier(userColumns.statusColumn)} AS status`;
     }
+    if (userColumns.activeColumn) {
+      return `CASE WHEN COALESCE(${prefix}${this.quoteIdentifier(userColumns.activeColumn)}, TRUE) THEN 'ACTIVE' ELSE 'INACTIVE' END AS status`;
+    }
+    return `'ACTIVE' AS status`;
+  }
 
-    return ` AND COALESCE(${alias}.${this.quoteIdentifier(userColumns.statusColumn)}, 'ACTIVE') = 'ACTIVE'`;
+  private activeUsersWhereClause(userColumns: { statusColumn: string | null; activeColumn?: string | null }, alias = 'u') {
+    if (userColumns.statusColumn) {
+      return ` AND COALESCE(${alias}.${this.quoteIdentifier(userColumns.statusColumn)}, 'ACTIVE') = 'ACTIVE'`;
+    }
+    if (userColumns.activeColumn) {
+      return ` AND COALESCE(${alias}.${this.quoteIdentifier(userColumns.activeColumn)}, TRUE) = TRUE`;
+    }
+    return '';
+  }
+
+  private userActiveUpdateAssignment(userColumns: { statusColumn: string | null; activeColumn?: string | null }, active: boolean) {
+    if (userColumns.statusColumn) {
+      return `${this.quoteIdentifier(userColumns.statusColumn)} = '${active ? 'ACTIVE' : 'INACTIVE'}'`;
+    }
+    if (userColumns.activeColumn) {
+      return `${this.quoteIdentifier(userColumns.activeColumn)} = ${active ? 'TRUE' : 'FALSE'}`;
+    }
+    return null;
   }
 
   private async deactivateAdminAndStoreStaff(
@@ -4592,11 +5141,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     storeId: number | null,
     userColumns: ReturnType<DatabaseService['resolveUserColumns']>,
   ) {
-    if (!userColumns.statusColumn || !userColumns.roleColumn) {
+    const activeAssignment = this.userActiveUpdateAssignment(userColumns, false);
+    if (!activeAssignment || !userColumns.roleColumn) {
       throw new InternalServerErrorException('Users table is missing required status columns.');
     }
 
-    const statusColumn = this.quoteIdentifier(userColumns.statusColumn);
     const roleColumn = this.quoteIdentifier(userColumns.roleColumn);
 
     if (storeId && userColumns.storeIdColumn) {
@@ -4604,10 +5153,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       const rows = await this.query<{ id: number }>(
         `
           UPDATE users
-          SET ${statusColumn} = 'INACTIVE'
+          SET ${activeAssignment}
           WHERE (
-            (id = $1 AND ${roleColumn} = 'ADMIN')
-            OR (${roleColumn} IN ('STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN') AND ${storeIdColumn} = $2)
+            (id = $1 AND ${roleColumn} IN (${STORE_ADMIN_ROLES_WITH_LEGACY_SQL}))
+            OR (${roleColumn} IN (${STORE_USER_ROLES_WITH_LEGACY_SQL}) AND ${storeIdColumn} = $2)
           )
           RETURNING id
         `,
@@ -4624,9 +5173,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const rows = await this.query<{ id: number }>(
       `
         UPDATE users
-        SET ${statusColumn} = 'INACTIVE'
+        SET ${activeAssignment}
         WHERE id = $1
-          AND ${roleColumn} = 'ADMIN'
+          AND ${roleColumn} IN (${STORE_ADMIN_ROLES_WITH_LEGACY_SQL})
         RETURNING id
       `,
       [adminUserId],
@@ -4644,11 +5193,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     storeId: number | null,
     userColumns: ReturnType<DatabaseService['resolveUserColumns']>,
   ) {
-    if (!userColumns.statusColumn || !userColumns.roleColumn) {
+    const activeAssignment = this.userActiveUpdateAssignment(userColumns, true);
+    if (!activeAssignment || !userColumns.roleColumn) {
       throw new InternalServerErrorException('Users table is missing required status columns.');
     }
 
-    const statusColumn = this.quoteIdentifier(userColumns.statusColumn);
     const roleColumn = this.quoteIdentifier(userColumns.roleColumn);
 
     if (storeId && userColumns.storeIdColumn) {
@@ -4656,10 +5205,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       const rows = await this.query<{ id: number }>(
         `
           UPDATE users
-          SET ${statusColumn} = 'ACTIVE'
+          SET ${activeAssignment}
           WHERE (
-            (id = $1 AND ${roleColumn} = 'ADMIN')
-            OR (${roleColumn} IN ('STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN') AND ${storeIdColumn} = $2)
+            (id = $1 AND ${roleColumn} IN (${STORE_ADMIN_ROLES_WITH_LEGACY_SQL}))
+            OR (${roleColumn} IN (${STORE_USER_ROLES_WITH_LEGACY_SQL}) AND ${storeIdColumn} = $2)
           )
           RETURNING id
         `,
@@ -4676,9 +5225,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const rows = await this.query<{ id: number }>(
       `
         UPDATE users
-        SET ${statusColumn} = 'ACTIVE'
+        SET ${activeAssignment}
         WHERE id = $1
-          AND ${roleColumn} = 'ADMIN'
+          AND ${roleColumn} IN (${STORE_ADMIN_ROLES_WITH_LEGACY_SQL})
         RETURNING id
       `,
       [adminUserId],
@@ -4696,20 +5245,20 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     storeId: number,
     userColumns: ReturnType<DatabaseService['resolveUserColumns']>,
   ) {
-    if (!userColumns.statusColumn || !userColumns.roleColumn || !userColumns.storeIdColumn) {
+    const activeAssignment = this.userActiveUpdateAssignment(userColumns, false);
+    if (!activeAssignment || !userColumns.roleColumn || !userColumns.storeIdColumn) {
       return [];
     }
 
-    const statusColumn = this.quoteIdentifier(userColumns.statusColumn);
     const roleColumn = this.quoteIdentifier(userColumns.roleColumn);
     const storeIdColumn = this.quoteIdentifier(userColumns.storeIdColumn);
 
     return this.query<{ id: number }>(
       `
         UPDATE users
-        SET ${statusColumn} = 'INACTIVE'
+        SET ${activeAssignment}
         WHERE id = $1
-          AND ${roleColumn} IN ('STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN')
+          AND ${roleColumn} IN (${STORE_USER_ROLES_WITH_LEGACY_SQL})
           AND ${storeIdColumn} = $2
         RETURNING id
       `,
@@ -4722,20 +5271,20 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     storeId: number,
     userColumns: ReturnType<DatabaseService['resolveUserColumns']>,
   ) {
-    if (!userColumns.statusColumn || !userColumns.roleColumn || !userColumns.storeIdColumn) {
+    const activeAssignment = this.userActiveUpdateAssignment(userColumns, true);
+    if (!activeAssignment || !userColumns.roleColumn || !userColumns.storeIdColumn) {
       return [];
     }
 
-    const statusColumn = this.quoteIdentifier(userColumns.statusColumn);
     const roleColumn = this.quoteIdentifier(userColumns.roleColumn);
     const storeIdColumn = this.quoteIdentifier(userColumns.storeIdColumn);
 
     return this.query<{ id: number }>(
       `
         UPDATE users
-        SET ${statusColumn} = 'ACTIVE'
+        SET ${activeAssignment}
         WHERE id = $1
-          AND ${roleColumn} IN ('STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN')
+          AND ${roleColumn} IN (${STORE_USER_ROLES_WITH_LEGACY_SQL})
           AND ${storeIdColumn} = $2
         RETURNING id
       `,
@@ -4794,7 +5343,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         `
           DELETE FROM users
           WHERE id = $1
-            AND ${this.quoteIdentifier(userColumns.roleColumn)} IN ('STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN')
+            AND ${this.quoteIdentifier(userColumns.roleColumn)} IN (${STORE_USER_ROLES_WITH_LEGACY_SQL})
             AND ${this.quoteIdentifier(userColumns.storeIdColumn)} = $2
           RETURNING id
         `,
@@ -4806,8 +5355,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   }
 
   private staffTypeForRole(role: StaffRole, staffType: StaffType): StaffType {
-    if (role === 'POS_ADMIN') return 'POS_STAFF';
-    if (role === 'INVENTORY_ADMIN') return 'INVENTORY_STAFF';
+    if (role === 'POS_MANAGER') return 'POS_STAFF';
+    if (role === 'INVENTORY_MANAGER') return 'INVENTORY_STAFF';
     return staffType;
   }
 
@@ -4843,8 +5392,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const databaseError = error as { code?: string; detail?: string; message?: string };
 
     if (databaseError.code === '23503') {
+      const isUserAccountWrite = /account|staff|admin|user/i.test(fallbackMessage);
+      if (!isUserAccountWrite) {
+        throw new ConflictException(
+          `${fallbackMessage} One of the selected records is no longer linked to the current store data. Please refresh the POS menu and try again.`,
+        );
+      }
+
       throw new ConflictException(
-        'This account is linked to other records and cannot be permanently deleted. Run backend/sql/add-user-is-active.sql to enable deactivation instead.',
+        'This account is linked to other records and cannot be permanently deleted. Use Deactivate instead; if deactivation is unavailable, run backend/sql/add-user-is-active.sql first.',
       );
     }
 

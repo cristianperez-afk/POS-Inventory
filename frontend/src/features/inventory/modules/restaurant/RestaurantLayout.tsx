@@ -22,16 +22,16 @@ import { NotificationBell } from "../../app/components/NotificationBell";
 import "./restaurantLegacyTheme.css";
 
 const navItems = [
-  { view: "restaurant-dashboard", icon: LayoutDashboard, label: "Dashboard", roles: ["Admin", "Manager", "Staff"] },
-  { view: "restaurant-stock-control", icon: Package, label: "Stock Control & Alerts", roles: ["Admin", "Manager", "Staff"] },
-  { view: "restaurant-food-inventory", icon: Apple, label: "Food Inventory", roles: ["Admin", "Manager", "Staff"] },
-  { view: "restaurant-purchase-orders", icon: ShoppingCart, label: "Purchase Orders", roles: ["Admin", "Manager", "Staff"] },
-  { view: "restaurant-goods-received", icon: ClipboardCheck, label: "Goods Received", roles: ["Admin", "Manager", "Staff"] },
-  { view: "restaurant-pos", icon: ReceiptText, label: "POS / Kitchen Orders", roles: ["Admin", "Manager", "Staff"] },
-  { view: "restaurant-recipe-bom", icon: ChefHat, label: "Recipe & BOM", roles: ["Admin", "Manager", "Staff"] },
-  { view: "restaurant-transfers", icon: ArrowLeftRight, label: "Transfers & Adjustments", roles: ["Admin", "Manager", "Staff"] },
-  { view: "restaurant-multilocation", icon: MapPin, label: "Multi-Location", roles: ["Admin", "Manager", "Staff"] },
-  { view: "restaurant-reports", icon: FileText, label: "Reports", roles: ["Admin", "Manager", "Staff"] },
+  { view: "restaurant-dashboard", icon: LayoutDashboard, label: "Dashboard", roles: ["Admin", "Staff"] },
+  { view: "restaurant-stock-control", icon: Package, label: "Stock Control & Alerts", roles: ["Admin", "Staff"] },
+  { view: "restaurant-food-inventory", icon: Apple, label: "Food Inventory", roles: ["Admin", "Staff"] },
+  { view: "restaurant-purchase-orders", icon: ShoppingCart, label: "Purchase Orders", roles: ["Admin", "Staff"] },
+  { view: "restaurant-goods-received", icon: ClipboardCheck, label: "Goods Received", roles: ["Admin", "Staff"] },
+  { view: "restaurant-pos", icon: ReceiptText, label: "POS / Kitchen Orders", roles: ["Admin", "Staff"] },
+  { view: "restaurant-recipe-bom", icon: ChefHat, label: "Recipe & BOM", roles: ["Admin", "Staff"] },
+  { view: "restaurant-transfers", icon: ArrowLeftRight, label: "Transfers & Adjustments", roles: ["Admin", "Staff"] },
+  { view: "restaurant-multilocation", icon: MapPin, label: "Multi-Location", roles: ["Admin", "Staff"] },
+  { view: "restaurant-reports", icon: FileText, label: "Reports", roles: ["Admin", "Staff"] },
   { view: "restaurant-product-management", icon: PackageSearch, label: "Product Management", roles: ["Admin"] },
   { view: "user-management", icon: Users, label: "User Management", roles: ["Admin"] },
 ] as const;
@@ -176,3 +176,4 @@ export function RestaurantLayout({
     </div>
   );
 }
+

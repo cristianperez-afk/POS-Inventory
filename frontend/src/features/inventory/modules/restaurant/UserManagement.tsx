@@ -41,7 +41,7 @@ export function UserManagement() {
   const updateUser = useUpdateRestaurantUserMutation();
   const deleteUser = useDeleteRestaurantUserMutation();
 
-  const roles = ["all", "admin", "manager", "staff"];
+  const roles = ["all", "admin", "staff"];
 
   const filteredUsers = users.filter(user => {
     const matchesSearch = (user.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -53,7 +53,6 @@ export function UserManagement() {
   const getRoleBadge = (role: string) => {
     const styles = {
       admin: { bg: "#E0F7F7", text: "#009BA5", border: "#00A7A5" },
-      manager: { bg: "#D1F2E8", text: "#007A5E", border: "#008967" },
       staff: { bg: "#F3F4F6", text: "#6B7280", border: "#D1D5DB" },
     };
     const style = styles[role as keyof typeof styles];
@@ -88,12 +87,11 @@ export function UserManagement() {
   const stats = [
     { label: "Total Users", value: users.length, color: "#009BA5" },
     { label: "Admins", value: users.filter(u => u.role === "admin").length, color: "#009BA5" },
-    { label: "Managers", value: users.filter(u => u.role === "manager").length, color: "#007A5E" },
     { label: "Staff", value: users.filter(u => u.role === "staff").length, color: "#6B7280" },
   ];
 
   const toBackendRole = (role: string) =>
-    ({ admin: "Admin", manager: "Manager", staff: "Staff" }[role] ?? "Staff");
+    ({ admin: "Admin", staff: "Staff" }[role] ?? "Staff");
   const toBackendStatus = (status: string) =>
     status === "inactive" ? "Inactive" : "Active";
 
@@ -328,15 +326,6 @@ export function UserManagement() {
               <li>• All reports and analytics</li>
             </ul>
           </div>
-          <div className="p-4 bg-blue-50 rounded-xl border border-blue-200">
-            <h3 className="font-semibold text-blue-900 mb-3">Manager</h3>
-            <ul className="space-y-2 text-sm text-blue-700">
-              <li>• Inventory management</li>
-              <li>• Purchase orders</li>
-              <li>• Reports access</li>
-              <li>• Team oversight</li>
-            </ul>
-          </div>
           <div className="p-4 bg-muted rounded-xl border border-border">
             <h3 className="font-semibold text-foreground mb-3">Staff</h3>
             <ul className="space-y-2 text-sm text-muted-foreground">
@@ -441,7 +430,6 @@ export function UserManagement() {
                   required
                 >
                   <option value="staff">Staff</option>
-                  <option value="manager">Manager</option>
                   <option value="admin">Admin</option>
                 </select>
               </div>
@@ -559,7 +547,6 @@ export function UserManagement() {
                   required
                 >
                   <option value="staff">Staff</option>
-                  <option value="manager">Manager</option>
                   <option value="admin">Admin</option>
                 </select>
               </div>

@@ -42,7 +42,7 @@ export function UserManagementView({
   const [userForm, setUserForm] = useState({
     name: '',
     email: '',
-    role: 'Staff' as 'Admin' | 'Manager' | 'Staff' | 'Cashier' | 'KitchenStaff' | 'RetailStaff',
+    role: 'Staff' as 'Admin' | 'Staff' | 'Cashier' | 'KitchenStaff' | 'RetailStaff',
     password: '',
     confirmPassword: ''
   });
@@ -254,7 +254,6 @@ export function UserManagementView({
     active: users.filter(u => u.status === 'Active').length,
     inactive: users.filter(u => u.status === 'Inactive').length,
     admins: users.filter(u => u.role === 'Admin').length,
-    managers: users.filter(u => u.role === 'Manager').length,
     staff: users.filter(u => u.role === 'Staff').length
   };
 
@@ -299,10 +298,6 @@ export function UserManagementView({
               <span className="text-[14px] font-bold text-warning">{userStats.admins}</span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-[13px] text-foreground">Manager</span>
-              <span className="text-[14px] font-bold text-secondary">{userStats.managers}</span>
-            </div>
-            <div className="flex items-center justify-between">
               <span className="text-[13px] text-foreground">Staff</span>
               <span className="text-[14px] font-bold text-secondary">{userStats.staff}</span>
             </div>
@@ -339,7 +334,6 @@ export function UserManagementView({
             >
               <option value="all">All Roles</option>
               <option value="Admin">Admin</option>
-              <option value="Manager">Manager</option>
               <option value="Staff">Staff</option>
               <option value="Cashier">Cashier</option>
               <option value="RetailStaff">Retail Staff</option>
@@ -388,7 +382,6 @@ export function UserManagementView({
                     <div className="flex items-center gap-3">
                       <div className={`rounded-full size-[40px] flex items-center justify-center ${
                         user.role === 'Admin' ? 'bg-warning/10' :
-                        user.role === 'Manager' ? 'bg-secondary/10' :
                         'bg-secondary/10'
                       }`}>
                         <span className="text-[16px] font-semibold text-foreground">{user.name.charAt(0)}</span>
@@ -405,7 +398,6 @@ export function UserManagementView({
                   <td className="px-6 py-4">
                     <span className={`px-2 py-1 rounded text-[12px] font-semibold ${
                       user.role === 'Admin' ? 'bg-warning/10 text-warning' :
-                      user.role === 'Manager' ? 'bg-secondary/10 text-secondary' :
                       'bg-secondary/10 text-secondary'
                     }`}>
                       {user.role}
@@ -515,7 +507,6 @@ export function UserManagementView({
                     <option value="Cashier">Cashier</option>
                     <option value="RetailStaff">Retail Staff</option>
                     <option value="KitchenStaff">Kitchen Staff</option>
-                    <option value="Manager">Manager</option>
                     <option value="Admin">Admin</option>
                   </select>
                 </div>
@@ -635,7 +626,6 @@ export function UserManagementView({
                     <option value="Cashier">Cashier</option>
                     <option value="RetailStaff">Retail Staff</option>
                     <option value="KitchenStaff">Kitchen Staff</option>
-                    <option value="Manager">Manager</option>
                     <option value="Admin">Admin</option>
                   </select>
                   {selectedUser.email === currentUser?.email && (

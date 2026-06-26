@@ -53,6 +53,8 @@ export type PosMenuProduct = {
   available_quantity?: number | string | null;
   is_available?: boolean;
   is_active?: boolean;
+  servings?: number | string | null;
+  prep_time_minutes?: number | string | null;
   ingredients?: PosMenuIngredient[];
   modifiers?: PosMenuModifier[];
 };

@@ -1,10 +1,10 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { Type } from 'class-transformer';
-import { IsArray, IsBoolean, IsEmail, IsIn, IsNumber, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsArray, IsBoolean, IsEmail, IsIn, IsNumber, IsObject, IsOptional, IsString, MinLength } from 'class-validator';
 import { AdminService } from './admin.service';
 
-const STAFF_TYPES = ['POS_STAFF', 'INVENTORY_STAFF', 'MANAGER'] as const;
-const STAFF_ROLES = ['STAFF', 'POS_ADMIN', 'INVENTORY_ADMIN'] as const;
+const STAFF_TYPES = ['POS_STAFF', 'INVENTORY_STAFF'] as const;
+const STAFF_ROLES = ['STAFF', 'POS_MANAGER', 'INVENTORY_MANAGER'] as const;
 type StaffType = (typeof STAFF_TYPES)[number];
 type StaffRole = (typeof STAFF_ROLES)[number];
 
@@ -141,6 +141,19 @@ class UpdateStoreSettingsDto {
 
   @IsOptional()
   @IsBoolean()
+  enable_estimated_prep_time?: boolean;
+
+  @IsOptional()
+  @IsString()
+  prep_time_strategy?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  customization_prep_time_minutes?: number;
+
+  @IsOptional()
+  @IsBoolean()
   enable_service_charge?: boolean;
 
   @IsOptional()
@@ -166,6 +179,10 @@ class UpdateStoreSettingsDto {
   @IsArray()
   @IsString({ each: true })
   enabled_payment_methods?: string[];
+
+  @IsOptional()
+  @IsObject()
+  payment_method_accounts?: Record<string, unknown>;
 
   @IsOptional()
   @IsBoolean()
@@ -334,6 +351,9 @@ export class AdminController {
       enableRefund: body.enable_refund,
       enableVoid: body.enable_void,
       enableDiscount: body.enable_discount,
+      enableEstimatedPrepTime: body.enable_estimated_prep_time,
+      prepTimeStrategy: body.prep_time_strategy,
+      customizationPrepTimeMinutes: body.customization_prep_time_minutes,
       enableServiceCharge: body.enable_service_charge,
       serviceChargeRate: body.service_charge_rate ?? body.service_charge_percentage,
       enableTax: body.enable_tax,
@@ -343,6 +363,7 @@ export class AdminController {
       enableIngredientCustomization: body.enable_ingredient_customization,
       enableReceiptPrinting: body.enable_receipt_printing,
       enabledPaymentMethods: body.enabled_payment_methods,
+      paymentMethodAccounts: body.payment_method_accounts,
       autoDeductInventoryOnSale: body.auto_deduct_inventory_on_sale,
       allowNegativeStock: body.allow_negative_stock,
       defaultLowStockThreshold: body.default_low_stock_threshold,

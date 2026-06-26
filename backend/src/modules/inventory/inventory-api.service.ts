@@ -199,8 +199,29 @@ export class InventoryApiService {
     return rows[0];
   }
 
-  async updateInventoryItem(id: string, body: Record<string, unknown>) {
+  async updateInventoryItem(headers: HeadersLike, id: string, body: Record<string, unknown>) {
+    const scope = await this.resolveScope(headers);
     await this.ensureInventoryItemOperationalColumns();
+
+    // Stock quantity can only be changed directly by an Admin or Manager. Staff must
+    // route stock changes through the adjustment approval workflow, so we reject any
+    // attempt by them to set a quantity different from the item's current value.
+    let quantityChange: number | null = body.quantity === undefined ? null : Number(body.quantity);
+    if (quantityChange !== null && !['Admin', 'Manager'].includes(scope.user.role)) {
+      const current = await this.safeQuery<{ quantity: number }>(
+        `SELECT quantity FROM "InventoryItem" WHERE id = $1 AND "businessId" = $2 LIMIT 1`,
+        [id, scope.businessId],
+      );
+      if (!current[0]) throw new NotFoundException('Inventory item was not found.');
+      if (Number(current[0].quantity) !== quantityChange) {
+        throw new ForbiddenException(
+          'Only an Admin or Manager can change stock quantity directly. Submit a stock adjustment for approval instead.',
+        );
+      }
+      // Quantity is unchanged — leave it untouched.
+      quantityChange = null;
+    }
+
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
         UPDATE "InventoryItem"
@@ -236,7 +257,7 @@ export class InventoryApiService {
         body.name ?? null,
         body.description ?? null,
         body.category ?? null,
-        body.quantity === undefined ? null : Number(body.quantity),
+        quantityChange,
         body.price === undefined ? null : Number(body.price),
         body.costPrice === undefined ? null : Number(body.costPrice),
         body.imageUrl ?? null,
@@ -697,6 +718,7 @@ export class InventoryApiService {
   }
 
   async listKitchenOrders(headers: HeadersLike, query: Record<string, string | undefined>) {
+    await this.ensurePosKitchenEstimateColumns();
     const scope = await this.resolveScope(headers);
     const posUserId = this.headerValue(headers['x-pos-user-id']);
     const rows = await this.safeQuery<Record<string, unknown>>(
@@ -744,8 +766,17 @@ export class InventoryApiService {
                   o.payment_at,
                   o.preparing_started_at,
                   o.ready_at,
+                  o.service_started_at,
+                  o.served_at,
+                  o.service_duration,
+                  o.estimated_prep_minutes,
+                  o.estimated_ready_at,
                   o.table_started_at,
                   o.table_ended_at,
+                  o.running_time_start,
+                  o.running_time_end,
+                  o.running_duration,
+                  o.is_running,
                   p.payment_number,
                   cashier.full_name AS cashier_name,
                   cashier.email AS cashier_email,
@@ -758,11 +789,12 @@ export class InventoryApiService {
                         'name', oi.product_name,
                         'quantity', oi.quantity,
                         'price', oi.unit_price,
-                        'prepTimeMinutes', COALESCE(prod.preparation_time_minutes, 0),
+                        'prepTimeMinutes', COALESCE(oi.prep_time_minutes, prod.preparation_time_minutes, 0),
                         'ingredients', COALESCE(default_ingredients.items, '[]'::json),
                         'notes', oi.notes,
                         'addedIngredients', COALESCE(customizations.added, '[]'::json),
                         'removedIngredients', COALESCE(customizations.removed, '[]'::json),
+                        'changedIngredients', COALESCE(customizations.changed, '[]'::json),
                         'replacedIngredients', COALESCE(customizations.replaced, '[]'::json),
                         'modifiers', COALESCE(customizations.modifiers, '[]'::json),
                         'specialInstructions', COALESCE(customizations.instructions, '[]'::json)
@@ -780,11 +812,22 @@ export class InventoryApiService {
                 LEFT JOIN LATERAL (
                   SELECT
                     COALESCE(json_agg(DISTINCT COALESCE(oic.replacement_ingredient_name, oic.original_ingredient_name, oic.notes)) FILTER (
-                      WHERE oic.customization_type IN ('ADD', 'EXTRA', 'REPLACE')
+                      WHERE oic.customization_type IN ('ADD', 'EXTRA')
                     ), '[]'::json) AS added,
                     COALESCE(json_agg(DISTINCT COALESCE(oic.original_ingredient_name, oic.notes)) FILTER (
                       WHERE oic.customization_type = 'REMOVE'
                     ), '[]'::json) AS removed,
+                    COALESCE(json_agg(DISTINCT CONCAT(
+                      COALESCE(oic.original_ingredient_name, 'Ingredient'),
+                      ': ',
+                      COALESCE(oic.original_quantity::text, '0'),
+                      COALESCE(CONCAT(' ', oic.unit), ''),
+                      ' -> ',
+                      COALESCE(oic.new_quantity::text, '0'),
+                      COALESCE(CONCAT(' ', oic.unit), '')
+                    )) FILTER (
+                      WHERE oic.customization_type IN ('CHANGE_QUANTITY', 'QUANTITY_CHANGE')
+                    ), '[]'::json) AS changed,
                     COALESCE(json_agg(DISTINCT CONCAT(COALESCE(oic.original_ingredient_name, 'Ingredient'), ' -> ', COALESCE(oic.replacement_ingredient_name, 'Replacement'))) FILTER (
                       WHERE oic.customization_type = 'REPLACE'
                     ), '[]'::json) AS replaced,
@@ -826,7 +869,7 @@ export class InventoryApiService {
                 payment_status AS "paymentStatus",
                 CASE
                   WHEN payment_status IN ('VOIDED', 'VOID', 'REFUNDED') OR order_status = 'CANCELLED' THEN 'CANCELLED'
-                  WHEN order_status = 'SERVED' THEN 'COMPLETED'
+                  WHEN order_status = 'SERVED' THEN 'SERVED'
                   ELSE order_status
                 END AS status,
                 created_at AS "createdAt",
@@ -834,9 +877,18 @@ export class InventoryApiService {
                 payment_at AS "paymentAt",
                 preparing_started_at AS "preparingStartedAt",
                 ready_at AS "readyAt",
+                service_started_at AS "serviceStartedAt",
+                served_at AS "servedAt",
+                service_duration AS "serviceDuration",
+                estimated_prep_minutes AS "estimatedPrepMinutes",
+                estimated_ready_at AS "estimatedReadyAt",
                 completed_at AS "completedAt",
                 table_started_at AS "tableStartedAt",
                 table_ended_at AS "tableEndedAt",
+                running_time_start AS "runningTimeStart",
+                running_time_end AS "runningTimeEnd",
+                running_duration AS "runningDuration",
+                is_running AS "isRunning",
                 json_build_object('name', item_summary) AS recipe,
                 json_build_object('name', cashier_name, 'email', cashier_email) AS "completedBy",
                 items,
@@ -862,16 +914,16 @@ export class InventoryApiService {
     const scope = await this.resolveScope(headers);
     const posUserId = this.headerValue(headers['x-pos-user-id']);
     const nextStatus = String(body?.status ?? '').toUpperCase();
-    const allowed = new Set(['PENDING', 'PREPARING', 'READY', 'COMPLETED', 'CANCELLED']);
+    const allowed = new Set(['PENDING', 'PREPARING', 'READY', 'SERVED', 'COMPLETED', 'CANCELLED']);
     if (!allowed.has(nextStatus)) {
-      throw new BadRequestException('Status must be Pending, Preparing, Ready, Completed, or Cancelled.');
+      throw new BadRequestException('Status must be Pending, Preparing, Ready, Served, Completed, or Cancelled.');
     }
 
     if (id.startsWith('pos-order-')) {
       const orderId = Number(id.replace('pos-order-', ''));
       if (!Number.isFinite(orderId)) throw new BadRequestException('Invalid POS order id.');
 
-      const posStatus = nextStatus === 'COMPLETED' ? 'COMPLETED' : nextStatus;
+      const posStatus = nextStatus;
       const rows = await this.safeQuery<Record<string, unknown>>(
         `
           WITH scoped_user AS (
@@ -886,8 +938,49 @@ export class InventoryApiService {
           SET order_status = $3::varchar,
               preparing_started_at = CASE WHEN $3::varchar = 'PREPARING' THEN COALESCE(preparing_started_at, CURRENT_TIMESTAMP) ELSE preparing_started_at END,
               ready_at = CASE WHEN $3::varchar = 'READY' THEN COALESCE(ready_at, CURRENT_TIMESTAMP) ELSE ready_at END,
-              completed_at = CASE WHEN $3::varchar = 'COMPLETED' THEN COALESCE(completed_at, CURRENT_TIMESTAMP) ELSE completed_at END,
+              service_started_at = CASE WHEN $3::varchar = 'READY' THEN COALESCE(service_started_at, CURRENT_TIMESTAMP) ELSE service_started_at END,
+              table_started_at = CASE WHEN $3::varchar = 'READY' AND order_type IN ('DINE_IN', 'MIXED') THEN COALESCE(table_started_at, CURRENT_TIMESTAMP) ELSE table_started_at END,
+              served_at = CASE WHEN $3::varchar = 'SERVED' THEN COALESCE(served_at, CURRENT_TIMESTAMP) ELSE served_at END,
+              service_duration = CASE WHEN $3::varchar = 'SERVED' AND service_started_at IS NOT NULL THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - service_started_at)))::BIGINT) ELSE service_duration END,
+              completed_at = CASE WHEN $3::varchar IN ('SERVED', 'COMPLETED') THEN COALESCE(completed_at, CURRENT_TIMESTAMP) ELSE completed_at END,
               table_ended_at = CASE WHEN $3::varchar IN ('COMPLETED', 'CANCELLED') THEN COALESCE(table_ended_at, CURRENT_TIMESTAMP) ELSE table_ended_at END,
+              -- Kitchen status updates must respect the restaurant lifecycle:
+              -- a takeout stops at completion; a dine-in Pay Later order only
+              -- stops after payment; a paid dine-in may stop when explicitly
+              -- marked completed (or later when its table is released).
+              running_time_end = CASE
+                WHEN COALESCE(is_running, FALSE) = TRUE
+                  AND running_time_start IS NOT NULL
+                  AND (
+                    $3::varchar = 'CANCELLED'
+                    OR (order_type = 'TAKEOUT' AND $3::varchar IN ('SERVED', 'COMPLETED'))
+                    OR (order_type IN ('DINE_IN', 'MIXED') AND payment_status = 'PAID' AND $3::varchar = 'COMPLETED')
+                  )
+                  THEN CURRENT_TIMESTAMP
+                ELSE running_time_end
+              END,
+              running_duration = CASE
+                WHEN COALESCE(is_running, FALSE) = TRUE
+                  AND running_time_start IS NOT NULL
+                  AND (
+                    $3::varchar = 'CANCELLED'
+                    OR (order_type = 'TAKEOUT' AND $3::varchar IN ('SERVED', 'COMPLETED'))
+                    OR (order_type IN ('DINE_IN', 'MIXED') AND payment_status = 'PAID' AND $3::varchar = 'COMPLETED')
+                  )
+                  THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - running_time_start)))::BIGINT)
+                ELSE running_duration
+              END,
+              is_running = CASE
+                WHEN COALESCE(is_running, FALSE) = TRUE
+                  AND running_time_start IS NOT NULL
+                  AND (
+                    $3::varchar = 'CANCELLED'
+                    OR (order_type = 'TAKEOUT' AND $3::varchar IN ('SERVED', 'COMPLETED'))
+                    OR (order_type IN ('DINE_IN', 'MIXED') AND payment_status = 'PAID' AND $3::varchar = 'COMPLETED')
+                  )
+                  THEN FALSE
+                ELSE is_running
+              END,
               updated_at = CURRENT_TIMESTAMP
           WHERE id = $4
             AND store_id = (SELECT store_id FROM scoped_user)
@@ -1234,10 +1327,14 @@ export class InventoryApiService {
 
   async submitPurchaseOrder(headers: HeadersLike, id: string) {
     const scope = await this.resolveScope(headers);
+    // Admins and Managers have approval authority, so their purchase orders skip
+    // the pending-approval queue and go straight to APPROVED on submission.
+    const autoApprove = ['Admin', 'Manager'].includes(scope.user.role);
+    const nextStatus = autoApprove ? 'APPROVED' : 'SUBMITTED';
     const rows = await this.safeQuery<{ id: string }>(
-      `UPDATE "PurchaseOrder" SET status = 'SUBMITTED', "updatedAt" = CURRENT_TIMESTAMP
+      `UPDATE "PurchaseOrder" SET status = $4::"PurchaseOrderStatus", "updatedAt" = CURRENT_TIMESTAMP
        WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule" AND status = 'DRAFT' RETURNING id`,
-      [id, scope.businessId, scope.module],
+      [id, scope.businessId, scope.module, nextStatus],
     );
     if (!rows[0]) throw new BadRequestException('Only DRAFT orders can be submitted.');
     return this.getPurchaseOrderRow(scope, id);
@@ -1245,8 +1342,8 @@ export class InventoryApiService {
 
   async approvePurchaseOrder(headers: HeadersLike, id: string) {
     const scope = await this.resolveScope(headers);
-    if (!['Admin', 'Manager'].includes(scope.user.role)) {
-      throw new ForbiddenException('Only Admin or Manager can approve purchase orders.');
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only Inventory Manager can approve purchase orders.');
     }
     const rows = await this.safeQuery<{ id: string }>(
       `UPDATE "PurchaseOrder" SET status = 'APPROVED', "updatedAt" = CURRENT_TIMESTAMP
@@ -1259,8 +1356,8 @@ export class InventoryApiService {
 
   async rejectPurchaseOrder(headers: HeadersLike, id: string, body: { reason?: string }) {
     const scope = await this.resolveScope(headers);
-    if (!['Admin', 'Manager'].includes(scope.user.role)) {
-      throw new ForbiddenException('Only Admin or Manager can reject purchase orders.');
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only Inventory Manager can reject purchase orders.');
     }
     const reason = String(body?.reason ?? '').trim();
     if (!reason) throw new BadRequestException('A rejection reason is required.');
@@ -1949,8 +2046,8 @@ export class InventoryApiService {
 
   async approveAdjustment(headers: HeadersLike, id: string) {
     const scope = await this.resolveScope(headers);
-    if (!['Admin', 'Manager'].includes(scope.user.role)) {
-      throw new ForbiddenException('Only Admin or Manager can approve adjustments.');
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only Inventory Manager can approve adjustments.');
     }
 
     const lowStockCandidates: LowStockCandidate[] = [];
@@ -2058,7 +2155,7 @@ export class InventoryApiService {
 
   // Emits a LOW_STOCK notification for each item that crossed at/below its
   // reorder threshold (downward only), de-duped against existing unread alerts,
-  // to every Admin/Manager in the business.
+  // to every Inventory Manager in the business.
   private async notifyLowStock(businessId: string, items: LowStockCandidate[]) {
     const defaultThreshold = await this.databaseService.getDefaultLowStockThreshold(Number(businessId));
     const crossed = items.filter((item) => {
@@ -2068,7 +2165,7 @@ export class InventoryApiService {
     if (crossed.length === 0) return;
 
     const managers = await this.safeQuery<{ id: string }>(
-      `SELECT id FROM "User" WHERE "businessId" = $1 AND role IN ('Admin', 'Manager') AND status = 'Active'`,
+      `SELECT id FROM "User" WHERE "businessId" = $1 AND role = 'Admin' AND status = 'Active'`,
       [businessId],
     );
     const recipientIds = managers.map((m) => m.id);
@@ -2104,8 +2201,8 @@ export class InventoryApiService {
 
   async rejectAdjustment(headers: HeadersLike, id: string, body: { reason?: string }) {
     const scope = await this.resolveScope(headers);
-    if (!['Admin', 'Manager'].includes(scope.user.role)) {
-      throw new ForbiddenException('Only Admin or Manager can reject adjustments.');
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only Inventory Manager can reject adjustments.');
     }
     const reason = String(body?.reason ?? '').trim();
     if (!reason) throw new BadRequestException('A rejection reason is required.');
@@ -2304,6 +2401,19 @@ export class InventoryApiService {
     );
     if (!rows[0]) throw new NotFoundException('No inventory location exists for this business.');
     return rows[0].id;
+  }
+
+  private async ensurePosKitchenEstimateColumns() {
+    await this.safeQuery(`
+      ALTER TABLE orders
+        ADD COLUMN IF NOT EXISTS estimated_prep_minutes INT,
+        ADD COLUMN IF NOT EXISTS estimated_ready_at TIMESTAMP
+    `);
+    await this.safeQuery(`
+      ALTER TABLE order_items
+        ADD COLUMN IF NOT EXISTS prep_time_minutes INT,
+        ADD COLUMN IF NOT EXISTS customization_prep_minutes INT DEFAULT 0
+    `);
   }
 
   private async resolveScope(headers: HeadersLike): Promise<Scope> {

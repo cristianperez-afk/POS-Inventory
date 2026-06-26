@@ -62,7 +62,7 @@ export function ItemBundlingView({
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [itemSearchTerm, setItemSearchTerm] = useState('');
 
-  const isAdmin = currentUser?.role === 'Admin' || currentUser?.role === 'Manager';
+  const isAdmin = currentUser?.role === 'Admin';
 
   // ─── Derived state ───────────────────────────────────────────────────────────
 
@@ -645,3 +645,4 @@ export function ItemBundlingView({
 
 
 // Transfers and Adjustments View
+

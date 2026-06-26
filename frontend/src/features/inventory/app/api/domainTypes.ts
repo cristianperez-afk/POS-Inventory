@@ -1,6 +1,5 @@
 export type UserRole =
   | 'Admin'
-  | 'Manager'
   | 'Staff'
   | 'Cashier'
   | 'KitchenStaff'
@@ -307,6 +306,7 @@ export type KitchenOrderStatus =
   | 'PENDING'
   | 'PREPARING'
   | 'READY'
+  | 'SERVED'
   | 'COMPLETED'
   | 'VOIDED'
   | 'CANCELLED';
@@ -322,6 +322,7 @@ export interface ApiKitchenOrderItem {
   notes?: string | null;
   addedIngredients?: string[];
   removedIngredients?: string[];
+  changedIngredients?: string[];
   modifiers?: string[];
   specialInstructions?: string[];
 }
@@ -356,6 +357,8 @@ export interface ApiKitchenOrder {
   paymentAt?: string | null;
   preparingStartedAt?: string | null;
   readyAt?: string | null;
+  estimatedPrepMinutes?: number | string | null;
+  estimatedReadyAt?: string | null;
   completedAt?: string | null;
   tableStartedAt?: string | null;
   tableEndedAt?: string | null;

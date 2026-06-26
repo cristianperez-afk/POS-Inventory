@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell } from "recharts";
 import { ChevronDown, ChevronRight, Clock, Download, TrendingUp, PhilippinePeso, ShoppingCart, Eye, AlertTriangle, ClipboardList } from "lucide-react";
 import {
@@ -68,6 +68,23 @@ const formatDuration = (start?: string, end?: string) => {
   const rest = minutes % 60;
   return `${hours} hr${hours === 1 ? '' : 's'}${rest ? ` ${rest} mins` : ''}`;
 };
+const formatRunningSeconds = (seconds: number) => {
+  const safeSeconds = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.floor((safeSeconds % 3600) / 60);
+  const remainder = safeSeconds % 60;
+  return [hours, minutes, remainder].map((value) => String(value).padStart(2, '0')).join(':');
+};
+const runningSeconds = (order: any, now: number) => {
+  if (order.runningDuration !== null && order.runningDuration !== undefined && !order.isRunning) {
+    return Number(order.runningDuration);
+  }
+  const start = order.runningTimeStart ?? order.running_time_start ?? order.orderedAt ?? order.createdAt;
+  const end = order.runningTimeEnd ?? order.running_time_end ?? (order.isRunning ? undefined : order.completedAt);
+  const startMs = start ? new Date(start).getTime() : NaN;
+  const endMs = end ? new Date(end).getTime() : now;
+  return Number.isNaN(startMs) || Number.isNaN(endMs) ? 0 : Math.max(0, Math.floor((endMs - startMs) / 1000));
+};
 const normalizeOrderStatus = (value?: string) =>
   String(value ?? 'pending').replace(/_/g, ' ').toLowerCase();
 
@@ -103,9 +120,15 @@ export function Reports() {
   const consumption = consumptionQuery.data;
   const [selectedMainCategory, setSelectedMainCategory] = useState("all");
   const [selectedSubCategory, setSelectedSubCategory] = useState("all");
+  const [runningClock, setRunningClock] = useState(() => Date.now());
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setRunningClock(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   const isAdmin = currentUser?.role === "Admin";
-  const hasFullAuditTrailAccess = currentUser?.role === "Admin" || currentUser?.role === "Manager";
+  const hasFullAuditTrailAccess = currentUser?.role === "Admin";
   const currentUserEmail = currentUser?.email ?? "";
 
   const { data: products = [] } = useRestaurantInventoryQuery();
@@ -204,7 +227,7 @@ export function Reports() {
   const posTransactions = useMemo(() =>
     (posOrders as any[]).map((order) => {
       const items = Array.isArray(order.items) ? order.items : [];
-      const orderedAt = order.orderedAt ?? order.createdAt ?? '';
+      const orderedAt = order.runningTimeStart ?? order.running_time_start ?? order.orderedAt ?? order.createdAt ?? '';
       const completedAt = ['completed', 'cancelled'].includes(String(order.status ?? '').toLowerCase())
         ? order.completedAt ?? order.tableEndedAt ?? order.updatedAt ?? orderedAt
         : undefined;
@@ -227,13 +250,32 @@ export function Reports() {
         readyAt: order.readyAt ?? undefined,
         tableStartedAt,
         tableEndedAt,
-        runningTime: formatDuration(orderedAt, completedAt),
+        preparationTime: order.preparingStartedAt ? formatDuration(order.preparingStartedAt, order.readyAt ?? undefined) : 'Not started',
+        runningTime: formatRunningSeconds(runningSeconds(order, runningClock)),
         customerStayDuration: tableStartedAt ? formatDuration(tableStartedAt, tableEndedAt) : 'No table selected',
         items,
       };
     }),
-    [posOrders],
+    [posOrders, runningClock],
   );
+
+  const averageCompletionTime = useMemo(() => {
+    const finalized = posTransactions.filter((order) => order.completedAt);
+    if (finalized.length === 0) return '00:00:00';
+    const total = finalized.reduce((sum, order) => sum + runningSeconds(order, runningClock), 0);
+    return formatRunningSeconds(total / finalized.length);
+  }, [posTransactions, runningClock]);
+
+  const averagePreparationTime = useMemo(() => {
+    const prepared = posTransactions.filter((order) => order.preparingStartedAt && order.readyAt);
+    if (prepared.length === 0) return '00:00:00';
+    const total = prepared.reduce((sum, order) => {
+      const start = new Date(order.preparingStartedAt!).getTime();
+      const end = new Date(order.readyAt!).getTime();
+      return sum + (Number.isNaN(start) || Number.isNaN(end) ? 0 : Math.max(0, Math.floor((end - start) / 1000)));
+    }, 0);
+    return formatRunningSeconds(total / prepared.length);
+  }, [posTransactions]);
 
   // ── Operations ──────────────────────────────────────────────────────────────
   const operationsData = useMemo(() => {
@@ -465,7 +507,7 @@ export function Reports() {
         ].map(csvValue).join(',') + '\n';
       });
     } else if (activeTab === 'orders') {
-      csv = 'Type,Order Number,Customer,Order Type,Table,Payment Method,Payment Status,Order Status,Total,Time Ordered,Time Completed,Running Time,Customer Stay Duration\n';
+      csv = 'Type,Order Number,Customer,Order Type,Table,Payment Method,Payment Status,Order Status,Total,Time Ordered,Time Completed,Preparation Time,Running Time,Customer Stay Duration\n';
       posTransactions.forEach(order => {
         csv += [
           'POS Transaction',
@@ -479,6 +521,7 @@ export function Reports() {
           order.totalAmount.toFixed(2),
           formatAuditDate(order.orderedAt),
           order.completedAt ? formatAuditDate(order.completedAt) : '',
+          order.preparationTime,
           order.runningTime,
           order.customerStayDuration,
         ].map(csvValue).join(',') + '\n';
@@ -606,7 +649,7 @@ export function Reports() {
             <h3 className="text-xl font-semibold text-foreground">System Overview</h3>
           </div>
 
-          <div className="grid grid-cols-3 gap-4 mb-6">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
             <div className="bg-card border border-border rounded-2xl p-6 overflow-hidden">
               <div className="flex items-center justify-between mb-4">
                 <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-cyan-500 rounded-xl flex items-center justify-center flex-shrink-0">
@@ -635,6 +678,24 @@ export function Reports() {
               <p className="text-2xl font-bold text-foreground break-words">
                 {formatCurrency(receivedPOs.length ? receivedPOs.reduce((s, o) => s + o.total, 0) / receivedPOs.length : 0)}
               </p>
+            </div>
+            <div className="bg-card border border-border rounded-2xl p-6 overflow-hidden">
+              <div className="flex items-center justify-between mb-4">
+                <div className="w-10 h-10 bg-gradient-to-br from-amber-500 to-orange-500 rounded-xl flex items-center justify-center flex-shrink-0">
+                  <Clock className="w-5 h-5 text-white" />
+                </div>
+              </div>
+              <p className="text-muted-foreground text-xs mb-1">Avg. Completion Time</p>
+              <p className="text-2xl font-bold text-foreground break-words">{averageCompletionTime}</p>
+            </div>
+            <div className="bg-card border border-border rounded-2xl p-6 overflow-hidden">
+              <div className="flex items-center justify-between mb-4">
+                <div className="w-10 h-10 bg-gradient-to-br from-sky-500 to-blue-500 rounded-xl flex items-center justify-center flex-shrink-0">
+                  <Clock className="w-5 h-5 text-white" />
+                </div>
+              </div>
+              <p className="text-muted-foreground text-xs mb-1">Avg. Preparation Time</p>
+              <p className="text-2xl font-bold text-foreground break-words">{averagePreparationTime}</p>
             </div>
           </div>
 
@@ -930,6 +991,10 @@ export function Reports() {
                             <div className="rounded-lg bg-muted/30 p-3">
                               <p className="text-xs text-muted-foreground">Ready to Serve</p>
                               <p className="text-sm font-semibold text-foreground">{order.readyAt ? formatAuditDate(order.readyAt) : '-'}</p>
+                            </div>
+                            <div className="rounded-lg bg-muted/30 p-3">
+                              <p className="text-xs text-muted-foreground">Preparation Time</p>
+                              <p className="text-sm font-semibold text-foreground">{order.preparationTime}</p>
                             </div>
                             <div className="rounded-lg bg-muted/30 p-3">
                               <p className="text-xs text-muted-foreground">Running Time</p>
@@ -1378,7 +1443,7 @@ export function Reports() {
                 <p className="text-2xl font-bold text-red-700">{confidentialData.byRole['admin'] || 0}</p>
               </div>
               <div className="p-4 bg-green-50 rounded-xl">
-                <p className="text-xs text-green-700 mb-1">Staff / Manager</p>
+                <p className="text-xs text-green-700 mb-1">Staff / Inventory Manager</p>
                 <p className="text-2xl font-bold text-green-700">
                   {(confidentialData.byRole['staff'] || 0) + (confidentialData.byRole['manager'] || 0)}
                 </p>
@@ -1447,3 +1512,4 @@ export function Reports() {
     </div>
   );
 }
+
