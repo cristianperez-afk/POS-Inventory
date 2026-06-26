@@ -17,7 +17,7 @@ import type {
 import { categorySubcategories, CHART_COLORS } from '../../app/utils/constants';
 import { autoSortItem } from '../../app/utils/autoSortingRules';
 import { useSession } from '../../app/hooks/useSession';
-import { useRetailWorkspace } from '../lib/retail';
+import { useRetailWorkspace, useRetailAuditLogsQuery } from '../lib/retail';
 
 const formatAuditDate = (value?: string) => {
   if (!value) return '';
@@ -202,7 +202,10 @@ export function ReportsView() {
       activeUsers: users.filter(u => u.status === 'Active').length,
       inactiveUsers: users.filter(u => u.status === 'Inactive').length,
       adminUsers: users.filter(u => u.role === 'Admin').length,
-      staffUsers: users.filter(u => u.role === 'Staff').length
+      staffUsers: users.filter(u => u.role === 'Staff').length,
+      // Retail has no distinct Manager role; kept for the confidential summary card
+      // so it adds 0 instead of rendering NaN.
+      managerUsers: 0
     };
 
     const financialSummary = {
@@ -250,62 +253,9 @@ export function ReportsView() {
     };
   }, [isAdmin, users, inventory, purchaseOrders, adjustments, transfers]);
 
-  const auditTrail = useMemo(() => {
-    const entries = [
-      ...purchaseOrders.map(po => ({
-        id: `po-${po.id}`,
-        date: po.date || '',
-        module: 'Purchase Order',
-        action: `PO ${po.status || 'created'}`,
-        item: po.supplier || 'Supplier',
-        quantity: `${po.items.length} item(s)`,
-        performedBy: po.createdBy || '',
-        reference: po.id,
-        details: `Total: ₱${po.totalAmount.toLocaleString()}`,
-      })),
-      ...transfers.map(transfer => ({
-        id: `transfer-${transfer.id}`,
-        date: transfer.date || '',
-        module: 'Transfer',
-        action: `Transfer ${transfer.status || 'requested'}`,
-        item: `${transfer.fromLocation} → ${transfer.toLocation}`,
-        quantity: `${transfer.items.reduce((s: number, i: any) => s + i.quantity, 0)} item(s)`,
-        performedBy: transfer.createdBy || '',
-        reference: transfer.transferNumber || transfer.id,
-        details: `${transfer.fromLocation} to ${transfer.toLocation}`,
-      })),
-      ...adjustments.map(adj => ({
-        id: `adjustment-${adj.id}`,
-        date: adj.date || '',
-        module: 'Adjustment',
-        action: adj.type || 'Correction',
-        item: adj.reason || 'Adjustment',
-        quantity: `${adj.items.reduce((s: number, i: any) => s + Math.abs(i.quantityChange), 0)} unit(s)`,
-        performedBy: adj.createdBy || '',
-        reference: adj.id,
-        details: adj.reason || '',
-      })),
-      ...productsReceived.map(pr => ({
-        id: `receipt-${pr.id}`,
-        date: pr.dateReceived || '',
-        module: 'Goods Received',
-        action: 'Receipt Verified',
-        item: `${pr.items.length} item(s)`,
-        quantity: `${pr.items.reduce((s: number, i: any) => s + i.receivedQty, 0)} received`,
-        performedBy: pr.receivedBy || '',
-        reference: pr.id,
-        details: `PO: ${pr.poNumber || 'N/A'} | ${pr.status}`,
-      })),
-    ];
-
-    return entries
-      .filter(entry => entry.date || entry.reference)
-      .sort((a, b) => {
-        const aTime = new Date(a.date).getTime();
-        const bTime = new Date(b.date).getTime();
-        return (Number.isNaN(bTime) ? 0 : bTime) - (Number.isNaN(aTime) ? 0 : aTime);
-      });
-  }, [purchaseOrders, transfers, adjustments, productsReceived]);
+  // Real audit trail — one row per recorded activity (create / update / delete /
+  // status change / receive / adjust) written by the backend audit log.
+  const { data: auditTrail = [] } = useRetailAuditLogsQuery();
 
   const visibleAuditTrail = useMemo(() => {
     if (hasFullAuditTrailAccess) return auditTrail;
