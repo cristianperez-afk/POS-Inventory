@@ -17,7 +17,7 @@ import type {
 import { categorySubcategories, CHART_COLORS } from '../../app/utils/constants';
 import { autoSortItem } from '../../app/utils/autoSortingRules';
 import { useSession } from '../../app/hooks/useSession';
-import { useRetailWorkspace } from '../lib/retail';
+import { useRetailWorkspace, useRetailAuditLogsQuery } from '../lib/retail';
 
 const formatAuditDate = (value?: string) => {
   if (!value) return '';
@@ -45,6 +45,7 @@ export function ReportsView() {
     loadUsers: currentUser?.role === 'Admin',
   });
   const [activeTab, setActiveTab] = useState<'overview' | 'inventory' | 'sold' | 'transfers' | 'financial' | 'operations' | 'audit' | 'confidential'>('overview');
+  const [auditModuleFilter, setAuditModuleFilter] = useState('all');
   const [soldFrom, setSoldFrom] = useState('');
   const [soldTo, setSoldTo] = useState('');
   const soldQuery = useQuery({
@@ -201,7 +202,10 @@ export function ReportsView() {
       activeUsers: users.filter(u => u.status === 'Active').length,
       inactiveUsers: users.filter(u => u.status === 'Inactive').length,
       adminUsers: users.filter(u => u.role === 'Admin').length,
-      staffUsers: users.filter(u => u.role === 'Staff').length
+      staffUsers: users.filter(u => u.role === 'Staff').length,
+      // Retail has no distinct Manager role; kept for the confidential summary card
+      // so it adds 0 instead of rendering NaN.
+      managerUsers: 0
     };
 
     const financialSummary = {
@@ -249,62 +253,9 @@ export function ReportsView() {
     };
   }, [isAdmin, users, inventory, purchaseOrders, adjustments, transfers]);
 
-  const auditTrail = useMemo(() => {
-    const entries = [
-      ...purchaseOrders.map(po => ({
-        id: `po-${po.id}`,
-        date: po.date || '',
-        module: 'Purchase Order',
-        action: `PO ${po.status || 'created'}`,
-        item: po.supplier || 'Supplier',
-        quantity: `${po.items.length} item(s)`,
-        performedBy: po.createdBy || '',
-        reference: po.id,
-        details: `Total: ₱${po.totalAmount.toLocaleString()}`,
-      })),
-      ...transfers.map(transfer => ({
-        id: `transfer-${transfer.id}`,
-        date: transfer.date || '',
-        module: 'Transfer',
-        action: `Transfer ${transfer.status || 'requested'}`,
-        item: `${transfer.fromLocation} → ${transfer.toLocation}`,
-        quantity: `${transfer.items.reduce((s: number, i: any) => s + i.quantity, 0)} item(s)`,
-        performedBy: transfer.createdBy || '',
-        reference: transfer.transferNumber || transfer.id,
-        details: `${transfer.fromLocation} to ${transfer.toLocation}`,
-      })),
-      ...adjustments.map(adj => ({
-        id: `adjustment-${adj.id}`,
-        date: adj.date || '',
-        module: 'Adjustment',
-        action: adj.type || 'Correction',
-        item: adj.reason || 'Adjustment',
-        quantity: `${adj.items.reduce((s: number, i: any) => s + Math.abs(i.quantityChange), 0)} unit(s)`,
-        performedBy: adj.createdBy || '',
-        reference: adj.id,
-        details: adj.reason || '',
-      })),
-      ...productsReceived.map(pr => ({
-        id: `receipt-${pr.id}`,
-        date: pr.dateReceived || '',
-        module: 'Goods Received',
-        action: 'Receipt Verified',
-        item: `${pr.items.length} item(s)`,
-        quantity: `${pr.items.reduce((s: number, i: any) => s + i.receivedQty, 0)} received`,
-        performedBy: pr.receivedBy || '',
-        reference: pr.id,
-        details: `PO: ${pr.poNumber || 'N/A'} | ${pr.status}`,
-      })),
-    ];
-
-    return entries
-      .filter(entry => entry.date || entry.reference)
-      .sort((a, b) => {
-        const aTime = new Date(a.date).getTime();
-        const bTime = new Date(b.date).getTime();
-        return (Number.isNaN(bTime) ? 0 : bTime) - (Number.isNaN(aTime) ? 0 : aTime);
-      });
-  }, [purchaseOrders, transfers, adjustments, productsReceived]);
+  // Real audit trail — one row per recorded activity (create / update / delete /
+  // status change / receive / adjust) written by the backend audit log.
+  const { data: auditTrail = [] } = useRetailAuditLogsQuery();
 
   const visibleAuditTrail = useMemo(() => {
     if (hasFullAuditTrailAccess) return auditTrail;
@@ -323,6 +274,23 @@ export function ReportsView() {
     const latest = visibleAuditTrail[0]?.date ? formatAuditDate(visibleAuditTrail[0].date) : 'No activity';
     return { byModule, latest };
   }, [visibleAuditTrail]);
+
+  // Summary cards filter the activity table below by module; clicking the active
+  // card (or Total Events) clears it back to "all".
+  const toggleAuditModule = (module: string) => {
+    setAuditModuleFilter((current) => (current === module ? 'all' : module));
+  };
+  const filteredAuditTrail = useMemo(
+    () =>
+      auditModuleFilter === 'all'
+        ? visibleAuditTrail
+        : visibleAuditTrail.filter((entry) => entry.module === auditModuleFilter),
+    [visibleAuditTrail, auditModuleFilter],
+  );
+  const auditCardClass = (active: boolean) =>
+    `text-left w-full bg-white rounded-[14px] p-6 border shadow-sm cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-lg hover:border-secondary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/40 active:translate-y-0 active:shadow-md ${
+      active ? 'border-secondary bg-secondary/5 shadow-md' : 'border-border'
+    }`;
 
   const handleExportReport = (reportType: string) => {
     let csvContent = '';
@@ -471,24 +439,24 @@ export function ReportsView() {
           <p className="text-[14px] text-muted-foreground mt-1">Comprehensive system reports and insights</p>
         </div>
         <div className="flex gap-3">
-          <label className="text-[12px] text-muted-foreground">
-            From
-            <input type="date" value={soldFrom} onChange={e => setSoldFrom(e.target.value)}
-              className="block mt-1 bg-card border border-border rounded-[8px] px-3 py-2 text-[14px] text-foreground" />
-          </label>
-          <label className="text-[12px] text-muted-foreground">
-            To
-            <input type="date" value={soldTo} onChange={e => setSoldTo(e.target.value)}
-              className="block mt-1 bg-card border border-border rounded-[8px] px-3 py-2 text-[14px] text-foreground" />
-          </label>
+            <label className="text-[12px] text-muted-foreground">
+              From
+              <input type="date" value={soldFrom} onChange={e => setSoldFrom(e.target.value)}
+              className="block mt-1 bg-card border border-border rounded-[8px] px-3 py-2 text-[14px] text-foreground cursor-pointer hover:border-secondary/60 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-secondary/40 focus:border-secondary transition-all duration-200" />
+            </label>
+            <label className="text-[12px] text-muted-foreground">
+              To
+              <input type="date" value={soldTo} onChange={e => setSoldTo(e.target.value)}
+              className="block mt-1 bg-card border border-border rounded-[8px] px-3 py-2 text-[14px] text-foreground cursor-pointer hover:border-secondary/60 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-secondary/40 focus:border-secondary transition-all duration-200" />
+            </label>
           {(soldFrom || soldTo) && (
             <button onClick={() => { setSoldFrom(''); setSoldTo(''); }}
               className="self-end px-3 py-2 text-[14px] text-muted-foreground hover:text-foreground">Clear</button>
           )}
-          <select
-            value={selectedLocation}
-            onChange={(e) => setSelectedLocation(e.target.value)}
-            className="bg-card border border-border rounded-[8px] px-4 py-2 text-[14px] text-foreground"
+            <select
+              value={selectedLocation}
+              onChange={(e) => setSelectedLocation(e.target.value)}
+            className="bg-card border border-border rounded-[8px] px-4 py-2 text-[14px] text-foreground cursor-pointer hover:border-secondary/60 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-secondary/40 focus:border-secondary transition-all duration-200"
           >
             <option value="all">All Locations</option>
             {locations.map(loc => (
@@ -502,40 +470,40 @@ export function ReportsView() {
       <div className="flex gap-2 mb-6 border-b border-border">
         <button
           onClick={() => setActiveTab('overview')}
-          className={`px-6 py-3 text-[14px] font-medium border-b-2 transition-colors ${
+          className={`px-6 py-3 text-[14px] font-medium border-b-2 rounded-t-lg transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 ${
             activeTab === 'overview'
               ? 'text-secondary border-secondary'
-              : 'text-muted-foreground border-transparent hover:text-foreground'
+              : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/40 hover:border-border'
           }`}
         >
           Overview
         </button>
         <button
           onClick={() => setActiveTab('inventory')}
-          className={`px-6 py-3 text-[14px] font-medium border-b-2 transition-colors ${
+          className={`px-6 py-3 text-[14px] font-medium border-b-2 rounded-t-lg transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 ${
             activeTab === 'inventory'
               ? 'text-secondary border-secondary'
-              : 'text-muted-foreground border-transparent hover:text-foreground'
+              : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/40 hover:border-border'
           }`}
         >
           Inventory Report
         </button>
         <button
           onClick={() => setActiveTab('sold')}
-          className={`px-6 py-3 text-[14px] font-medium border-b-2 transition-colors ${
+          className={`px-6 py-3 text-[14px] font-medium border-b-2 rounded-t-lg transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 ${
             activeTab === 'sold'
               ? 'text-secondary border-secondary'
-              : 'text-muted-foreground border-transparent hover:text-foreground'
+              : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/40 hover:border-border'
           }`}
         >
           Goods Sold
         </button>
         <button
           onClick={() => setActiveTab('transfers')}
-          className={`px-6 py-3 text-[14px] font-medium border-b-2 transition-colors ${
+          className={`px-6 py-3 text-[14px] font-medium border-b-2 rounded-t-lg transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 ${
             activeTab === 'transfers'
               ? 'text-secondary border-secondary'
-              : 'text-muted-foreground border-transparent hover:text-foreground'
+              : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/40 hover:border-border'
           }`}
         >
           Transfer Report
@@ -543,10 +511,10 @@ export function ReportsView() {
         {isAdmin && (
           <button
             onClick={() => setActiveTab('financial')}
-            className={`px-6 py-3 text-[14px] font-medium border-b-2 transition-colors ${
+            className={`px-6 py-3 text-[14px] font-medium border-b-2 rounded-t-lg transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 ${
               activeTab === 'financial'
                 ? 'text-secondary border-secondary'
-                : 'text-muted-foreground border-transparent hover:text-foreground'
+                : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/40 hover:border-border'
             }`}
           >
             Financial Report
@@ -554,20 +522,20 @@ export function ReportsView() {
         )}
         <button
           onClick={() => setActiveTab('operations')}
-          className={`px-6 py-3 text-[14px] font-medium border-b-2 transition-colors ${
+          className={`px-6 py-3 text-[14px] font-medium border-b-2 rounded-t-lg transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 ${
             activeTab === 'operations'
               ? 'text-secondary border-secondary'
-              : 'text-muted-foreground border-transparent hover:text-foreground'
+              : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/40 hover:border-border'
           }`}
         >
           Operations Report
         </button>
         <button
           onClick={() => setActiveTab('audit')}
-          className={`px-6 py-3 text-[14px] font-medium border-b-2 transition-colors flex items-center gap-2 ${
+          className={`px-6 py-3 text-[14px] font-medium border-b-2 rounded-t-lg transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 flex items-center gap-2 ${
             activeTab === 'audit'
               ? 'text-secondary border-secondary'
-              : 'text-muted-foreground border-transparent hover:text-foreground'
+              : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/40 hover:border-border'
           }`}
         >
           <ClipboardList className="size-4" />
@@ -576,10 +544,10 @@ export function ReportsView() {
         {isAdmin && (
           <button
             onClick={() => setActiveTab('confidential')}
-            className={`px-6 py-3 text-[14px] font-medium border-b-2 transition-colors flex items-center gap-2 ${
+            className={`px-6 py-3 text-[14px] font-medium border-b-2 rounded-t-lg transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 flex items-center gap-2 ${
               activeTab === 'confidential'
                 ? 'text-destructive border-destructive'
-                : 'text-muted-foreground border-transparent hover:text-foreground'
+                : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/40 hover:border-border'
             }`}
           >
             <Eye className="size-4" />
@@ -1170,21 +1138,21 @@ export function ReportsView() {
                 Export Report
               </button>
             </div>
-          </div>
+            </div>
 
-          <div className="grid grid-cols-4 gap-4 mb-4">
-            <div className="bg-card border border-border rounded-[14px] p-6">
+            <div className="grid grid-cols-4 gap-4 mb-4">
+            <button type="button" onClick={() => toggleAuditModule('all')} aria-pressed={auditModuleFilter === 'all'} aria-label="Show all audit events" className={auditCardClass(auditModuleFilter === 'all')}>
               <p className="text-muted-foreground text-[12px] mb-2">Total Events</p>
               <p className="text-foreground text-[24px] font-bold">{visibleAuditTrail.length}</p>
-            </div>
-            <div className="bg-card border border-border rounded-[14px] p-6">
+            </button>
+            <button type="button" onClick={() => toggleAuditModule('Purchase Order')} aria-pressed={auditModuleFilter === 'Purchase Order'} aria-label="Filter by purchase order events" className={auditCardClass(auditModuleFilter === 'Purchase Order')}>
               <p className="text-muted-foreground text-[12px] mb-2">Purchase Orders</p>
               <p className="text-secondary text-[24px] font-bold">{auditSummary.byModule['Purchase Order'] || 0}</p>
-            </div>
-            <div className="bg-card border border-border rounded-[14px] p-6">
+            </button>
+            <button type="button" onClick={() => toggleAuditModule('Goods Received')} aria-pressed={auditModuleFilter === 'Goods Received'} aria-label="Filter by goods received events" className={auditCardClass(auditModuleFilter === 'Goods Received')}>
               <p className="text-muted-foreground text-[12px] mb-2">Goods Received</p>
               <p className="text-success text-[24px] font-bold">{auditSummary.byModule['Goods Received'] || 0}</p>
-            </div>
+            </button>
             <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Latest Activity</p>
               <p className="text-[12px] font-semibold text-foreground break-words">{auditSummary.latest}</p>
@@ -1194,7 +1162,10 @@ export function ReportsView() {
           <div className="bg-card border border-border rounded-[14px] p-6">
             <div className="flex items-center justify-between mb-4">
               <h4 className="text-[16px] font-semibold text-foreground">Recent Activity</h4>
-              <p className="text-[12px] text-muted-foreground">{visibleAuditTrail.length} record{visibleAuditTrail.length !== 1 ? 's' : ''}</p>
+              <p className="text-[12px] text-muted-foreground">
+                {auditModuleFilter === 'all' ? '' : `${auditModuleFilter} • `}
+                {filteredAuditTrail.length} record{filteredAuditTrail.length !== 1 ? 's' : ''}
+              </p>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[900px]">
@@ -1211,14 +1182,14 @@ export function ReportsView() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/50">
-                  {visibleAuditTrail.length === 0 ? (
+                  {filteredAuditTrail.length === 0 ? (
                     <tr>
                       <td colSpan={8} className="px-4 py-8 text-center text-[14px] text-muted-foreground">
                         No audit trail records found
                       </td>
                     </tr>
                   ) : (
-                    visibleAuditTrail.slice(0, 100).map(entry => (
+                    filteredAuditTrail.slice(0, 100).map(entry => (
                       <tr key={entry.id} className="hover:bg-muted transition-colors">
                         <td className="px-4 py-3 text-[12px] text-muted-foreground whitespace-nowrap">{formatAuditDate(entry.date)}</td>
                         <td className="px-4 py-3">

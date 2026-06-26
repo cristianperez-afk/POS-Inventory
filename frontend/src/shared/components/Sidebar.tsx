@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ChevronDown, Home, ShoppingCart, List, BarChart3, LogOut, Users, UtensilsCrossed, Store, ShoppingBag, Info, SlidersHorizontal, Package, PanelLeftClose, PanelLeftOpen, AlertTriangle, Apple, ArrowRightLeft, ChefHat, ClipboardCheck, FileText, Layers, LayoutDashboard, MapPin, PackageCheck, PackageSearch, Receipt, ReceiptText, Settings, Settings2 } from 'lucide-react';
+import { ChevronDown, Home, ShoppingCart, List, BarChart3, LogOut, Users, UtensilsCrossed, Store, ShoppingBag, Info, SlidersHorizontal, Package, PanelLeftClose, PanelLeftOpen, AlertTriangle, Apple, ArrowRightLeft, ChefHat, ClipboardCheck, FileText, Layers, LayoutDashboard, MapPin, PackageCheck, PackageSearch, Receipt, ReceiptText, Settings, Settings2, UserCircle, History } from 'lucide-react';
 import { Page, type StoreBrand } from '../App';
 import type { StaffType } from '../../auth/types/auth';
 import { useStoreSettings } from '../context/StoreSettingsContext';
@@ -33,8 +33,10 @@ type MenuItem = {
 export function Sidebar({ currentPage, onNavigate, onLogout, isAdmin = false, storeBrand, userName, userRole, storeType = 'RESTAURANT', staffType = 'POS_STAFF', inventoryEnabled = true }: SidebarProps) {
   const SIDEBAR_COLLAPSED_STORAGE_KEY = 'bukolabs-pos-sidebar-collapsed';
   const isRetail = storeType === 'RETAIL_STORE';
-  const isPosManagerRole = userRole === 'POS_MANAGER' || userRole === 'POS_ADMIN';
-  const isInventoryManagerRole = userRole === 'INVENTORY_MANAGER' || userRole === 'INVENTORY_ADMIN';
+  const isPosManagerRole = userRole === 'POS_MANAGER' || userRole === 'POS_ADMIN' || (userRole === 'ADMIN' && staffType !== 'INVENTORY_STAFF');
+  const isActualPosManagerRole = userRole === 'POS_MANAGER' || userRole === 'POS_ADMIN';
+  const isInventoryManagerRole = userRole === 'INVENTORY_MANAGER' || userRole === 'INVENTORY_ADMIN' || (userRole === 'ADMIN' && staffType === 'INVENTORY_STAFF');
+  const canManageStaffAccounts = userRole === 'ADMIN';
   const { settings } = useStoreSettings();
 
   const storeItems = [
@@ -44,7 +46,9 @@ export function Sidebar({ currentPage, onNavigate, onLogout, isAdmin = false, st
 
   const storePages = storeItems.map((item) => item.page);
   const canUsePos = isAdmin || isPosManagerRole || staffType === 'POS_STAFF';
-  const canUseInventory = inventoryEnabled && !isPosManagerRole && (isAdmin || isInventoryManagerRole || staffType === 'INVENTORY_STAFF');
+  const canUseInventory = inventoryEnabled && (isAdmin || (!isPosManagerRole && (isInventoryManagerRole || staffType === 'INVENTORY_STAFF')));
+  const canViewManagerProfile = isRetail && isActualPosManagerRole;
+  const canViewGeneralSettings = Boolean(isAdmin || userRole || userName);
   const inventoryItems = getInventoryItems(isRetail, isAdmin);
   const inventoryPages = inventoryItems.map((item) => item.page);
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
@@ -69,6 +73,7 @@ export function Sidebar({ currentPage, onNavigate, onLogout, isAdmin = false, st
     { icon: Users, label: 'Staff Accounts', page: 'admin-dashboard' as Page },
     { icon: List, label: 'Transaction', page: 'order-list' as Page },
     { icon: BarChart3, label: 'Reports', page: 'reports' as Page },
+    { icon: History, label: 'Activity Log', page: 'activity-log' as Page },
   ];
 
   const retailAdminMenuItems: MenuItem[] = [
@@ -76,6 +81,7 @@ export function Sidebar({ currentPage, onNavigate, onLogout, isAdmin = false, st
     { icon: Users, label: 'Staff Accounts', page: 'admin-dashboard' as Page },
     { icon: List, label: 'Transaction', page: 'retail-transactions' as Page },
     { icon: BarChart3, label: 'Reports', page: 'retail-reports' as Page },
+    { icon: History, label: 'Activity Log', page: 'activity-log' as Page },
   ];
 
   const restaurantStaffMenuItems: MenuItem[] = [
@@ -93,21 +99,27 @@ export function Sidebar({ currentPage, onNavigate, onLogout, isAdmin = false, st
     { icon: BarChart3, label: 'Reports', page: 'retail-reports' as Page },
   ];
 
-  const menuItems = isAdmin
+  const usesManagerMenu = isAdmin || isActualPosManagerRole;
+  const menuItems = usesManagerMenu
     ? (isRetail ? retailAdminMenuItems : restaurantAdminMenuItems)
     : (isRetail ? retailStaffMenuItems : restaurantStaffMenuItems);
-  const managementItems: MenuItem[] = isAdmin
+  const managementItems: MenuItem[] = usesManagerMenu
     ? [
         { icon: Store, label: 'Store', children: storeItems },
       ]
     : [];
-  const visibleMenuItems = canUsePos ? menuItems.filter((item) => item.page !== 'table-management' || settings.enable_table_management) : [];
+  const visibleMenuItems = canUsePos
+    ? menuItems.filter((item) => {
+        if (item.page === 'admin-dashboard') return canManageStaffAccounts;
+        return item.page !== 'table-management' || settings.enable_table_management;
+      })
+    : [];
   const flattenedInventoryItems = canUseInventory ? inventoryItems : [];
   const defaultTitle = isRetail ? 'Retail Store' : 'The Restaurant';
   const headerTitle = storeBrand?.name || defaultTitle;
   const defaultLogo = getDefaultStoreLogo(storeType);
-  const userRoleLabel = getUserRoleLabel(userRole, isAdmin, staffType);
-  const userSubtitle = userName?.trim() || userRoleLabel;
+  const userRoleLabel = getUserRoleLabel(userRole, isAdmin, staffType, storeType);
+  const userSubtitle = userRoleLabel || userName?.trim();
   const closeManagementGroups = () => {
     setOpenGroups({
       Store: false,
@@ -338,7 +350,7 @@ export function Sidebar({ currentPage, onNavigate, onLogout, isAdmin = false, st
       </nav>
 
       <div className={`shrink-0 border-t border-white/10 py-2 text-white transition-all duration-300 ease-in-out ${isCollapsed ? 'px-3' : 'px-5'}`}>
-        {isAdmin && (
+        {canViewGeneralSettings && (
           <button
             onClick={() => {
               closeManagementGroups();
@@ -355,6 +367,18 @@ export function Sidebar({ currentPage, onNavigate, onLogout, isAdmin = false, st
             <span className={`overflow-hidden whitespace-nowrap text-base transition-all duration-300 ease-in-out ${isCollapsed ? 'w-0 opacity-0' : 'flex-1 opacity-100'} ${currentPage === 'general-settings' ? 'font-semibold' : 'font-medium'}`}>
               {!isCollapsed && 'Settings'}
             </span>
+          </button>
+        )}
+        {canViewManagerProfile && (
+          <button
+            onClick={() => onNavigate('manager-profile')}
+            className={`mb-2 flex h-8 w-8 items-center justify-center rounded-md border border-transparent text-slate-200/80 transition hover:bg-white/5 hover:text-white ${
+              isCollapsed ? 'mx-auto' : ''
+            } ${currentPage === 'manager-profile' ? 'bg-white/10 text-white' : ''}`}
+            title="Profile"
+            aria-label="Profile"
+          >
+            <UserCircle className="h-4 w-4" strokeWidth={1.8} />
           </button>
         )}
         <button
@@ -384,19 +408,22 @@ export function Sidebar({ currentPage, onNavigate, onLogout, isAdmin = false, st
   );
 }
 
-function getStaffTypeLabel(staffType: StaffType) {
-  if (staffType === 'INVENTORY_STAFF') return 'Inventory Staff';
-  return 'POS Staff';
+function getStaffTypeLabel(staffType: StaffType, storeType?: string | null) {
+  const prefix = storeType === 'RETAIL_STORE' ? 'Retail ' : storeType === 'RESTAURANT' ? 'Restaurant ' : '';
+  if (staffType === 'INVENTORY_STAFF') return `${prefix}Inventory Staff`;
+  return `${prefix}POS Staff`;
 }
 
-function getUserRoleLabel(role: string | null | undefined, isAdmin: boolean, staffType: StaffType) {
-  if (role === 'POS_ADMIN') return 'POS Admin';
-  if (role === 'INVENTORY_ADMIN') return 'Inventory Admin';
-  if (role === 'POS_MANAGER') return 'POS Manager';
-  if (role === 'INVENTORY_MANAGER') return 'Inventory Manager';
-  if (role === 'ADMIN') return staffType === 'INVENTORY_STAFF' ? 'Inventory Admin' : 'POS Admin';
-  if (isAdmin) return 'Admin';
-  return getStaffTypeLabel(staffType);
+function getUserRoleLabel(role: string | null | undefined, isAdmin: boolean, staffType: StaffType, storeType?: string | null) {
+  const prefix = storeType === 'RETAIL_STORE' ? 'Retail ' : storeType === 'RESTAURANT' ? 'Restaurant ' : '';
+  if (role === 'POS_ADMIN') return `${prefix}POS Manager`;
+  if (role === 'INVENTORY_ADMIN') return `${prefix}Inventory Manager`;
+  if (role === 'POS_MANAGER') return `${prefix}POS Manager`;
+  if (role === 'INVENTORY_MANAGER') return `${prefix}Inventory Manager`;
+  if (role === 'ADMIN') return staffType === 'INVENTORY_STAFF' ? `${prefix}Inventory Manager` : `${prefix}Admin`;
+  if (role === 'STAFF') return getStaffTypeLabel(staffType, storeType);
+  if (isAdmin) return `${prefix}Admin`;
+  return getStaffTypeLabel(staffType, storeType);
 }
 
 function getInventoryItems(isRetail: boolean, canManageUsers: boolean): MenuItem['children'] {

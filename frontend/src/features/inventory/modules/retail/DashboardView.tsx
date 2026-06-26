@@ -14,6 +14,8 @@ import type {
 import { categorySubcategories, CHART_COLORS } from '../../app/utils/constants';
 import { autoSortItem } from '../../app/utils/autoSortingRules';
 import { useRetailWorkspace } from '../lib/retail';
+import { useQueryClient } from '@tanstack/react-query';
+import { getManilaTime } from '../../../../shared/utils/date';
 
 
 export interface StockAlert {
@@ -24,7 +26,9 @@ export interface StockAlert {
   severity: 'low' | 'critical';
 }
 
-export function DashboardView() {
+export function DashboardView({ onNavigate }: { onNavigate?: (view: string) => void } = {}) {
+  // Cards jump to the relevant detail view via the navigation passed from the app shell.
+  const navigateToView = (view: string) => onNavigate?.(view);
   const {
     stats,
     stockAlerts,
@@ -38,20 +42,22 @@ export function DashboardView() {
   });
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastRefreshed, setLastRefreshed] = useState(new Date());
+  const queryClient = useQueryClient();
 
   // Calculate additional stats
   const totalValue = inventory.reduce((sum, item) => sum + (item.price * item.quantity), 0);
   const pendingPOs = purchaseOrders.filter(po => po.status === 'Pending' || po.status === 'Approved').length;
   const recentReceipts = productsReceived.slice(-5);
 
-  const handleRefresh = () => {
+  const handleRefresh = async () => {
     setIsRefreshing(true);
-
-    // Simulate data refresh with animation
-    setTimeout(() => {
+    try {
+      // Refetch all dashboard data (inventory, locations, POs, receipts, etc.).
+      await queryClient.invalidateQueries();
+    } finally {
       setLastRefreshed(new Date());
       setIsRefreshing(false);
-    }, 1000);
+    }
   };
 
   // Category breakdown for pie chart
@@ -98,7 +104,7 @@ export function DashboardView() {
             Overview of your inventory system
             {!isRefreshing && (
               <span className="ml-2 text-[12px] text-muted-foreground">
-                • Last updated: {lastRefreshed.toLocaleTimeString()}
+                • Last updated: {getManilaTime(lastRefreshed)}
               </span>
             )}
           </p>
@@ -107,7 +113,7 @@ export function DashboardView() {
           <button
             onClick={handleRefresh}
             disabled={isRefreshing}
-            className="bg-card border border-border text-foreground px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="bg-card border border-border text-foreground px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-muted hover:-translate-y-0.5 hover:shadow-md hover:border-secondary/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 active:translate-y-0 active:shadow-sm transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:translate-y-0 disabled:shadow-none disabled:border-border"
           >
             <RefreshCw className={`size-4 ${isRefreshing ? 'animate-spin' : ''}`} />
             {isRefreshing ? 'Refreshing...' : 'Refresh'}
@@ -124,6 +130,7 @@ export function DashboardView() {
           color="#ffedd4"
           iconColor="#F54900"
           icon={<Package className="size-6" />}
+          onClick={() => navigateToView('inventory')}
         />
         <StatCard
           title="Available Stock"
@@ -132,6 +139,7 @@ export function DashboardView() {
           color="#fef3c6"
           iconColor="#FFA500"
           icon={<Package className="size-6" />}
+          onClick={() => navigateToView('inventory')}
         />
         <StatCard
           title="Total Value"
@@ -140,6 +148,7 @@ export function DashboardView() {
           color="#E0F5F1"
           iconColor="#008967"
           icon={<TrendingUp className="size-6" />}
+          onClick={() => navigateToView('reports')}
         />
         <StatCard
           title="Low Stock Alerts"
@@ -149,6 +158,7 @@ export function DashboardView() {
           iconColor="#E7000B"
           isWarning
           icon={<AlertTriangle className="size-6" />}
+          onClick={() => navigateToView('stock-alerts')}
         />
       </div>
 
@@ -336,10 +346,10 @@ export function DashboardView() {
   );
 }
 
-// Stat Card Component
-function StatCard({ title, value, change, subtitle, color, iconColor, isWarning, icon }: any) {
-  return (
-    <div className="bg-card border border-border rounded-[14px] p-6">
+// Stat Card Component becomes a clickable, navigating card when given an onClick.
+function StatCard({ title, value, change, subtitle, color, iconColor, isWarning, icon, onClick }: any) {
+  const content = (
+    <>
       <div className="flex items-start justify-between mb-3">
         <div>
           <p className="text-foreground text-[14px] leading-[20px] mb-1">{title}</p>
@@ -360,8 +370,22 @@ function StatCard({ title, value, change, subtitle, color, iconColor, isWarning,
       {subtitle && (
         <p className="text-foreground text-[12px] leading-[16px]">{subtitle}</p>
       )}
-    </div>
+    </>
   );
+
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className="text-left w-full bg-card border border-border rounded-[14px] p-6 shadow-sm cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-lg hover:border-secondary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/40 active:translate-y-0 active:shadow-md"
+      >
+        {content}
+      </button>
+    );
+  }
+
+  return <div className="bg-card border border-border rounded-[14px] p-6">{content}</div>;
 }
 
 // Stock Alerts View

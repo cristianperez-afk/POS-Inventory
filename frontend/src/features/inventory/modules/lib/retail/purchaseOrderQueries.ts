@@ -16,6 +16,7 @@ import {
   rejectGoodsReceipt,
   rejectPurchaseOrder,
   submitPurchaseOrder,
+  updateSupplier,
 } from '../../../app/api/client';
 import {
   domainQueryKeys,
@@ -148,10 +149,11 @@ export function useRetailGoodsReceiptsQuery<
 }
 
 export function useRetailSuppliersQuery<TData = ApiSupplier[]>(
-  params?: { isActive?: boolean },
+  params?: { isActive?: boolean; enabled?: boolean },
   select?: (items: ApiSupplier[]) => TData,
 ) {
-  return useSuppliersQuery({ module: 'RETAIL', ...params }, {
+  return useSuppliersQuery({ module: 'RETAIL', isActive: params?.isActive ?? true }, {
+    enabled: params?.enabled,
     select: (items) => mapItems(items, mapRetailSupplierRecord, select),
   });
 }
@@ -242,5 +244,27 @@ export function useCreateRetailSupplierMutation() {
   return useRetailMutation(
     (data: Record<string, unknown>) => createSupplier({ ...data, module: 'RETAIL' }),
     [retailQueryKeys.suppliers],
+  );
+}
+
+export function useUpdateRetailSupplierMutation() {
+  return useRetailMutation(
+    ({ id, data }: { id: string; data: Record<string, unknown> }) =>
+      updateSupplier(id, data, 'RETAIL'),
+    [retailQueryKeys.suppliers, retailQueryKeys.purchaseOrders],
+  );
+}
+
+export function useArchiveRetailSupplierMutation() {
+  return useRetailMutation(
+    (id: string) => updateSupplier(id, { isActive: false }, 'RETAIL'),
+    [retailQueryKeys.suppliers, retailQueryKeys.purchaseOrders],
+  );
+}
+
+export function useRestoreRetailSupplierMutation() {
+  return useRetailMutation(
+    (id: string) => updateSupplier(id, { isActive: true }, 'RETAIL'),
+    [retailQueryKeys.suppliers, retailQueryKeys.purchaseOrders],
   );
 }

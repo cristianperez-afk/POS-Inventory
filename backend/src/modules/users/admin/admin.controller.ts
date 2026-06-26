@@ -29,6 +29,11 @@ class CreateStaffDto {
   @IsOptional()
   @IsIn(STAFF_ROLES)
   role?: StaffRole;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(4)
+  void_pin?: string;
 }
 
 class UpdateStaffDto {
@@ -53,6 +58,27 @@ class UpdateStaffDto {
   @IsOptional()
   @IsIn(STAFF_ROLES)
   role?: StaffRole;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(4)
+  void_pin?: string;
+}
+
+class VerifyRetailVoidPinDto {
+  @Type(() => Number)
+  @IsNumber()
+  user_id!: number;
+
+  @IsString()
+  @MinLength(4)
+  void_pin!: string;
+}
+
+class RetailManagerProfileDto {
+  @Type(() => Number)
+  @IsNumber()
+  user_id!: number;
 }
 
 class UpdateStoreInformationDto {
@@ -272,6 +298,7 @@ export class AdminController {
       password: body.password,
       staffType: body.staff_type,
       role: body.role,
+      voidPin: body.void_pin,
     });
   }
 
@@ -285,7 +312,26 @@ export class AdminController {
       password: body.password,
       staffType: body.staff_type,
       role: body.role,
+      voidPin: body.void_pin,
     });
+  }
+
+  @Post('retail/void-pin/verify')
+  verifyRetailVoidPin(@Body() body: VerifyRetailVoidPinDto) {
+    return this.adminService.verifyRetailVoidPin({
+      userId: Number(body.user_id),
+      voidPin: body.void_pin,
+    });
+  }
+
+  @Get('retail/manager-profile')
+  getRetailManagerProfile(@Query('user_id') userId: string) {
+    return this.adminService.getRetailManagerProfile(Number(userId));
+  }
+
+  @Post('retail/manager-profile/unique-pin')
+  generateRetailManagerUniquePin(@Body() body: RetailManagerProfileDto) {
+    return this.adminService.generateRetailManagerUniquePin(Number(body.user_id));
   }
 
   @Delete('staff/:id')
@@ -378,6 +424,37 @@ export class AdminController {
   @Get('discount-settings')
   listDiscountSettings(@Query('admin_user_id') adminUserId: string) {
     return this.adminService.listDiscountSettings(Number(adminUserId));
+  }
+
+  @Get('activity-logs')
+  listActivityLogs(
+    @Query('user_id') userId: string,
+    @Query('date_from') dateFrom?: string,
+    @Query('date_to') dateTo?: string,
+    @Query('actor_user_id') actorUserId?: string,
+    @Query('module') module?: string,
+    @Query('action') action?: string,
+    @Query('search') search?: string,
+  ) {
+    return this.adminService.listActivityLogs({
+      userId: Number(userId),
+      dateFrom,
+      dateTo,
+      actorUserId: actorUserId ? Number(actorUserId) : undefined,
+      module,
+      action,
+      search,
+    });
+  }
+
+  @Post('activity-logs')
+  recordActivityLog(@Body() body: any) {
+    return this.adminService.recordActivityLog({
+      userId: Number(body.user_id),
+      module: String(body.module ?? ''),
+      action: String(body.action ?? ''),
+      details: String(body.details ?? ''),
+    });
   }
 
   @Post('discount-settings')

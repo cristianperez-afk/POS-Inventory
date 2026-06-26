@@ -88,6 +88,16 @@ export function ItemBundlingView({
     totalValue: bundles.filter((b: any) => b.status === 'ACTIVE').reduce((sum: number, b: any) => sum + b.price, 0),
   };
 
+  // Stat cards toggle the status filter that drives the bundle list; clicking the
+  // active card (or Total Bundles) clears it back to "all".
+  const toggleFilterStatus = (status: string) => {
+    setFilterStatus((current) => (current === status ? 'all' : status));
+  };
+  const statCardClass = (active: boolean) =>
+    `text-left w-full bg-white rounded-[14px] p-4 border shadow-sm cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-lg hover:border-secondary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/40 active:translate-y-0 active:shadow-md ${
+      active ? 'border-secondary bg-secondary/5 shadow-md' : 'border-border'
+    }`;
+
   // ─── Bundle price calculation (uses local form state + fetched inventory) ────
 
   const calculateFormPrice = (items: { inventoryItemId: string; quantity: number }[], discount: number) => {
@@ -253,7 +263,7 @@ export function ItemBundlingView({
         <button
           onClick={() => setShowCreateModal(true)}
           disabled={loading}
-          className="bg-secondary text-white px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-secondary transition-colors disabled:opacity-50"
+          className="bg-secondary text-white px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-secondary/90 hover:-translate-y-0.5 hover:shadow-md hover:shadow-secondary/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 active:translate-y-0 active:shadow-sm transition-all duration-200 disabled:opacity-50 disabled:translate-y-0 disabled:shadow-none"
         >
           <Plus className="size-4" />
           Create Bundle
@@ -482,18 +492,18 @@ export function ItemBundlingView({
 
       {/* Stats */}
       <div className="grid grid-cols-4 gap-4 mb-6">
-        <div className="bg-card border border-border rounded-[14px] p-4">
+        <button type="button" onClick={() => toggleFilterStatus('all')} aria-pressed={filterStatus === 'all'} aria-label="Show all bundles" className={statCardClass(filterStatus === 'all')}>
           <p className="text-foreground text-[12px] mb-1">Total Bundles</p>
           <p className="text-foreground text-[24px] font-bold">{loading ? '—' : stats.total}</p>
-        </div>
-        <div className="bg-card border border-border rounded-[14px] p-4">
+        </button>
+        <button type="button" onClick={() => toggleFilterStatus('PENDING')} aria-pressed={filterStatus === 'PENDING'} aria-label="Filter by pending approval" className={statCardClass(filterStatus === 'PENDING')}>
           <p className="text-warning text-[12px] mb-1">Pending Approval</p>
           <p className="text-warning text-[24px] font-bold">{loading ? '—' : stats.pending}</p>
-        </div>
-        <div className="bg-card border border-border rounded-[14px] p-4">
+        </button>
+        <button type="button" onClick={() => toggleFilterStatus('ACTIVE')} aria-pressed={filterStatus === 'ACTIVE'} aria-label="Filter by active bundles" className={statCardClass(filterStatus === 'ACTIVE')}>
           <p className="text-success text-[12px] mb-1">Active Bundles</p>
           <p className="text-success text-[24px] font-bold">{loading ? '—' : stats.active}</p>
-        </div>
+        </button>
         <div className="bg-card border border-border rounded-[14px] p-4">
           <p className="text-foreground text-[12px] mb-1">Active Value</p>
           <p className="text-secondary text-[24px] font-bold">₱{loading ? '—' : stats.totalValue.toLocaleString()}</p>

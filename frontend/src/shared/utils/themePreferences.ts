@@ -58,6 +58,9 @@ export function applyUserPreferences(preferences: UserPreferenceValues) {
    * unrelated secondary badges/buttons.
    */
   document.documentElement.style.setProperty('--secondary-accent', preferences.secondaryColor);
+  document.documentElement.style.setProperty('--sidebar', preferences.secondaryColor);
+  document.documentElement.style.setProperty('--sidebar-primary', preferences.primaryColor);
+  document.documentElement.style.setProperty('--sidebar-ring', preferences.primaryColor);
 
   const isDark = preferences.appearance === 'dark' || (preferences.appearance === 'system' && prefersDarkSystemTheme());
   document.documentElement.classList.toggle('dark', isDark);

@@ -4,7 +4,6 @@ import { ChevronDown, ChevronRight, Clock, Download, TrendingUp, PhilippinePeso,
 import {
   useRestaurantAdjustmentsQuery,
   useRestaurantGoodsRecordsQuery,
-  useRestaurantInventoryMovementsQuery,
   useRestaurantIngredientConsumptionQuery,
   useRestaurantInventoryQuery,
   useRestaurantKitchenOrdersQuery,
@@ -12,6 +11,7 @@ import {
   useRestaurantTransfersQuery,
   useRestaurantUsersQuery,
   useRestaurantWasteQuery,
+  useRestaurantAuditLogsQuery,
 } from "../lib/restaurant";
 import { useSession } from "../../app/hooks/useSession";
 import { defaultCategoryHierarchy, formatCurrency, getInventoryValue, splitCategory } from "../lib/inventoryLogic";
@@ -79,7 +79,7 @@ const runningSeconds = (order: any, now: number) => {
   if (order.runningDuration !== null && order.runningDuration !== undefined && !order.isRunning) {
     return Number(order.runningDuration);
   }
-  const start = order.runningTimeStart ?? order.running_time_start ?? order.orderedAt ?? order.createdAt;
+  const start = order.runningTimeStart ?? order.running_time_start ?? order.preparingStartedAt;
   const end = order.runningTimeEnd ?? order.running_time_end ?? (order.isRunning ? undefined : order.completedAt);
   const startMs = start ? new Date(start).getTime() : NaN;
   const endMs = end ? new Date(end).getTime() : now;
@@ -111,6 +111,7 @@ export function Reports() {
   const { currentUser } = useSession();
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [expandedPosTransactions, setExpandedPosTransactions] = useState<Record<string, boolean>>({});
+  const [auditModuleFilter, setAuditModuleFilter] = useState('all');
   const [consumptionFrom, setConsumptionFrom] = useState('');
   const [consumptionTo, setConsumptionTo] = useState('');
   const consumptionQuery = useRestaurantIngredientConsumptionQuery({
@@ -137,9 +138,11 @@ export function Reports() {
   const { data: adjustments = [] } = useRestaurantAdjustmentsQuery();
   const { data: wasteLogs = [] } = useRestaurantWasteQuery();
   const { data: goodsReceived = [] } = useRestaurantGoodsRecordsQuery();
-  const { data: inventoryMovements = [] } = useRestaurantInventoryMovementsQuery();
   const { data: posOrders = [] } = useRestaurantKitchenOrdersQuery();
   const { data: users = [] } = useRestaurantUsersQuery(isAdmin);
+  // Real audit trail — one row per recorded activity (create / update / delete /
+  // status change / receive / adjust / setting change) written by the backend.
+  const { data: auditTrail = [] } = useRestaurantAuditLogsQuery();
 
   const inventoryValue = getInventoryValue(products);
 
@@ -227,7 +230,7 @@ export function Reports() {
   const posTransactions = useMemo(() =>
     (posOrders as any[]).map((order) => {
       const items = Array.isArray(order.items) ? order.items : [];
-      const orderedAt = order.runningTimeStart ?? order.running_time_start ?? order.orderedAt ?? order.createdAt ?? '';
+      const orderedAt = order.runningTimeStart ?? order.running_time_start ?? order.preparingStartedAt ?? '';
       const completedAt = ['completed', 'cancelled'].includes(String(order.status ?? '').toLowerCase())
         ? order.completedAt ?? order.tableEndedAt ?? order.updatedAt ?? orderedAt
         : undefined;
@@ -322,113 +325,6 @@ export function Reports() {
     return { totalInventoryValue, totalPOSpending, receivedPOValue, wasteValue, categoryValue, assetHealthScore };
   }, [products, purchaseOrders, receivedPOs, wasteLogs]);
 
-  const auditTrail = useMemo(() => {
-    const entries = [
-      ...inventoryMovements.map(movement => ({
-        id: `movement-${movement.id}`,
-        date: movement.date || '',
-        module: 'Inventory',
-        action: String(movement.type || 'Stock Movement').replace(/_/g, ' '),
-        item: movement.item || 'Item',
-        quantity: movement.quantity ? `${movement.quantity} ${movement.unit || ''}`.trim() : '',
-        performedBy: movement.createdBy || movement.by || '',
-        reference: movement.sourceId || movement.source || movement.id,
-        details: [
-          movement.previousQuantity !== undefined && movement.newQuantity !== undefined
-            ? `${movement.previousQuantity} to ${movement.newQuantity}`
-            : '',
-          movement.notes || movement.reason || '',
-          movement.location ? `Location: ${movement.location}` : '',
-        ].filter(Boolean).join(' | '),
-        status: 'recorded',
-      })),
-      ...posOrders.map(order => ({
-        id: `pos-${order.id}`,
-        date: order.voidedAt || order.orderedAt || '',
-        module: 'POS / Kitchen',
-        action: order.status === 'voided' ? 'Receipt Voided' : 'Receipt Completed',
-        item: order.recipeName || 'Menu item',
-        quantity: order.quantity ? `${order.quantity} order(s)` : '',
-        performedBy: order.completedBy || '',
-        reference: order.receiptNo || order.id,
-        details: [
-          order.modifiers?.length ? `Modifiers: ${order.modifiers.join(', ')}` : '',
-          order.voidReason ? `Void reason: ${order.voidReason}` : '',
-          order.notes || '',
-        ].filter(Boolean).join(' | '),
-        status: order.status || 'recorded',
-      })),
-      ...goodsReceived.map(receipt => ({
-        id: `receipt-${receipt.backendId || receipt.id}`,
-        date: receipt.receivedDate || '',
-        module: 'Goods Received',
-        action: 'Receipt Verified',
-        item: `${receipt.items || receipt.receivedItems?.length || 0} item(s)`,
-        quantity: `${(receipt.receivedItems || []).reduce((sum: number, item: any) => sum + (item.acceptedQuantity || 0), 0)} accepted`,
-        performedBy: receipt.receivedBy || '',
-        reference: receipt.id,
-        details: receipt.notes || `PO: ${receipt.poId || 'N/A'}`,
-        status: receipt.status || 'recorded',
-      })),
-      ...purchaseOrders.map(order => ({
-        id: `po-${order.backendId || order.id}`,
-        date: order.createdAt || order.date || '',
-        module: 'Purchase Order',
-        action: `PO ${order.status || 'created'}`,
-        item: order.supplier || 'Supplier',
-        quantity: `${order.items || order.orderItems?.length || 0} item(s)`,
-        performedBy: order.createdBy || '',
-        reference: order.id,
-        details: order.rejectionNote || `Total: ${formatCurrency(order.total || 0)}`,
-        status: order.status || 'recorded',
-      })),
-      ...transfers.map(transfer => ({
-        id: `transfer-${transfer.backendId || transfer.id}`,
-        date: transfer.completedDate || transfer.requestDate || '',
-        module: 'Transfer',
-        action: `Transfer ${transfer.status || 'requested'}`,
-        item: transfer.item || 'Multiple items',
-        quantity: transfer.quantity ? `${transfer.quantity} ${transfer.unit || ''}`.trim() : '',
-        performedBy: transfer.requestedByEmail || transfer.requestedBy || '',
-        reference: transfer.id,
-        details: `${transfer.from || 'Source'} to ${transfer.to || 'Destination'}`,
-        status: transfer.status || 'recorded',
-      })),
-      ...adjustments.map(adjustment => ({
-        id: `adjustment-${adjustment.id}`,
-        date: adjustment.date || '',
-        module: 'Adjustment',
-        action: adjustment.type || 'Correction',
-        item: adjustment.item || 'Item',
-        quantity: adjustment.quantity ? `${adjustment.quantity} ${adjustment.unit || ''}`.trim() : '',
-        performedBy: adjustment.adjustedBy || '',
-        reference: adjustment.id,
-        details: adjustment.reason || adjustment.notes || '',
-        status: 'recorded',
-      })),
-      ...wasteLogs.map(waste => ({
-        id: `waste-${waste.id}`,
-        date: waste.date || '',
-        module: 'Waste',
-        action: waste.wasteType || 'Waste Log',
-        item: waste.item || 'Item',
-        quantity: waste.quantity ? `${waste.quantity} ${waste.unit || ''}`.trim() : '',
-        performedBy: waste.loggedBy || '',
-        reference: waste.id,
-        details: waste.notes || `Value: ${formatCurrency(waste.totalValue || 0)}`,
-        status: 'recorded',
-      })),
-    ];
-
-    return entries
-      .filter(entry => entry.date || entry.reference)
-      .sort((a, b) => {
-        const aTime = new Date(a.date).getTime();
-        const bTime = new Date(b.date).getTime();
-        return (Number.isNaN(bTime) ? 0 : bTime) - (Number.isNaN(aTime) ? 0 : aTime);
-      });
-  }, [inventoryMovements, posOrders, goodsReceived, purchaseOrders, transfers, adjustments, wasteLogs]);
-
   const visibleAuditTrail = useMemo(() => {
     if (hasFullAuditTrailAccess) return auditTrail;
     if (!currentUserEmail) return [];
@@ -447,6 +343,20 @@ export function Reports() {
     const latest = visibleAuditTrail[0]?.date ? formatAuditDate(visibleAuditTrail[0].date) : 'No activity';
     return { byModule, latest };
   }, [visibleAuditTrail]);
+
+  // Summary cards filter the activity table below by module; clicking the active
+  // card (or Total Events) clears it back to "all".
+  const toggleAuditModule = (module: string) => {
+    setAuditModuleFilter((current) => (current === module ? 'all' : module));
+  };
+
+  const filteredAuditTrail = useMemo(
+    () =>
+      auditModuleFilter === 'all'
+        ? visibleAuditTrail
+        : visibleAuditTrail.filter((entry) => entry.module === auditModuleFilter),
+    [visibleAuditTrail, auditModuleFilter],
+  );
 
   // ── Confidential ────────────────────────────────────────────────────────────
   const confidentialData = useMemo(() => {
@@ -579,12 +489,12 @@ export function Reports() {
 
   // ── Tab button helper ───────────────────────────────────────────────────────
   const tabCls = (id: TabType, danger = false) =>
-    `px-6 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${
+    `px-6 py-3 text-sm font-medium border-b-2 rounded-t-lg transition-all duration-200 flex items-center gap-2 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${
       activeTab === id
         ? danger
           ? 'text-red-600 border-red-600'
           : 'text-primary border-primary'
-        : 'text-muted-foreground border-transparent hover:text-foreground'
+        : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/40 hover:border-border'
     }`;
 
   return (
@@ -599,12 +509,12 @@ export function Reports() {
           <label className="text-xs text-muted-foreground">
             From
             <input type="date" value={consumptionFrom} onChange={e => setConsumptionFrom(e.target.value)}
-              className="block mt-1 bg-card border border-border rounded-xl px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50" />
+              className="block mt-1 bg-card border border-border rounded-xl px-3 py-2 text-sm text-foreground cursor-pointer hover:border-primary/60 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all duration-200" />
           </label>
           <label className="text-xs text-muted-foreground">
             To
             <input type="date" value={consumptionTo} onChange={e => setConsumptionTo(e.target.value)}
-              className="block mt-1 bg-card border border-border rounded-xl px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50" />
+              className="block mt-1 bg-card border border-border rounded-xl px-3 py-2 text-sm text-foreground cursor-pointer hover:border-primary/60 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all duration-200" />
           </label>
           {(consumptionFrom || consumptionTo) && (
             <button onClick={() => { setConsumptionFrom(''); setConsumptionTo(''); }}
@@ -612,7 +522,7 @@ export function Reports() {
           )}
           <button
             onClick={handleExport}
-            className="bg-primary text-primary-foreground px-4 py-2 rounded-xl text-sm font-medium hover:opacity-90 transition-opacity flex items-center gap-2"
+            className="bg-primary text-primary-foreground px-4 py-2 rounded-xl text-sm font-medium hover:opacity-90 hover:-translate-y-0.5 hover:shadow-md hover:shadow-primary/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-sm transition-all duration-200 flex items-center gap-2"
           >
             <Download className="w-4 h-4" />
             Export
@@ -1203,18 +1113,28 @@ export function Reports() {
           </div>
 
           <div className="grid grid-cols-4 gap-4 mb-4">
-            <div className="bg-card border border-border rounded-2xl p-6">
-              <p className="text-muted-foreground text-xs mb-2">Total Events</p>
-              <p className="text-2xl font-bold text-foreground">{visibleAuditTrail.length}</p>
-            </div>
-            <div className="bg-card border border-border rounded-2xl p-6">
-              <p className="text-muted-foreground text-xs mb-2">Inventory Events</p>
-              <p className="text-2xl font-bold text-primary">{auditSummary.byModule.Inventory || 0}</p>
-            </div>
-            <div className="bg-card border border-border rounded-2xl p-6">
-              <p className="text-muted-foreground text-xs mb-2">Receiving Events</p>
-              <p className="text-2xl font-bold text-green-700">{auditSummary.byModule['Goods Received'] || 0}</p>
-            </div>
+            {[
+              { label: 'Total Events', value: visibleAuditTrail.length, valueClass: 'text-foreground', module: 'all' },
+              { label: 'Inventory Events', value: auditSummary.byModule.Inventory || 0, valueClass: 'text-primary', module: 'Inventory' },
+              { label: 'Receiving Events', value: auditSummary.byModule['Goods Received'] || 0, valueClass: 'text-green-700', module: 'Goods Received' },
+            ].map((card) => {
+              const isActive = auditModuleFilter === card.module;
+              return (
+                <button
+                  key={card.label}
+                  type="button"
+                  onClick={() => toggleAuditModule(card.module)}
+                  aria-pressed={isActive}
+                  aria-label={`Filter audit trail by ${card.label}`}
+                  className={`group text-left w-full bg-card border rounded-2xl p-6 cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-xl hover:shadow-primary/25 hover:border-primary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-lg active:shadow-primary/30 ${
+                    isActive ? 'border-primary bg-primary/5 shadow-md shadow-primary/20' : 'border-border'
+                  }`}
+                >
+                  <p className="text-muted-foreground text-xs mb-2">{card.label}</p>
+                  <p className={`text-2xl font-bold ${card.valueClass}`}>{card.value}</p>
+                </button>
+              );
+            })}
             <div className="bg-card border border-border rounded-2xl p-6 overflow-hidden">
               <p className="text-muted-foreground text-xs mb-2">Latest Activity</p>
               <p className="text-sm font-semibold text-foreground break-words">{auditSummary.latest}</p>
@@ -1224,7 +1144,10 @@ export function Reports() {
           <div className="bg-card border border-border rounded-2xl p-6">
             <div className="flex items-center justify-between mb-4">
               <h4 className="text-base font-semibold text-foreground">Recent Activity</h4>
-              <p className="text-xs text-muted-foreground">{visibleAuditTrail.length} record{visibleAuditTrail.length !== 1 ? 's' : ''}</p>
+              <p className="text-xs text-muted-foreground">
+                {auditModuleFilter === 'all' ? '' : `${auditModuleFilter} • `}
+                {filteredAuditTrail.length} record{filteredAuditTrail.length !== 1 ? 's' : ''}
+              </p>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[900px]">
@@ -1241,14 +1164,14 @@ export function Reports() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {visibleAuditTrail.length === 0 ? (
+                  {filteredAuditTrail.length === 0 ? (
                     <tr>
                       <td colSpan={8} className="px-4 py-8 text-center text-sm text-muted-foreground">
                         No audit trail records found
                       </td>
                     </tr>
                   ) : (
-                    visibleAuditTrail.slice(0, 100).map(entry => (
+                    filteredAuditTrail.slice(0, 100).map(entry => (
                       <tr key={entry.id} className="hover:bg-muted/30 transition-colors">
                         <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">{formatAuditDate(entry.date)}</td>
                         <td className="px-4 py-3">

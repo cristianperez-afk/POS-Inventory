@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { Plus, X, Search, Package, ShoppingCart, CheckCircle, XCircle, Clock, Eye, Users, Trash2 } from 'lucide-react';
 import {
+  useArchiveRetailSupplierMutation,
   useApproveRetailPurchaseOrderMutation,
   useCancelRetailPurchaseOrderMutation,
   useCreateRetailPurchaseOrderMutation,
@@ -11,8 +12,10 @@ import {
   useRetailLocationsQuery,
   useRetailPurchaseOrderRecordsQuery,
   useRetailSuppliersQuery,
+  useRestoreRetailSupplierMutation,
   useSaveRetailInventoryMutation,
   useSubmitRetailPurchaseOrderMutation,
+  useUpdateRetailSupplierMutation,
 } from '../lib/retail';
 import { categorySubcategories, generalMerchandiseSubcategories } from '../../app/utils/constants';
 import { SuppliersManager, type NormalizedSupplier } from '../shared/suppliers/SuppliersManager';
@@ -101,8 +104,10 @@ export default function PurchaseOrdersView({
 }: {
   currentUser: { email: string; role: string } | null;
 }) {
+  const isAdmin = currentUser?.role === 'Admin';
   const ordersQuery = useRetailPurchaseOrderRecordsQuery();
   const suppliersQuery = useRetailSuppliersQuery();
+  const archivedSuppliersQuery = useRetailSuppliersQuery({ isActive: false, enabled: isAdmin });
   const inventoryQuery = useRetailInventoryRecordsQuery();
   const locationsQuery = useRetailLocationsQuery();
   const createPurchaseOrderMutation = useCreateRetailPurchaseOrderMutation();
@@ -111,9 +116,13 @@ export default function PurchaseOrdersView({
   const rejectPurchaseOrderMutation = useRejectRetailPurchaseOrderMutation();
   const cancelPurchaseOrderMutation = useCancelRetailPurchaseOrderMutation();
   const createSupplierMutation = useCreateRetailSupplierMutation();
+  const updateSupplierMutation = useUpdateRetailSupplierMutation();
+  const archiveSupplierMutation = useArchiveRetailSupplierMutation();
+  const restoreSupplierMutation = useRestoreRetailSupplierMutation();
   const saveInventoryMutation = useSaveRetailInventoryMutation();
   const orders = ordersQuery.data ?? [];
   const suppliers = suppliersQuery.data ?? [];
+  const archivedSuppliers = archivedSuppliersQuery.data ?? [];
   const inventory = inventoryQuery.data ?? [];
   const locations = locationsQuery.data ?? [];
   const loading = ordersQuery.isLoading || suppliersQuery.isLoading || inventoryQuery.isLoading;
@@ -373,9 +382,14 @@ export default function PurchaseOrdersView({
     }
   };
 
-  const filteredOrders = orders.filter(o => filterStatus === 'all' || o.status === filterStatus);
+  const filteredOrders = orders.filter(o =>
+    filterStatus === 'all'
+      ? true
+      : filterStatus === 'pending'
+        ? ['DRAFT', 'SUBMITTED'].includes(o.status)
+        : o.status === filterStatus,
+  );
   const submittedPOs = orders.filter(o => o.status === 'SUBMITTED');
-  const isAdmin = currentUser?.role === 'Admin';
 
   const getDeliveryDelayBadge = (order: { expectedDelivery?: string | null; status: string }) => {
     if (!isPurchaseOrderDelayed(order.expectedDelivery, order.status, now)) return null;
@@ -395,6 +409,16 @@ export default function PurchaseOrdersView({
     received: orders.filter(o => o.status === 'RECEIVED').length,
   };
 
+  // Stat cards toggle the status filter that drives the orders list; clicking the
+  // active card (or Total Orders) clears it back to "all".
+  const toggleFilterStatus = (status: string) => {
+    setFilterStatus((current) => (current === status ? 'all' : status));
+  };
+  const statCardClass = (active: boolean) =>
+    `text-left w-full bg-white rounded-[14px] p-4 border shadow-sm cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-lg hover:border-[#007A5E]/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#007A5E]/40 active:translate-y-0 active:shadow-md ${
+      active ? 'border-[#007A5E] bg-[#007A5E]/5 shadow-md' : 'border-[rgba(0,0,0,0.1)]'
+    }`;
+
   if (loading) {
     return <div className="flex items-center justify-center h-64 text-muted-foreground">Loading purchase orders…</div>;
   }
@@ -406,10 +430,10 @@ export default function PurchaseOrdersView({
           <h2 className="text-[30px] font-bold text-foreground">Purchase Orders</h2>
           <p className="text-foreground text-[14px] mt-1">Create POs and register new items</p>
         </div>
-        <div className="flex gap-3">
-          <button
-            onClick={() => setShowSuppliersModal(true)}
-            className="bg-card border border-[rgba(0,0,0,0.1)] text-foreground px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-background transition-colors"
+          <div className="flex gap-3">
+            <button
+              onClick={() => setShowSuppliersModal(true)}
+            className="bg-card border border-[rgba(0,0,0,0.1)] text-foreground px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-background hover:-translate-y-0.5 hover:shadow-md hover:border-primary/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 active:translate-y-0 active:shadow-sm transition-all duration-200"
           >
             <Users className="size-4" />
             View Suppliers
@@ -425,10 +449,10 @@ export default function PurchaseOrdersView({
                 {submittedPOs.length}
               </span>
             </button>
-          )}
-          <button
-            onClick={() => setShowNewPOModal(true)}
-            className="bg-primary text-white px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-primary/90 transition-colors"
+            )}
+            <button
+              onClick={() => setShowNewPOModal(true)}
+            className="bg-primary text-white px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-primary/90 hover:-translate-y-0.5 hover:shadow-md hover:shadow-primary/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-sm transition-all duration-200"
           >
             <Plus className="size-4" />
             New Purchase Order
@@ -933,6 +957,7 @@ export default function PurchaseOrdersView({
         open={showSuppliersModal}
         onClose={() => setShowSuppliersModal(false)}
         suppliers={suppliers as NormalizedSupplier[]}
+        archivedSuppliers={archivedSuppliers as NormalizedSupplier[]}
         fields={[
           { key: 'name', label: 'Name', required: true, placeholder: 'Supplier name' },
           { key: 'contactPerson', label: 'Contact Person', placeholder: 'Contact name' },
@@ -944,6 +969,22 @@ export default function PurchaseOrdersView({
         onCreate={async (payload) => {
           await createSupplierMutation.mutateAsync(payload);
         }}
+        onUpdate={async (id, payload) => {
+          await updateSupplierMutation.mutateAsync({ id, data: payload });
+          setPOForm((current) =>
+            current.supplierId === id ? { ...current, supplierName: payload.name } : current
+          );
+        }}
+        onArchive={async (id) => {
+          await archiveSupplierMutation.mutateAsync(id);
+          setPOForm((current) =>
+            current.supplierId === id ? { ...current, supplierId: undefined, supplierName: '' } : current
+          );
+        }}
+        onRestore={async (id) => {
+          await restoreSupplierMutation.mutateAsync(id);
+        }}
+        canManage={isAdmin}
         onSelectSupplier={(s) => {
           setPOForm({ ...poForm, supplierId: s.id, supplierName: s.name });
           setShowSuppliersModal(false);
@@ -954,10 +995,18 @@ export default function PurchaseOrdersView({
 
       {/* Stats */}
       <div className="grid grid-cols-4 gap-4 mb-6">
-        <div className="bg-card border border-[rgba(0,0,0,0.1)] rounded-[14px] p-4"><p className="text-foreground text-[12px] mb-1">Total Orders</p><p className="text-foreground text-[24px] font-bold">{stats.total}</p></div>
-        <div className="bg-card border border-[rgba(0,0,0,0.1)] rounded-[14px] p-4"><p className="text-foreground text-[12px] mb-1">Pending</p><p className="text-[#FFA500] text-[24px] font-bold">{stats.pending}</p></div>
-        <div className="bg-card border border-[rgba(0,0,0,0.1)] rounded-[14px] p-4"><p className="text-foreground text-[12px] mb-1">Approved</p><p className="text-primary text-[24px] font-bold">{stats.approved}</p></div>
-        <div className="bg-card border border-[rgba(0,0,0,0.1)] rounded-[14px] p-4"><p className="text-foreground text-[12px] mb-1">Received</p><p className="text-primary text-[24px] font-bold">{stats.received}</p></div>
+        <button type="button" onClick={() => toggleFilterStatus('all')} aria-pressed={filterStatus === 'all'} aria-label="Show all orders" className={statCardClass(filterStatus === 'all')}>
+          <p className="text-[#323B42] text-[12px] mb-1">Total Orders</p><p className="text-[#323B42] text-[24px] font-bold">{stats.total}</p>
+        </button>
+        <button type="button" onClick={() => toggleFilterStatus('pending')} aria-pressed={filterStatus === 'pending'} aria-label="Filter by pending" className={statCardClass(filterStatus === 'pending')}>
+          <p className="text-[#323B42] text-[12px] mb-1">Pending</p><p className="text-[#FFA500] text-[24px] font-bold">{stats.pending}</p>
+        </button>
+        <button type="button" onClick={() => toggleFilterStatus('APPROVED')} aria-pressed={filterStatus === 'APPROVED'} aria-label="Filter by approved" className={statCardClass(filterStatus === 'APPROVED')}>
+          <p className="text-[#323B42] text-[12px] mb-1">Approved</p><p className="text-[#007A5E] text-[24px] font-bold">{stats.approved}</p>
+        </button>
+        <button type="button" onClick={() => toggleFilterStatus('RECEIVED')} aria-pressed={filterStatus === 'RECEIVED'} aria-label="Filter by received" className={statCardClass(filterStatus === 'RECEIVED')}>
+          <p className="text-[#323B42] text-[12px] mb-1">Received</p><p className="text-[#008967] text-[24px] font-bold">{stats.received}</p>
+        </button>
       </div>
 
       {/* Filter */}
@@ -966,6 +1015,7 @@ export default function PurchaseOrdersView({
           <label className="text-[14px] text-foreground font-medium">Status:</label>
           <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className="px-3 py-1.5 border border-[rgba(0,0,0,0.1)] rounded-[6px] text-[14px] bg-card focus:outline-none focus:border-primary">
             <option value="all">All Orders</option>
+            <option value="pending">Pending</option>
             <option value="DRAFT">Draft</option>
             <option value="SUBMITTED">Submitted</option>
             <option value="APPROVED">Approved</option>

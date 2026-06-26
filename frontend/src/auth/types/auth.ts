@@ -18,4 +18,5 @@ export interface AuthenticatedUser {
   staff_type: StaffType;
   store_type: StoreType;
   store_name: string | null;
+  void_pin?: string | null;
 }

@@ -251,6 +251,7 @@ model Recipe {
   targetFoodCost  Float?
   sellingPrice    Float?
   isActive        Boolean            @default(true)
+  archivedAt      DateTime?
   imageUrl        String?
   isVegetarian    Boolean            @default(false)
   isVegan         Boolean            @default(false)
@@ -271,6 +272,7 @@ model Recipe {
 
   @@unique([businessId, name])
   @@index([businessId, isActive])
+  @@index([businessId, archivedAt])
 }
 
 model RecipeIngredient {
@@ -716,4 +718,35 @@ model BundleItem {
   createdAt       DateTime      @default(now())
 
   @@index([bundleId])
+}
+
+// ─── Audit Log ───────────────────────────────────────────────────────────────
+// One row per meaningful action performed in the inventory system (create /
+// update / delete / status change / receive / adjust / setting change). Written
+// by InventoryApiService.recordAudit and read by the Reports "Audit Trail" tab.
+// Actor fields are denormalized so a log line stays accurate even if the user is
+// later renamed or deleted. No foreign keys, so a POS-bridge actor (no real User
+// row) can still be recorded.
+model AuditLog {
+  id               String         @id @default(uuid())
+  businessId       String
+  module           BusinessModule @default(RETAIL)
+  category         String
+  action           String
+  entityType       String?
+  entityId         String?
+  entityName       String?
+  summary          String?
+  quantity         String?
+  status           String?
+  metadata         Json?
+  performedById    String?
+  performedByName  String?
+  performedByEmail String?
+  performedByRole  String?
+  createdAt        DateTime       @default(now())
+
+  @@index([businessId, createdAt])
+  @@index([businessId, module, createdAt])
+  @@index([businessId, module, category])
 }

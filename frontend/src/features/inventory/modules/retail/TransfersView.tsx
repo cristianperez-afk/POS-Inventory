@@ -160,7 +160,7 @@ export default function TransfersView({
         </div>
         {activeTab === 'transfers' && (
           <div className="flex gap-3">
-            <button onClick={() => setShowTransferModal(true)} className="bg-secondary text-white px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-secondary">
+            <button onClick={() => setShowTransferModal(true)} className="bg-secondary text-white px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-secondary/90 hover:-translate-y-0.5 hover:shadow-md hover:shadow-secondary/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 active:translate-y-0 active:shadow-sm transition-all duration-200">
               <ArrowRightLeft className="size-4" />
               New Transfer
             </button>
@@ -171,7 +171,7 @@ export default function TransfersView({
       {/* Tabs */}
       <div className="bg-card border border-border rounded-[14px] overflow-hidden mb-4">
         <div className="flex border-b border-border">
-          <button onClick={() => setActiveTab('transfers')} className={`flex-1 px-6 py-3 text-[16px] font-medium transition-colors relative ${activeTab === 'transfers' ? 'bg-secondary/10 text-secondary' : 'text-foreground hover:bg-muted'}`}>
+          <button onClick={() => setActiveTab('transfers')} className={`flex-1 px-6 py-3 text-[16px] font-medium transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-secondary/50 relative ${activeTab === 'transfers' ? 'bg-secondary/10 text-secondary' : 'text-foreground hover:bg-muted'}`}>
             {activeTab === 'transfers' && <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-secondary" />}
             <div className="flex items-center justify-center gap-2">
               <ArrowRightLeft className="size-5" />
@@ -179,7 +179,7 @@ export default function TransfersView({
               <span className={`px-2 py-0.5 rounded text-[12px] font-semibold ${activeTab === 'transfers' ? 'bg-secondary text-white' : 'bg-muted text-foreground'}`}>{transfers.length}</span>
             </div>
           </button>
-          <button onClick={() => setActiveTab('adjustments')} className={`flex-1 px-6 py-3 text-[16px] font-medium transition-colors relative ${activeTab === 'adjustments' ? 'bg-secondary/10 text-secondary' : 'text-foreground hover:bg-muted'}`}>
+          <button onClick={() => setActiveTab('adjustments')} className={`flex-1 px-6 py-3 text-[16px] font-medium transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-secondary/50 relative ${activeTab === 'adjustments' ? 'bg-secondary/10 text-secondary' : 'text-foreground hover:bg-muted'}`}>
             {activeTab === 'adjustments' && <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-secondary" />}
             <div className="flex items-center justify-center gap-2">
               <RefreshCw className="size-5" />

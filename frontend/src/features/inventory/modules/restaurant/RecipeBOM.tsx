@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { ChefHat, Plus, Search, Edit, Trash2, X, Save, Calculator, Scale, Upload } from "lucide-react";
+import { useState, type WheelEvent } from "react";
+import { ChefHat, Plus, Search, Edit, Trash2, X, Save, Calculator, Scale, Upload, Archive, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "../../app/hooks/useSession";
 import { InventoryProduct } from "../lib/inventoryLogic";
@@ -7,6 +7,7 @@ import {
   useDeleteRestaurantRecipeMutation,
   useRestaurantInventoryQuery,
   useRestaurantRecipesQuery,
+  useRestoreRestaurantRecipeMutation,
   useSaveRestaurantRecipeMutation,
 } from "../lib/restaurant";
 
@@ -20,17 +21,32 @@ type Ingredient = {
   unit: string;
   inventoryQuantity?: number;
   inventoryUnit?: string;
+  inventoryStock?: number;
+  inventoryUsableStock?: number;
+  inventoryExpiry?: string | null;
+  stockStatus?: "available" | "low" | "insufficient" | "expired" | "missing";
   unitCost: number;
   totalCost: number;
 };
 
+const preventNumberWheel = (event: WheelEvent<HTMLInputElement>) => {
+  event.currentTarget.blur();
+};
+
+const numberInputClassName =
+  "[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none";
+
 type RecipeModifier = {
   id: string;
   name: string;
-  type: "remove";
+  group?: string;
+  type: "remove" | "note";
   itemId?: string;
   itemName?: string;
   productId?: number | string;
+  requiresStock?: boolean;
+  priceDelta?: number;
+  priceDeltaPercent?: number;
 };
 
 type Recipe = {
@@ -55,6 +71,8 @@ type Recipe = {
   sellingPrice?: number;
   grossMargin?: number;
   isActive?: boolean;
+  availableOrders?: number;
+  archivedAt?: string | null;
   modifiers?: RecipeModifier[];
   instructions: string;
 };
@@ -63,6 +81,193 @@ type Recipe = {
 type InventoryItem = InventoryProduct & { backendId?: string };
 
 const UNIT_OPTIONS = ["kg", "g", "L", "ml", "pcs", "piece", "liter", "bottle", "pack", "box", "dozen"];
+const MODIFIER_GROUPS = [
+  "Protein Choice",
+  "Flavor Adjustment",
+  "Sauce Preference",
+  "Add-ons",
+  "Rice Options",
+  "Portion Size",
+  "Special Instructions",
+  "Patty",
+  "Cheese",
+  "Vegetables",
+  "Sauce",
+  "Chicken Part",
+  "Skin",
+  "Gravy",
+  "Soup",
+  "Sourness",
+  "Ice Level",
+  "Sweetness",
+  "Size",
+  "Toppings",
+  "Temperature",
+];
+
+const PRICES: Record<string, number> = {
+  "Protein Choice|Boneless": 20,
+  "Protein Choice|Lean Pork": 15,
+  "Flavor Adjustment|Spicy": 10,
+  "Flavor Adjustment|Extra Spicy": 15,
+  "Sauce Preference|Extra Sauce": 15,
+  "Sauce Preference|Separate Sauce": 10,
+  "Add-ons|Extra Garlic": 10,
+  "Add-ons|Extra Onion": 10,
+  "Add-ons|Extra Chili": 10,
+  "Add-ons|Boiled Egg": 20,
+  "Add-ons|Mushroom": 25,
+  "Add-ons|Extra Vegetables": 20,
+  "Add-ons|Extra Butter": 20,
+  "Rice Options|No Rice": -20,
+  "Rice Options|Garlic Rice": 15,
+  "Rice Options|Extra Rice": 25,
+  "Rice Options|Half Rice": -10,
+  "Portion Size|Large": 60,
+  "Portion Size|Family Size": 180,
+  "Extra Options|Extra Chicken": 45,
+  "Extra Options|Extra Rice": 25,
+  "Extra Options|Extra Vegetables": 20,
+  "Extra Options|Peeled Shrimp": 20,
+  "Extra Options|Extra Butter": 20,
+  "Extra Options|Extra Garlic": 10,
+  "Extra Options|Spicy": 10,
+  "Patty|Double Patty": 60,
+  "Cheese|Extra Cheese": 20,
+  "Vegetables|Extra Lettuce": 10,
+  "Vegetables|Extra Tomato": 15,
+  "Vegetables|Extra Onion": 10,
+  "Sauce|Extra Mayo": 10,
+  "Sauce|BBQ Sauce": 10,
+  "Sauce|Spicy Sauce": 10,
+  "Add-ons|Bacon": 35,
+  "Add-ons|Egg": 20,
+  "Gravy|Extra Gravy": 10,
+  "Rice|Extra Rice": 25,
+  "Rice|Garlic Rice": 15,
+  "Rice|No Rice": -20,
+  "Spice|Spicy": 10,
+  "Soup|More Soup": 15,
+  "Sourness|Extra Sour": 10,
+  "Meat|Lean Meat": 20,
+  "Meat|Extra Pork": 60,
+  "Vegetables|Extra Vegetables": 20,
+  "Size|Large": 20,
+  "Beverage Add-ons|Lemon Slice": 10,
+  "Beverage Add-ons|Extra Lemon": 15,
+  "Serving Size|Large": 30,
+  "Toppings|Extra Caramel": 15,
+  "Toppings|Whipped Cream": 20,
+  "Toppings|Fresh Fruits": 35,
+};
+const PERCENTS: Record<string, number> = {
+  "Portion Size|Half Serving": -50,
+};
+
+const modifierPreset = (group: string, names: string[]) => names.map((name) => ({
+  group,
+  name,
+  priceDelta: PRICES[`${group}|${name}`] ?? 0,
+  priceDeltaPercent: PERCENTS[`${group}|${name}`] ?? 0,
+}));
+
+const MAIN_COURSE_MODIFIERS = [
+  ...modifierPreset("Protein Choice", ["Chicken Breast", "Chicken Thigh", "Mixed Parts", "Boneless", "Skin On", "No Skin", "Lean Pork", "Fatty Pork", "Mixed Pork Cuts"]),
+  ...modifierPreset("Flavor Adjustment", ["Less Salty", "More Salty", "Less Sweet", "Sweeter", "Less Sour", "More Sour", "Mild", "Spicy", "Extra Spicy"]),
+  ...modifierPreset("Sauce Preference", ["Extra Sauce", "Less Sauce", "Dry Style", "Separate Sauce"]),
+  ...modifierPreset("Add-ons", ["Extra Garlic", "Extra Onion", "Extra Chili", "Boiled Egg", "Mushroom", "Extra Vegetables", "Extra Butter"]),
+  ...modifierPreset("Rice Options", ["No Rice", "Plain Rice", "Garlic Rice", "Extra Rice", "Half Rice"]),
+  ...modifierPreset("Portion Size", ["Half Serving", "Regular", "Large", "Family Size"]),
+  ...modifierPreset("Special Instructions", ["Less Oil", "No MSG", "Cut into Smaller Pieces", "Well Done", "Cashier Note"]),
+];
+
+const RECIPE_PRESETS: Record<string, { match: RegExp; options: { group: string; name: string; priceDelta?: number; priceDeltaPercent?: number }[] }> = {
+  "Chicken Adobo": {
+    match: /chicken adobo/i,
+    options: MAIN_COURSE_MODIFIERS,
+  },
+  "Chicken Rice Bowl": {
+    match: /chicken rice bowl/i,
+    options: [
+      ...MAIN_COURSE_MODIFIERS.filter((option) => ["Protein Choice", "Rice Options", "Flavor Adjustment", "Sauce Preference", "Add-ons", "Special Instructions"].includes(option.group)),
+      ...modifierPreset("Extra Options", ["Extra Chicken", "Extra Rice", "No Vegetables", "Extra Vegetables"]),
+    ],
+  },
+  "Garlic Buttered Shrimp": {
+    match: /garlic butter(?:ed)? shrimp|shrimp/i,
+    options: [
+      ...MAIN_COURSE_MODIFIERS.filter((option) => ["Flavor Adjustment", "Sauce Preference", "Rice Options", "Portion Size", "Add-ons", "Special Instructions"].includes(option.group)),
+      ...modifierPreset("Extra Options", ["Peeled Shrimp", "With Shell", "Extra Butter", "Extra Garlic", "Spicy"]),
+    ],
+  },
+  "Pork Adobo": {
+    match: /pork adobo/i,
+    options: [
+      ...MAIN_COURSE_MODIFIERS.filter((option) => ["Flavor Adjustment", "Sauce Preference", "Rice Options", "Portion Size", "Add-ons", "Special Instructions"].includes(option.group)),
+    ],
+  },
+  "Regular Burger": {
+    match: /regular burger|burger/i,
+    options: [
+      ...modifierPreset("Patty", ["Single Patty", "Double Patty"]),
+      ...modifierPreset("Cheese", ["No Cheese", "Extra Cheese"]),
+      ...modifierPreset("Vegetables", ["No Lettuce", "No Tomato", "Extra Lettuce", "Extra Tomato", "Extra Onion"]),
+      ...modifierPreset("Sauce", ["No Mayo", "Extra Mayo", "Extra Ketchup", "Extra Mustard", "BBQ Sauce", "Spicy Sauce"]),
+      ...modifierPreset("Doneness", ["Well Done"]),
+      ...modifierPreset("Add-ons", ["Bacon", "Egg"]),
+    ],
+  },
+  "Chicken Joy": {
+    match: /chicken joy/i,
+    options: [
+      ...modifierPreset("Chicken Part", ["Breast", "Thigh", "Drumstick", "Wing"]),
+      ...modifierPreset("Skin", ["Crispy", "No Skin"]),
+      ...modifierPreset("Gravy", ["Extra Gravy", "Separate Gravy", "No Gravy"]),
+      ...modifierPreset("Rice", ["Extra Rice", "Garlic Rice", "No Rice"]),
+      ...modifierPreset("Spice", ["Original", "Spicy"]),
+    ],
+  },
+  "Sinigang na Baboy": {
+    match: /sinigang na baboy|sinigang/i,
+    options: [
+      ...modifierPreset("Soup", ["More Soup", "Less Soup"]),
+      ...modifierPreset("Sourness", ["Less Sour", "Regular", "Extra Sour"]),
+      ...modifierPreset("Spice", ["Mild", "Spicy"]),
+      ...modifierPreset("Meat", ["Lean Meat", "Mixed Meat", "Extra Pork"]),
+      ...modifierPreset("Vegetables", ["Extra Vegetables", "No Okra", "No Eggplant", "No Radish"]),
+      ...modifierPreset("Rice", ["No Rice", "Extra Rice", "Garlic Rice"]),
+    ],
+  },
+  "Iced Tea": {
+    match: /iced tea/i,
+    options: [
+      ...modifierPreset("Ice Level", ["No Ice", "Less Ice", "Regular Ice", "Extra Ice"]),
+      ...modifierPreset("Sweetness", ["0% Sugar", "25%", "50%", "75%", "100%"]),
+      ...modifierPreset("Size", ["Regular", "Large"]),
+      ...modifierPreset("Beverage Add-ons", ["Lemon Slice", "Extra Lemon"]),
+    ],
+  },
+  "Leche Flan": {
+    match: /leche flan/i,
+    options: [
+      ...modifierPreset("Serving Size", ["Regular", "Large"]),
+      ...modifierPreset("Toppings", ["Extra Caramel", "Whipped Cream", "Fresh Fruits"]),
+      ...modifierPreset("Temperature", ["Chilled", "Room Temperature"]),
+    ],
+  },
+};
+
+const cleanModifierName = (name: string) =>
+  name
+    .replace(/\(\+P\)/gi, "")
+    .replace(/\b(extra|more|less|no|regular|single|double|large|half|family|separate|dry style|with)\b/gi, "")
+    .trim()
+    .toLowerCase();
+
+const modifierNeedsStock = (group: string, name: string) => {
+  if (/^no\b|^less\b|^mild$|^spicy$|well done|room temperature|chilled|sugar|ice|sour|salty|sweet|original|separate|dry style/i.test(name)) return false;
+  return /\(\+P\)|extra|plain rice|garlic rice|chicken|pork|shrimp|patty|cheese|lettuce|tomato|onion|garlic|chili|egg|mushroom|vegetables|bacon|gravy|butter|lemon|caramel|cream|fruits|breast|thigh|leg|wing|lean|fatty|mixed/i.test(`${group} ${name}`);
+};
 
 const normalizeUnit = (unit: string | undefined) => {
   const normalized = (unit || '').trim().toLowerCase();
@@ -85,6 +290,50 @@ const toInventoryQuantity = (quantity: number, recipeUnit: string, inventoryUnit
 };
 
 const formatMoney = (value: number) => `₱${Number.isFinite(value) ? value.toFixed(2) : "0.00"}`;
+const formatModifierPrice = (modifier: { priceDelta?: number; priceDeltaPercent?: number }) => {
+  if (modifier.priceDeltaPercent) return `${modifier.priceDeltaPercent > 0 ? "+" : ""}${modifier.priceDeltaPercent}%`;
+  if (modifier.priceDelta) return `${modifier.priceDelta > 0 ? "+" : "-"}P${Math.abs(modifier.priceDelta)}`;
+  return "";
+};
+
+const isExpiredInventoryItem = (item: InventoryItem) => {
+  if (!item.expiry) return false;
+  const expiryDate = new Date(`${item.expiry}T00:00:00`);
+  if (Number.isNaN(expiryDate.getTime())) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return expiryDate < today;
+};
+
+const isExpiredDate = (value?: string | null) => {
+  if (!value) return false;
+  const expiryDate = new Date(value.includes('T') ? value : `${value}T00:00:00`);
+  if (Number.isNaN(expiryDate.getTime())) return false;
+  expiryDate.setHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return expiryDate < today;
+};
+
+const formatNumber = (value: number) =>
+  Number.isFinite(value) ? value.toLocaleString(undefined, { maximumFractionDigits: 2 }) : "0";
+
+const calculateIngredientAvailableOrders = (ingredient: Ingredient) => {
+  const requiredQuantity = ingredient.inventoryQuantity ?? ingredient.quantity;
+  const usableStock = ingredient.inventoryUsableStock ?? (isExpiredDate(ingredient.inventoryExpiry) ? 0 : ingredient.inventoryStock);
+  if (!Number.isFinite(requiredQuantity) || requiredQuantity <= 0) return 0;
+  return Math.max(0, Math.floor(Number(usableStock ?? 0) / requiredQuantity));
+};
+
+const getIngredientStockStatus = (ingredient: Ingredient) => {
+  if (ingredient.stockStatus) return ingredient.stockStatus;
+  if (isExpiredDate(ingredient.inventoryExpiry)) return "expired";
+  const stock = Number(ingredient.inventoryStock ?? 0);
+  const requiredQuantity = Number(ingredient.inventoryQuantity ?? ingredient.quantity);
+  if (!Number.isFinite(stock) || stock <= 0) return "missing";
+  if (Number.isFinite(requiredQuantity) && requiredQuantity > 0 && stock < requiredQuantity) return "insufficient";
+  return "available";
+};
 
 const calculateRecipeYieldAdjustedCost = (recipe: Recipe) => {
   return recipe.yieldAdjustedCost ?? recipe.totalCost / Math.max((recipe.yieldPercentage || 100) / 100, 0.01);
@@ -100,12 +349,14 @@ export function RecipeBOM() {
   const isAdmin = currentUser?.role === "Admin";
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [activeFilter, setActiveFilter] = useState<"all" | "active">("all");
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingRecipe, setEditingRecipe] = useState<Recipe | null>(null);
   const [showViewModal, setShowViewModal] = useState(false);
   const [selectedRecipe, setSelectedRecipe] = useState<Recipe | null>(null);
   const [scaleMultiplier, setScaleMultiplier] = useState(1);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [viewArchived, setViewArchived] = useState(false);
   const [ingredientSearch, setIngredientSearch] = useState("");
   const [isIngredientPickerOpen, setIsIngredientPickerOpen] = useState(false);
 
@@ -125,7 +376,8 @@ export function RecipeBOM() {
 
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
   const [modifiers, setModifiers] = useState<RecipeModifier[]>([]);
-  const [modifierIngredientId, setModifierIngredientId] = useState("");
+  const [modifierGroup, setModifierGroup] = useState(MODIFIER_GROUPS[0]);
+  const [modifierItemId, setModifierItemId] = useState("");
   const [modifierName, setModifierName] = useState("");
   const [currentIngredient, setCurrentIngredient] = useState({
     productId: "",
@@ -138,17 +390,35 @@ export function RecipeBOM() {
 
   const { data: inventoryItems = [] } = useRestaurantInventoryQuery<InventoryItem[]>();
 
-  // Only show products that are actually in stock.
-  const availableInventoryItems = inventoryItems.filter(item => item.stock > 0);
+  // Only show products that are actually in stock and not expired.
+  const availableInventoryItems = inventoryItems.filter(item => item.stock > 0 && !isExpiredInventoryItem(item));
 
   const { data: recipes = [] } = useRestaurantRecipesQuery();
+  const { data: archivedRecipes = [] } = useRestaurantRecipesQuery({ archived: true });
   const saveRecipe = useSaveRestaurantRecipeMutation();
   const removeRecipe = useDeleteRestaurantRecipeMutation();
+  const restoreRecipe = useRestoreRestaurantRecipeMutation();
+
+  // The list source swaps between the live menu and the archive bin.
+  const sourceRecipes = viewArchived ? archivedRecipes : recipes;
   const findInventoryItem = (productId?: number | string) =>
     inventoryItems.find((item) =>
       String(item.id) === String(productId) ||
       item.backendId === productId,
     );
+  const findModifierInventoryItem = (group: string, name: string) => {
+    const cleaned = cleanModifierName(name);
+    if (!cleaned) return undefined;
+    return inventoryItems.find((item) => {
+      const itemName = item.name.toLowerCase();
+      return itemName === cleaned || itemName.includes(cleaned) || cleaned.includes(itemName);
+    });
+  };
+  const isModifierUnavailable = (modifier: RecipeModifier) => {
+    if (!modifier.requiresStock && !modifier.itemId && !modifier.productId) return false;
+    const item = findInventoryItem(modifier.productId ?? modifier.itemId);
+    return !item || Number(item.stock ?? 0) <= 0;
+  };
 
   const categories = ["all", "Appetizer", "Main Course", "Dessert", "Beverage"];
 
@@ -161,11 +431,13 @@ export function RecipeBOM() {
   });
   const visibleIngredientOptions = filteredInventoryItems.slice(0, 10);
 
-  const filteredRecipes = recipes.filter(recipe => {
+  const filteredRecipes = sourceRecipes.filter(recipe => {
     const matchesSearch = (recipe.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
                          (recipe.id || '').toLowerCase().includes(searchQuery.toLowerCase());
     const matchesCategory = categoryFilter === "all" || recipe.category === categoryFilter;
-    return matchesSearch && matchesCategory;
+    // The active/inactive filter only applies to the live menu, not the archive.
+    const matchesActive = viewArchived || activeFilter === "all" || (recipe.isActive ?? true);
+    return matchesSearch && matchesCategory && matchesActive;
   });
 
   const handleAddIngredient = () => {
@@ -184,6 +456,10 @@ export function RecipeBOM() {
       const unitCost = parseFloat(currentIngredient.unitCost);
       if (!Number.isFinite(quantity) || quantity <= 0) {
         toast.error("Ingredient quantity must be greater than zero");
+        return;
+      }
+      if (isExpiredInventoryItem(selectedItem)) {
+        toast.error(`${selectedItem.name} is expired and cannot be used in a recipe.`);
         return;
       }
 
@@ -208,6 +484,10 @@ export function RecipeBOM() {
         unit: currentIngredient.unit,
         inventoryQuantity,
         inventoryUnit: selectedItem.unit,
+        inventoryStock: selectedItem.stock,
+        inventoryUsableStock: selectedItem.stock,
+        inventoryExpiry: selectedItem.expiry || null,
+        stockStatus: "available",
         unitCost: unitCost,
         totalCost: totalCost,
       };
@@ -250,24 +530,14 @@ export function RecipeBOM() {
     }
   };
 
-  const handleModifierIngredientChange = (ingredientId: string) => {
-    setModifierIngredientId(ingredientId);
-    const ingredient = ingredients.find((item) => item.id === ingredientId);
-    setModifierName(ingredient ? `No ${ingredient.name}` : "");
-  };
-
   const handleAddModifier = () => {
-    const ingredient = ingredients.find((item) => item.id === modifierIngredientId);
-    if (!ingredient) {
-      toast.error("Please select an ingredient for the modifier");
-      return;
-    }
     if (!modifierName.trim()) {
       toast.error("Modifier name is required");
       return;
     }
-    if (modifiers.some((modifier) => modifier.productId === ingredient.productId)) {
-      toast.error("A remove modifier already exists for this ingredient");
+    const linkedItem = modifierItemId ? findInventoryItem(modifierItemId) : undefined;
+    if (modifierItemId && !linkedItem) {
+      toast.error("Please select a valid stock item");
       return;
     }
 
@@ -276,17 +546,51 @@ export function RecipeBOM() {
       {
         id: `MOD-${Date.now()}`,
         name: modifierName.trim(),
-        type: "remove",
-        productId: ingredient.productId,
-        itemName: ingredient.name,
+        group: modifierGroup.trim() || "Modifiers",
+        type: linkedItem ? "remove" : "note",
+        productId: linkedItem?.id,
+        itemId: linkedItem?.backendId,
+        itemName: linkedItem?.name,
+        requiresStock: Boolean(linkedItem),
+        priceDelta: 0,
+        priceDeltaPercent: 0,
       },
     ]);
-    setModifierIngredientId("");
+    setModifierItemId("");
     setModifierName("");
   };
 
   const handleRemoveModifier = (id: string) => {
     setModifiers(modifiers.filter((modifier) => modifier.id !== id));
+  };
+
+  const applyPresetModifiers = () => {
+    const recipeName = newRecipe.name.trim();
+    const preset = Object.values(RECIPE_PRESETS).find((item) => item.match.test(recipeName)) ??
+      (newRecipe.category === "Dessert" ? RECIPE_PRESETS["Leche Flan"] :
+       newRecipe.category === "Beverage" ? RECIPE_PRESETS["Iced Tea"] : null);
+
+    if (!preset) {
+      toast.error("No dish preset matched this recipe name");
+      return;
+    }
+
+    setModifiers(preset.options.map((option, index) => {
+      const requiresStock = modifierNeedsStock(option.group, option.name);
+      const stockItem = requiresStock ? findModifierInventoryItem(option.group, option.name) : undefined;
+      return {
+        id: `MOD-${Date.now()}-${index}`,
+        name: option.name,
+        group: option.group,
+        type: stockItem ? "remove" : "note",
+        productId: stockItem?.id,
+        itemId: stockItem?.backendId,
+        itemName: stockItem?.name,
+        requiresStock,
+        priceDelta: option.priceDelta ?? 0,
+        priceDeltaPercent: option.priceDeltaPercent ?? 0,
+      };
+    }));
   };
 
   const calculateTotalCost = () => {
@@ -406,15 +710,19 @@ export function RecipeBOM() {
           isActive: recipeToAdd.isActive,
           modifiers: modifiers.map((modifier) => {
             const inventoryItem = findInventoryItem(modifier.productId ?? modifier.itemId);
-            if (!inventoryItem?.backendId) {
+            if (modifier.itemId && !inventoryItem?.backendId) {
               throw new Error(`Inventory link is missing for modifier ${modifier.name}`);
             }
             return {
               id: modifier.id,
               name: modifier.name,
-              type: modifier.type,
-              itemId: inventoryItem.backendId,
-              itemName: modifier.itemName,
+              group: modifier.group ?? "Modifiers",
+              type: inventoryItem?.backendId ? modifier.type : "note",
+              itemId: inventoryItem?.backendId,
+              itemName: inventoryItem?.name ?? modifier.itemName,
+              requiresStock: Boolean(modifier.requiresStock),
+              priceDelta: Number(modifier.priceDelta ?? 0),
+              priceDeltaPercent: Number(modifier.priceDeltaPercent ?? 0),
             };
           }),
           ingredients: recipeToAdd.ingredients.map((ingredient) => {
@@ -448,7 +756,8 @@ export function RecipeBOM() {
       });
       setIngredients([]);
       setModifiers([]);
-      setModifierIngredientId("");
+      setModifierGroup(MODIFIER_GROUPS[0]);
+      setModifierItemId("");
       setModifierName("");
       setIngredientSearch("");
       setIsIngredientPickerOpen(false);
@@ -484,8 +793,9 @@ export function RecipeBOM() {
       instructions: recipe.instructions,
     });
     setIngredients(recipe.ingredients);
-    setModifiers(recipe.modifiers ?? []);
-    setModifierIngredientId("");
+    setModifiers((recipe.modifiers ?? []).map((modifier) => ({ ...modifier, group: modifier.group ?? "Modifiers" })));
+    setModifierGroup(MODIFIER_GROUPS[0]);
+    setModifierItemId("");
     setModifierName("");
     setIngredientSearch("");
     setIsIngredientPickerOpen(false);
@@ -494,21 +804,37 @@ export function RecipeBOM() {
 
   const handleDeleteRecipe = (id: string) => {
     if (!isAdmin) {
-      toast.error("Only admin users can delete recipes.");
+      toast.error("Only admin users can modify recipes.");
       return;
     }
     setPendingDeleteId(id);
   };
 
+  const handleRestoreRecipe = async (id: string) => {
+    if (!isAdmin) {
+      toast.error("Only admin users can restore recipes.");
+      return;
+    }
+    try {
+      await restoreRecipe.mutateAsync(id);
+      toast.success("Recipe restored to the menu");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to restore recipe");
+    }
+  };
+
   const confirmDeleteRecipe = async () => {
     if (!pendingDeleteId) return;
     const id = pendingDeleteId;
+    // In the archive bin "delete" means permanent removal; on the live menu it
+    // means archive (a reversible soft-delete).
+    const permanent = viewArchived;
     setPendingDeleteId(null);
     try {
-      await removeRecipe.mutateAsync(id);
-      toast.success("Recipe deleted successfully");
+      await removeRecipe.mutateAsync({ id, permanent });
+      toast.success(permanent ? "Recipe permanently deleted" : "Recipe archived");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to delete recipe");
+      toast.error(error instanceof Error ? error.message : "Failed to update recipe");
     }
   };
 
@@ -628,11 +954,23 @@ export function RecipeBOM() {
     return (cost * scaleMultiplier).toFixed(2);
   };
 
-  const stats = [
-    { label: "Total Recipes", value: recipes.length, color: "text-blue-600" },
-    { label: "Active Menu Items", value: recipes.filter(r => r.isActive ?? true).length, color: "text-purple-600" },
-    { label: "Avg Cost/Serving", value: formatMoney(recipes.length ? recipes.reduce((sum, r) => sum + r.costPerServing, 0) / recipes.length : 0), color: "text-green-600" },
-    { label: "Avg Menu Price", value: formatMoney(recipes.length ? recipes.reduce((sum, r) => sum + (r.sellingPrice ?? r.suggestedSellingPrice ?? 0), 0) / recipes.length : 0), color: "text-orange-600" },
+  // Count cards toggle the recipe list filter; clicking the active card (or Total
+  // Recipes) clears it back to "all". Average / metric cards are not filters.
+  const toggleActiveFilter = (filter: "all" | "active") => {
+    setActiveFilter((current) => (current === filter ? "all" : filter));
+  };
+
+  const stats: Array<{
+    label: string;
+    value: number | string;
+    color: string;
+    filter: "all" | "active" | null;
+  }> = [
+    { label: "Total Recipes", value: recipes.length, color: "text-blue-600", filter: "all" },
+    { label: "Active Menu Items", value: recipes.filter(r => r.isActive ?? true).length, color: "text-purple-600", filter: "active" },
+    { label: "Recipes In Stock", value: recipes.filter(r => (r.availableOrders ?? 0) > 0).length, color: "text-emerald-600", filter: null },
+    { label: "Avg Cost/Serving", value: formatMoney(recipes.length ? recipes.reduce((sum, r) => sum + r.costPerServing, 0) / recipes.length : 0), color: "text-green-600", filter: null },
+    { label: "Avg Menu Price", value: formatMoney(recipes.length ? recipes.reduce((sum, r) => sum + (r.sellingPrice ?? r.suggestedSellingPrice ?? 0), 0) / recipes.length : 0), color: "text-orange-600", filter: null },
   ];
 
   return (
@@ -647,25 +985,59 @@ export function RecipeBOM() {
               : "View recipe costs, menu prices, and scaling"}
           </p>
         </div>
-        {isAdmin && (
+        <div className="mt-4 md:mt-0 flex items-center gap-3">
           <button
-            onClick={handleOpenCreateModal}
-            className="mt-4 md:mt-0 px-6 py-3 bg-gradient-to-r from-primary to-secondary text-white rounded-2xl hover:shadow-lg hover:shadow-primary/30 transition-all duration-200 flex items-center gap-2"
+            onClick={() => setViewArchived((v) => !v)}
+            aria-pressed={viewArchived}
+            className={`px-5 py-3 rounded-2xl border transition-all duration-200 flex items-center gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${
+              viewArchived
+                ? "bg-primary/10 text-primary border-primary/60"
+                : "bg-card text-foreground border-border hover:border-primary/60"
+            }`}
           >
-            <Plus className="w-5 h-5" />
-            Create Recipe
+            <Archive className="w-5 h-5" />
+            {viewArchived ? `Back to Menu` : `Archived${archivedRecipes.length ? ` (${archivedRecipes.length})` : ""}`}
           </button>
-        )}
+          {isAdmin && !viewArchived && (
+            <button
+              onClick={handleOpenCreateModal}
+              className="px-6 py-3 bg-gradient-to-r from-primary to-secondary text-white rounded-2xl hover:-translate-y-0.5 hover:shadow-lg hover:shadow-primary/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-md transition-all duration-200 flex items-center gap-2"
+            >
+              <Plus className="w-5 h-5" />
+              Create Recipe
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-        {stats.map((stat, index) => (
-          <div key={index} className="bg-card rounded-2xl p-6 shadow-sm border border-border">
-            <p className="text-muted-foreground text-sm mb-2">{stat.label}</p>
-            <p className={`text-2xl font-bold ${stat.color}`}>{stat.value}</p>
-          </div>
-        ))}
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-6 mb-8">
+        {stats.map((stat, index) => {
+          if (!stat.filter) {
+            return (
+              <div key={index} className="bg-card rounded-2xl p-6 shadow-sm border border-border">
+                <p className="text-muted-foreground text-sm mb-2">{stat.label}</p>
+                <p className={`text-2xl font-bold ${stat.color}`}>{stat.value}</p>
+              </div>
+            );
+          }
+          const isActive = activeFilter === stat.filter;
+          return (
+            <button
+              key={index}
+              type="button"
+              onClick={() => toggleActiveFilter(stat.filter!)}
+              aria-pressed={isActive}
+              aria-label={`Filter by ${stat.label}`}
+              className={`group text-left w-full bg-card rounded-2xl p-6 shadow-sm border cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-xl hover:shadow-primary/25 hover:border-primary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-lg active:shadow-primary/30 ${
+                isActive ? "border-primary bg-primary/5 shadow-md shadow-primary/20" : "border-border"
+              }`}
+            >
+              <p className="text-muted-foreground text-sm mb-2">{stat.label}</p>
+              <p className={`text-2xl font-bold ${stat.color}`}>{stat.value}</p>
+            </button>
+          );
+        })}
       </div>
 
       {/* Search and Filter */}
@@ -747,6 +1119,12 @@ export function RecipeBOM() {
                 <span className="font-medium text-foreground">{recipe.ingredients.length}</span>
               </div>
               <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">Available Orders:</span>
+                <span className={`font-semibold ${(recipe.availableOrders ?? 0) > 0 ? "text-emerald-600" : "text-red-600"}`}>
+                  {recipe.availableOrders ?? 0}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">Menu Status:</span>
                 <span className={`font-medium ${(recipe.isActive ?? true) ? "text-green-600" : "text-muted-foreground"}`}>
                   {(recipe.isActive ?? true) ? "Active" : "Inactive"}
@@ -783,7 +1161,7 @@ export function RecipeBOM() {
                 <Calculator className="w-4 h-4" />
                 View & Scale
               </button>
-              {isAdmin && (
+              {isAdmin && !viewArchived && (
                 <>
                   <button
                     onClick={() => handleEditRecipe(recipe)}
@@ -794,8 +1172,27 @@ export function RecipeBOM() {
                   </button>
                   <button
                     onClick={() => handleDeleteRecipe(recipe.id)}
+                    className="px-4 py-2 bg-amber-50 text-amber-600 rounded-xl hover:bg-amber-100 transition-colors"
+                    title="Archive recipe (can be restored later)"
+                  >
+                    <Archive className="w-4 h-4" />
+                  </button>
+                </>
+              )}
+              {isAdmin && viewArchived && (
+                <>
+                  <button
+                    onClick={() => handleRestoreRecipe(recipe.id)}
+                    className="px-4 py-2 bg-green-50 text-green-600 rounded-xl hover:bg-green-100 transition-colors flex items-center gap-2"
+                    title="Restore recipe to the menu"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                    Restore
+                  </button>
+                  <button
+                    onClick={() => handleDeleteRecipe(recipe.id)}
                     className="px-4 py-2 bg-red-50 text-red-600 rounded-xl hover:bg-red-100 transition-colors"
-                    title="Delete recipe"
+                    title="Delete permanently (only if never sold)"
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
@@ -804,6 +1201,19 @@ export function RecipeBOM() {
             </div>
           </div>
         ))}
+        {filteredRecipes.length === 0 && (
+          <div className="col-span-full bg-card rounded-2xl p-12 shadow-sm border border-dashed border-border flex flex-col items-center justify-center text-center">
+            <Archive className="w-10 h-10 text-muted-foreground mb-3" />
+            <p className="text-foreground font-medium">
+              {viewArchived ? "No archived recipes" : "No recipes found"}
+            </p>
+            <p className="text-sm text-muted-foreground mt-1">
+              {viewArchived
+                ? "Recipes you archive will appear here and can be restored anytime."
+                : "Try adjusting your search or filters, or create a new recipe."}
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Create Recipe Modal */}
@@ -912,10 +1322,13 @@ export function RecipeBOM() {
                     id="servings"
                     name="servings"
                     type="number"
+                    step="any"
+                    inputMode="decimal"
                     min="1"
                     value={newRecipe.servings}
+                    onWheel={preventNumberWheel}
                     onChange={handleInputChange}
-                    className="w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                    className={`w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${numberInputClassName}`}
                     required
                   />
                 </div>
@@ -930,10 +1343,12 @@ export function RecipeBOM() {
                     type="number"
                     min="1"
                     max="100"
-                    step="0.01"
+                    step="any"
+                    inputMode="decimal"
                     value={newRecipe.yieldPercentage}
+                    onWheel={preventNumberWheel}
                     onChange={handleInputChange}
-                    className="w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                    className={`w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${numberInputClassName}`}
                     required
                   />
                 </div>
@@ -948,10 +1363,12 @@ export function RecipeBOM() {
                     type="number"
                     min="1"
                     max="100"
-                    step="0.01"
+                    step="any"
+                    inputMode="decimal"
                     value={newRecipe.targetFoodCost}
+                    onWheel={preventNumberWheel}
                     onChange={handleInputChange}
-                    className="w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                    className={`w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${numberInputClassName}`}
                     required
                   />
                   <p className="mt-1 text-[11px] text-muted-foreground">Used to compute the suggested price from current ingredient cost.</p>
@@ -966,11 +1383,13 @@ export function RecipeBOM() {
                     name="sellingPrice"
                     type="number"
                     min="0.01"
-                    step="0.01"
+                    step="any"
+                    inputMode="decimal"
                     value={newRecipe.sellingPrice}
+                    onWheel={preventNumberWheel}
                     onChange={handleInputChange}
                     placeholder={formatMoney(calculateSuggestedSellingPrice())}
-                    className="w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                    className={`w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${numberInputClassName}`}
                   />
                   <p className="mt-1 text-[11px] text-muted-foreground">Leave blank to use the suggested price; edit this when the client wants a different menu price.</p>
                 </div>
@@ -983,10 +1402,13 @@ export function RecipeBOM() {
                     id="prepTime"
                     name="prepTime"
                     type="number"
+                    step="any"
+                    inputMode="decimal"
                     min="0"
                     value={newRecipe.prepTime}
+                    onWheel={preventNumberWheel}
                     onChange={handleInputChange}
-                    className="w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                    className={`w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${numberInputClassName}`}
                     required
                   />
                 </div>
@@ -1072,11 +1494,13 @@ export function RecipeBOM() {
                       id="quantity"
                       name="quantity"
                       type="number"
-                      step="0.01"
+                      step="any"
+                      inputMode="decimal"
                       min="0.01"
                       value={currentIngredient.quantity}
+                      onWheel={preventNumberWheel}
                       onChange={handleIngredientInputChange}
-                      className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                      className={`w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${numberInputClassName}`}
                     />
                   </div>
 
@@ -1106,10 +1530,12 @@ export function RecipeBOM() {
                       id="unitCost"
                       name="unitCost"
                       type="number"
-                      step="0.01"
+                      step="any"
+                      inputMode="decimal"
                       value={currentIngredient.unitCost}
+                      onWheel={preventNumberWheel}
                       onChange={handleIngredientInputChange}
-                      className="w-full px-3 py-2 text-sm bg-muted/50 border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                      className={`w-full px-3 py-2 text-sm bg-muted/50 border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${numberInputClassName}`}
                       readOnly
                     />
                   </div>
@@ -1163,26 +1589,51 @@ export function RecipeBOM() {
                     <h3 className="text-lg font-semibold text-foreground">Menu Modifiers</h3>
                     <p className="text-xs text-muted-foreground">Set the modifier choices that staff can use for this menu item in POS.</p>
                   </div>
-                  <span className="rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
-                    {modifiers.length} option{modifiers.length !== 1 ? "s" : ""}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={applyPresetModifiers}
+                      className="rounded-lg border border-primary/30 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10"
+                    >
+                      Set defaults
+                    </button>
+                    <span className="rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
+                      {modifiers.length} option{modifiers.length !== 1 ? "s" : ""}
+                    </span>
+                  </div>
                 </div>
 
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_auto]">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_1fr_auto]">
                   <div>
-                    <label htmlFor="modifierIngredient" className="block text-xs mb-1 text-foreground">
-                      BOM Ingredient
+                    <label htmlFor="modifierGroup" className="block text-xs mb-1 text-foreground">
+                      Category
+                    </label>
+                    <input
+                      id="modifierGroup"
+                      list="modifier-group-options"
+                      value={modifierGroup}
+                      onChange={(event) => setModifierGroup(event.target.value)}
+                      placeholder="Flavor Adjustment"
+                      className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                    />
+                    <datalist id="modifier-group-options">
+                      {MODIFIER_GROUPS.map((group) => <option key={group} value={group} />)}
+                    </datalist>
+                  </div>
+                  <div>
+                    <label htmlFor="modifierItem" className="block text-xs mb-1 text-foreground">
+                      Stock Link
                     </label>
                     <select
-                      id="modifierIngredient"
-                      value={modifierIngredientId}
-                      onChange={(event) => handleModifierIngredientChange(event.target.value)}
+                      id="modifierItem"
+                      value={modifierItemId}
+                      onChange={(event) => setModifierItemId(event.target.value)}
                       className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
                     >
-                      <option value="">Select ingredient</option>
-                      {ingredients.map((ingredient) => (
-                        <option key={ingredient.id} value={ingredient.id}>
-                          {ingredient.name}
+                      <option value="">No stock effect</option>
+                      {inventoryItems.map((item) => (
+                        <option key={item.backendId ?? item.id} value={item.backendId ?? item.id}>
+                          {item.name} ({item.stock} {item.unit})
                         </option>
                       ))}
                     </select>
@@ -1202,7 +1653,7 @@ export function RecipeBOM() {
                   <button
                     type="button"
                     onClick={handleAddModifier}
-                    disabled={ingredients.length === 0}
+                    disabled={!modifierName.trim() || !modifierGroup.trim()}
                     className="self-end rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary/90 disabled:opacity-50"
                   >
                     Add
@@ -1215,11 +1666,18 @@ export function RecipeBOM() {
                       No modifiers configured for this menu item
                     </p>
                   ) : (
-                    modifiers.map((modifier) => (
-                      <div key={modifier.id} className="flex items-center justify-between rounded-lg bg-muted/40 px-3 py-2">
+                    modifiers.map((modifier) => {
+                      const unavailable = isModifierUnavailable(modifier);
+                      return (
+                      <div key={modifier.id} className={`flex items-center justify-between rounded-lg px-3 py-2 ${unavailable ? "bg-gray-100 text-gray-400" : "bg-muted/40"}`}>
                         <div>
-                          <p className="text-sm font-medium text-foreground">{modifier.name}</p>
-                          <p className="text-xs text-muted-foreground">Removes {modifier.itemName || "selected ingredient"} from stock deduction</p>
+                          <p className={`text-sm font-medium ${unavailable ? "text-gray-400" : "text-foreground"}`}>
+                            {modifier.group ?? "Modifiers"} - {modifier.name}
+                            {formatModifierPrice(modifier) && <span className="ml-2 text-xs text-primary">{formatModifierPrice(modifier)}</span>}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {unavailable ? "Unavailable in stock - disabled in POS" : modifier.itemName ? `Linked to ${modifier.itemName}` : "Instruction only"}
+                          </p>
                         </div>
                         <button
                           type="button"
@@ -1230,7 +1688,7 @@ export function RecipeBOM() {
                           <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
-                    ))
+                    )})
                   )}
                 </div>
               </div>
@@ -1370,6 +1828,12 @@ export function RecipeBOM() {
                   <p className="text-lg font-bold text-foreground">{selectedRecipe.ingredients.length}</p>
                 </div>
                 <div className="bg-muted/30 rounded-xl p-4">
+                  <p className="text-xs text-muted-foreground mb-1">Available Orders</p>
+                  <p className={`text-lg font-bold ${(selectedRecipe.availableOrders ?? 0) > 0 ? "text-emerald-600" : "text-red-600"}`}>
+                    {selectedRecipe.availableOrders ?? 0}
+                  </p>
+                </div>
+                <div className="bg-muted/30 rounded-xl p-4">
                   <p className="text-xs text-muted-foreground mb-1">Menu Price</p>
                   <p className="text-lg font-bold text-foreground">{formatMoney(selectedRecipe.sellingPrice ?? selectedRecipe.suggestedSellingPrice ?? 0)}</p>
                 </div>
@@ -1394,7 +1858,7 @@ export function RecipeBOM() {
                     <div className="flex flex-wrap gap-2">
                       {selectedRecipe.modifiers.map((modifier) => (
                         <span key={modifier.id} className="rounded-full bg-primary/10 px-3 py-1 text-sm font-medium text-primary">
-                          {modifier.name}
+                          {modifier.name}{formatModifierPrice(modifier) ? ` ${formatModifierPrice(modifier)}` : ""}
                         </span>
                       ))}
                     </div>
@@ -1414,30 +1878,63 @@ export function RecipeBOM() {
                         <th className="px-4 py-3 text-left text-sm font-medium text-foreground">Ingredient</th>
                         <th className="px-4 py-3 text-right text-sm font-medium text-foreground">Quantity</th>
                         <th className="px-4 py-3 text-right text-sm font-medium text-foreground">Inventory Qty</th>
+                        <th className="px-4 py-3 text-right text-sm font-medium text-foreground">Max Orders</th>
                         <th className="px-4 py-3 text-right text-sm font-medium text-foreground">Unit Cost</th>
                         <th className="px-4 py-3 text-right text-sm font-medium text-foreground">Total</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
-                      {selectedRecipe.ingredients.map((ing) => (
-                        <tr key={ing.id}>
-                          <td className="px-4 py-3 text-foreground">{ing.name}</td>
-                          <td className="px-4 py-3 text-right text-foreground">
-                            {getScaledQuantity(ing.quantity)} {ing.unit}
-                          </td>
-                          <td className="px-4 py-3 text-right text-foreground">
-                            {getScaledQuantity(ing.inventoryQuantity ?? ing.quantity)} {ing.inventoryUnit || ing.unit}
-                          </td>
-                          <td className="px-4 py-3 text-right text-foreground">{formatMoney(ing.unitCost)}</td>
-                          <td className="px-4 py-3 text-right font-medium text-foreground">
-                            {formatMoney(Number(getScaledCost(ing.totalCost)))}
-                          </td>
-                        </tr>
-                      ))}
+                      {selectedRecipe.ingredients.map((ing) => {
+                        const stockStatus = getIngredientStockStatus(ing);
+                        const physicalStock = Number(ing.inventoryStock ?? 0);
+                        const usableStock = Number(
+                          ing.inventoryUsableStock ?? (stockStatus === "expired" ? 0 : physicalStock),
+                        );
+                        return (
+                          <tr key={ing.id}>
+                            <td className="px-4 py-3 text-foreground">
+                              <div className="flex items-center gap-2">
+                                <p>{ing.name}</p>
+                                {stockStatus !== "available" && (
+                                  <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${
+                                    stockStatus === "expired"
+                                      ? "bg-red-100 text-red-700"
+                                      : "bg-amber-100 text-amber-700"
+                                  }`}>
+                                    {stockStatus}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs text-muted-foreground">
+                                Stock: {formatNumber(physicalStock)} {ing.inventoryUnit || ing.unit}
+                                {usableStock !== physicalStock && (
+                                  <> | Usable: {formatNumber(usableStock)} {ing.inventoryUnit || ing.unit}</>
+                                )}
+                                {stockStatus === "expired" && ing.inventoryExpiry && (
+                                  <> | Expired: {new Date(ing.inventoryExpiry).toLocaleDateString()}</>
+                                )}
+                              </p>
+                            </td>
+                            <td className="px-4 py-3 text-right text-foreground">
+                              {getScaledQuantity(ing.quantity)} {ing.unit}
+                            </td>
+                            <td className="px-4 py-3 text-right text-foreground">
+                              {getScaledQuantity(ing.inventoryQuantity ?? ing.quantity)} {ing.inventoryUnit || ing.unit}
+                            </td>
+                            <td className="px-4 py-3 text-right font-semibold text-foreground">
+                              {calculateIngredientAvailableOrders(ing)}
+                            </td>
+                            <td className="px-4 py-3 text-right text-foreground">{formatMoney(ing.unitCost)}</td>
+                            <td className="px-4 py-3 text-right font-medium text-foreground">
+                              {formatMoney(Number(getScaledCost(ing.totalCost)))}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                     <tfoot className="bg-muted/50 border-t border-border">
                       <tr>
-                        <td colSpan={4} className="px-4 py-3 text-right font-semibold text-foreground">
+                        <td colSpan={5} className="px-4 py-3 text-right font-semibold text-foreground">
                           Raw ingredient total:
                         </td>
                         <td className="px-4 py-3 text-right text-xl font-bold text-primary">
@@ -1445,7 +1942,7 @@ export function RecipeBOM() {
                         </td>
                       </tr>
                       <tr>
-                        <td colSpan={4} className="px-4 py-3 text-right font-semibold text-foreground">
+                        <td colSpan={5} className="px-4 py-3 text-right font-semibold text-foreground">
                           Yield-adjusted total:
                         </td>
                         <td className="px-4 py-3 text-right text-xl font-bold text-green-600">
@@ -1480,24 +1977,45 @@ export function RecipeBOM() {
         </div>
       )}
 
-      {/* Delete Recipe Confirmation Modal */}
+      {/* Archive / Delete Recipe Confirmation Modal */}
       {pendingDeleteId !== null && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-card rounded-2xl shadow-xl border border-border w-full max-w-sm">
             <div className="p-6 border-b border-border flex items-center gap-3">
-              <Trash2 className="w-6 h-6 text-red-600 flex-shrink-0" />
-              <h2 className="text-lg font-bold text-foreground">Delete Recipe</h2>
+              {viewArchived ? (
+                <Trash2 className="w-6 h-6 text-red-600 flex-shrink-0" />
+              ) : (
+                <Archive className="w-6 h-6 text-amber-600 flex-shrink-0" />
+              )}
+              <h2 className="text-lg font-bold text-foreground">
+                {viewArchived ? "Delete Recipe Permanently" : "Archive Recipe"}
+              </h2>
             </div>
             <div className="p-6">
-              <p className="text-foreground mb-1">Are you sure you want to delete this recipe?</p>
-              <p className="text-sm text-muted-foreground mb-6">This action cannot be undone.</p>
+              {viewArchived ? (
+                <>
+                  <p className="text-foreground mb-1">Permanently delete this recipe?</p>
+                  <p className="text-sm text-muted-foreground mb-6">
+                    This cannot be undone. Recipes that have ever been sold cannot be deleted — archive them instead.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-foreground mb-1">Archive this recipe?</p>
+                  <p className="text-sm text-muted-foreground mb-6">
+                    It will be removed from the menu and POS, but you can restore it anytime from the Archived view.
+                  </p>
+                </>
+              )}
               <div className="flex gap-3">
                 <button
                   onClick={confirmDeleteRecipe}
-                  className="flex-1 px-4 py-2 bg-red-600 text-white rounded-xl hover:bg-red-700 transition-colors flex items-center justify-center gap-2"
+                  className={`flex-1 px-4 py-2 text-white rounded-xl transition-colors flex items-center justify-center gap-2 ${
+                    viewArchived ? "bg-red-600 hover:bg-red-700" : "bg-amber-600 hover:bg-amber-700"
+                  }`}
                 >
-                  <Trash2 className="w-4 h-4" />
-                  Delete
+                  {viewArchived ? <Trash2 className="w-4 h-4" /> : <Archive className="w-4 h-4" />}
+                  {viewArchived ? "Delete" : "Archive"}
                 </button>
                 <button
                   onClick={() => setPendingDeleteId(null)}

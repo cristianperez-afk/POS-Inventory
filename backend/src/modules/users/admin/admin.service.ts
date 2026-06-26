@@ -19,6 +19,7 @@ export class AdminService {
     password: string;
     staffType: StaffType;
     role?: StaffRole;
+    voidPin?: string | null;
   }) {
     return this.databaseService.createStaffAccount(input);
   }
@@ -31,8 +32,21 @@ export class AdminService {
     password?: string;
     staffType: StaffType;
     role?: StaffRole;
+    voidPin?: string | null;
   }) {
     return this.databaseService.updateStaffAccountForAdmin(input);
+  }
+
+  verifyRetailVoidPin(input: { userId: number; voidPin: string }) {
+    return this.databaseService.verifyRetailVoidPin(input);
+  }
+
+  getRetailManagerProfile(userId: number) {
+    return this.databaseService.getRetailManagerProfile(userId);
+  }
+
+  generateRetailManagerUniquePin(userId: number) {
+    return this.databaseService.generateRetailManagerUniquePin(userId);
   }
 
   deleteStaff(input: { adminUserId: number; staffUserId: number }) {
@@ -120,6 +134,23 @@ export class AdminService {
 
   deleteDiscountSetting(input: { adminUserId: number; discountId: number }) {
     return this.databaseService.deleteDiscountSettingForAdmin(input);
+  }
+
+  listActivityLogs(input: {
+    userId: number;
+    dateFrom?: string;
+    dateTo?: string;
+    actorUserId?: number;
+    module?: string;
+    action?: string;
+    search?: string;
+  }) {
+    return this.databaseService.listActivityLogsForUser(input);
+  }
+
+  async recordActivityLog(input: { userId: number; module: string; action: string; details: string }) {
+    await this.databaseService.recordActivityForUser(input.userId, input.module, input.action, input.details);
+    return { ok: true };
   }
 
   listPosProducts(userId: number) {

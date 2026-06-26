@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Apple, TrendingUp, AlertTriangle, PhilippinePeso, ShoppingCart, ArrowUp, ArrowDown, Calendar, Filter, Clock, ArrowRight } from "lucide-react";
+import { Apple, TrendingUp, AlertTriangle, PhilippinePeso, ShoppingCart, ArrowUp, ArrowDown, Calendar, Filter, Clock, ArrowRight, ChevronDown } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import {
   useRestaurantGoodsRecordsQuery,
@@ -34,12 +34,18 @@ type GoodsRecordSummary = {
   status: string;
 };
 
-const goToInventory = () =>
-  window.dispatchEvent(new CustomEvent('restaurant-navigate', { detail: 'restaurant-food-inventory' }));
+const navigateRestaurant = (target: string) =>
+  window.dispatchEvent(new CustomEvent('restaurant-navigate', { detail: target }));
+
+const goToInventory = () => navigateRestaurant('restaurant-food-inventory');
+
+const goToStockAlerts = () => navigateRestaurant('restaurant-stock-alerts');
+
+const goToKitchenOrders = () => navigateRestaurant('restaurant-pos-kitchen');
 
 const goToPurchaseOrders = () => {
   sessionStorage.setItem('po-open-approval', 'true');
-  window.dispatchEvent(new CustomEvent('restaurant-navigate', { detail: 'restaurant-purchase-orders' }));
+  navigateRestaurant('restaurant-purchase-orders');
 };
 
 const formatDuration = (minutes: number) => {
@@ -120,6 +126,7 @@ export function Dashboard() {
       trend: "up",
       icon: Apple,
       color: "from-orange-500 to-red-500",
+      onClick: goToInventory,
     },
     {
       title: "Expiring Soon",
@@ -128,6 +135,7 @@ export function Dashboard() {
       trend: "down",
       icon: Calendar,
       color: "from-orange-500 to-yellow-500",
+      onClick: goToStockAlerts,
     },
     {
       title: "Total Value",
@@ -136,6 +144,7 @@ export function Dashboard() {
       trend: "up",
       icon: PhilippinePeso,
       color: "from-green-500 to-lime-500",
+      onClick: goToInventory,
     },
     {
       title: userRole === "admin" ? "Pending Approvals" : "My Orders",
@@ -144,6 +153,7 @@ export function Dashboard() {
       trend: "up",
       icon: userRole === "admin" ? Clock : ShoppingCart,
       color: "from-amber-500 to-orange-500",
+      onClick: goToPurchaseOrders,
     },
     {
       title: "Avg Running Time",
@@ -152,6 +162,7 @@ export function Dashboard() {
       trend: "up",
       icon: Clock,
       color: "from-cyan-500 to-blue-500",
+      onClick: goToKitchenOrders,
     },
     {
       title: "Avg Dine-In Stay",
@@ -160,6 +171,7 @@ export function Dashboard() {
       trend: "up",
       icon: Clock,
       color: "from-violet-500 to-fuchsia-500",
+      onClick: goToKitchenOrders,
     },
   ];
 
@@ -243,34 +255,36 @@ export function Dashboard() {
           </div>
 
           {/* Category Filters */}
-          <div className="flex gap-6">
+          <div className="flex gap-3">
             <div className="relative">
-              <Filter className="absolute left-1.5 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+              <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
               <select
                 value={selectedMainCategory}
                 onChange={(e) => handleMainCategoryChange(e.target.value)}
-                className="pl-6 pr-4 py-2 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary transition-all appearance-none cursor-pointer min-w-[120px] text-sm"
+                className="pl-9 pr-9 py-2 bg-input-background border border-input rounded-xl hover:border-primary/60 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all duration-200 appearance-none cursor-pointer min-w-[150px] text-sm"
               >
                 <option value="all">All Categories</option>
                 {mainCategories.map((cat) => (
                   <option key={cat} value={cat}>{cat}</option>
                 ))}
               </select>
+              <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
             </div>
 
             {selectedMainCategory !== "all" && (
               <div className="relative">
-                <Filter className="absolute left-1.5 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+                <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
                 <select
                   value={selectedSubCategory}
                   onChange={(e) => setSelectedSubCategory(e.target.value)}
-                  className="pl-6 pr-4 py-2 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary transition-all appearance-none cursor-pointer min-w-[120px] text-sm"
+                  className="pl-9 pr-9 py-2 bg-input-background border border-input rounded-xl hover:border-primary/60 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all duration-200 appearance-none cursor-pointer min-w-[150px] text-sm"
                 >
                   <option value="all">All {selectedMainCategory}</option>
                   {currentSubCategories.map((subCat) => (
                     <option key={subCat} value={subCat}>{subCat}</option>
                   ))}
                 </select>
+                <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
               </div>
             )}
           </div>
@@ -282,7 +296,13 @@ export function Dashboard() {
         {stats.map((stat, index) => {
           const Icon = stat.icon;
           return (
-            <div key={`stat-${index}`} className="bg-card rounded-2xl p-6 shadow-sm border border-border hover:shadow-md transition-all duration-200">
+            <button
+              type="button"
+              key={`stat-${index}`}
+              onClick={stat.onClick}
+              aria-label={`View ${stat.title}`}
+              className="group text-left w-full bg-card rounded-2xl p-6 shadow-sm border border-border cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-xl hover:shadow-primary/25 hover:border-primary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-lg active:shadow-primary/30 active:border-primary"
+            >
               <div className="flex items-start justify-between mb-4">
                 <div className={`w-10 h-10 bg-gradient-to-br ${stat.color} rounded-xl flex items-center justify-center shadow-lg`}>
                   <Icon className="w-5 h-5 text-white" />
@@ -294,7 +314,7 @@ export function Dashboard() {
               </div>
               <h3 className="text-muted-foreground text-sm mb-1">{stat.title}</h3>
               <p className="text-2xl font-bold text-foreground">{stat.value}</p>
-            </div>
+            </button>
           );
         })}
       </div>
@@ -445,32 +465,32 @@ export function Dashboard() {
             {pendingOrders.map((order) => (
               <div
                 key={order.id}
-                className="flex items-center justify-between p-4 bg-amber-50 border border-amber-200 rounded-xl"
+                className="flex items-center justify-between p-4 bg-amber-50 border border-amber-200 rounded-xl text-slate-900"
               >
                 <div className="flex items-center gap-4">
-                  <div className="w-10 h-10 bg-card rounded-lg flex items-center justify-center border border-amber-200">
+                  <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center border border-amber-200">
                     <ShoppingCart className="w-5 h-5 text-amber-600" />
                   </div>
                   <div>
                     <div className="flex items-center gap-2 mb-1">
-                      <h3 className="font-semibold text-foreground">{order.id}</h3>
+                      <h3 className="font-semibold text-slate-950">{order.id}</h3>
                       <span className="px-2 py-0.5 bg-amber-200 text-amber-800 rounded text-xs font-medium">
                         Pending Approval
                       </span>
                     </div>
-                    <p className="text-sm text-muted-foreground">
-                      Supplier: <span className="font-medium text-foreground">{order.supplier}</span> •
-                      Created by: <span className="font-medium text-foreground">{order.createdBy}</span> •
+                    <p className="text-sm text-slate-700">
+                      Supplier: <span className="font-medium text-slate-950">{order.supplier}</span> •
+                      Created by: <span className="font-medium text-slate-950">{order.createdBy}</span> •
                       {order.items} item{order.items !== 1 ? 's' : ''}
                     </p>
-                    <p className="text-xs text-muted-foreground mt-1">
+                    <p className="text-xs text-slate-600 mt-1">
                       Expected Delivery: {new Date(order.expectedDelivery).toLocaleDateString()}
                     </p>
                   </div>
                 </div>
                 <div className="text-right">
-                  <p className="text-xs text-muted-foreground">Total Amount</p>
-                  <p className="text-lg font-bold text-foreground">₱{order.total.toLocaleString()}</p>
+                  <p className="text-xs text-slate-600">Total Amount</p>
+                  <p className="text-lg font-bold text-slate-950">₱{order.total.toLocaleString()}</p>
                 </div>
               </div>
             ))}

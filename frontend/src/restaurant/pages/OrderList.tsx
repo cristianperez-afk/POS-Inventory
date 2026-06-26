@@ -8,7 +8,7 @@ import { ThermalReceipt } from '../../shared/components/ThermalReceipt';
 import { useStoreSettings } from '../../shared/context/StoreSettingsContext';
 import { DeleteConfirmDialog } from '../../shared/components/DeleteConfirmDialog';
 import { DateFilterControl, type DateFilterMode } from '../../shared/components/DateFilterControl';
-import { getLocalDateKey, parseDatabaseTimestamp, parseLocalDateKey } from '../../shared/utils/date';
+import { formatManilaDateTime, formatManilaTime, getLocalDateKey, parseDatabaseTimestamp, parseLocalDateKey } from '../../shared/utils/date';
 
 interface OrderListProps {
   onNavigate: (page: Page) => void;
@@ -44,18 +44,83 @@ function formatDuration(minutes?: number) {
 }
 
 function formatElapsed(start?: string, end?: string, duration?: number, now = Date.now()) {
-  const seconds = duration !== undefined && end
-    ? duration
-    : start
-      ? Math.max(0, Math.floor(((end ? parseDatabaseTimestamp(end).getTime() : now) - parseDatabaseTimestamp(start).getTime()) / 1000))
-      : null;
-  if (seconds === null || !Number.isFinite(seconds)) return '-';
+  const savedSeconds = Number(duration);
+  const startMs = start ? parseDatabaseTimestamp(start).getTime() : NaN;
+  const endMs = end ? parseDatabaseTimestamp(end).getTime() : NaN;
+  const seconds = Number.isFinite(startMs)
+    ? Math.max(0, Math.floor(((Number.isFinite(endMs) ? endMs : now) - startMs) / 1000))
+    : Number.isFinite(savedSeconds)
+    ? Math.max(0, Math.floor(savedSeconds))
+    : 0;
+  if (!Number.isFinite(seconds)) return '00:00:00';
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
   return [hours, minutes, seconds % 60].map((value) => String(value).padStart(2, '0')).join(':');
 }
+
+function preparationEnd(order: Order) {
+  return order.servedAt;
+}
+
+function isFinalServedOrder(order: Order) {
+  return order.orderStatus === 'Served' || order.orderStatus === 'Completed';
+}
+
+function serveTimeStart(order: Order) {
+  const end = preparationEnd(order);
+  const endMs = end ? parseDatabaseTimestamp(end).getTime() : Date.now();
+  const candidates = [order.orderedAt, order.runningTimeStart, order.preparingStartedAt, order.createdAt];
+  return candidates.find((value) => {
+    if (!value) return false;
+    const startMs = parseDatabaseTimestamp(value).getTime();
+    return Number.isFinite(startMs) && (!Number.isFinite(endMs) || startMs <= endMs);
+  });
+}
+
+function serveTimeDisplay(order: Order, now = Date.now()) {
+  const savedSeconds = Number(order.serviceDuration ?? NaN);
+  if (isFinalServedOrder(order) && Number.isFinite(savedSeconds) && savedSeconds > 0) {
+    return formatElapsed(undefined, undefined, savedSeconds, now);
+  }
+  return formatElapsed(serveTimeStart(order), preparationEnd(order), order.serviceDuration, now);
+}
+
+function isDineInOrder(order: Order) {
+  return order.type === 'Dine-In' || order.type === 'Mixed';
+}
+
+function stayEnd(order: Order) {
+  if (!isDineInOrder(order)) return undefined;
+  return order.tableEndedAt ?? order.runningTimeEnd ?? order.completedAt ?? order.paymentAt;
+}
+
+function stayStart(order: Order) {
+  if (!isDineInOrder(order)) return undefined;
+  const end = stayEnd(order);
+  const endMs = end ? parseDatabaseTimestamp(end).getTime() : Date.now();
+  const candidates = [order.tableStartedAt, order.orderedAt, order.runningTimeStart, order.createdAt];
+  return candidates.find((value) => {
+    if (!value) return false;
+    const startMs = parseDatabaseTimestamp(value).getTime();
+    return Number.isFinite(startMs) && (!Number.isFinite(endMs) || startMs <= endMs);
+  });
+}
+
+function estimatedWaitDisplay(order: Order, _strategy: 'parallel' | 'sequential') {
+  const estimate = Number(order.estimatedPrepMinutes ?? 0);
+  if (!Number.isFinite(estimate) || estimate <= 0) return null;
+  const orderedAt = order.orderedAt ? parseDatabaseTimestamp(order.orderedAt) : null;
+  const computedReadyAt = orderedAt && !Number.isNaN(orderedAt.getTime())
+    ? new Date(orderedAt.getTime() + Math.ceil(estimate) * 60000).toISOString()
+    : order.estimatedReadyAt;
+  return {
+    minutes: Math.ceil(estimate),
+    readyAt: computedReadyAt,
+  };
+}
+
 export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, userName, userRole, storeType, staffType }: OrderListProps) {
-  const { orders, completePayment, completeTableOrder, voidOrder, refundOrder, reloadOrders } = useOrders();
+  const { orders, completePayment, voidOrder, refundOrder, reloadOrders } = useOrders();
   const { settings } = useStoreSettings();
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState('All');
@@ -92,6 +157,13 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
     const interval = window.setInterval(() => setClock(Date.now()), 1000);
     return () => window.clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    setSelectedOrder((current) => {
+      if (!current) return current;
+      return orders.find((order) => order.id === current.id) ?? current;
+    });
+  }, [orders]);
 
   const openModal = (order: Order, modal: ActiveModal) => {
     if (!canProcessTransactions && ['payment', 'refund', 'void'].includes(String(modal))) return;
@@ -130,7 +202,21 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
 
     try {
       await completePayment(selectedOrder.id, { cashReceived: cash, changeGiven: change, cashier: userName ?? undefined, paymentId: pId, receiptId: rId });
-      const updates = { paymentStatus: 'Paid' as const, paymentAt: new Date().toISOString(), paymentId: pId, receiptId: rId, cashReceived: cash, changeGiven: change, cashier: userName ?? undefined };
+      const paidAt = new Date().toISOString();
+      const updates = {
+        paymentStatus: 'Paid' as const,
+        paymentAt: paidAt,
+        orderStatus: selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed' ? 'Completed' as const : selectedOrder.orderStatus,
+        completedAt: selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed' ? (selectedOrder.completedAt ?? paidAt) : selectedOrder.completedAt,
+        tableEndedAt: selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed' ? (selectedOrder.tableEndedAt ?? paidAt) : selectedOrder.tableEndedAt,
+        runningTimeEnd: selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed' ? (selectedOrder.runningTimeEnd ?? paidAt) : selectedOrder.runningTimeEnd,
+        isRunning: selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed' ? false : selectedOrder.isRunning,
+        paymentId: pId,
+        receiptId: rId,
+        cashReceived: cash,
+        changeGiven: change,
+        cashier: userName ?? undefined,
+      };
       setSelectedOrder(prev => prev ? { ...prev, ...updates } : null);
       setActiveModal('payment-success');
     } catch (error) {
@@ -160,17 +246,6 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
 
   const handlePrintReceipt = () => {
     window.print();
-  };
-
-  const handleCompleteOrder = async (order: Order) => {
-    if (!canProcessTransactions || order.paymentStatus !== 'Paid' || order.orderStatus === 'Completed') return;
-
-    try {
-      await completeTableOrder(order.id);
-      setSelectedOrder(prev => prev?.id === order.id ? { ...prev, orderStatus: 'Completed' } : prev);
-    } catch (error) {
-      alert(error instanceof Error ? error.message : 'Unable to complete order.');
-    }
   };
 
   const cashFloat = parseFloat(cashReceived) || 0;
@@ -228,7 +303,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
   const paginatedOrders = filteredOrders.slice(pageStartIndex, pageStartIndex + ORDERS_PER_PAGE);
   const visibleStart = filteredOrders.length === 0 ? 0 : pageStartIndex + 1;
   const visibleEnd = Math.min(pageStartIndex + ORDERS_PER_PAGE, filteredOrders.length);
-  const tableColumnCount = (showTableManagementColumns ? 12 : 9) + (showEstimatedPrepTime ? 1 : 0);
+  const tableColumnCount = (showTableManagementColumns ? 13 : 10) + (showEstimatedPrepTime ? 1 : 0);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -252,6 +327,14 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
       case 'Mixed': return 'bg-[#f5f3ff] text-[#8b5cf6]';
       default: return 'bg-[#f1f5f9] text-[#64748b]';
     }
+  };
+
+  const getOrderStatusBadge = (status: string) => {
+    if (status === 'Completed') return 'bg-blue-50 text-blue-700 border-blue-200';
+    if (status === 'Served') return 'bg-sky-50 text-sky-700 border-sky-200';
+    if (status === 'Ready') return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+    if (status === 'Preparing') return 'bg-amber-50 text-amber-700 border-amber-200';
+    return 'bg-slate-50 text-slate-700 border-slate-200';
   };
 
   const dineInItems = selectedOrder?.items.filter(i => i.itemType === 'dine-in') ?? [];
@@ -343,12 +426,13 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                   )}
                   <th className="w-[9%] text-right px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Total</th>
                   <th className="w-[8%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Payments</th>
+                  <th className="w-[8%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Order Status</th>
                   <th className="w-[9%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Date and Time</th>
                   {showEstimatedPrepTime && (
                     <th className="w-[8%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Est. Prep</th>
                   )}
                   <th className="w-[8%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Stay</th>
-                  <th className="w-[9%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Time Served</th>
+                  <th className="w-[9%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Serve Time</th>
                   <th className="w-[14%] text-center px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Action</th>
                 </tr>
               </thead>
@@ -361,6 +445,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                   </tr>
                 ) : paginatedOrders.map((order) => {
                   const waitingTime = order.isQueued ? Math.floor((new Date().getTime() - new Date(`${order.date} ${order.time}`).getTime()) / 60000) : 0;
+                  const estimatedWait = estimatedWaitDisplay(order, settings.prep_time_strategy);
 
                   return (<tr key={order.id} className="hover:bg-muted/20 transition-colors">
                     <td className="px-5 py-5 text-sm font-mono text-primary whitespace-nowrap overflow-hidden text-ellipsis">
@@ -412,26 +497,29 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                       </span>
                     </td>
                     <td className="px-4 py-5">
+                      <span className={`inline-block px-2.5 py-1 rounded-full text-xs border whitespace-nowrap ${getOrderStatusBadge(order.orderStatus)}`}>
+                        {order.orderStatus}
+                      </span>
+                    </td>
+                    <td className="px-4 py-5">
                       <div className="text-xs text-gray-600 whitespace-nowrap">{order.date}</div>
                       <div className="text-xs text-gray-400 whitespace-nowrap">{order.time}</div>
                     </td>
                     {showEstimatedPrepTime && (
                       <td className="px-4 py-5 text-xs text-gray-600 whitespace-nowrap">
-                        {order.estimatedPrepMinutes ? `${order.estimatedPrepMinutes} mins` : '-'}
-                        {order.estimatedReadyAt && (
-                          <div className="text-xs text-gray-400">{new Date(order.estimatedReadyAt).toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })}</div>
+                        {estimatedWait ? `${estimatedWait.minutes} mins` : '-'}
+                        {estimatedWait?.readyAt && (
+                          <div className="text-xs text-gray-400">{formatManilaTime(estimatedWait.readyAt)}</div>
                         )}
                       </td>
                     )}
                     <td className="px-4 py-5 text-xs text-gray-600 whitespace-nowrap">
-                      {order.type === 'Dine-In' || order.type === 'Mixed'
-                        ? formatElapsed(order.tableStartedAt, order.tableEndedAt, undefined, clock)
+                      {isDineInOrder(order)
+                        ? formatElapsed(stayStart(order), stayEnd(order), order.runningDuration, clock)
                         : '-'}
                     </td>
                     <td className="px-4 py-5 text-xs text-gray-600 whitespace-nowrap">
-                      {order.type === 'Takeout'
-                        ? formatElapsed(order.serviceStartedAt, order.servedAt, order.serviceDuration, clock)
-                        : '-'}
+                      {serveTimeDisplay(order, clock)}
                     </td>
                     <td className="px-4 py-5">
                       <div className="flex items-center justify-center gap-1 whitespace-nowrap">
@@ -466,17 +554,6 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                           >
                             <Printer className="w-3.5 h-3.5" />
                             Receipt
-                          </button>
-                        )}
-
-                        {canProcessTransactions && order.paymentStatus === 'Paid' && order.orderStatus !== 'Completed' && (
-                          <button
-                            onClick={() => void handleCompleteOrder(order)}
-                            title="Complete Order"
-                            className="inline-flex items-center gap-1 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors whitespace-nowrap"
-                          >
-                            <CheckCircle className="w-3.5 h-3.5" />
-                            Complete
                           </button>
                         )}
 
@@ -579,41 +656,48 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="bg-muted rounded-xl p-3">
-                  <p className="text-xs text-gray-400 mb-1">Customer Stay Duration</p>
+                  <p className="text-xs text-gray-400 mb-1">Stay Time</p>
                   <p className="text-sm text-gray-800">
                     {selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed'
-                      ? formatElapsed(selectedOrder.tableStartedAt, selectedOrder.tableEndedAt, undefined, clock)
+                      ? formatElapsed(stayStart(selectedOrder), stayEnd(selectedOrder), selectedOrder.runningDuration, clock)
                       : '-'}
                   </p>
                 </div>
                 <div className="bg-muted rounded-xl p-3">
-                  <p className="text-xs text-gray-400 mb-1">Time Served</p>
-                  <p className="text-sm text-gray-800">{selectedOrder.type === 'Takeout' ? formatElapsed(selectedOrder.serviceStartedAt, selectedOrder.servedAt, selectedOrder.serviceDuration, clock) : '-'}</p>
+                  <p className="text-xs text-gray-400 mb-1">Serve Time</p>
+                  <p className="text-sm text-gray-800">{serveTimeDisplay(selectedOrder, clock)}</p>
+                </div>
+                <div className="bg-muted rounded-xl p-3">
+                  <p className="text-xs text-gray-400 mb-1">Served At</p>
+                  <p className="text-sm text-gray-800">{selectedOrder.servedAt ? formatManilaDateTime(selectedOrder.servedAt) : '-'}</p>
                 </div>
                 <div className="bg-muted rounded-xl p-3">
                   <p className="text-xs text-gray-400 mb-1">Payment Time</p>
-                  <p className="text-sm text-gray-800">{selectedOrder.paymentAt ? new Date(selectedOrder.paymentAt).toLocaleString('en-PH') : '-'}</p>
+                  <p className="text-sm text-gray-800">{selectedOrder.paymentAt ? formatManilaDateTime(selectedOrder.paymentAt) : '-'}</p>
                 </div>
                 {showEstimatedPrepTime && (
                   <div className="bg-muted rounded-xl p-3">
                     <p className="text-xs text-gray-400 mb-1">Estimated Preparation</p>
                     <p className="text-sm text-gray-800">
-                      {selectedOrder.estimatedPrepMinutes ? `${selectedOrder.estimatedPrepMinutes} mins` : '-'}
-                      {selectedOrder.estimatedReadyAt ? `, ready around ${new Date(selectedOrder.estimatedReadyAt).toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })}` : ''}
+                      {(() => {
+                        const estimatedWait = estimatedWaitDisplay(selectedOrder, settings.prep_time_strategy);
+                        if (!estimatedWait) return '-';
+                        return `${estimatedWait.minutes} mins${estimatedWait.readyAt ? `, ready around ${formatManilaTime(estimatedWait.readyAt)}` : ''}`;
+                      })()}
                     </p>
                   </div>
                 )}
                 <div className="bg-muted rounded-xl p-3">
                   <p className="text-xs text-gray-400 mb-1">Preparing Start</p>
-                  <p className="text-sm text-gray-800">{selectedOrder.preparingStartedAt ? new Date(selectedOrder.preparingStartedAt).toLocaleString('en-PH') : '-'}</p>
+                  <p className="text-sm text-gray-800">{selectedOrder.preparingStartedAt ? formatManilaDateTime(selectedOrder.preparingStartedAt) : '-'}</p>
                 </div>
                 <div className="bg-muted rounded-xl p-3">
                   <p className="text-xs text-gray-400 mb-1">Ready to Serve</p>
-                  <p className="text-sm text-gray-800">{selectedOrder.readyAt ? new Date(selectedOrder.readyAt).toLocaleString('en-PH') : '-'}</p>
+                  <p className="text-sm text-gray-800">{selectedOrder.readyAt ? formatManilaDateTime(selectedOrder.readyAt) : '-'}</p>
                 </div>
                 <div className="bg-muted rounded-xl p-3">
                   <p className="text-xs text-gray-400 mb-1">Completed Time</p>
-                  <p className="text-sm text-gray-800">{selectedOrder.completedAt ? new Date(selectedOrder.completedAt).toLocaleString('en-PH') : '-'}</p>
+                  <p className="text-sm text-gray-800">{selectedOrder.completedAt ? formatManilaDateTime(selectedOrder.completedAt) : '-'}</p>
                 </div>
               </div>
 

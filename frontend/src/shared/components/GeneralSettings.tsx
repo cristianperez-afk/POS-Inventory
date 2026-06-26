@@ -1,10 +1,8 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Bell, Palette, Save, SlidersHorizontal, User } from 'lucide-react';
+import { Bell, Palette, Save, User } from 'lucide-react';
 import { Sidebar } from './Sidebar';
 import { Page, type StoreBrand } from '../App';
-import { getApiBaseUrl } from '../../auth/services/auth';
 import type { AuthenticatedUser } from '../../auth/types/auth';
-import { normalizeStoreSettings, useStoreSettings, type StoreSettingValues } from '../context/StoreSettingsContext';
 import {
   applyUserPreferences,
   defaultUserPreferences,
@@ -30,24 +28,6 @@ const appearanceOptions: Array<{ value: UserPreferenceValues['appearance']; labe
   { value: 'system', label: 'System' },
   { value: 'light', label: 'Light' },
   { value: 'dark', label: 'Dark' },
-];
-
-const restaurantSettings: Array<[keyof StoreSettingValues, string, string]> = [
-  ['enable_customer_recommendation', 'Customer Recommendations', 'Previous-customer suggestions while staff types names.'],
-  ['enable_table_management', 'Table Management', 'Table selection, status, assignment, and history for dine-in orders.'],
-  ['enable_refund', 'Refund Processing', 'Refund actions in paid order workflows.'],
-  ['enable_void', 'Void Transactions', 'Void actions for transactions that need cancellation.'],
-  ['enable_service_charge', 'Service Charge', 'Service charge line and calculation in order totals.'],
-  ['enable_tax', 'VAT', 'VAT line and calculation in order totals.'],
-  ['enable_discount', 'Discounts', 'Discount management and staff discount selection.'],
-];
-
-const retailSettings: Array<[keyof StoreSettingValues, string, string]> = [
-  ['enable_refund', 'Refund Processing', 'Refund actions in paid order workflows.'],
-  ['enable_void', 'Void Transactions', 'Void actions for transactions that need cancellation.'],
-  ['enable_service_charge', 'Service Fee / Service Charge', 'Service fee line and calculation in order totals.'],
-  ['enable_tax', 'VAT', 'VAT line and calculation in order totals.'],
-  ['enable_discount', 'Discounts', 'Discount management and staff discount selection.'],
 ];
 
 export function SettingToggle({
@@ -99,8 +79,6 @@ function SettingRow({
 type PendingAction = { type: 'navigate'; page: Page } | { type: 'logout' };
 
 export function GeneralSettings({ currentUser, storeBrand, onLogout, onNavigate }: GeneralSettingsProps) {
-  const { settings: loadedSettings, reload } = useStoreSettings();
-  const [settings, setSettings] = useState<StoreSettingValues>(loadedSettings);
   const [userPreferences, setUserPreferences] = useState<UserPreferenceValues>(defaultUserPreferences);
   // Last saved preferences (what's persisted to localStorage / shown on every
   // other page). userPreferences is the live-edited draft -- it's applied to
@@ -108,18 +86,12 @@ export function GeneralSettings({ currentUser, storeBrand, onLogout, onNavigate 
   // localStorage (and kept) once Save is clicked. Undoing/leaving without
   // saving re-applies appliedPreferences so the preview doesn't stick.
   const [appliedPreferences, setAppliedPreferences] = useState<UserPreferenceValues>(defaultUserPreferences);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
-  const isRestaurant = currentUser?.store_type === 'RESTAURANT';
-  const visibleSettings = isRestaurant ? restaurantSettings : retailSettings;
-  const hasUnsavedChanges =
-    JSON.stringify(settings) !== JSON.stringify(loadedSettings) || JSON.stringify(userPreferences) !== JSON.stringify(appliedPreferences);
-
-  useEffect(() => {
-    setSettings(loadedSettings);
-  }, [loadedSettings]);
+  const canChooseDefaultWorkspace = currentUser?.role === 'ADMIN';
+  const hasPreferenceChanges = JSON.stringify(userPreferences) !== JSON.stringify(appliedPreferences);
+  const hasUnsavedChanges = hasPreferenceChanges;
 
   useEffect(() => {
     const loaded = loadUserPreferences(currentUser?.id);
@@ -143,53 +115,12 @@ export function GeneralSettings({ currentUser, storeBrand, onLogout, onNavigate 
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [hasUnsavedChanges]);
 
-  useEffect(() => {
-    const load = async () => {
-      if (!currentUser?.id) {
-        setLoading(false);
-        return;
-      }
-
-      setLoading(true);
-      try {
-        await reload();
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    void load();
-  }, [currentUser?.id]);
-
   const saveSettings = async () => {
     if (!currentUser?.id) return false;
     setSaving(true);
     setMessage('');
 
     try {
-      const response = await fetch(`${getApiBaseUrl()}/admin/store-settings`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          admin_user_id: currentUser.id,
-          enable_customer_recommendation: settings.enable_customer_recommendation,
-          enable_table_management: settings.enable_table_management,
-          enable_refund: settings.enable_refund,
-          enable_void: settings.enable_void,
-          enable_service_charge: settings.enable_service_charge,
-          service_charge_rate: settings.service_charge_rate,
-          enable_tax: settings.enable_tax,
-          tax_rate: settings.tax_rate,
-          enable_discount: settings.enable_discount,
-          enabled_payment_methods: settings.enabled_payment_methods.length > 0 ? settings.enabled_payment_methods : ['Cash'],
-        }),
-      });
-      const data = await response.json();
-
-      if (!response.ok) throw new Error(data?.message ?? 'Unable to save settings.');
-      setSettings(normalizeStoreSettings(data));
-      await reload();
-
       applyUserPreferences(userPreferences);
       saveUserPreferences(currentUser.id, userPreferences);
       setAppliedPreferences(userPreferences);
@@ -205,7 +136,6 @@ export function GeneralSettings({ currentUser, storeBrand, onLogout, onNavigate 
   };
 
   const discardChanges = () => {
-    setSettings(loadedSettings);
     setUserPreferences(appliedPreferences);
     // setUserPreferences above triggers the live-preview effect on next
     // render, but apply synchronously too so the revert is instant even if
@@ -244,17 +174,19 @@ export function GeneralSettings({ currentUser, storeBrand, onLogout, onNavigate 
         currentPage="general-settings"
         onNavigate={(page) => requestAction({ type: 'navigate', page })}
         onLogout={() => requestAction({ type: 'logout' })}
-        isAdmin
+        isAdmin={currentUser?.role === 'ADMIN'}
         storeBrand={storeBrand}
         userName={currentUser?.full_name}
+        userRole={currentUser?.role}
         storeType={currentUser?.store_type}
+        staffType={currentUser?.staff_type}
       />
       <div className="flex-1 overflow-auto bg-background">
         <main className="min-h-full p-6 lg:p-8">
           <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
             <div>
               <h1 className="text-primary mb-2">Settings</h1>
-              <p className="text-muted-foreground">Account details, preferences, theme, and system configuration.</p>
+              <p className="text-muted-foreground">Account details, preferences, and theme.</p>
             </div>
             <button onClick={saveSettings} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-primary px-6 py-3 text-primary-foreground hover:bg-primary/90 disabled:opacity-60">
               <Save className="h-5 w-5" />
@@ -319,17 +251,19 @@ export function GeneralSettings({ currentUser, storeBrand, onLogout, onNavigate 
                 <SettingRow label="Low Stock Alerts" description="Keep inventory warning indicators visible.">
                   <SettingToggle checked={userPreferences.lowStockAlerts} onChange={(checked) => setUserPreferences((current) => ({ ...current, lowStockAlerts: checked }))} />
                 </SettingRow>
-                <SettingRow label="Default Workspace" description="Page shown right after login.">
-                  <select
-                    value={userPreferences.defaultWorkspace}
-                    onChange={(event) => setUserPreferences((current) => ({ ...current, defaultWorkspace: event.target.value as UserPreferenceValues['defaultWorkspace'] }))}
-                    className="rounded-lg border border-border bg-input-background px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                  >
-                    {defaultWorkspaceOptions.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </SettingRow>
+                {canChooseDefaultWorkspace && (
+                  <SettingRow label="Default Workspace" description="Admin landing page shown right after login.">
+                    <select
+                      value={userPreferences.defaultWorkspace}
+                      onChange={(event) => setUserPreferences((current) => ({ ...current, defaultWorkspace: event.target.value as UserPreferenceValues['defaultWorkspace'] }))}
+                      className="rounded-lg border border-border bg-input-background px-4 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                    >
+                      {defaultWorkspaceOptions.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </SettingRow>
+                )}
               </div>
             </section>
 
@@ -405,58 +339,6 @@ export function GeneralSettings({ currentUser, storeBrand, onLogout, onNavigate 
               </div>
             </section>
 
-            <section className="rounded-lg border border-border bg-card p-6 shadow-sm">
-              <div className="mb-5 flex items-center gap-3">
-                <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                  <SlidersHorizontal className="h-5 w-5" />
-                </span>
-                <div>
-                  <h2 className="text-lg font-semibold">System Configuration</h2>
-                  <p className="text-sm text-muted-foreground">These {isRestaurant ? 'restaurant POS' : 'retail store'} settings are saved per store and applied to staff POS pages.</p>
-                </div>
-              </div>
-
-              {loading ? (
-                <p className="text-muted-foreground">Loading settings...</p>
-              ) : (
-                <div className="divide-y divide-border">
-                  {visibleSettings.map(([key, label, description]) => (
-                    <SettingRow key={key} label={label} description={description}>
-                      <SettingToggle
-                        checked={Boolean(settings[key])}
-                        onChange={(checked) => setSettings((current) => ({ ...current, [key]: checked }))}
-                      />
-                    </SettingRow>
-                  ))}
-
-                  {settings.enable_service_charge && (
-                    <SettingRow label="Service Charge Rate (%)" description="Applied to every order total.">
-                      <input
-                        type="number"
-                        value={settings.service_charge_rate}
-                        onChange={(event) => setSettings((current) => ({ ...current, service_charge_rate: Number(event.target.value) }))}
-                        className="w-32 rounded-lg border border-border bg-input-background px-4 py-2 focus:outline-none focus:ring-2 focus:ring-primary"
-                        min="0"
-                        max="100"
-                      />
-                    </SettingRow>
-                  )}
-
-                  {settings.enable_tax && (
-                    <SettingRow label="VAT Rate (%)" description="Applied to every order total.">
-                      <input
-                        type="number"
-                        value={settings.tax_rate}
-                        onChange={(event) => setSettings((current) => ({ ...current, tax_rate: Number(event.target.value) }))}
-                        className="w-32 rounded-lg border border-border bg-input-background px-4 py-2 focus:outline-none focus:ring-2 focus:ring-primary"
-                        min="0"
-                        max="100"
-                      />
-                    </SettingRow>
-                  )}
-                </div>
-              )}
-            </section>
           </div>
         </main>
       </div>

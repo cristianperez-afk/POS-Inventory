@@ -7,3 +7,4 @@ export * from './transferQueries';
 export * from './salesQueries';
 export * from './kitchenQueries';
 export * from './userQueries';
+export { useRestaurantAuditLogsQuery, type AuditTrailEntry } from '../auditQueries';

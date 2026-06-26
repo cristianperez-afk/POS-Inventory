@@ -49,8 +49,8 @@ export class InventoryApiController {
   }
 
   @Delete('inventory/:id')
-  deleteInventoryItem(@Param('id') id: string) {
-    return this.inventoryApiService.deleteById('InventoryItem', id);
+  deleteInventoryItem(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.deleteInventoryItem(request.headers, id);
   }
 
   @Get('locations')
@@ -97,9 +97,18 @@ export class InventoryApiController {
     return this.inventoryApiService.updateRecipe(request.headers, id, body);
   }
 
+  @Post('recipes/:id/restore')
+  restoreRecipe(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.restoreRecipe(request.headers, id);
+  }
+
   @Delete('recipes/:id')
-  deleteRecipe(@Req() request: RequestLike, @Param('id') id: string) {
-    return this.inventoryApiService.deleteRecipe(request.headers, id);
+  deleteRecipe(
+    @Req() request: RequestLike,
+    @Param('id') id: string,
+    @Query('permanent') permanent?: string,
+  ) {
+    return this.inventoryApiService.deleteRecipe(request.headers, id, permanent === 'true');
   }
 
   @Get('kitchen-orders')
@@ -209,6 +218,11 @@ export class InventoryApiController {
   @Get('stock-movements')
   listStockMovements(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
     return this.inventoryApiService.listStockMovements(request.headers, query);
+  }
+
+  @Get('audit-logs')
+  listAuditLogs(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
+    return this.inventoryApiService.listAuditLogs(request.headers, query);
   }
 
   @Get('reports/ingredient-consumption')

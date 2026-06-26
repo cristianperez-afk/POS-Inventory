@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, ClipboardCheck, ClipboardList, Clock, Eye, Filter, Play, Printer, ReceiptText, Search, X } from "lucide-react";
 import {
   useRestaurantKitchenOrdersQuery,
   useUpdateRestaurantKitchenOrderStatusMutation,
 } from "../lib/restaurant";
+import { formatManilaDateTime, parseDatabaseTimestamp } from "../../../../shared/utils/date";
 
 type KitchenStatus = "pending" | "preparing" | "ready" | "served" | "completed" | "cancelled";
 type StatusFilter = "all" | KitchenStatus;
@@ -36,16 +37,22 @@ type KitchenOrder = {
   itemCount: number;
   status: KitchenStatus;
   orderedAt: string;
+  createdAt?: string | null;
   updatedAt?: string;
   paymentAt?: string | null;
   preparingStartedAt?: string | null;
   readyAt?: string | null;
   servedAt?: string | null;
+  serviceDuration?: number | string | null;
   estimatedPrepMinutes?: number;
   estimatedReadyAt?: string | null;
   completedAt?: string | null;
   tableStartedAt?: string | null;
   tableEndedAt?: string | null;
+  runningTimeStart?: string | null;
+  runningTimeEnd?: string | null;
+  runningDuration?: number | null;
+  isRunning?: boolean | null;
   items: KitchenOrderItem[];
 };
 
@@ -95,13 +102,9 @@ const formatOrderType = (value: string) => {
   return value || "-";
 };
 
-const formatDateTime = (value: string) =>
-  new Intl.DateTimeFormat("en-PH", {
-    month: "short",
-    day: "2-digit",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(value));
+const formatDateTime = (value?: string | null) => {
+  return formatManilaDateTime(value);
+};
 
 const formatCurrency = (value?: number) =>
   new Intl.NumberFormat("en-PH", { style: "currency", currency: "PHP" }).format(Number(value ?? 0));
@@ -112,12 +115,12 @@ const formatPaymentStatus = (value?: string) => {
   return normalized.replace(/\b\w/g, (letter) => letter.toUpperCase());
 };
 
-const minutesBetween = (start?: string, end?: string) => {
+const secondsBetween = (start?: string | null, end?: string | null) => {
   if (!start) return 0;
-  const startTime = new Date(start).getTime();
-  const endTime = end ? new Date(end).getTime() : Date.now();
+  const startTime = parseDatabaseTimestamp(start).getTime();
+  const endTime = end ? parseDatabaseTimestamp(end).getTime() : Date.now();
   if (Number.isNaN(startTime) || Number.isNaN(endTime)) return 0;
-  return Math.max(0, Math.round((endTime - startTime) / 60000));
+  return Math.max(0, Math.floor((endTime - startTime) / 1000));
 };
 
 const cleanList = (items?: string[]) =>
@@ -148,10 +151,7 @@ function nextAction(status: KitchenStatus, orderType: string) {
   if (status === "pending") return { label: "Start Preparing", next: "preparing" as KitchenStatus, icon: Play };
   if (status === "preparing") return { label: "Mark Ready to Serve", next: "ready" as KitchenStatus, icon: CheckCircle2 };
   if (status === "ready") {
-    const isTakeout = orderType.replace(/_/g, "-").toLowerCase() === "takeout";
-    return isTakeout
-      ? { label: "Mark Served", next: "served" as KitchenStatus, icon: ClipboardCheck }
-      : { label: "Complete", next: "completed" as KitchenStatus, icon: ClipboardCheck };
+    return { label: "Mark Served", next: "served" as KitchenStatus, icon: ClipboardCheck };
   }
   return null;
 }
@@ -170,18 +170,35 @@ function hasModifications(item: KitchenOrderItem) {
     Boolean(item.notes?.trim());
 }
 
-function getEstimatedPrepTime(order: KitchenOrder) {
-  if (Number(order.estimatedPrepMinutes ?? 0) > 0) return Number(order.estimatedPrepMinutes);
-  const itemPrepTimes = order.items.map((item) => Number(item.prepTimeMinutes ?? 0) * Math.max(Number(item.quantity ?? 1), 1));
-  const maxPrepTime = Math.max(0, ...itemPrepTimes);
-  if (maxPrepTime > 0) return maxPrepTime;
-
-  const fallback = order.items.reduce((total, item) => total + Number(item.quantity ?? 0), 0) * 5;
-  return Math.max(fallback, 5);
+function getSavedEstimatedPrepTime(order: KitchenOrder) {
+  const minutes = Number(order.estimatedPrepMinutes ?? 0);
+  return Number.isFinite(minutes) && minutes > 0 ? minutes : null;
 }
 
 function formatPrepTime(minutes: number) {
   return `${minutes} min${minutes === 1 ? "" : "s"}`;
+}
+
+function formatServeTime(seconds: number) {
+  const normalizedSeconds = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(normalizedSeconds / 3600);
+  const minutes = Math.floor((normalizedSeconds % 3600) / 60);
+  return [hours, minutes, normalizedSeconds % 60].map((value) => String(value).padStart(2, "0")).join(":");
+}
+
+function getSavedServiceSeconds(order: KitchenOrder) {
+  const seconds = Number(order.serviceDuration ?? NaN);
+  return Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : null;
+}
+
+function getServeTimeStart(order: KitchenOrder, end?: string | null) {
+  const endTime = end ? parseDatabaseTimestamp(end).getTime() : Date.now();
+  const candidates = [order.orderedAt, order.runningTimeStart, order.preparingStartedAt, order.createdAt];
+  return candidates.find((value) => {
+    if (!value) return false;
+    const startTime = parseDatabaseTimestamp(value).getTime();
+    return Number.isFinite(startTime) && (!Number.isFinite(endTime) || startTime <= endTime);
+  }) ?? order.orderedAt;
 }
 
 function getLifecycleEnd(order: KitchenOrder) {
@@ -190,13 +207,40 @@ function getLifecycleEnd(order: KitchenOrder) {
     : undefined;
 }
 
+function getServeTimeEnd(order: KitchenOrder) {
+  if (order.servedAt) return order.servedAt;
+  if (order.status === "served") return order.completedAt ?? order.runningTimeEnd ?? order.updatedAt;
+  if (order.status === "completed") return order.servedAt ?? order.completedAt ?? order.runningTimeEnd ?? order.updatedAt;
+  return undefined;
+}
+
 function getRunningTime(order: KitchenOrder) {
-  return formatPrepTime(minutesBetween(order.orderedAt, getLifecycleEnd(order)));
+  const end = getServeTimeEnd(order);
+  const savedSeconds = getSavedServiceSeconds(order);
+  if ((order.status === "served" || order.status === "completed") && savedSeconds !== null && savedSeconds > 0) {
+    return formatServeTime(savedSeconds);
+  }
+  const start = getServeTimeStart(order, end);
+  if (start) return formatServeTime(secondsBetween(start, end));
+  return formatServeTime(savedSeconds ?? 0);
 }
 
 function getCustomerStayDuration(order: KitchenOrder) {
-  if (!order.tableNumber || !order.tableStartedAt) return "No table selected";
-  return formatPrepTime(minutesBetween(order.tableStartedAt, order.tableEndedAt ?? getLifecycleEnd(order)));
+  const normalizedType = order.orderType.replace(/_/g, "-").toLowerCase();
+  if (normalizedType === "takeout") return "-";
+  const stayEnd = order.tableEndedAt ?? getLifecycleEnd(order);
+  const savedSeconds = Number(order.runningDuration ?? NaN);
+  if (stayEnd && Number.isFinite(savedSeconds) && savedSeconds > 0) {
+    return formatServeTime(savedSeconds);
+  }
+  const endTime = stayEnd ? parseDatabaseTimestamp(stayEnd).getTime() : Date.now();
+  const stayStartedAt = [order.tableStartedAt, order.orderedAt, order.runningTimeStart, order.createdAt].find((value) => {
+    if (!value) return false;
+    const startTime = parseDatabaseTimestamp(value).getTime();
+    return Number.isFinite(startTime) && (!Number.isFinite(endTime) || startTime <= endTime);
+  });
+  if (!order.tableNumber || !stayStartedAt) return "No table selected";
+  return formatServeTime(secondsBetween(stayStartedAt, stayEnd));
 }
 
 function KitchenTicketItems({ orderId, items }: { orderId: string; items: KitchenOrderItem[] }) {
@@ -260,10 +304,24 @@ export function POSKitchenOrders() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [selectedOrder, setSelectedOrder] = useState<KitchenOrder | null>(null);
+
+  // Cards toggle the shared status filter that drives the order lanes below;
+  // clicking the active card (or Total Orders) clears it back to "all".
+  const toggleStatusFilter = (filter: StatusFilter) => {
+    setStatusFilter((current) => (current === filter ? "all" : filter));
+  };
+
   const [expandedOrders, setExpandedOrders] = useState<Record<string, boolean>>({});
   const { data: orderRecords = [], isLoading } = useRestaurantKitchenOrdersQuery();
   const updateStatus = useUpdateRestaurantKitchenOrderStatusMutation();
   const orders = orderRecords as KitchenOrder[];
+
+  useEffect(() => {
+    setSelectedOrder((current) => {
+      if (!current) return current;
+      return orders.find((order) => order.id === current.id) ?? current;
+    });
+  }, [orders]);
 
   const orderStats = useMemo(() => {
     const counts = orders.reduce<Record<KitchenStatus, number>>(
@@ -319,7 +377,7 @@ export function POSKitchenOrders() {
       `Status: ${STATUS_LABELS[order.status]}`,
       `Payment Status: ${formatPaymentStatus(order.paymentStatus)}`,
       `Time Ordered: ${formatDateTime(order.orderedAt)}`,
-      `Estimated Prep Time: ${formatPrepTime(getEstimatedPrepTime(order))}`,
+      `Estimated Prep: ${getSavedEstimatedPrepTime(order) === null ? "-" : formatPrepTime(getSavedEstimatedPrepTime(order) ?? 0)}`,
       order.estimatedReadyAt ? `Estimated Ready: ${formatDateTime(order.estimatedReadyAt)}` : "",
       "",
       "Products:",
@@ -367,9 +425,11 @@ export function POSKitchenOrders() {
             <button
               key={stat.label}
               type="button"
-              onClick={() => setStatusFilter(stat.filter)}
-              className={`rounded-2xl border border-border bg-card p-5 text-left shadow-sm transition-all duration-200 hover:shadow-md ${
-                isActive ? "ring-2 ring-primary/40" : ""
+              onClick={() => toggleStatusFilter(stat.filter)}
+              aria-pressed={isActive}
+              aria-label={`Filter by ${stat.label}`}
+              className={`group text-left w-full rounded-2xl border bg-card p-5 shadow-sm cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-xl hover:shadow-primary/25 hover:border-primary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-lg active:shadow-primary/30 ${
+                isActive ? "border-primary bg-primary/5 shadow-md shadow-primary/20" : "border-border"
               }`}
             >
               <div className="mb-4 flex items-center justify-between">
@@ -383,41 +443,6 @@ export function POSKitchenOrders() {
             </button>
           );
         })}
-      </div>
-
-      <div className="mb-8 rounded-xl border border-border bg-card p-5 shadow-sm">
-        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="text-xl font-semibold text-foreground">Customer Order Status Display</h2>
-            <p className="text-sm text-muted-foreground">Queue preview for received, preparing, ready, completed, and cancelled orders.</p>
-          </div>
-          <span className="rounded-full border border-border bg-muted/40 px-3 py-1 text-xs font-medium text-muted-foreground">
-            Kitchen Side Preview
-          </span>
-        </div>
-
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-          {orders
-            .filter((order) => order.status !== "cancelled" || statusFilter === "cancelled")
-            .slice(0, 15)
-            .map((order) => (
-              <div key={`queue-${order.id}`} className={`rounded-lg border px-4 py-3 ${STATUS_STYLES[order.status]}`}>
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-base font-bold">Order #{order.orderNumber}</p>
-                  <span className="text-xs font-semibold">{STATUS_LABELS[order.status]}</span>
-                </div>
-                <p className="mt-1 text-xs opacity-80">{order.customerName || "Walk-in Customer"}</p>
-                <p className="mt-2 text-xs font-medium">
-                  Running Time: {getRunningTime(order)}
-                </p>
-              </div>
-            ))}
-          {orders.length === 0 && (
-            <div className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground md:col-span-2 xl:col-span-5">
-              No customer queue orders yet.
-            </div>
-          )}
-        </div>
       </div>
 
       <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
@@ -509,12 +534,12 @@ export function POSKitchenOrders() {
                               <Clock className="h-3.5 w-3.5" />
                               <span>{formatDateTime(order.orderedAt)}</span>
                             </div>
-                            <div className="font-medium text-foreground">Estimated Prep Time: {formatPrepTime(getEstimatedPrepTime(order))}</div>
+                            <div className="font-medium text-foreground">Estimated Prep: {getSavedEstimatedPrepTime(order) === null ? "-" : formatPrepTime(getSavedEstimatedPrepTime(order) ?? 0)}</div>
                             {order.estimatedReadyAt && (
                               <div className="font-medium text-primary">Ready Around: {formatDateTime(order.estimatedReadyAt)}</div>
                             )}
                             <div className="flex items-center justify-between gap-2">
-                              <span>Running: {getRunningTime(order)}</span>
+                              <span>Serve Time: {getRunningTime(order)}</span>
                               <span>Stay: {getCustomerStayDuration(order)}</span>
                             </div>
                           </div>
@@ -646,19 +671,23 @@ export function POSKitchenOrders() {
                   <p className="mt-1 text-lg text-foreground">{formatDateTime(selectedOrder.orderedAt)}</p>
                 </div>
                 <div>
-                  <p className="text-sm text-muted-foreground">Estimated Prep Time</p>
-                  <p className="mt-1 text-lg text-foreground">{formatPrepTime(getEstimatedPrepTime(selectedOrder))}</p>
+                  <p className="text-sm text-muted-foreground">Estimated Prep</p>
+                  <p className="mt-1 text-lg text-foreground">{getSavedEstimatedPrepTime(selectedOrder) === null ? "-" : formatPrepTime(getSavedEstimatedPrepTime(selectedOrder) ?? 0)}</p>
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Estimated Ready Around</p>
                   <p className="mt-1 text-lg text-foreground">{selectedOrder.estimatedReadyAt ? formatDateTime(selectedOrder.estimatedReadyAt) : "-"}</p>
                 </div>
                 <div>
-                  <p className="text-sm text-muted-foreground">Running Time</p>
+                  <p className="text-sm text-muted-foreground">Serve Time</p>
                   <p className="mt-1 text-lg text-foreground">{getRunningTime(selectedOrder)}</p>
                 </div>
                 <div>
-                  <p className="text-sm text-muted-foreground">Customer Stay Duration</p>
+                  <p className="text-sm text-muted-foreground">Served At</p>
+                  <p className="mt-1 text-lg text-foreground">{selectedOrder.servedAt ? formatDateTime(selectedOrder.servedAt) : "-"}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Stay Time</p>
                   <p className="mt-1 text-lg text-foreground">{getCustomerStayDuration(selectedOrder)}</p>
                 </div>
                 <div>

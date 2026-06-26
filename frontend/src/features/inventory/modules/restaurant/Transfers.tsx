@@ -262,10 +262,17 @@ export function Transfers() {
   const totalWasteValue = filteredWasteLogs.reduce((sum, log) => sum + log.totalValue, 0);
   const totalWasteQuantity = filteredWasteLogs.length;
 
+  // Cards jump to the Transfers tab and toggle its status filter; clicking the
+  // active card clears the filter back to "all".
+  const toggleTransferStatus = (status: string) => {
+    setActiveTab("transfers");
+    setStatusFilter((current) => (current === status ? "all" : status));
+  };
+
   const transferStats = [
-    { label: "Pending Approvals", value: transfers.filter(t => t.status === "pending").length, icon: Clock, color: "from-yellow-500 to-orange-500" },
-    { label: "In Transit", value: transfers.filter(t => t.status === "in-transit").length, icon: ArrowLeftRight, color: "from-purple-500 to-indigo-500" },
-    { label: "Completed Today", value: transfers.filter(t => t.status === "completed" && t.completedDate === new Date().toISOString().split('T')[0]).length, icon: CheckCircle, color: "from-green-500 to-emerald-500" },
+    { label: "Pending Approvals", value: transfers.filter(t => t.status === "pending").length, icon: Clock, color: "from-yellow-500 to-orange-500", filter: "pending" },
+    { label: "In Transit", value: transfers.filter(t => t.status === "in-transit").length, icon: ArrowLeftRight, color: "from-purple-500 to-indigo-500", filter: "in-transit" },
+    { label: "Completed Today", value: transfers.filter(t => t.status === "completed" && t.completedDate === new Date().toISOString().split('T')[0]).length, icon: CheckCircle, color: "from-green-500 to-emerald-500", filter: "completed" },
   ];
 
   return (
@@ -280,7 +287,7 @@ export function Transfers() {
           {activeTab === "transfers" && (
             <button
               onClick={() => setShowTransferModal(true)}
-              className="px-4 py-2 bg-gradient-to-r from-primary to-secondary text-white rounded-xl hover:shadow-lg hover:shadow-primary/30 transition-all duration-200 flex items-center gap-2 text-sm"
+              className="px-4 py-2 bg-gradient-to-r from-primary to-secondary text-white rounded-xl hover:-translate-y-0.5 hover:shadow-lg hover:shadow-primary/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-md transition-all duration-200 flex items-center gap-2 text-sm"
             >
               <Plus className="w-4 h-4" />
               New Transfer
@@ -302,8 +309,18 @@ export function Transfers() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
         {transferStats.map((stat, index) => {
           const Icon = stat.icon;
+          const isActive = activeTab === "transfers" && statusFilter === stat.filter;
           return (
-            <div key={index} className="bg-card rounded-2xl p-6 shadow-sm border border-border">
+            <button
+              key={index}
+              type="button"
+              onClick={() => toggleTransferStatus(stat.filter)}
+              aria-pressed={isActive}
+              aria-label={`Filter transfers by ${stat.label}`}
+              className={`group text-left w-full bg-card rounded-2xl p-6 shadow-sm border cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-xl hover:shadow-primary/25 hover:border-primary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-lg active:shadow-primary/30 ${
+                isActive ? "border-primary bg-primary/5 shadow-md shadow-primary/20" : "border-border"
+              }`}
+            >
               <div className="flex items-center gap-3 mb-3">
                 <div className={`w-10 h-10 bg-gradient-to-br ${stat.color} rounded-xl flex items-center justify-center`}>
                   <Icon className="w-5 h-5 text-white" />
@@ -311,7 +328,7 @@ export function Transfers() {
               </div>
               <p className="text-muted-foreground text-sm mb-1">{stat.label}</p>
               <p className="text-2xl font-bold text-foreground">{stat.value}</p>
-            </div>
+            </button>
           );
         })}
       </div>
@@ -320,10 +337,10 @@ export function Transfers() {
       <div className="flex items-center gap-2 bg-muted rounded-xl p-1 mb-6 w-fit">
         <button
           onClick={() => setActiveTab("transfers")}
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${
             activeTab === "transfers"
               ? "bg-primary text-white shadow-md"
-              : "text-muted-foreground hover:text-foreground"
+              : "text-muted-foreground hover:text-foreground hover:bg-background/70 hover:shadow-sm"
           }`}
         >
           <ArrowLeftRight className="w-4 h-4 inline-block mr-2" />
@@ -331,10 +348,10 @@ export function Transfers() {
         </button>
         <button
           onClick={() => setActiveTab("adjustments")}
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${
             activeTab === "adjustments"
               ? "bg-primary text-white shadow-md"
-              : "text-muted-foreground hover:text-foreground"
+              : "text-muted-foreground hover:text-foreground hover:bg-background/70 hover:shadow-sm"
           }`}
         >
           <FileText className="w-4 h-4 inline-block mr-2" />
@@ -342,10 +359,10 @@ export function Transfers() {
         </button>
         <button
           onClick={() => setActiveTab("waste")}
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${
             activeTab === "waste"
               ? "bg-primary text-white shadow-md"
-              : "text-muted-foreground hover:text-foreground"
+              : "text-muted-foreground hover:text-foreground hover:bg-background/70 hover:shadow-sm"
           }`}
         >
           <Trash2 className="w-4 h-4 inline-block mr-2" />

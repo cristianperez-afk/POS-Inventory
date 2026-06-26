@@ -7,3 +7,4 @@ export * from './transferQueries';
 export * from './salesQueries';
 export * from './bundleQueries';
 export * from './workspace';
+export { useRetailAuditLogsQuery, type AuditTrailEntry } from '../auditQueries';

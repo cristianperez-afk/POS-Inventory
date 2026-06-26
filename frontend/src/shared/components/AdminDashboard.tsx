@@ -58,6 +58,7 @@ interface StaffUser {
   store_type: string | null;
   staff_type: StaffType;
   status?: string | null;
+  void_pin_configured?: boolean;
 }
 
 interface AdminDashboardProps {
@@ -68,6 +69,7 @@ interface AdminDashboardProps {
 }
 
 export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }: AdminDashboardProps) {
+  const canManageStaff = currentUser?.role === 'ADMIN';
   const [users, setUsers] = useState<StaffUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -84,11 +86,12 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
   const [formName, setFormName] = useState('');
   const [formEmail, setFormEmail] = useState('');
   const [formPassword, setFormPassword] = useState('');
+  const [formVoidPin, setFormVoidPin] = useState('');
   const [formAccessRole, setFormAccessRole] = useState<AccessRole>('POS_STAFF');
   const [showPassword, setShowPassword] = useState(false);
   useEffect(() => {
     const loadStaff = async () => {
-      if (!currentUser?.id) {
+      if (!currentUser?.id || !canManageStaff) {
         setLoading(false);
         return;
       }
@@ -111,13 +114,16 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
     };
 
     void loadStaff();
-  }, [currentUser?.id]);
+  }, [canManageStaff, currentUser?.id]);
 
   const handleAddUser = () => {
+    if (!canManageStaff) return;
+
     setEditingUser(null);
     setFormName('');
     setFormEmail('');
     setFormPassword('');
+    setFormVoidPin('');
     setFormAccessRole('POS_STAFF');
     setShowPassword(false);
     setError('');
@@ -125,10 +131,13 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
   };
 
   const handleEditUser = (user: StaffUser) => {
+    if (!canManageStaff) return;
+
     setEditingUser(user);
     setFormName(user.full_name);
     setFormEmail(user.email);
     setFormPassword('');
+    setFormVoidPin('');
     setFormAccessRole(getAccessRoleFromUser(user));
     setShowPassword(false);
     setError('');
@@ -156,6 +165,7 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
           full_name: formName,
           email: formEmail,
           password: formPassword || undefined,
+          void_pin: formVoidPin || undefined,
           staff_type: accessRolePayload.staff_type,
           role: accessRolePayload.role,
         }),
@@ -169,6 +179,7 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
       setUsers((current) => editingUser ? current.map((user) => (user.id === data.id ? data : user)) : [...current, data]);
       setShowModal(false);
       setShowPassword(false);
+      setFormVoidPin('');
       setEditingUser(null);
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : 'Unable to save staff account.');
@@ -266,7 +277,7 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
 
   return (
     <div className="flex h-screen">
-      <Sidebar currentPage="admin-dashboard" onNavigate={onNavigate} onLogout={onLogout} isAdmin storeBrand={storeBrand} userName={currentUser?.full_name} userRole={currentUser?.role} storeType={currentUser?.store_type} />
+      <Sidebar currentPage="admin-dashboard" onNavigate={onNavigate} onLogout={onLogout} isAdmin={canManageStaff} storeBrand={storeBrand} userName={currentUser?.full_name} userRole={currentUser?.role} storeType={currentUser?.store_type} />
 
       <div className="flex-1 overflow-auto bg-background">
         <div className="p-8">
@@ -401,6 +412,7 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
                 onClick={() => {
                   setShowModal(false);
                   setShowPassword(false);
+                  setFormVoidPin('');
                   setEditingUser(null);
                 }}
                 className="text-muted-foreground hover:text-foreground"
@@ -475,6 +487,7 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
                   onClick={() => {
                     setShowModal(false);
                     setShowPassword(false);
+                    setFormVoidPin('');
                     setEditingUser(null);
                   }}
                   className="px-4 py-2 border border-border rounded-lg hover:bg-muted transition-colors"
