@@ -18,6 +18,7 @@ import {
   Pencil,
   Plus,
   Search,
+  Settings,
   Store,
   StoreIcon,
   Trash2,
@@ -489,6 +490,18 @@ export function SuperadminDashboard({ currentUser, onLogout, onNavigate }: Super
             <History className="h-6 w-6 shrink-0" strokeWidth={1.8} />
             <span className={`overflow-hidden whitespace-nowrap text-base font-medium transition-all duration-300 ease-in-out ${isSidebarCollapsed ? 'w-0 opacity-0' : 'flex-1 opacity-100'}`}>
               {!isSidebarCollapsed && 'Activity Log'}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => onNavigate('general-settings')}
+            className={`mt-4 flex h-[52px] w-full items-center rounded-lg border border-transparent text-white transition hover:bg-[#007a5e]/15 hover:text-slate-100 ${
+              isSidebarCollapsed ? 'justify-center gap-0 px-0' : 'gap-4 px-4 text-left'
+            }`}
+          >
+            <Settings className="h-6 w-6 shrink-0" strokeWidth={1.8} />
+            <span className={`overflow-hidden whitespace-nowrap text-base font-medium transition-all duration-300 ease-in-out ${isSidebarCollapsed ? 'w-0 opacity-0' : 'flex-1 opacity-100'}`}>
+              {!isSidebarCollapsed && 'Settings'}
             </span>
           </button>
         </nav>

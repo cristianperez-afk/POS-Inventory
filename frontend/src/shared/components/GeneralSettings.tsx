@@ -1,8 +1,10 @@
-import { useEffect, useState, type ReactNode } from 'react';
-import { Bell, Palette, Save, User } from 'lucide-react';
+import { useEffect, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
+import { Bell, History, LogOut, Palette, PanelLeftClose, PanelLeftOpen, Save, Settings, StoreIcon, User, UserPlus } from 'lucide-react';
 import { Sidebar } from './Sidebar';
 import { Page, type StoreBrand } from '../App';
 import type { AuthenticatedUser } from '../../auth/types/auth';
+import logoImage from '../../imports/logo1.png';
+import { LogoutConfirmDialog } from './LogoutConfirmDialog';
 import {
   applyUserPreferences,
   defaultUserPreferences,
@@ -90,6 +92,7 @@ export function GeneralSettings({ currentUser, storeBrand, onLogout, onNavigate 
   const [message, setMessage] = useState('');
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const canChooseDefaultWorkspace = currentUser?.role === 'ADMIN';
+  const canUseInventoryPreferences = currentUser?.role !== 'SUPERADMIN';
   const hasPreferenceChanges = JSON.stringify(userPreferences) !== JSON.stringify(appliedPreferences);
   const hasUnsavedChanges = hasPreferenceChanges;
 
@@ -168,6 +171,36 @@ export function GeneralSettings({ currentUser, storeBrand, onLogout, onNavigate 
     if (ok) setPendingAction(null);
   };
 
+  const content = (
+    <SettingsContent
+      canChooseDefaultWorkspace={canChooseDefaultWorkspace}
+      canUseInventoryPreferences={canUseInventoryPreferences}
+      currentUser={currentUser}
+      discardChanges={discardChanges}
+      handleSaveAndProceed={handleSaveAndProceed}
+      handleUndoAndProceed={handleUndoAndProceed}
+      hasUnsavedChanges={hasUnsavedChanges}
+      message={message}
+      pendingAction={pendingAction}
+      saveSettings={saveSettings}
+      saving={saving}
+      setPendingAction={setPendingAction}
+      setUserPreferences={setUserPreferences}
+      userPreferences={userPreferences}
+    />
+  );
+
+  if (currentUser?.role === 'SUPERADMIN') {
+    return (
+      <SuperadminSettingsLayout
+        onLogout={() => requestAction({ type: 'logout' })}
+        onNavigate={(page) => requestAction({ type: 'navigate', page })}
+      >
+        {content}
+      </SuperadminSettingsLayout>
+    );
+  }
+
   return (
     <div className="flex h-screen">
       <Sidebar
@@ -181,8 +214,48 @@ export function GeneralSettings({ currentUser, storeBrand, onLogout, onNavigate 
         storeType={currentUser?.store_type}
         staffType={currentUser?.staff_type}
       />
+      {content}
+    </div>
+  );
+}
+
+function SettingsContent({
+  canChooseDefaultWorkspace,
+  canUseInventoryPreferences,
+  currentUser,
+  discardChanges,
+  handleSaveAndProceed,
+  handleUndoAndProceed,
+  hasUnsavedChanges,
+  message,
+  pendingAction,
+  saveSettings,
+  saving,
+  setPendingAction,
+  setUserPreferences,
+  userPreferences,
+}: {
+  canChooseDefaultWorkspace: boolean;
+  canUseInventoryPreferences: boolean;
+  currentUser: AuthenticatedUser | null;
+  discardChanges: () => void;
+  handleSaveAndProceed: () => void;
+  handleUndoAndProceed: () => void;
+  hasUnsavedChanges: boolean;
+  message: string;
+  pendingAction: PendingAction | null;
+  saveSettings: () => Promise<boolean>;
+  saving: boolean;
+  setPendingAction: (action: PendingAction | null) => void;
+  setUserPreferences: Dispatch<SetStateAction<UserPreferenceValues>>;
+  userPreferences: UserPreferenceValues;
+}) {
+  const isSuperadmin = currentUser?.role === 'SUPERADMIN';
+
+  return (
+    <>
       <div className="flex-1 overflow-auto bg-background">
-        <main className="min-h-full p-6 lg:p-8">
+      <main className="min-h-full p-6 lg:p-8">
           <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
             <div>
               <h1 className="text-primary mb-2">Settings</h1>
@@ -248,9 +321,11 @@ export function GeneralSettings({ currentUser, storeBrand, onLogout, onNavigate 
                 <SettingRow label="Compact Mode" description="Use tighter spacing for dense work screens.">
                   <SettingToggle checked={userPreferences.compactMode} onChange={(checked) => setUserPreferences((current) => ({ ...current, compactMode: checked }))} />
                 </SettingRow>
-                <SettingRow label="Low Stock Alerts" description="Keep inventory warning indicators visible.">
-                  <SettingToggle checked={userPreferences.lowStockAlerts} onChange={(checked) => setUserPreferences((current) => ({ ...current, lowStockAlerts: checked }))} />
-                </SettingRow>
+                {canUseInventoryPreferences && (
+                  <SettingRow label="Low Stock Alerts" description="Keep inventory warning indicators visible.">
+                    <SettingToggle checked={userPreferences.lowStockAlerts} onChange={(checked) => setUserPreferences((current) => ({ ...current, lowStockAlerts: checked }))} />
+                  </SettingRow>
+                )}
                 {canChooseDefaultWorkspace && (
                   <SettingRow label="Default Workspace" description="Admin landing page shown right after login.">
                     <select
@@ -306,7 +381,7 @@ export function GeneralSettings({ currentUser, storeBrand, onLogout, onNavigate 
                     ))}
                   </div>
                 </SettingRow>
-                <SettingRow label="Primary Color" description="Buttons, links, highlights, and the sidebar across POS and Inventory (retail and restaurant).">
+                <SettingRow label="Primary Color" description={isSuperadmin ? "Buttons, links, highlights, and the sidebar." : "Buttons, links, highlights, and the sidebar across POS and Inventory (retail and restaurant)."}>
                   <div className="flex items-center gap-3">
                     <input
                       type="color"
@@ -321,7 +396,7 @@ export function GeneralSettings({ currentUser, storeBrand, onLogout, onNavigate 
                     />
                   </div>
                 </SettingRow>
-                <SettingRow label="Secondary Color" description="The gradient pairing on primary buttons and the sidebar across POS and Inventory. Doesn't affect unrelated secondary buttons/badges elsewhere.">
+                <SettingRow label="Secondary Color" description={isSuperadmin ? "The gradient pairing on primary buttons and the sidebar." : "The gradient pairing on primary buttons and the sidebar across POS and Inventory. Doesn't affect unrelated secondary buttons/badges elsewhere."}>
                   <div className="flex items-center gap-3">
                     <input
                       type="color"
@@ -374,6 +449,114 @@ export function GeneralSettings({ currentUser, storeBrand, onLogout, onNavigate 
           </div>
         </div>
       )}
+    </>
+  );
+}
+
+function SuperadminSettingsLayout({
+  children,
+  onLogout,
+  onNavigate,
+}: {
+  children: ReactNode;
+  onLogout: () => void;
+  onNavigate: (page: Page) => void;
+}) {
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+
+  return (
+    <div className="min-h-screen bg-background text-foreground">
+      <aside
+        className={`fixed inset-y-0 left-0 z-30 flex flex-col text-white transition-[width] duration-300 ease-in-out ${isSidebarCollapsed ? 'w-20 overflow-visible' : 'w-80 overflow-y-auto no-scrollbar'}`}
+        style={{ background: 'linear-gradient(180deg, var(--sidebar) 0%, var(--primary) 100%)' }}
+      >
+        <div className={`relative border-b border-white/10 transition-all duration-300 ease-in-out ${isSidebarCollapsed ? 'px-3 py-4' : 'px-4 pb-4 pt-5'}`}>
+          <button
+            type="button"
+            onClick={() => setIsSidebarCollapsed((value) => !value)}
+            className={`z-10 inline-flex items-center justify-center text-slate-300 transition hover:text-slate-100 ${
+              isSidebarCollapsed ? 'group relative left-1/2 h-10 w-10 -translate-x-1/2' : 'absolute right-3 top-3 h-9 w-9'
+            }`}
+            aria-label={isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            title={isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            {isSidebarCollapsed ? (
+              <>
+                <img src={logoImage} alt="N&Ns logo" className="h-full w-full object-contain transition-opacity duration-150 group-hover:opacity-0" />
+                <span className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+                  <PanelLeftOpen className="h-5 w-5" strokeWidth={1.8} />
+                </span>
+              </>
+            ) : (
+              <PanelLeftClose className="h-5 w-5" strokeWidth={1.8} />
+            )}
+          </button>
+          <div className="text-center">
+            {!isSidebarCollapsed && (
+              <div className="mx-auto mb-1 flex h-24 w-24 items-center justify-center transition-all duration-300 ease-in-out">
+                <img src={logoImage} alt="N&Ns logo" className="h-20 w-20 object-contain transition-all duration-300 ease-in-out" />
+              </div>
+            )}
+            <div className={`overflow-hidden transition-all duration-300 ease-in-out ${isSidebarCollapsed ? 'max-h-0 opacity-0' : 'max-h-16 opacity-100'}`}>
+              <h1 className="truncate text-xl font-semibold tracking-tight text-white">Unified POS</h1>
+              <p className="mt-1 text-lg leading-tight text-slate-200">Super Admin</p>
+            </div>
+          </div>
+        </div>
+
+        <nav className={`flex-1 py-7 transition-all duration-300 ease-in-out ${isSidebarCollapsed ? 'px-3' : 'px-5'}`}>
+          {[
+            { icon: StoreIcon, label: 'Stores', page: 'superadmin-dashboard' as Page },
+            { icon: UserPlus, label: 'Admin Accounts', page: 'superadmin-dashboard' as Page },
+            { icon: History, label: 'Activity Log', page: 'activity-log' as Page },
+            { icon: Settings, label: 'Settings', page: 'general-settings' as Page, active: true },
+          ].map((item, index) => (
+            <button
+              key={`${item.label}-${index}`}
+              type="button"
+              onClick={() => onNavigate(item.page)}
+              className={`flex h-[52px] w-full items-center rounded-lg border transition ${index > 0 ? 'mt-4' : ''} ${
+                isSidebarCollapsed ? 'justify-center gap-0 px-0' : 'gap-4 px-4 text-left'
+              } ${item.active ? 'border-primary/25 text-white' : 'border-transparent text-white hover:bg-primary/15 hover:text-slate-100'}`}
+              style={item.active ? { background: 'linear-gradient(135deg, var(--primary) 0%, var(--secondary-accent) 100%)', boxShadow: '0 0 18px color-mix(in srgb, var(--primary) 35%, transparent)' } : undefined}
+            >
+              <item.icon className="h-6 w-6 shrink-0" strokeWidth={1.8} />
+              <span className={`overflow-hidden whitespace-nowrap text-base transition-all duration-300 ease-in-out ${isSidebarCollapsed ? 'w-0 opacity-0' : 'flex-1 opacity-100'} ${item.active ? 'font-semibold' : 'font-medium'}`}>
+                {!isSidebarCollapsed && item.label}
+              </span>
+            </button>
+          ))}
+        </nav>
+
+        <div className={`border-t border-white/10 py-2 transition-all duration-300 ease-in-out ${isSidebarCollapsed ? 'px-3' : 'px-5'}`}>
+          <button
+            type="button"
+            onClick={() => setShowLogoutConfirm(true)}
+            className={`flex h-11 w-full items-center rounded-lg border border-transparent text-white transition hover:bg-red-500/10 hover:text-red-400 ${
+              isSidebarCollapsed ? 'justify-center gap-0 px-0' : 'gap-4 px-4 text-left'
+            }`}
+          >
+            <LogOut className="h-6 w-6 shrink-0" strokeWidth={1.8} />
+            <span className={`overflow-hidden whitespace-nowrap text-base font-medium transition-all duration-300 ease-in-out ${isSidebarCollapsed ? 'w-0 opacity-0' : 'flex-1 opacity-100'}`}>
+              {!isSidebarCollapsed && 'Logout'}
+            </span>
+          </button>
+        </div>
+      </aside>
+
+      <div className={`min-h-screen transition-[padding] duration-300 ease-in-out ${isSidebarCollapsed ? 'pl-20' : 'pl-80'}`}>
+        {children}
+      </div>
+
+      <LogoutConfirmDialog
+        isOpen={showLogoutConfirm}
+        onCancel={() => setShowLogoutConfirm(false)}
+        onConfirm={() => {
+          setShowLogoutConfirm(false);
+          onLogout();
+        }}
+      />
     </div>
   );
 }
