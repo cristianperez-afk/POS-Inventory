@@ -9,6 +9,18 @@ export class SuperadminService {
     return this.databaseService.listAdminUsers();
   }
 
+  listActivityLogs(input: {
+    userId: number;
+    dateFrom?: string;
+    dateTo?: string;
+    actorUserId?: number;
+    module?: string;
+    action?: string;
+    search?: string;
+  }) {
+    return this.databaseService.listActivityLogsForUser(input);
+  }
+
   createAdminAccount(input: { fullName: string; email: string; storeType: 'RESTAURANT' | 'RETAIL_STORE'; password?: string }) {
     return this.databaseService.createAdminAccount(input);
   }

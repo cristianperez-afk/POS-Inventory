@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { IsEmail, IsIn, IsOptional, IsString, MinLength } from 'class-validator';
 import { SuperadminService } from './superadmin.service';
 
@@ -37,6 +37,27 @@ export class SuperadminController {
   @Get('admins')
   listAdmins() {
     return this.superadminService.listAdminUsers();
+  }
+
+  @Get('activity-logs')
+  listActivityLogs(
+    @Query('user_id') userId: string,
+    @Query('date_from') dateFrom?: string,
+    @Query('date_to') dateTo?: string,
+    @Query('actor_user_id') actorUserId?: string,
+    @Query('module') module?: string,
+    @Query('action') action?: string,
+    @Query('search') search?: string,
+  ) {
+    return this.superadminService.listActivityLogs({
+      userId: Number(userId),
+      dateFrom,
+      dateTo,
+      actorUserId: actorUserId ? Number(actorUserId) : undefined,
+      module,
+      action,
+      search,
+    });
   }
 
   @Post('admins')
