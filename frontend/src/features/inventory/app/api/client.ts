@@ -18,6 +18,7 @@ import type {
   KitchenOrderStatus,
   RestaurantSettingKey,
 } from './domainTypes';
+import { getApiBaseUrl } from '../../../../auth/services/auth';
 
 export type { KitchenOrderStatus, RestaurantSettingKey } from './domainTypes';
 
@@ -40,7 +41,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     bridgeHeaders['x-pos-store-type'] = window.__POS_STORE_TYPE__ ?? '';
   }
 
-  const response = await fetch(path, {
+  const response = await fetch(`${getApiBaseUrl()}${path}`, {
     ...options,
     credentials: 'include', // sends the HttpOnly cookie automatically
     headers: {

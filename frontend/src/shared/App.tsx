@@ -31,7 +31,7 @@ import type { AuthenticatedUser } from '../auth/types/auth';
 import { getDefaultStoreLogo } from './utils/defaultStoreLogo';
 import { AppAlertProvider } from './components/AppAlertProvider';
 import { appQueryClient } from '../query/appQueryClient';
-import { applyUserPreferences, loadUserPreferences } from './utils/themePreferences';
+import { applyUserPreferences, fromRemoteThemePreferences, fromRemoteUserPreferences, loadUserPreferences, mergeUserPreferencesWithTheme, saveUserPreferences } from './utils/themePreferences';
 
 const SESSION_USER_KEY = 'bukolabs-pos-current-user';
 const SESSION_PAGE_KEY = 'bukolabs-pos-current-page';
@@ -93,7 +93,37 @@ export default function App() {
   const [storeBrand, setStoreBrand] = useState<StoreBrand>({ name: null, logo: null });
 
   useEffect(() => {
-    applyUserPreferences(loadUserPreferences(currentUser?.id));
+    if (!currentUser?.id) {
+      applyUserPreferences(loadUserPreferences(null));
+      return;
+    }
+
+    const cachedPreferences = loadUserPreferences(currentUser.id);
+    applyUserPreferences(cachedPreferences);
+
+    let cancelled = false;
+    const loadThemePreferences = async () => {
+      try {
+        const response = await fetch(`${getApiBaseUrl()}/admin/theme-preferences?user_id=${currentUser.id}`);
+        if (!response.ok) throw new Error('Unable to load theme preferences.');
+        const data = await response.json();
+        if (cancelled) return;
+
+        const personalPreferences = fromRemoteUserPreferences(data.user_preferences);
+        const effectiveTheme = fromRemoteThemePreferences(data.effective_theme);
+        const effectivePreferences = personalPreferences ?? mergeUserPreferencesWithTheme(cachedPreferences, effectiveTheme);
+        applyUserPreferences(effectivePreferences);
+        saveUserPreferences(currentUser.id, effectivePreferences);
+      } catch {
+        if (!cancelled) applyUserPreferences(cachedPreferences);
+      }
+    };
+
+    void loadThemePreferences();
+
+    return () => {
+      cancelled = true;
+    };
   }, [currentUser?.id]);
 
   useEffect(() => {
