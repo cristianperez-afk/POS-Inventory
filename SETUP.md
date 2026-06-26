@@ -21,6 +21,15 @@ copy backend\.env.example backend\.env
 
 Edit `backend/.env` and put the real PostgreSQL connection string in `DATABASE_URL`.
 
+For Supabase, use the pooler URLs:
+
+```env
+DATABASE_URL="postgresql://postgres.<project-ref>:<password>@<pooler-host>:6543/postgres?sslmode=no-verify"
+DIRECT_URL="postgresql://postgres.<project-ref>:<password>@<pooler-host>:5432/postgres?sslmode=no-verify"
+```
+
+`DATABASE_URL` is for app traffic and uses Supabase's transaction pooler. `DIRECT_URL` is for Prisma migrations and uses Supabase's session pooler. Do not use `db.<project-ref>.supabase.co:5432` on Render unless the Supabase project has IPv4/direct connectivity enabled.
+
 ## 3. Prepare the database
 
 Run the SQL in:
@@ -65,3 +74,20 @@ If login says `Failed to fetch`, the frontend cannot reach the backend. Check:
 - `frontend/.env` has `VITE_API_BASE_URL=http://localhost:3000`
 - `backend/.env` exists and has a valid `DATABASE_URL`
 - Supabase allows the connection and the password is URL-encoded
+
+## Render Deploy With Supabase
+
+Use these Render backend environment variables:
+
+```env
+DATABASE_URL=postgresql://postgres.<project-ref>:<password>@<pooler-host>:6543/postgres?sslmode=no-verify
+DIRECT_URL=postgresql://postgres.<project-ref>:<password>@<pooler-host>:5432/postgres?sslmode=no-verify
+```
+
+Keep the backend build command:
+
+```bash
+npm install && npm run db:deploy
+```
+
+If Render fails with `P1001` against `db.<project-ref>.supabase.co:5432`, `DIRECT_URL` is using Supabase's direct IPv6 host. Replace it with the session pooler URL above, or enable Supabase's IPv4 add-on.

@@ -1,15 +1,21 @@
 import 'dotenv/config';
 import { defineConfig } from 'prisma/config';
 
-// Migrations run through the CLI, which needs a direct (non-pooled) connection —
-// Supabase's transaction-mode pooler (port 6543) can hang on the advisory lock
-// `migrate deploy` takes. DIRECT_URL should be Supabase's direct connection
-// string (port 5432); it falls back to DATABASE_URL for local setups that only
-// have one connection string.
+// Migrations run through the CLI and should avoid Supabase's transaction pooler
+// because transaction-mode pooling can interfere with Prisma advisory locks.
+// On IPv4-only hosts such as Render, use Supabase's session pooler for
+// DIRECT_URL. Supabase's direct db.<project-ref>.supabase.co:5432 host requires
+// IPv6 unless the project has the IPv4 add-on enabled.
 const migrationUrl = process.env.DIRECT_URL ?? process.env.DATABASE_URL;
 
 if (!migrationUrl) {
   throw new Error('DIRECT_URL or DATABASE_URL is missing. Create backend/.env or set one in the environment.');
+}
+
+if (process.env.RENDER && /@db\.[^.]+\.supabase\.co:5432\//.test(migrationUrl)) {
+  console.warn(
+    'DIRECT_URL points at Supabase direct port 5432. Render often cannot reach that IPv6-only host; use the Supabase session pooler for DIRECT_URL, or enable Supabase IPv4 add-on.',
+  );
 }
 
 export default defineConfig({
