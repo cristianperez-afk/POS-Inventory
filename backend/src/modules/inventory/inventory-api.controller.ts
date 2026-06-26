@@ -97,9 +97,18 @@ export class InventoryApiController {
     return this.inventoryApiService.updateRecipe(request.headers, id, body);
   }
 
+  @Post('recipes/:id/restore')
+  restoreRecipe(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.restoreRecipe(request.headers, id);
+  }
+
   @Delete('recipes/:id')
-  deleteRecipe(@Req() request: RequestLike, @Param('id') id: string) {
-    return this.inventoryApiService.deleteRecipe(request.headers, id);
+  deleteRecipe(
+    @Req() request: RequestLike,
+    @Param('id') id: string,
+    @Query('permanent') permanent?: string,
+  ) {
+    return this.inventoryApiService.deleteRecipe(request.headers, id, permanent === 'true');
   }
 
   @Get('kitchen-orders')

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChefHat, Plus, Search, Edit, Trash2, X, Save, Calculator, Scale, Upload } from "lucide-react";
+import { ChefHat, Plus, Search, Edit, Trash2, X, Save, Calculator, Scale, Upload, Archive, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "../../app/hooks/useSession";
 import { InventoryProduct } from "../lib/inventoryLogic";
@@ -7,6 +7,7 @@ import {
   useDeleteRestaurantRecipeMutation,
   useRestaurantInventoryQuery,
   useRestaurantRecipesQuery,
+  useRestoreRestaurantRecipeMutation,
   useSaveRestaurantRecipeMutation,
 } from "../lib/restaurant";
 
@@ -64,6 +65,7 @@ type Recipe = {
   grossMargin?: number;
   isActive?: boolean;
   availableOrders?: number;
+  archivedAt?: string | null;
   modifiers?: RecipeModifier[];
   instructions: string;
 };
@@ -347,6 +349,7 @@ export function RecipeBOM() {
   const [selectedRecipe, setSelectedRecipe] = useState<Recipe | null>(null);
   const [scaleMultiplier, setScaleMultiplier] = useState(1);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [viewArchived, setViewArchived] = useState(false);
   const [ingredientSearch, setIngredientSearch] = useState("");
   const [isIngredientPickerOpen, setIsIngredientPickerOpen] = useState(false);
 
@@ -384,8 +387,13 @@ export function RecipeBOM() {
   const availableInventoryItems = inventoryItems.filter(item => item.stock > 0 && !isExpiredInventoryItem(item));
 
   const { data: recipes = [] } = useRestaurantRecipesQuery();
+  const { data: archivedRecipes = [] } = useRestaurantRecipesQuery({ archived: true });
   const saveRecipe = useSaveRestaurantRecipeMutation();
   const removeRecipe = useDeleteRestaurantRecipeMutation();
+  const restoreRecipe = useRestoreRestaurantRecipeMutation();
+
+  // The list source swaps between the live menu and the archive bin.
+  const sourceRecipes = viewArchived ? archivedRecipes : recipes;
   const findInventoryItem = (productId?: number | string) =>
     inventoryItems.find((item) =>
       String(item.id) === String(productId) ||
@@ -416,11 +424,12 @@ export function RecipeBOM() {
   });
   const visibleIngredientOptions = filteredInventoryItems.slice(0, 10);
 
-  const filteredRecipes = recipes.filter(recipe => {
+  const filteredRecipes = sourceRecipes.filter(recipe => {
     const matchesSearch = (recipe.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
                          (recipe.id || '').toLowerCase().includes(searchQuery.toLowerCase());
     const matchesCategory = categoryFilter === "all" || recipe.category === categoryFilter;
-    const matchesActive = activeFilter === "all" || (recipe.isActive ?? true);
+    // The active/inactive filter only applies to the live menu, not the archive.
+    const matchesActive = viewArchived || activeFilter === "all" || (recipe.isActive ?? true);
     return matchesSearch && matchesCategory && matchesActive;
   });
 
@@ -788,21 +797,37 @@ export function RecipeBOM() {
 
   const handleDeleteRecipe = (id: string) => {
     if (!isAdmin) {
-      toast.error("Only admin users can delete recipes.");
+      toast.error("Only admin users can modify recipes.");
       return;
     }
     setPendingDeleteId(id);
   };
 
+  const handleRestoreRecipe = async (id: string) => {
+    if (!isAdmin) {
+      toast.error("Only admin users can restore recipes.");
+      return;
+    }
+    try {
+      await restoreRecipe.mutateAsync(id);
+      toast.success("Recipe restored to the menu");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to restore recipe");
+    }
+  };
+
   const confirmDeleteRecipe = async () => {
     if (!pendingDeleteId) return;
     const id = pendingDeleteId;
+    // In the archive bin "delete" means permanent removal; on the live menu it
+    // means archive (a reversible soft-delete).
+    const permanent = viewArchived;
     setPendingDeleteId(null);
     try {
-      await removeRecipe.mutateAsync(id);
-      toast.success("Recipe deleted successfully");
+      await removeRecipe.mutateAsync({ id, permanent });
+      toast.success(permanent ? "Recipe permanently deleted" : "Recipe archived");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to delete recipe");
+      toast.error(error instanceof Error ? error.message : "Failed to update recipe");
     }
   };
 
@@ -953,15 +978,29 @@ export function RecipeBOM() {
               : "View recipe costs, menu prices, and scaling"}
           </p>
         </div>
-        {isAdmin && (
+        <div className="mt-4 md:mt-0 flex items-center gap-3">
           <button
-            onClick={handleOpenCreateModal}
-            className="mt-4 md:mt-0 px-6 py-3 bg-gradient-to-r from-primary to-secondary text-white rounded-2xl hover:-translate-y-0.5 hover:shadow-lg hover:shadow-primary/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-md transition-all duration-200 flex items-center gap-2"
+            onClick={() => setViewArchived((v) => !v)}
+            aria-pressed={viewArchived}
+            className={`px-5 py-3 rounded-2xl border transition-all duration-200 flex items-center gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${
+              viewArchived
+                ? "bg-primary/10 text-primary border-primary/60"
+                : "bg-card text-foreground border-border hover:border-primary/60"
+            }`}
           >
-            <Plus className="w-5 h-5" />
-            Create Recipe
+            <Archive className="w-5 h-5" />
+            {viewArchived ? `Back to Menu` : `Archived${archivedRecipes.length ? ` (${archivedRecipes.length})` : ""}`}
           </button>
-        )}
+          {isAdmin && !viewArchived && (
+            <button
+              onClick={handleOpenCreateModal}
+              className="px-6 py-3 bg-gradient-to-r from-primary to-secondary text-white rounded-2xl hover:-translate-y-0.5 hover:shadow-lg hover:shadow-primary/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-md transition-all duration-200 flex items-center gap-2"
+            >
+              <Plus className="w-5 h-5" />
+              Create Recipe
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Stats */}
@@ -1115,7 +1154,7 @@ export function RecipeBOM() {
                 <Calculator className="w-4 h-4" />
                 View & Scale
               </button>
-              {isAdmin && (
+              {isAdmin && !viewArchived && (
                 <>
                   <button
                     onClick={() => handleEditRecipe(recipe)}
@@ -1126,8 +1165,27 @@ export function RecipeBOM() {
                   </button>
                   <button
                     onClick={() => handleDeleteRecipe(recipe.id)}
+                    className="px-4 py-2 bg-amber-50 text-amber-600 rounded-xl hover:bg-amber-100 transition-colors"
+                    title="Archive recipe (can be restored later)"
+                  >
+                    <Archive className="w-4 h-4" />
+                  </button>
+                </>
+              )}
+              {isAdmin && viewArchived && (
+                <>
+                  <button
+                    onClick={() => handleRestoreRecipe(recipe.id)}
+                    className="px-4 py-2 bg-green-50 text-green-600 rounded-xl hover:bg-green-100 transition-colors flex items-center gap-2"
+                    title="Restore recipe to the menu"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                    Restore
+                  </button>
+                  <button
+                    onClick={() => handleDeleteRecipe(recipe.id)}
                     className="px-4 py-2 bg-red-50 text-red-600 rounded-xl hover:bg-red-100 transition-colors"
-                    title="Delete recipe"
+                    title="Delete permanently (only if never sold)"
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
@@ -1136,6 +1194,19 @@ export function RecipeBOM() {
             </div>
           </div>
         ))}
+        {filteredRecipes.length === 0 && (
+          <div className="col-span-full bg-card rounded-2xl p-12 shadow-sm border border-dashed border-border flex flex-col items-center justify-center text-center">
+            <Archive className="w-10 h-10 text-muted-foreground mb-3" />
+            <p className="text-foreground font-medium">
+              {viewArchived ? "No archived recipes" : "No recipes found"}
+            </p>
+            <p className="text-sm text-muted-foreground mt-1">
+              {viewArchived
+                ? "Recipes you archive will appear here and can be restored anytime."
+                : "Try adjusting your search or filters, or create a new recipe."}
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Create Recipe Modal */}
@@ -1883,24 +1954,45 @@ export function RecipeBOM() {
         </div>
       )}
 
-      {/* Delete Recipe Confirmation Modal */}
+      {/* Archive / Delete Recipe Confirmation Modal */}
       {pendingDeleteId !== null && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-card rounded-2xl shadow-xl border border-border w-full max-w-sm">
             <div className="p-6 border-b border-border flex items-center gap-3">
-              <Trash2 className="w-6 h-6 text-red-600 flex-shrink-0" />
-              <h2 className="text-lg font-bold text-foreground">Delete Recipe</h2>
+              {viewArchived ? (
+                <Trash2 className="w-6 h-6 text-red-600 flex-shrink-0" />
+              ) : (
+                <Archive className="w-6 h-6 text-amber-600 flex-shrink-0" />
+              )}
+              <h2 className="text-lg font-bold text-foreground">
+                {viewArchived ? "Delete Recipe Permanently" : "Archive Recipe"}
+              </h2>
             </div>
             <div className="p-6">
-              <p className="text-foreground mb-1">Are you sure you want to delete this recipe?</p>
-              <p className="text-sm text-muted-foreground mb-6">This action cannot be undone.</p>
+              {viewArchived ? (
+                <>
+                  <p className="text-foreground mb-1">Permanently delete this recipe?</p>
+                  <p className="text-sm text-muted-foreground mb-6">
+                    This cannot be undone. Recipes that have ever been sold cannot be deleted — archive them instead.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-foreground mb-1">Archive this recipe?</p>
+                  <p className="text-sm text-muted-foreground mb-6">
+                    It will be removed from the menu and POS, but you can restore it anytime from the Archived view.
+                  </p>
+                </>
+              )}
               <div className="flex gap-3">
                 <button
                   onClick={confirmDeleteRecipe}
-                  className="flex-1 px-4 py-2 bg-red-600 text-white rounded-xl hover:bg-red-700 transition-colors flex items-center justify-center gap-2"
+                  className={`flex-1 px-4 py-2 text-white rounded-xl transition-colors flex items-center justify-center gap-2 ${
+                    viewArchived ? "bg-red-600 hover:bg-red-700" : "bg-amber-600 hover:bg-amber-700"
+                  }`}
                 >
-                  <Trash2 className="w-4 h-4" />
-                  Delete
+                  {viewArchived ? <Trash2 className="w-4 h-4" /> : <Archive className="w-4 h-4" />}
+                  {viewArchived ? "Delete" : "Archive"}
                 </button>
                 <button
                   onClick={() => setPendingDeleteId(null)}

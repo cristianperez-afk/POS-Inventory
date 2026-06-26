@@ -251,6 +251,7 @@ model Recipe {
   targetFoodCost  Float?
   sellingPrice    Float?
   isActive        Boolean            @default(true)
+  archivedAt      DateTime?
   imageUrl        String?
   isVegetarian    Boolean            @default(false)
   isVegan         Boolean            @default(false)
@@ -271,6 +272,7 @@ model Recipe {
 
   @@unique([businessId, name])
   @@index([businessId, isActive])
+  @@index([businessId, archivedAt])
 }
 
 model RecipeIngredient {
