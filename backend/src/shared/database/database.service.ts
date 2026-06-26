@@ -3431,6 +3431,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         const orderStatus = input.orderStatus ?? (isRestaurantOrder ? 'PENDING' : (isPaid && !isPaidDineIn ? 'COMPLETED' : 'PENDING'));
         const paymentStatus = input.paymentStatus ?? (isPaid ? 'PAID' : 'NOT_PAID');
         const confirmedAt = new Date();
+        const estimatedPrepMinutes = Number(input.estimatedPrepMinutes ?? input.estimated_prep_minutes);
+        const estimatedReadyAt = Number.isFinite(estimatedPrepMinutes) && estimatedPrepMinutes > 0
+          ? new Date(confirmedAt.getTime() + estimatedPrepMinutes * 60000)
+          : null;
         const shouldStartPreparationAtConfirmation = isRestaurantOrder;
         const shouldStartStayAtConfirmation = isRestaurantOrder && isDineInOrder;
         const runningTimeStart = isRestaurantOrder ? confirmedAt : null;
@@ -3485,8 +3489,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             runningTimeEnd,
             runningTimeEnd ? 0 : null,
             Boolean(isRestaurantOrder && !stopsOnConfirmation),
-            Number.isFinite(Number(input.estimatedPrepMinutes ?? input.estimated_prep_minutes)) ? Number(input.estimatedPrepMinutes ?? input.estimated_prep_minutes) : null,
-            input.estimatedReadyAt ?? input.estimated_ready_at ?? null,
+            Number.isFinite(estimatedPrepMinutes) ? estimatedPrepMinutes : null,
+            estimatedReadyAt,
           ],
         );
         const orderId = orderRows[0].id;
@@ -5558,10 +5562,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       conditions.push(`store_id = ${addValue(requester.store_id)}`);
     }
     if (input.dateFrom?.trim()) {
-      conditions.push(`created_at >= ${addValue(`${input.dateFrom} 00:00:00`)}`);
+      conditions.push(`created_at >= (${addValue(input.dateFrom.trim())}::date::timestamp - INTERVAL '8 hours')`);
     }
     if (input.dateTo?.trim()) {
-      conditions.push(`created_at <= ${addValue(`${input.dateTo} 23:59:59`)}`);
+      conditions.push(`created_at < (${addValue(input.dateTo.trim())}::date::timestamp + INTERVAL '1 day' - INTERVAL '8 hours')`);
     }
     if (Number.isFinite(input.actorUserId) && Number(input.actorUserId) > 0) {
       conditions.push(`user_id = ${addValue(Number(input.actorUserId))}`);
@@ -5580,7 +5584,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const whereSql = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     return this.query(
       `
-        SELECT id, store_id, user_id, user_name, user_role, module, action, details, created_at
+        SELECT id, store_id, user_id, user_name, user_role, module, action, details, to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS created_at
         FROM activity_logs
         ${whereSql}
         ORDER BY created_at DESC, id DESC
@@ -5612,8 +5616,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       await this.ensureActivityLogSchema();
       await this.query(
         `
-          INSERT INTO activity_logs (store_id, user_id, user_name, user_role, module, action, details)
-          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          INSERT INTO activity_logs (store_id, user_id, user_name, user_role, module, action, details, created_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
         `,
         [
           input.storeId ?? null,
@@ -5641,9 +5645,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         module TEXT NOT NULL,
         action TEXT NOT NULL,
         details TEXT NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
       )
     `);
+    await this.query(`ALTER TABLE activity_logs ALTER COLUMN created_at SET DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')`);
     await this.query(`CREATE INDEX IF NOT EXISTS activity_logs_store_created_idx ON activity_logs(store_id, created_at DESC)`);
     await this.query(`CREATE INDEX IF NOT EXISTS activity_logs_user_created_idx ON activity_logs(user_id, created_at DESC)`);
     await this.query(`CREATE INDEX IF NOT EXISTS activity_logs_module_idx ON activity_logs(module)`);

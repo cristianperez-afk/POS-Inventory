@@ -7,6 +7,7 @@ import { useOrders, Order } from '../../shared/context/OrderContext';
 import { useTables } from '../../shared/context/TableContext';
 import { TableAssignmentNotification } from '../../shared/components/TableAssignmentNotification';
 import { DeleteConfirmDialog } from '../../shared/components/DeleteConfirmDialog';
+import { formatManilaTime } from '../../shared/utils/date';
 
 interface TableManagementProps {
   onNavigate: (page: Page) => void;
@@ -1203,9 +1204,9 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
                       <div className="grid grid-cols-2 gap-2 text-sm text-muted-foreground">
                         <p><strong>Party Size:</strong> {entry.partySize} people</p>
                         <p><strong>Required Seats:</strong> {entry.requiredSeats}</p>
-                        <p><strong>Queue Time:</strong> {new Date(entry.queueTime).toLocaleTimeString()}</p>
+                        <p><strong>Queue Time:</strong> {formatManilaTime(entry.queueTime)}</p>
                         {entry.timeAssigned && (
-                          <p><strong>Time Assigned:</strong> {new Date(entry.timeAssigned).toLocaleTimeString()}</p>
+                          <p><strong>Time Assigned:</strong> {formatManilaTime(entry.timeAssigned)}</p>
                         )}
                         {entry.assignedTables && entry.assignedTables.length > 0 && (
                           <p><strong>Assigned Tables:</strong> {entry.assignedTables.map(t => `#${t}`).join(', ')}</p>

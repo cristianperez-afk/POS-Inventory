@@ -9,7 +9,7 @@ import { useStoreSettings } from '../../shared/context/StoreSettingsContext';
 import { DeleteConfirmDialog } from '../../shared/components/DeleteConfirmDialog';
 import { getApiBaseUrl } from '../../auth/services/auth';
 import type { AuthenticatedUser } from '../../auth/types/auth';
-import { getLocalDateKey } from '../../shared/utils/date';
+import { getLocalDateKey, getManilaTime } from '../../shared/utils/date';
 import { useCompletePaymentMutation, usePosMenuQuery } from '../../features/pos/hooks/usePosMenuQuery';
 
 interface RetailCreateOrderProps {
@@ -559,7 +559,7 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
       paymentMethod,
       paymentStatus: 'Paid' as const,
       date: getLocalDateKey(),
-      time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+      time: getManilaTime(),
       cashReceived: paymentMethod === 'Cash' ? parseFloat(cashAmount) : total,
       changeGiven: paymentMethod === 'Cash' ? computedChange : 0,
       cashier: userName || 'Staff',

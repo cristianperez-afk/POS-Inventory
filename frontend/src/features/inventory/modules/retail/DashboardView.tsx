@@ -15,6 +15,7 @@ import { categorySubcategories, CHART_COLORS } from '../../app/utils/constants';
 import { autoSortItem } from '../../app/utils/autoSortingRules';
 import { useRetailWorkspace } from '../lib/retail';
 import { useQueryClient } from '@tanstack/react-query';
+import { getManilaTime } from '../../../../shared/utils/date';
 
 
 export interface StockAlert {
@@ -103,7 +104,7 @@ export function DashboardView({ onNavigate }: { onNavigate?: (view: string) => v
             Overview of your inventory system
             {!isRefreshing && (
               <span className="ml-2 text-[12px] text-muted-foreground">
-                • Last updated: {lastRefreshed.toLocaleTimeString()}
+                • Last updated: {getManilaTime(lastRefreshed)}
               </span>
             )}
           </p>

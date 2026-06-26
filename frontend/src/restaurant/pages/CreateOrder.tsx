@@ -10,7 +10,7 @@ import { ThermalReceipt } from '../../shared/components/ThermalReceipt';
 import { DeleteConfirmDialog } from '../../shared/components/DeleteConfirmDialog';
 import { getApiBaseUrl } from '../../auth/services/auth';
 import type { AuthenticatedUser } from '../../auth/types/auth';
-import { formatManilaTime, getLocalDateKey } from '../../shared/utils/date';
+import { formatManilaTime, getLocalDateKey, getManilaTime } from '../../shared/utils/date';
 import { useCompletePaymentMutation, usePosIngredientsQuery, usePosMenuQuery, useProductRecipeQuery } from '../../features/pos/hooks/usePosMenuQuery';
 
 interface CreateOrderProps {
@@ -145,7 +145,7 @@ function toOrderListFormat(order: any, paid: boolean) {
     paymentStatus: paid ? 'Paid' as const : 'Not Paid' as const,
     orderStatus: 'Pending' as const,
     date: getLocalDateKey(now),
-    time: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+    time: getManilaTime(now),
     cashier: order.cashier,
     items: order.items.map((item: CartItem) => ({
       name: item.name,

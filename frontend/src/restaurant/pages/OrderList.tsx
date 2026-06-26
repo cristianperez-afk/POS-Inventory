@@ -109,9 +109,13 @@ function stayStart(order: Order) {
 function estimatedWaitDisplay(order: Order, _strategy: 'parallel' | 'sequential') {
   const estimate = Number(order.estimatedPrepMinutes ?? 0);
   if (!Number.isFinite(estimate) || estimate <= 0) return null;
+  const orderedAt = order.orderedAt ? parseDatabaseTimestamp(order.orderedAt) : null;
+  const computedReadyAt = orderedAt && !Number.isNaN(orderedAt.getTime())
+    ? new Date(orderedAt.getTime() + Math.ceil(estimate) * 60000).toISOString()
+    : order.estimatedReadyAt;
   return {
     minutes: Math.ceil(estimate),
-    readyAt: order.estimatedReadyAt,
+    readyAt: computedReadyAt,
   };
 }
 
