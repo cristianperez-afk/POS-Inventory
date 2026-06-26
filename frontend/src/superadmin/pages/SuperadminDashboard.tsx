@@ -10,6 +10,7 @@ import {
   CircleCheck,
   Eye,
   EyeOff,
+  History,
   KeyRound,
   LogOut,
   PanelLeftClose,
@@ -42,6 +43,7 @@ interface AdminSummary {
 interface SuperadminDashboardProps {
   currentUser: AuthenticatedUser | null;
   onLogout: () => void;
+  onNavigate: (page: 'activity-log') => void;
 }
 
 type StoreFilter = 'ALL' | 'RETAIL_STORE' | 'RESTAURANT';
@@ -68,7 +70,7 @@ const statusBadge = (admin: AdminSummary) =>
     ? <span className="inline-flex rounded bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">Active</span>
     : <span className="inline-flex rounded bg-red-50 px-2.5 py-1 text-xs font-medium text-red-700">Deactivated</span>;
 
-export function SuperadminDashboard({ currentUser, onLogout }: SuperadminDashboardProps) {
+export function SuperadminDashboard({ currentUser, onLogout, onNavigate }: SuperadminDashboardProps) {
   const [admins, setAdmins] = useState<AdminSummary[]>([]);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -475,6 +477,18 @@ export function SuperadminDashboard({ currentUser, onLogout }: SuperadminDashboa
             <UserPlus className="h-6 w-6 shrink-0" strokeWidth={1.8} />
             <span className={`overflow-hidden whitespace-nowrap text-base transition-all duration-300 ease-in-out ${isSidebarCollapsed ? 'w-0 opacity-0' : 'flex-1 opacity-100'} ${activeSection === 'admins' ? 'font-semibold' : 'font-medium'}`}>
               {!isSidebarCollapsed && 'Admin Accounts'}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => onNavigate('activity-log')}
+            className={`mt-4 flex h-[52px] w-full items-center rounded-lg border border-transparent text-white transition hover:bg-[#007a5e]/15 hover:text-slate-100 ${
+              isSidebarCollapsed ? 'justify-center gap-0 px-0' : 'gap-4 px-4 text-left'
+            }`}
+          >
+            <History className="h-6 w-6 shrink-0" strokeWidth={1.8} />
+            <span className={`overflow-hidden whitespace-nowrap text-base font-medium transition-all duration-300 ease-in-out ${isSidebarCollapsed ? 'w-0 opacity-0' : 'flex-1 opacity-100'}`}>
+              {!isSidebarCollapsed && 'Activity Log'}
             </span>
           </button>
         </nav>

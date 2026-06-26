@@ -11,7 +11,7 @@ import {
 } from '@nestjs/common';
 import { Pool, PoolClient, QueryResultRow } from 'pg';
 import * as bcrypt from 'bcryptjs';
-import { randomUUID } from 'crypto';
+import { randomInt, randomUUID } from 'crypto';
 import { AuthenticatedUser } from '../common/types';
 
 // Captures one InventoryItem stock change produced by a paid POS order so it can
@@ -63,6 +63,17 @@ type StoreInformation = {
 
 type StaffType = 'POS_STAFF' | 'INVENTORY_STAFF';
 type StaffRole = 'STAFF' | 'POS_MANAGER' | 'INVENTORY_MANAGER';
+type ActivityModule = 'Authentication' | 'Staff Accounts' | 'Transactions' | 'Payments' | 'Void & Refund' | 'Restaurant Table Management' | 'Store Settings';
+
+type ActivityLogInput = {
+  userId?: number | null;
+  storeId?: number | null;
+  userName?: string | null;
+  userRole?: string | null;
+  module: ActivityModule | string;
+  action: string;
+  details: string;
+};
 
 const LEGACY_STORE_ADMIN_ROLES = ['ADMIN'] as const;
 const STORE_MANAGER_ROLES = ['POS_MANAGER', 'INVENTORY_MANAGER'] as const;
@@ -196,18 +207,23 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   }
 
   private isStoreManagerRole(role: unknown) {
-    return role === 'POS_MANAGER' || role === 'INVENTORY_MANAGER' || role === 'ADMIN';
+    return role === 'POS_MANAGER' || role === 'INVENTORY_MANAGER' || role === 'POS_ADMIN' || role === 'INVENTORY_ADMIN' || role === 'ADMIN';
+  }
+
+  private isStoreAdminRole(role: unknown) {
+    return role === 'ADMIN';
   }
 
   private isPosManagerRole(role: unknown) {
-    return role === 'POS_MANAGER' || role === 'ADMIN';
+    return role === 'POS_MANAGER' || role === 'POS_ADMIN' || role === 'ADMIN';
   }
 
   private isInventoryManagerRole(role: unknown) {
-    return role === 'INVENTORY_MANAGER' || role === 'ADMIN';
+    return role === 'INVENTORY_MANAGER' || role === 'INVENTORY_ADMIN' || role === 'ADMIN';
   }
 
-  async getLoginUserByEmail(email: string): Promise<AuthenticatedUser & { password_hash: string } | null> {
+  async getLoginUserByEmail(email: string): Promise<AuthenticatedUser & { password_hash: string; void_pin?: string | null } | null> {
+    await this.ensureVoidPinHashColumn();
     const schema = await this.getSchemaColumns();
     const userColumns = this.resolveUserColumns(schema.users);
     const storeColumns = this.resolveStoreColumns(schema.stores);
@@ -227,6 +243,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const storeJoin = storeIdColumn && storeColumns.joinable ? `LEFT JOIN stores s ON s.id = u.${this.quoteIdentifier(storeIdColumn)}` : '';
     const storeIdSelect = storeIdColumn ? `u.${this.quoteIdentifier(storeIdColumn)} AS store_id` : 'NULL AS store_id';
     const staffTypeSelect = staffTypeColumn ? `u.${this.quoteIdentifier(staffTypeColumn)} AS staff_type` : 'NULL AS staff_type';
+    const voidPinSelect = userColumns.voidPinColumn ? `u.${this.quoteIdentifier(userColumns.voidPinColumn)} AS void_pin` : 'NULL AS void_pin';
 
     const rows = await this.query<{
       id: number;
@@ -239,6 +256,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       store_type: string | null;
       store_name: string | null;
       status: string | null;
+      void_pin: string | null;
     }>(
       `
         SELECT
@@ -251,6 +269,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           u.${this.quoteIdentifier(passwordColumn)} AS password_hash,
           ${storeTypeSelect},
           ${storeNameSelect},
+          ${voidPinSelect},
           ${this.userStatusSelect(userColumns)}
         FROM users u
         ${storeJoin}
@@ -263,6 +282,22 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     if (rows.length === 0) {
       return null;
+    }
+
+    const user = rows[0];
+    if (user.store_type === 'RETAIL_STORE' && this.isPosManagerRole(user.role) && !user.void_pin?.trim() && userColumns.voidPinHashColumn && userColumns.voidPinColumn) {
+      const uniquePin = await this.generateUniqueRetailVoidPin(user.store_id, user.id);
+      await this.query(
+        `
+          UPDATE users
+          SET
+            ${this.quoteIdentifier(userColumns.voidPinHashColumn)} = $1,
+            ${this.quoteIdentifier(userColumns.voidPinColumn)} = $2
+          WHERE id = $3
+        `,
+        [await bcrypt.hash(uniquePin, 10), uniquePin, user.id],
+      );
+      user.void_pin = uniquePin;
     }
 
     return rows[0];
@@ -336,7 +371,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const passwordHash = await bcrypt.hash(password, 10);
 
     try {
-      return await this.withTransaction(async (client) => {
+      const savedOrder = await this.withTransaction(async (client) => {
       const storeInsertColumns: string[] = [this.quoteIdentifier(storeColumns.storeTypeColumn!)];
       const storeInsertValues: unknown[] = [this.toDatabaseStoreType(input.storeType)];
       const storeInsertPlaceholders: string[] = ['$1'];
@@ -553,10 +588,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async listStaffForAdmin(adminUserId: number) {
     const admin = await this.getUserStoreScope(adminUserId);
 
+    if (!this.isStoreAdminRole(admin.role)) {
+      throw new ForbiddenException('Only admin accounts can manage staff accounts.');
+    }
+
     if (!admin.store_id) {
       throw new InternalServerErrorException('Admin account is not linked to a store.');
     }
 
+    await this.ensureVoidPinHashColumn();
     const schema = await this.getSchemaColumns();
     const userColumns = this.resolveUserColumns(schema.users);
     const storeColumns = this.resolveStoreColumns(schema.stores);
@@ -569,7 +609,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const storeTypeSelect = storeColumns.storeTypeColumn ? `${this.normalizedStoreTypeSql(`s.${this.quoteIdentifier(storeColumns.storeTypeColumn)}`)} AS store_type` : 'NULL AS store_type';
     const storeNameSelect = storeColumns.storeNameColumn ? `s.${this.quoteIdentifier(storeColumns.storeNameColumn)} AS store_name` : 'NULL AS store_name';
 
-    return this.query<AuthenticatedUser>(
+    const voidPinConfiguredSelect = userColumns.voidPinHashColumn ? `u.${this.quoteIdentifier(userColumns.voidPinHashColumn)} IS NOT NULL AS void_pin_configured` : 'FALSE AS void_pin_configured';
+
+    return this.query<AuthenticatedUser & { void_pin_configured?: boolean }>(
       `
         SELECT
           u.id,
@@ -580,6 +622,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ${userColumns.staffTypeColumn ? `u.${this.quoteIdentifier(userColumns.staffTypeColumn)} AS staff_type` : 'NULL AS staff_type'},
           ${storeTypeSelect},
           ${storeNameSelect},
+          ${voidPinConfiguredSelect},
           ${this.userStatusSelect(userColumns)}
         FROM users u
         ${storeJoin}
@@ -598,13 +641,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     password: string;
     staffType: StaffType;
     role?: StaffRole;
+    voidPin?: string | null;
   }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (!this.isPosManagerRole(admin.role) || !admin.store_id) {
-      throw new InternalServerErrorException('Only POS Manager accounts can create staff.');
+    if (!this.isStoreAdminRole(admin.role) || !admin.store_id) {
+      throw new ForbiddenException('Only admin accounts can create staff.');
     }
 
+    await this.ensureVoidPinHashColumn();
     const schema = await this.getSchemaColumns();
     const userColumns = this.resolveUserColumns(schema.users);
 
@@ -615,6 +660,22 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const passwordHash = await bcrypt.hash(input.password, 10);
     const role = input.role ?? 'STAFF';
     const staffType = this.staffTypeForRole(role, input.staffType);
+    const normalizedVoidPin = admin.store_type === 'RETAIL_STORE' && role === 'POS_MANAGER'
+      ? input.voidPin?.trim() || await this.generateUniqueRetailVoidPin(admin.store_id)
+      : null;
+    if (normalizedVoidPin) {
+      await this.assertUniqueRetailVoidPin(admin.store_id, normalizedVoidPin);
+    }
+    const voidPinHash = normalizedVoidPin
+      ? await bcrypt.hash(normalizedVoidPin, 10)
+      : null;
+    const voidPinInsertColumns = [
+      userColumns.voidPinHashColumn ? this.quoteIdentifier(userColumns.voidPinHashColumn) : null,
+      userColumns.voidPinColumn ? this.quoteIdentifier(userColumns.voidPinColumn) : null,
+    ].filter((column): column is string => !!column);
+    const voidPinInsertColumn = voidPinInsertColumns.length > 0 ? `, ${voidPinInsertColumns.join(', ')}` : '';
+    const voidPinInsertValue = voidPinInsertColumns.length > 0 ? `, ${voidPinInsertColumns.map((_, index) => `$${index + 9}`).join(', ')}` : '';
+    const voidPinConfiguredSelect = userColumns.voidPinHashColumn ? `$9::text IS NOT NULL AS void_pin_configured,` : 'FALSE AS void_pin_configured,';
 
     const rows = await this.query<AuthenticatedUser>(
       `
@@ -625,8 +686,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ${this.quoteIdentifier(userColumns.passwordColumn)},
           ${this.quoteIdentifier(userColumns.storeIdColumn)},
           ${this.quoteIdentifier(userColumns.staffTypeColumn)}
+          ${voidPinInsertColumn}
         )
-        VALUES ($1, $2, $6, $3, $4, $5)
+        VALUES ($1, $2, $6, $3, $4, $5${voidPinInsertValue})
         RETURNING
           id,
           ${this.quoteIdentifier(userColumns.fullNameColumn)} AS full_name,
@@ -636,10 +698,21 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ${this.quoteIdentifier(userColumns.staffTypeColumn)} AS staff_type,
           $7::text AS store_type,
           $8::text AS store_name,
+          ${voidPinConfiguredSelect}
           ${this.userStatusSelect(userColumns, '')}
       `,
-      [input.fullName, input.email, passwordHash, admin.store_id, staffType, role, admin.store_type, admin.store_name],
+      [input.fullName, input.email, passwordHash, admin.store_id, staffType, role, admin.store_type, admin.store_name, voidPinHash, normalizedVoidPin],
     );
+
+    await this.recordActivity({
+      userId: admin.id,
+      storeId: admin.store_id,
+      userName: admin.full_name,
+      userRole: admin.role,
+      module: 'Staff Accounts',
+      action: 'Staff Account Created',
+      details: `Created ${role.replaceAll('_', ' ')} Account\nName: ${rows[0].full_name}`,
+    });
 
     return rows[0];
   }
@@ -652,13 +725,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     password?: string;
     staffType: StaffType;
     role?: StaffRole;
+    voidPin?: string | null;
   }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (!this.isPosManagerRole(admin.role) || !admin.store_id) {
-      throw new InternalServerErrorException('Only POS Manager accounts can update staff.');
+    if (!this.isStoreAdminRole(admin.role) || !admin.store_id) {
+      throw new ForbiddenException('Only admin accounts can update staff.');
     }
 
+    await this.ensureVoidPinHashColumn();
     const schema = await this.getSchemaColumns();
     const userColumns = this.resolveUserColumns(schema.users);
     const storeColumns = this.resolveStoreColumns(schema.stores);
@@ -676,6 +751,36 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const role = input.role ?? 'STAFF';
     const values: unknown[] = [input.fullName, input.email, this.staffTypeForRole(role, input.staffType), role];
 
+    let normalizedVoidPin = admin.store_type === 'RETAIL_STORE' && role === 'POS_MANAGER' && input.voidPin?.trim()
+      ? input.voidPin.trim()
+      : null;
+    if (normalizedVoidPin) {
+      await this.assertUniqueRetailVoidPin(admin.store_id, normalizedVoidPin, input.staffUserId);
+    }
+    if (admin.store_type === 'RETAIL_STORE' && role === 'POS_MANAGER' && !normalizedVoidPin) {
+      if (!userColumns.voidPinHashColumn) {
+        throw new InternalServerErrorException('Users table is missing required columns for unique PIN setup.');
+      }
+
+      const voidPinSelect = userColumns.voidPinColumn ? `, ${this.quoteIdentifier(userColumns.voidPinColumn)} AS void_pin` : ', NULL AS void_pin';
+      const existingRows = await this.query<{ void_pin_hash: string | null; void_pin: string | null }>(
+        `
+          SELECT ${this.quoteIdentifier(userColumns.voidPinHashColumn)} AS void_pin_hash
+            ${voidPinSelect}
+          FROM users
+          WHERE id = $1
+            AND ${this.quoteIdentifier(userColumns.storeIdColumn)} = $2
+            AND ${this.quoteIdentifier(userColumns.roleColumn)} IN (${STORE_USER_ROLES_WITH_LEGACY_SQL})
+          LIMIT 1
+        `,
+        [input.staffUserId, admin.store_id],
+      );
+
+      if (existingRows.length > 0 && (!existingRows[0].void_pin_hash || !existingRows[0].void_pin)) {
+        normalizedVoidPin = await this.generateUniqueRetailVoidPin(admin.store_id, input.staffUserId);
+      }
+    }
+
     if (input.password?.trim()) {
       if (!userColumns.passwordColumn) {
         throw new InternalServerErrorException('Users table is missing a password column.');
@@ -683,6 +788,22 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
       values.push(await bcrypt.hash(input.password, 10));
       updates.push(`${this.quoteIdentifier(userColumns.passwordColumn)} = $${values.length}`);
+    }
+
+    if (userColumns.voidPinHashColumn) {
+      if (role === 'POS_MANAGER' && normalizedVoidPin) {
+        values.push(await bcrypt.hash(normalizedVoidPin, 10));
+        updates.push(`${this.quoteIdentifier(userColumns.voidPinHashColumn)} = $${values.length}`);
+        if (userColumns.voidPinColumn) {
+          values.push(normalizedVoidPin);
+          updates.push(`${this.quoteIdentifier(userColumns.voidPinColumn)} = $${values.length}`);
+        }
+      } else if (role !== 'POS_MANAGER') {
+        updates.push(`${this.quoteIdentifier(userColumns.voidPinHashColumn)} = NULL`);
+        if (userColumns.voidPinColumn) {
+          updates.push(`${this.quoteIdentifier(userColumns.voidPinColumn)} = NULL`);
+        }
+      }
     }
 
     values.push(input.staffUserId, admin.store_id);
@@ -693,6 +814,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       const storeJoin = storeColumns.joinable ? `LEFT JOIN stores s ON s.id = u.${this.quoteIdentifier(userColumns.storeIdColumn)}` : '';
       const storeTypeSelect = storeColumns.storeTypeColumn ? `${this.normalizedStoreTypeSql(`s.${this.quoteIdentifier(storeColumns.storeTypeColumn)}`)} AS store_type` : 'NULL AS store_type';
       const storeNameSelect = storeColumns.storeNameColumn ? `s.${this.quoteIdentifier(storeColumns.storeNameColumn)} AS store_name` : 'NULL AS store_name';
+      const voidPinConfiguredSelect = userColumns.voidPinHashColumn ? `u.${this.quoteIdentifier(userColumns.voidPinHashColumn)} IS NOT NULL AS void_pin_configured` : 'FALSE AS void_pin_configured';
 
       const rows = await this.query<AuthenticatedUser>(
         `
@@ -713,6 +835,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             u.${this.quoteIdentifier(userColumns.staffTypeColumn)} AS staff_type,
             ${storeTypeSelect},
             ${storeNameSelect},
+            ${voidPinConfiguredSelect},
             ${this.userStatusSelect(userColumns)}
           FROM updated u
           ${storeJoin}
@@ -724,6 +847,16 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       if (rows.length === 0) {
         throw new InternalServerErrorException('Staff account was not found for this store.');
       }
+
+      await this.recordActivity({
+        userId: admin.id,
+        storeId: admin.store_id,
+        userName: admin.full_name,
+        userRole: admin.role,
+        module: 'Staff Accounts',
+        action: 'Staff Account Updated',
+        details: `Updated staff account\nName: ${rows[0].full_name}\nRole: ${rows[0].role}`,
+      });
 
       return rows[0];
     } catch (error) {
@@ -746,8 +879,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (!this.isPosManagerRole(admin.role) || !admin.store_id) {
-      throw new ForbiddenException('Only POS Manager accounts can remove staff for their store.');
+    if (!this.isStoreAdminRole(admin.role) || !admin.store_id) {
+      throw new ForbiddenException('Only admin accounts can remove staff for their store.');
     }
 
     const schema = await this.getSchemaColumns();
@@ -764,6 +897,16 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         throw new NotFoundException('Staff account was not found for this store.');
       }
 
+      await this.recordActivity({
+        userId: admin.id,
+        storeId: admin.store_id,
+        userName: admin.full_name,
+        userRole: admin.role,
+        module: 'Staff Accounts',
+        action: 'Staff Account Deactivated',
+        details: `Deactivated staff account\nUser ID: ${input.staffUserId}`,
+      });
+
       return { id: rows[0].id, status: 'INACTIVE', deactivated: true, deleted: false };
     }
 
@@ -773,6 +916,16 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       if (rows.length === 0) {
         throw new NotFoundException('Staff account was not found for this store.');
       }
+
+      await this.recordActivity({
+        userId: admin.id,
+        storeId: admin.store_id,
+        userName: admin.full_name,
+        userRole: admin.role,
+        module: 'Staff Accounts',
+        action: 'Staff Account Deleted',
+        details: `Deleted staff account\nUser ID: ${input.staffUserId}`,
+      });
 
       return { id: rows[0].id, deleted: true, deactivated: false };
     } catch (error) {
@@ -795,8 +948,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (!this.isPosManagerRole(admin.role) || !admin.store_id) {
-      throw new ForbiddenException('Only POS Manager accounts can remove staff for their store.');
+    if (!this.isStoreAdminRole(admin.role) || !admin.store_id) {
+      throw new ForbiddenException('Only admin accounts can remove staff for their store.');
     }
 
     const schema = await this.getSchemaColumns();
@@ -812,6 +965,16 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       if (rows.length === 0) {
         throw new NotFoundException('Staff account was not found for this store.');
       }
+
+      await this.recordActivity({
+        userId: admin.id,
+        storeId: admin.store_id,
+        userName: admin.full_name,
+        userRole: admin.role,
+        module: 'Staff Accounts',
+        action: 'Staff Account Deleted',
+        details: `Permanently deleted staff account\nUser ID: ${input.staffUserId}`,
+      });
 
       return { id: rows[0].id, deleted: true, deactivated: false };
     } catch (error) {
@@ -830,8 +993,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (!this.isPosManagerRole(admin.role) || !admin.store_id) {
-      throw new ForbiddenException('Only POS Manager accounts can activate staff for their store.');
+    if (!this.isStoreAdminRole(admin.role) || !admin.store_id) {
+      throw new ForbiddenException('Only admin accounts can activate staff for their store.');
     }
 
     const schema = await this.getSchemaColumns();
@@ -846,6 +1009,16 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     if (rows.length === 0) {
       throw new NotFoundException('Staff account was not found for this store.');
     }
+
+    await this.recordActivity({
+      userId: admin.id,
+      storeId: admin.store_id,
+      userName: admin.full_name,
+      userRole: admin.role,
+      module: 'Staff Accounts',
+      action: 'Staff Account Activated',
+      details: `Activated staff account\nUser ID: ${input.staffUserId}`,
+    });
 
     return { id: rows[0].id, status: 'ACTIVE', activated: true };
   }
@@ -971,6 +1144,16 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       ],
     );
 
+    await this.recordActivity({
+      userId: admin.id,
+      storeId: admin.store_id,
+      userName: admin.full_name,
+      userRole: admin.role,
+      module: 'Store Settings',
+      action: 'Store Information Updated',
+      details: `Store information updated\nBusiness Name: ${rows[0].business_name}`,
+    });
+
     return rows[0];
   }
 
@@ -1079,6 +1262,16 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       ],
     );
 
+    await this.recordActivity({
+      userId: admin.id,
+      storeId: admin.store_id,
+      userName: admin.full_name,
+      userRole: admin.role,
+      module: 'Store Settings',
+      action: 'Store Settings Updated',
+      details: `Store settings updated\nRefunds: ${rows[0].enable_refund ? 'Enabled' : 'Disabled'}\nVoids: ${rows[0].enable_void ? 'Enabled' : 'Disabled'}`,
+    });
+
     return rows[0];
   }
 
@@ -1118,6 +1311,16 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       [admin.store_id, input.discountName, input.discountRate, input.isEnabled],
     );
 
+    await this.recordActivity({
+      userId: admin.id,
+      storeId: admin.store_id,
+      userName: admin.full_name,
+      userRole: admin.role,
+      module: 'Store Settings',
+      action: 'Discount Settings Updated',
+      details: `Created discount setting\n${input.discountName}: ${input.discountRate}%`,
+    });
+
     return rows[0];
   }
 
@@ -1146,6 +1349,16 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       throw new NotFoundException('Discount setting was not found for this store.');
     }
 
+    await this.recordActivity({
+      userId: admin.id,
+      storeId: admin.store_id,
+      userName: admin.full_name,
+      userRole: admin.role,
+      module: 'Store Settings',
+      action: 'Discount Settings Updated',
+      details: `Updated discount setting\n${input.discountName}: ${input.discountRate}%`,
+    });
+
     return rows[0];
   }
 
@@ -1169,6 +1382,16 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     if (rows.length === 0) {
       throw new NotFoundException('Discount setting was not found for this store.');
     }
+
+    await this.recordActivity({
+      userId: admin.id,
+      storeId: admin.store_id,
+      userName: admin.full_name,
+      userRole: admin.role,
+      module: 'Store Settings',
+      action: 'Discount Settings Updated',
+      details: `Deleted discount setting\nDiscount ID: ${input.discountId}`,
+    });
 
     return { id: input.discountId };
   }
@@ -2854,7 +3077,17 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       `,
       [randomUUID(), input.tableNumber.trim(), totalSeats, input.isShared, scope.locationId, scope.businessId],
     );
-    return this.mapDiningTable(rows[0]);
+    const table = this.mapDiningTable(rows[0]);
+    await this.recordActivity({
+      userId: user.id,
+      storeId: user.store_id,
+      userName: user.full_name,
+      userRole: user.role,
+      module: 'Restaurant Table Management',
+      action: 'Table Created',
+      details: `Created Table ${table.table_number}\nSeats: ${table.total_seats}`,
+    });
+    return table;
   }
 
   async updateDiningTable(input: { userId: number; tableId: string; tableNumber: string; totalSeats: number; isShared: boolean }) {
@@ -2879,7 +3112,17 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       `,
       [input.tableNumber.trim(), totalSeats, occupiedSeats, input.isShared, status, input.tableId, scope.businessId, scope.locationId],
     );
-    return this.mapDiningTable(rows[0]);
+    const table = this.mapDiningTable(rows[0]);
+    await this.recordActivity({
+      userId: user.id,
+      storeId: user.store_id,
+      userName: user.full_name,
+      userRole: user.role,
+      module: 'Restaurant Table Management',
+      action: 'Table Settings Updated',
+      details: `Updated Table ${table.table_number}\nSeats: ${table.total_seats}`,
+    });
+    return table;
   }
 
   async deleteDiningTable(input: { userId: number; tableId: string }) {
@@ -2896,6 +3139,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
       await this.queryWithClient(client, `UPDATE "KitchenOrder" SET "tableId" = NULL WHERE "tableId" = $1`, [input.tableId]);
       await this.queryWithClient(client, `DELETE FROM "DiningTable" WHERE id = $1`, [input.tableId]);
+      await this.recordActivity({
+        userId: user.id,
+        storeId: user.store_id,
+        userName: user.full_name,
+        userRole: user.role,
+        module: 'Restaurant Table Management',
+        action: 'Table Deleted',
+        details: `Deleted table\nTable ID: ${input.tableId}`,
+      });
       return { ok: true };
     });
   }
@@ -2958,6 +3210,17 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       if (status === 'AVAILABLE') {
         await this.stopRunningTimersForReleasedTable(client, user.store_id!, `Table ${table.tableNumber}`);
       }
+      await this.recordActivity({
+        userId: user.id,
+        storeId: user.store_id,
+        userName: user.full_name,
+        userRole: user.role,
+        module: 'Restaurant Table Management',
+        action: occupiedSeats > 0 ? 'Table Occupied' : 'Table Released',
+        details: occupiedSeats > 0
+          ? `Table ${table.tableNumber} occupied\nSeats: ${occupiedSeats}`
+          : `Table ${table.tableNumber} released`,
+      });
       return this.mapDiningTable(rows[0]);
     });
   }
@@ -3157,7 +3420,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
 
     try {
-      return await this.withTransaction(async (client) => {
+      const savedOrder = await this.withTransaction(async (client) => {
         const isPaid = Boolean(input.payment);
         const orderType = input.orderType ?? (user.store_type === 'RETAIL_STORE' ? 'RETAIL' : 'TAKEOUT');
         const hasDiningTable = Boolean(input.tableName && !String(input.tableName).toLowerCase().startsWith('queue'));
@@ -3305,6 +3568,27 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
         return { id: orderId, order_number: orderNumber };
       });
+      await this.recordActivity({
+        userId: user.id,
+        storeId: user.store_id,
+        userName: user.full_name,
+        userRole: user.role,
+        module: 'Transactions',
+        action: 'Order Created',
+        details: `Created Order #${savedOrder.order_number}`,
+      });
+      if (input.payment) {
+        await this.recordActivity({
+          userId: user.id,
+          storeId: user.store_id,
+          userName: user.full_name,
+          userRole: user.role,
+          module: 'Payments',
+          action: 'Payment Processed',
+          details: `${input.payment.method ?? 'Cash'} Payment\nAmount: ${Number(input.total ?? 0).toFixed(2)}`,
+        });
+      }
+      return savedOrder;
     } catch (error) {
       this.handleDatabaseWriteError(error, 'Unable to save order.');
     }
@@ -3639,6 +3923,48 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     if (rows.length === 0) {
       throw new NotFoundException('Order not found.');
+    }
+
+    if (input.payment) {
+      await this.recordActivity({
+        userId: user.id,
+        storeId: user.store_id,
+        userName: user.full_name,
+        userRole: user.role,
+        module: 'Payments',
+        action: 'Payment Processed',
+        details: `${input.payment.method ?? 'Cash'} Payment\nAmount: ${Number(input.payment.amountPaid ?? rows[0].total_amount ?? 0).toFixed(2)}\nOrder #${rows[0].order_number}`,
+      });
+    } else if (String(input.paymentStatus ?? '').toUpperCase() === 'REFUNDED' || String(input.paymentStatus ?? '').toUpperCase() === 'PARTIALLY_REFUNDED') {
+      await this.recordActivity({
+        userId: user.id,
+        storeId: user.store_id,
+        userName: user.full_name,
+        userRole: user.role,
+        module: 'Void & Refund',
+        action: 'Refund Processed',
+        details: `Refund processed\nOrder #${rows[0].order_number}\nReason: ${input.refundReason ?? input.reason ?? 'Customer request'}`,
+      });
+    } else if (String(input.paymentStatus ?? '').toUpperCase() === 'VOIDED') {
+      await this.recordActivity({
+        userId: user.id,
+        storeId: user.store_id,
+        userName: user.full_name,
+        userRole: user.role,
+        module: 'Void & Refund',
+        action: 'Void Approved',
+        details: `Voided Order #${rows[0].order_number}\nReason: ${input.voidReason ?? input.reason ?? 'No reason provided'}`,
+      });
+    } else if (input.orderStatus) {
+      await this.recordActivity({
+        userId: user.id,
+        storeId: user.store_id,
+        userName: user.full_name,
+        userRole: user.role,
+        module: 'Transactions',
+        action: `Order ${String(input.orderStatus).charAt(0).toUpperCase()}${String(input.orderStatus).slice(1).toLowerCase()}`,
+        details: `Order #${rows[0].order_number} status changed to ${input.orderStatus}`,
+      });
     }
 
     return rows[0];
@@ -5201,6 +5527,128 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return rows[0];
   }
 
+  async listActivityLogsForUser(input: {
+    userId: number;
+    dateFrom?: string;
+    dateTo?: string;
+    actorUserId?: number;
+    module?: string;
+    action?: string;
+    search?: string;
+  }) {
+    const requester = await this.getUserStoreScope(input.userId);
+    const role = String(requester.role ?? '');
+    const canViewAll = role === 'SUPERADMIN';
+    const canViewStore = role === 'ADMIN' || role === 'POS_MANAGER' || role === 'POS_ADMIN';
+
+    if (!canViewAll && (!canViewStore || !requester.store_id || !['RESTAURANT', 'RETAIL_STORE'].includes(String(requester.store_type)))) {
+      throw new ForbiddenException('Only Superadmin, Store Admin, and POS Manager accounts can view activity logs.');
+    }
+
+    await this.ensureActivityLogSchema();
+
+    const conditions: string[] = [];
+    const values: unknown[] = [];
+    const addValue = (value: unknown) => {
+      values.push(value);
+      return `$${values.length}`;
+    };
+
+    if (!canViewAll) {
+      conditions.push(`store_id = ${addValue(requester.store_id)}`);
+    }
+    if (input.dateFrom?.trim()) {
+      conditions.push(`created_at >= ${addValue(`${input.dateFrom} 00:00:00`)}`);
+    }
+    if (input.dateTo?.trim()) {
+      conditions.push(`created_at <= ${addValue(`${input.dateTo} 23:59:59`)}`);
+    }
+    if (Number.isFinite(input.actorUserId) && Number(input.actorUserId) > 0) {
+      conditions.push(`user_id = ${addValue(Number(input.actorUserId))}`);
+    }
+    if (input.module?.trim()) {
+      conditions.push(`module = ${addValue(input.module.trim())}`);
+    }
+    if (input.action?.trim()) {
+      conditions.push(`action = ${addValue(input.action.trim())}`);
+    }
+    if (input.search?.trim()) {
+      const param = addValue(`%${input.search.trim()}%`);
+      conditions.push(`(user_name ILIKE ${param} OR user_role ILIKE ${param} OR module ILIKE ${param} OR action ILIKE ${param} OR details ILIKE ${param})`);
+    }
+
+    const whereSql = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    return this.query(
+      `
+        SELECT id, store_id, user_id, user_name, user_role, module, action, details, created_at
+        FROM activity_logs
+        ${whereSql}
+        ORDER BY created_at DESC, id DESC
+        LIMIT 500
+      `,
+      values,
+    );
+  }
+
+  async recordActivityForUser(userId: number, module: ActivityModule | string, action: string, details: string) {
+    try {
+      const user = await this.getUserStoreScope(userId);
+      await this.recordActivity({
+        userId: user.id,
+        storeId: user.store_id,
+        userName: user.full_name,
+        userRole: user.role,
+        module,
+        action,
+        details,
+      });
+    } catch {
+      return;
+    }
+  }
+
+  async recordActivity(input: ActivityLogInput) {
+    try {
+      await this.ensureActivityLogSchema();
+      await this.query(
+        `
+          INSERT INTO activity_logs (store_id, user_id, user_name, user_role, module, action, details)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `,
+        [
+          input.storeId ?? null,
+          input.userId ?? null,
+          input.userName ?? 'System',
+          input.userRole ?? 'System',
+          input.module,
+          input.action,
+          input.details,
+        ],
+      );
+    } catch {
+      return;
+    }
+  }
+
+  private async ensureActivityLogSchema() {
+    await this.query(`
+      CREATE TABLE IF NOT EXISTS activity_logs (
+        id BIGSERIAL PRIMARY KEY,
+        store_id BIGINT NULL,
+        user_id BIGINT NULL,
+        user_name TEXT NOT NULL,
+        user_role TEXT NOT NULL,
+        module TEXT NOT NULL,
+        action TEXT NOT NULL,
+        details TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await this.query(`CREATE INDEX IF NOT EXISTS activity_logs_store_created_idx ON activity_logs(store_id, created_at DESC)`);
+    await this.query(`CREATE INDEX IF NOT EXISTS activity_logs_user_created_idx ON activity_logs(user_id, created_at DESC)`);
+    await this.query(`CREATE INDEX IF NOT EXISTS activity_logs_module_idx ON activity_logs(module)`);
+  }
+
   private async getSchemaColumns(): Promise<SchemaColumns> {
     if (this.schemaColumns) {
       return this.schemaColumns;
@@ -5234,8 +5682,243 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       storeIdColumn: pick(['store_id']),
       staffTypeColumn: pick(['staff_type']),
       passwordColumn: pick(['hashed_password', 'password_hash', 'password']),
+      voidPinHashColumn: pick(['void_pin_hash']),
+      voidPinColumn: pick(['void_pin']),
       statusColumn: pick(['status']),
       activeColumn: pick(['is_active']),
+    };
+  }
+
+  private async ensureVoidPinHashColumn() {
+    await this.query(`
+      ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS void_pin_hash TEXT,
+      ADD COLUMN IF NOT EXISTS void_pin TEXT
+    `);
+    this.schemaColumns = null;
+  }
+
+  private async assertUniqueRetailVoidPin(storeId: number | null, voidPin: string, excludeUserId?: number) {
+    if (!storeId) {
+      throw new BadRequestException('Store scope is required for Unique PIN setup.');
+    }
+
+    const schema = await this.getSchemaColumns();
+    const userColumns = this.resolveUserColumns(schema.users);
+    if (!userColumns.roleColumn || !userColumns.storeIdColumn || !userColumns.voidPinHashColumn) {
+      throw new InternalServerErrorException('Users table is missing required columns for Unique PIN setup.');
+    }
+
+    const values: unknown[] = [storeId];
+    const excludeSql = excludeUserId ? 'AND id <> $2' : '';
+    if (excludeUserId) values.push(excludeUserId);
+
+    const voidPinSelect = userColumns.voidPinColumn ? `, ${this.quoteIdentifier(userColumns.voidPinColumn)} AS void_pin` : ', NULL AS void_pin';
+    const rows = await this.query<{ void_pin_hash: string | null; void_pin: string | null }>(
+      `
+        SELECT ${this.quoteIdentifier(userColumns.voidPinHashColumn)} AS void_pin_hash
+          ${voidPinSelect}
+        FROM users
+        WHERE ${this.quoteIdentifier(userColumns.storeIdColumn)} = $1
+          AND ${this.quoteIdentifier(userColumns.roleColumn)} IN ('POS_MANAGER', 'POS_ADMIN')
+          AND (${this.quoteIdentifier(userColumns.voidPinHashColumn)} IS NOT NULL${userColumns.voidPinColumn ? ` OR ${this.quoteIdentifier(userColumns.voidPinColumn)} IS NOT NULL` : ''})
+          ${excludeSql}
+      `,
+      values,
+    );
+
+    for (const row of rows) {
+      if (row.void_pin === voidPin || (row.void_pin_hash && await bcrypt.compare(voidPin, row.void_pin_hash))) {
+        throw new ConflictException('This Unique PIN is already assigned to another retail POS manager.');
+      }
+    }
+  }
+
+  private async generateUniqueRetailVoidPin(storeId: number | null, excludeUserId?: number) {
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const pin = String(randomInt(100000, 1000000));
+      try {
+        await this.assertUniqueRetailVoidPin(storeId, pin, excludeUserId);
+        return pin;
+      } catch (error) {
+        if (error instanceof ConflictException) {
+          continue;
+        }
+
+        throw error;
+      }
+    }
+
+    throw new ConflictException('Unable to generate a unique retail manager PIN. Please try again.');
+  }
+
+  async verifyRetailVoidPin(input: { userId: number; voidPin: string }) {
+    const requester = await this.getUserStoreScope(input.userId);
+    if (requester.store_type !== 'RETAIL_STORE' || !requester.store_id) {
+      throw new ForbiddenException('Unique PIN authorization is only available for retail stores.');
+    }
+    if (!input.voidPin?.trim()) {
+      throw new BadRequestException('Unique PIN is required.');
+    }
+
+    await this.ensureVoidPinHashColumn();
+    const schema = await this.getSchemaColumns();
+    const userColumns = this.resolveUserColumns(schema.users);
+    if (!userColumns.fullNameColumn || !userColumns.roleColumn || !userColumns.storeIdColumn || !userColumns.voidPinHashColumn) {
+      throw new InternalServerErrorException('Users table is missing required columns for Unique PIN authorization.');
+    }
+
+    const rows = await this.query<{ id: number; full_name: string; email: string; role: string; void_pin_hash: string }>(
+      `
+        SELECT
+          id,
+          ${this.quoteIdentifier(userColumns.fullNameColumn)} AS full_name,
+          email,
+          ${this.quoteIdentifier(userColumns.roleColumn)} AS role,
+          ${this.quoteIdentifier(userColumns.voidPinHashColumn)} AS void_pin_hash
+        FROM users u
+        WHERE ${this.quoteIdentifier(userColumns.storeIdColumn)} = $1
+          AND ${this.quoteIdentifier(userColumns.roleColumn)} IN ('POS_MANAGER', 'POS_ADMIN')
+          AND ${this.quoteIdentifier(userColumns.voidPinHashColumn)} IS NOT NULL
+          ${this.activeUsersWhereClause(userColumns)}
+      `,
+      [requester.store_id],
+    );
+
+    for (const row of rows) {
+      if (await bcrypt.compare(input.voidPin.trim(), row.void_pin_hash)) {
+        await this.recordActivity({
+          userId: requester.id,
+          storeId: requester.store_id,
+          userName: requester.full_name,
+          userRole: requester.role,
+          module: 'Void & Refund',
+          action: 'Void Approved',
+          details: `Retail cart void authorized\nManager: ${row.full_name}`,
+        });
+
+        return {
+          authorized: true,
+          manager: {
+            id: row.id,
+            full_name: row.full_name,
+            email: row.email,
+            role: row.role,
+          },
+        };
+      }
+    }
+
+    throw new ForbiddenException('Invalid retail POS manager Unique PIN.');
+  }
+
+  async getRetailManagerProfile(userId: number) {
+    const requester = await this.getUserStoreScope(userId);
+    if (requester.store_type !== 'RETAIL_STORE' || !requester.store_id) {
+      throw new ForbiddenException('Retail manager profile is only available for retail stores.');
+    }
+    if (!this.isPosManagerRole(requester.role)) {
+      throw new ForbiddenException('Only retail POS managers can view this profile.');
+    }
+
+    await this.ensureVoidPinHashColumn();
+    const schema = await this.getSchemaColumns();
+    const userColumns = this.resolveUserColumns(schema.users);
+    const storeColumns = this.resolveStoreColumns(schema.stores);
+
+    if (!userColumns.fullNameColumn || !userColumns.roleColumn || !userColumns.storeIdColumn || !userColumns.staffTypeColumn) {
+      throw new InternalServerErrorException('Users table is missing required columns for manager profile.');
+    }
+    if (!userColumns.voidPinHashColumn || !userColumns.voidPinColumn) {
+      throw new InternalServerErrorException('Users table is missing required columns for Unique PIN display.');
+    }
+
+    const storeJoin = storeColumns.joinable ? `LEFT JOIN stores s ON s.id = u.${this.quoteIdentifier(userColumns.storeIdColumn)}` : '';
+    const storeTypeSelect = storeColumns.storeTypeColumn ? `${this.normalizedStoreTypeSql(`s.${this.quoteIdentifier(storeColumns.storeTypeColumn)}`)} AS store_type` : '$2::text AS store_type';
+    const storeNameSelect = storeColumns.storeNameColumn ? `s.${this.quoteIdentifier(storeColumns.storeNameColumn)} AS store_name` : '$3::text AS store_name';
+    const voidPinSelect = userColumns.voidPinColumn ? `u.${this.quoteIdentifier(userColumns.voidPinColumn)} AS void_pin` : 'NULL AS void_pin';
+    const voidPinConfiguredSelect = userColumns.voidPinHashColumn ? `u.${this.quoteIdentifier(userColumns.voidPinHashColumn)} IS NOT NULL AS void_pin_configured` : 'FALSE AS void_pin_configured';
+
+    const rows = await this.query<AuthenticatedUser & { void_pin: string | null; void_pin_configured: boolean }>(
+      `
+        SELECT
+          u.id,
+          u.${this.quoteIdentifier(userColumns.fullNameColumn)} AS full_name,
+          u.email,
+          u.${this.quoteIdentifier(userColumns.roleColumn)} AS role,
+          u.${this.quoteIdentifier(userColumns.storeIdColumn)} AS store_id,
+          u.${this.quoteIdentifier(userColumns.staffTypeColumn)} AS staff_type,
+          ${storeTypeSelect},
+          ${storeNameSelect},
+          ${voidPinSelect},
+          ${voidPinConfiguredSelect},
+          ${this.userStatusSelect(userColumns)}
+        FROM users u
+        ${storeJoin}
+        WHERE u.id = $1
+          AND u.${this.quoteIdentifier(userColumns.storeIdColumn)} = $4
+        LIMIT 1
+      `,
+      [userId, requester.store_type, requester.store_name, requester.store_id],
+    );
+
+    if (rows.length === 0) {
+      throw new NotFoundException('Retail manager profile was not found.');
+    }
+
+    if (!rows[0].void_pin?.trim()) {
+      const uniquePin = await this.generateUniqueRetailVoidPin(requester.store_id, userId);
+      await this.query(
+        `
+          UPDATE users
+          SET
+            ${this.quoteIdentifier(userColumns.voidPinHashColumn)} = $1,
+            ${this.quoteIdentifier(userColumns.voidPinColumn)} = $2
+          WHERE id = $3
+            AND ${this.quoteIdentifier(userColumns.storeIdColumn)} = $4
+        `,
+        [await bcrypt.hash(uniquePin, 10), uniquePin, userId, requester.store_id],
+      );
+      rows[0].void_pin = uniquePin;
+      rows[0].void_pin_configured = true;
+    }
+
+    return rows[0];
+  }
+
+  async generateRetailManagerUniquePin(userId: number) {
+    const requester = await this.getUserStoreScope(userId);
+    if (requester.store_type !== 'RETAIL_STORE' || !requester.store_id) {
+      throw new ForbiddenException('Unique PIN generation is only available for retail stores.');
+    }
+    if (!this.isPosManagerRole(requester.role)) {
+      throw new ForbiddenException('Only retail POS managers can generate a Unique PIN.');
+    }
+
+    await this.ensureVoidPinHashColumn();
+    const schema = await this.getSchemaColumns();
+    const userColumns = this.resolveUserColumns(schema.users);
+    if (!userColumns.voidPinHashColumn || !userColumns.voidPinColumn || !userColumns.storeIdColumn) {
+      throw new InternalServerErrorException('Users table is missing required columns for Unique PIN generation.');
+    }
+
+    const uniquePin = await this.generateUniqueRetailVoidPin(requester.store_id, userId);
+    await this.query(
+      `
+        UPDATE users
+        SET
+          ${this.quoteIdentifier(userColumns.voidPinHashColumn)} = $1,
+          ${this.quoteIdentifier(userColumns.voidPinColumn)} = $2
+        WHERE id = $3
+          AND ${this.quoteIdentifier(userColumns.storeIdColumn)} = $4
+      `,
+      [await bcrypt.hash(uniquePin, 10), uniquePin, userId, requester.store_id],
+    );
+
+    return {
+      id: userId,
+      void_pin: uniquePin,
+      void_pin_configured: true,
     };
   }
 

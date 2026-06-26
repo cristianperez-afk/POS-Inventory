@@ -5,6 +5,8 @@ import { getLocalDateKey } from '../../shared/utils/date';
 
 export interface OrderItem {
   id?: number;
+  variantId?: number;
+  code?: string;
   name: string;
   category: string;
   size?: string;
