@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { getItemsSoldReport } from '../../app/api/client';
-import { Plus, Edit2, Trash2, Search, ChevronRight, ChevronDown, Folder, FolderOpen, AlertTriangle, Package, PackagePlus, ShoppingCart, PackageCheck, Layers, X, Eye, TrendingUp, TrendingDown, RefreshCw, CheckCircle, Users, ClipboardList } from 'lucide-react';
+import { Plus, Edit2, Trash2, Search, ChevronRight, ChevronDown, Folder, FolderOpen, AlertTriangle, Package, PackagePlus, ShoppingCart, PackageCheck, Layers, X, Eye, TrendingUp, TrendingDown, RefreshCw, CheckCircle, Users, ClipboardList, Activity } from 'lucide-react';
 import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
 import type {
   Adjustment,
@@ -41,8 +41,14 @@ export function ReportsView() {
     loadSharedData: true,
     loadUsers: currentUser?.role === 'Admin',
   });
-  const [activeTab, setActiveTab] = useState<'overview' | 'inventory' | 'sold' | 'transfers' | 'financial' | 'operations' | 'audit' | 'confidential'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'inventory' | 'sold' | 'transfers' | 'operations' | 'audit' | 'admin'>('overview');
   const [auditModuleFilter, setAuditModuleFilter] = useState('all');
+  const [activityQuery, setActivityQuery] = useState('');
+  const [activityDateFrom, setActivityDateFrom] = useState('');
+  const [activityDateTo, setActivityDateTo] = useState('');
+  const [activityUserFilter, setActivityUserFilter] = useState('All');
+  const [activityModuleFilter, setActivityModuleFilter] = useState('All');
+  const [activityActionFilter, setActivityActionFilter] = useState('All');
   const [soldFrom, setSoldFrom] = useState('');
   const [soldTo, setSoldTo] = useState('');
   const soldQuery = useQuery({
@@ -253,6 +259,49 @@ export function ReportsView() {
   // Real audit trail — one row per recorded activity (create / update / delete /
   // status change / receive / adjust) written by the backend audit log.
   const { data: auditTrail = [] } = useRetailAuditLogsQuery();
+
+  // Activity Log — a POS-style event feed over the real audit trail, with the same
+  // filter set as the POS Activity Log page (date range, user, module, action,
+  // free-text search).
+  const activityUsers = useMemo(() => {
+    const map = new Map<string, string>();
+    auditTrail.forEach((entry) => {
+      const value = (entry.performedBy || '').trim();
+      if (value && !map.has(value)) map.set(value, entry.performedByName || value);
+    });
+    return Array.from(map.entries())
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [auditTrail]);
+
+  const activityModules = useMemo(
+    () => ['All', ...Array.from(new Set(auditTrail.map((e) => e.module).filter(Boolean))).sort()],
+    [auditTrail],
+  );
+  const activityActions = useMemo(
+    () => ['All', ...Array.from(new Set(auditTrail.map((e) => e.action).filter(Boolean))).sort()],
+    [auditTrail],
+  );
+
+  const activityLog = useMemo(() => {
+    const query = activityQuery.trim().toLowerCase();
+    return auditTrail.filter((entry) => {
+      if (activityUserFilter !== 'All' && (entry.performedBy || '').toLowerCase() !== activityUserFilter.toLowerCase()) return false;
+      if (activityModuleFilter !== 'All' && entry.module !== activityModuleFilter) return false;
+      if (activityActionFilter !== 'All' && entry.action !== activityActionFilter) return false;
+      const day = (entry.date || '').slice(0, 10);
+      if (activityDateFrom && (!day || day < activityDateFrom)) return false;
+      if (activityDateTo && (!day || day > activityDateTo)) return false;
+      if (query) {
+        const haystack = [
+          entry.performedByName, entry.performedBy, entry.module, entry.action,
+          entry.item, entry.quantity, entry.details,
+        ].join(' ').toLowerCase();
+        if (!haystack.includes(query)) return false;
+      }
+      return true;
+    });
+  }, [auditTrail, activityUserFilter, activityModuleFilter, activityActionFilter, activityDateFrom, activityDateTo, activityQuery]);
 
   const visibleAuditTrail = useMemo(() => {
     if (hasFullAuditTrailAccess) return auditTrail;
@@ -505,18 +554,6 @@ export function ReportsView() {
         >
           Transfer Report
         </button>
-        {isAdmin && (
-          <button
-            onClick={() => setActiveTab('financial')}
-            className={`px-6 py-3 text-[14px] font-medium border-b-2 rounded-t-lg transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 ${
-              activeTab === 'financial'
-                ? 'text-secondary border-secondary'
-                : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/40 hover:border-border'
-            }`}
-          >
-            Financial Report
-          </button>
-        )}
         <button
           onClick={() => setActiveTab('operations')}
           className={`px-6 py-3 text-[14px] font-medium border-b-2 rounded-t-lg transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 ${
@@ -540,15 +577,15 @@ export function ReportsView() {
         </button>
         {isAdmin && (
           <button
-            onClick={() => setActiveTab('confidential')}
+            onClick={() => setActiveTab('admin')}
             className={`px-6 py-3 text-[14px] font-medium border-b-2 rounded-t-lg transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 flex items-center gap-2 ${
-              activeTab === 'confidential'
-                ? 'text-destructive border-destructive'
+              activeTab === 'admin'
+                ? 'text-secondary border-secondary'
                 : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/40 hover:border-border'
             }`}
           >
             <Eye className="size-4" />
-            Confidential
+            Admin Report
           </button>
         )}
       </div>
@@ -896,20 +933,7 @@ export function ReportsView() {
         </div>
       )}
 
-      {activeTab === 'financial' && !isAdmin && (
-        <div className="bg-card border border-border rounded-[14px] p-12 text-center">
-          <div className="bg-destructive/10 size-20 rounded-full flex items-center justify-center mx-auto mb-4">
-            <Eye className="size-10 text-destructive" />
-          </div>
-          <h3 className="text-[20px] font-bold text-foreground mb-2">Access Denied</h3>
-          <p className="text-[14px] text-muted-foreground">
-            You do not have permission to view financial reports.<br />
-            This section is restricted to administrators only.
-          </p>
-        </div>
-      )}
-
-      {activeTab === 'financial' && isAdmin && (
+      {activeTab === 'admin' && isAdmin && (
         <div>
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-[20px] font-semibold text-foreground">Financial Report</h3>
@@ -1215,8 +1239,8 @@ export function ReportsView() {
         </div>
       )}
 
-      {activeTab === 'confidential' && isAdmin && confidentialReportData && (
-        <div>
+      {activeTab === 'admin' && isAdmin && confidentialReportData && (
+        <div className="mt-6 pt-6 border-t border-border">
           <div className="flex items-center gap-2 mb-4">
             <div className="bg-destructive text-white px-3 py-1 rounded-[6px] text-[12px] font-bold flex items-center gap-2">
               <Eye className="size-4" />
@@ -1268,73 +1292,64 @@ export function ReportsView() {
             </div>
           </div>
 
-          {/* Financial Summary */}
-          <div className="bg-card border border-border rounded-[14px] p-6 mb-4">
-            <h4 className="text-[16px] font-semibold text-foreground mb-4">Confidential Financial Summary</h4>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="p-4 bg-secondary/10 rounded-[8px]">
-                <p className="text-[12px] text-secondary mb-1">Total Asset Value</p>
-                <p className="text-[28px] font-bold text-secondary">
-                  ₱{confidentialReportData.financialSummary.totalAssetValue.toLocaleString()}
-                </p>
-                <p className="text-[11px] text-muted-foreground mt-1">Current inventory valuation</p>
-              </div>
-              <div className="p-4 bg-warning/10 rounded-[8px]">
-                <p className="text-[12px] text-warning mb-1">Total Purchase Investment</p>
-                <p className="text-[28px] font-bold text-warning">
-                  ₱{confidentialReportData.financialSummary.totalPurchaseValue.toLocaleString()}
-                </p>
-                <p className="text-[11px] text-muted-foreground mt-1">All purchase orders</p>
-              </div>
-              <div className="p-4 bg-destructive/10 rounded-[8px]">
-                <p className="text-[12px] text-destructive mb-1">Loss from Damaged Stock</p>
-                <p className="text-[28px] font-bold text-destructive">
-                  ₱{confidentialReportData.financialSummary.damagedLoss.toLocaleString()}
-                </p>
-                <p className="text-[11px] text-muted-foreground mt-1">Non-recoverable items</p>
-              </div>
-              <div className="p-4 bg-secondary/10 rounded-[8px]">
-                <p className="text-[12px] text-secondary mb-1">Adjustment Impact Value</p>
-                <p className="text-[28px] font-bold text-secondary">
-                  ₱{confidentialReportData.financialSummary.adjustmentImpact.toLocaleString()}
-                </p>
-                <p className="text-[11px] text-muted-foreground mt-1">Approved adjustments</p>
+          {/* Activity Log */}
+          <div className="bg-white border border-border rounded-[14px] p-6 mb-4">
+            <div className="flex items-center gap-2 mb-1">
+              <Activity className="size-4 text-secondary" />
+              <h4 className="text-[16px] font-semibold text-foreground">Activity Log</h4>
+            </div>
+            <p className="text-[12px] text-muted-foreground mb-4">
+              Review recorded inventory actions and staff activity. {activityLog.length} of {auditTrail.length} entr{auditTrail.length === 1 ? 'y' : 'ies'}.
+            </p>
+
+            <div className="mb-4 grid gap-3 md:grid-cols-5">
+              <input type="date" value={activityDateFrom} onChange={(e) => setActivityDateFrom(e.target.value)} className="rounded-[8px] border border-border px-3 py-2 text-[13px]" />
+              <input type="date" value={activityDateTo} onChange={(e) => setActivityDateTo(e.target.value)} className="rounded-[8px] border border-border px-3 py-2 text-[13px]" />
+              <select value={activityUserFilter} onChange={(e) => setActivityUserFilter(e.target.value)} className="rounded-[8px] border border-border px-3 py-2 text-[13px] bg-white">
+                <option value="All">All Users</option>
+                {activityUsers.map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}
+              </select>
+              <select value={activityModuleFilter} onChange={(e) => setActivityModuleFilter(e.target.value)} className="rounded-[8px] border border-border px-3 py-2 text-[13px] bg-white">
+                {activityModules.map((m) => <option key={m} value={m}>{m === 'All' ? 'All Modules' : m}</option>)}
+              </select>
+              <select value={activityActionFilter} onChange={(e) => setActivityActionFilter(e.target.value)} className="rounded-[8px] border border-border px-3 py-2 text-[13px] bg-white">
+                {activityActions.map((a) => <option key={a} value={a}>{a === 'All' ? 'All Actions' : a}</option>)}
+              </select>
+              <div className="relative md:col-span-5">
+                <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <input value={activityQuery} onChange={(e) => setActivityQuery(e.target.value)} placeholder="Search activity details..." className="w-full rounded-[8px] border border-border py-2 pl-9 pr-3 text-[13px]" />
               </div>
             </div>
-          </div>
 
-          {/* User Activity Log */}
-          <div className="bg-card border border-border rounded-[14px] p-6 mb-4">
-            <h4 className="text-[16px] font-semibold text-foreground mb-4">User Activity Log</h4>
-            <div className="space-y-2">
-              {confidentialReportData.userActivityLog.map(user => (
-                <div key={user.email} className="flex items-center justify-between p-3 bg-muted rounded-[8px]">
-                  <div className="flex items-center gap-4">
-                    <div className={`size-8 rounded-full flex items-center justify-center text-white text-[14px] font-bold ${
-                      user.role === 'Admin' ? 'bg-destructive' : 'bg-secondary'
-                    }`}>
-                      {user.name.charAt(0)}
-                    </div>
-                    <div>
-                      <p className="text-[14px] font-medium text-foreground">{user.name}</p>
-                      <p className="text-[12px] text-muted-foreground">{user.email}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-4">
-                    <span className={`px-3 py-1 rounded-[6px] text-[12px] font-medium ${
-                      user.role === 'Admin' ? 'bg-destructive/10 text-destructive' : 'bg-secondary/10 text-secondary'
-                    }`}>
-                      {user.role}
-                    </span>
-                    <span className={`px-3 py-1 rounded-[6px] text-[12px] font-medium ${
-                      user.status === 'Active' ? 'bg-secondary/10 text-success' : 'bg-muted text-muted-foreground'
-                    }`}>
-                      {user.status}
-                    </span>
-                    <p className="text-[12px] text-muted-foreground w-32 text-right">{user.lastLogin}</p>
-                  </div>
-                </div>
-              ))}
+            <div className="overflow-x-auto rounded-[8px] border border-border">
+              <table className="w-full text-[13px] min-w-[760px]">
+                <thead className="bg-muted">
+                  <tr>
+                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Date &amp; Time</th>
+                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">User</th>
+                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Role</th>
+                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Module</th>
+                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Action</th>
+                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Details</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {activityLog.length === 0 ? (
+                    <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">No activity found.</td></tr>
+                  ) : activityLog.slice(0, 200).map((entry) => (
+                    <tr key={entry.id} className="align-top hover:bg-muted transition-colors">
+                      <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">{formatAuditDate(entry.date)}</td>
+                      <td className="px-4 py-3 text-foreground">{entry.performedByName || 'System'}</td>
+                      <td className="px-4 py-3 capitalize">{entry.performedByRole || '—'}</td>
+                      <td className="px-4 py-3"><span className="inline-flex rounded-full bg-secondary/10 px-2 py-1 text-[11px] font-medium text-secondary">{entry.module}</span></td>
+                      <td className="px-4 py-3 capitalize text-foreground">{entry.action.toLowerCase()}</td>
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {[entry.item && `${entry.item}${entry.quantity ? ` (${entry.quantity})` : ''}`, entry.details].filter(Boolean).join(' — ') || '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
 
@@ -1372,124 +1387,6 @@ export function ReportsView() {
             </div>
           </div>
 
-          {/* Purchase Orders History */}
-          <div className="bg-card border border-border rounded-[14px] p-6 mb-4">
-            <h4 className="text-[16px] font-semibold text-foreground mb-4">Purchase Orders History</h4>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-muted">
-                  <tr>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">PO ID</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Supplier</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Created By</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Date</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Total Amount</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Status</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Items</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {purchaseOrders.length === 0 ? (
-                    <tr>
-                      <td colSpan={7} className="px-4 py-8 text-center">
-                        <p className="text-[14px] text-muted-foreground">No purchase orders found</p>
-                      </td>
-                    </tr>
-                  ) : (
-                    purchaseOrders.map(po => (
-                      <tr key={po.id} className="hover:bg-muted transition-colors">
-                        <td className="px-4 py-3 text-[13px] text-foreground font-medium">{po.id}</td>
-                        <td className="px-4 py-3 text-[13px] text-foreground">{po.supplier}</td>
-                        <td className="px-4 py-3 text-[13px] text-muted-foreground">{po.createdBy || 'Admin User'}</td>
-                        <td className="px-4 py-3 text-[13px] text-muted-foreground">{po.date}</td>
-                        <td className="px-4 py-3 text-[13px] text-foreground font-medium">₱{po.totalAmount.toFixed(2)}</td>
-                        <td className="px-4 py-3">
-                          <span className={`inline-flex px-2 py-1 text-[11px] font-medium rounded-full ${
-                            po.status === 'Approved' ? 'bg-success/15 text-success' :
-                            po.status === 'Pending' ? 'bg-warning/15 text-warning' :
-                            po.status === 'Rejected' ? 'bg-destructive/10 text-destructive' :
-                            'bg-muted text-muted-foreground'
-                          }`}>
-                            {po.status}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-[13px] text-muted-foreground">{po.items.length} items</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* Products Received History */}
-          <div className="bg-card border border-border rounded-[14px] p-6">
-            <h4 className="text-[16px] font-semibold text-foreground mb-4">Products Received History</h4>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-muted">
-                  <tr>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Receipt ID</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">PO ID</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Received Date</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Received By</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Total Items</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Accepted</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Rejected</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {productsReceived.length === 0 ? (
-                    <tr>
-                      <td colSpan={8} className="px-4 py-8 text-center">
-                        <p className="text-[14px] text-muted-foreground">No products received found</p>
-                      </td>
-                    </tr>
-                  ) : (
-                    productsReceived.map(pr => (
-                      <tr key={pr.id} className="hover:bg-muted transition-colors">
-                        <td className="px-4 py-3 text-[13px] text-foreground font-medium">{pr.id}</td>
-                        <td className="px-4 py-3 text-[13px] text-secondary font-medium">{pr.poNumber}</td>
-                        <td className="px-4 py-3 text-[13px] text-muted-foreground">{pr.dateReceived}</td>
-                        <td className="px-4 py-3 text-[13px] text-foreground">{pr.receivedBy}</td>
-                        <td className="px-4 py-3 text-[13px] text-muted-foreground">
-                          {pr.items.reduce((sum, item) => sum + item.receivedQty, 0)}
-                        </td>
-                        <td className="px-4 py-3 text-[13px] text-success font-medium">
-                          {pr.items.reduce((sum, item) => sum + (item.acceptedQty || item.receivedQty), 0)}
-                        </td>
-                        <td className="px-4 py-3 text-[13px] text-destructive font-medium">
-                          {pr.items.reduce((sum, item) => sum + (item.rejectedQty || 0), 0)}
-                        </td>
-                        <td className="px-4 py-3">
-                          <span className={`inline-flex px-2 py-1 text-[11px] font-medium rounded-full ${
-                            pr.status === 'Fully Accepted' ? 'bg-success/15 text-success' :
-                            'bg-warning/15 text-warning'
-                          }`}>
-                            {pr.status}
-                          </span>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {activeTab === 'confidential' && !isAdmin && (
-        <div className="bg-card border border-border rounded-[14px] p-12 text-center">
-          <div className="bg-destructive/10 size-20 rounded-full flex items-center justify-center mx-auto mb-4">
-            <Eye className="size-10 text-destructive" />
-          </div>
-          <h3 className="text-[20px] font-bold text-foreground mb-2">Access Denied</h3>
-          <p className="text-[14px] text-muted-foreground">
-            You do not have permission to view confidential reports.<br />
-            This section is restricted to administrators only.
-          </p>
         </div>
       )}
     </div>
