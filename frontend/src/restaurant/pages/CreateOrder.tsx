@@ -3,14 +3,14 @@ import { Sidebar } from '../../shared/components/Sidebar';
 import { Page, type StoreBrand } from '../../shared/App';
 import type { StaffType, StoreType } from '../../auth/types/auth';
 import { Banknote, Building2, Minus, Plus, Search, Edit2, Trash2, X, AlertCircle, Printer, Download, Users, Smartphone, Wallet, MoreVertical } from 'lucide-react';
-import { useOrders } from '../../shared/context/OrderContext';
+import { useOrders, type Order } from '../../shared/context/OrderContext';
 import { useTables } from '../../shared/context/TableContext';
 import { useStoreSettings } from '../../shared/context/StoreSettingsContext';
 import { ThermalReceipt } from '../../shared/components/ThermalReceipt';
 import { DeleteConfirmDialog } from '../../shared/components/DeleteConfirmDialog';
 import { getApiBaseUrl } from '../../auth/services/auth';
 import type { AuthenticatedUser } from '../../auth/types/auth';
-import { getLocalDateKey } from '../../shared/utils/date';
+import { formatManilaTime, getLocalDateKey } from '../../shared/utils/date';
 import { useCompletePaymentMutation, usePosIngredientsQuery, usePosMenuQuery, useProductRecipeQuery } from '../../features/pos/hooks/usePosMenuQuery';
 
 interface CreateOrderProps {
@@ -47,9 +47,16 @@ interface Ingredient {
 interface Modifier {
   id: string;
   name: string;
-  type: 'remove';
+  group?: string;
+  type: 'remove' | 'note';
   itemId?: string;
   itemName?: string;
+  quantityAvailable?: number | null;
+  unit?: string;
+  stockStatus?: 'available' | 'unavailable' | 'untracked';
+  requiresStock?: boolean;
+  priceDelta?: number;
+  priceDeltaPercent?: number;
 }
 
 interface MenuProduct {
@@ -61,6 +68,7 @@ interface MenuProduct {
   categoryName?: string;
   image: string;
   availableQuantity?: number;
+  availableOrders?: number;
   servings?: number;
   prepTimeMinutes?: number;
   ingredients: Ingredient[];
@@ -73,6 +81,7 @@ interface CartItem {
   price: number;
   quantity: number;
   image: string;
+  availableQuantity?: number;
   prepTimeMinutes?: number;
   customizationPrepMinutes?: number;
   orderType: 'dine-in' | 'takeout';
@@ -94,6 +103,18 @@ const finiteNumberIncludingZeroOrUndefined = (value: unknown) => {
   return Number.isFinite(parsed) ? parsed : undefined;
 };
 
+const DEFAULT_ITEM_PREP_MINUTES = 5;
+const MAX_ITEM_PREP_MINUTES = 30;
+const MAX_CART_PREP_MINUTES = 35;
+const MAX_QUEUE_DELAY_MINUTES = 20;
+const MAX_CUSTOMER_WAIT_MINUTES = 45;
+const KITCHEN_PARALLEL_ORDER_CAPACITY = 3;
+
+const clampMinutes = (minutes: number, min: number, max: number) => {
+  if (!Number.isFinite(minutes)) return min;
+  return Math.min(max, Math.max(min, minutes));
+};
+
 function toOrderListFormat(order: any, paid: boolean) {
   const hasDineIn = order.items.some((i: CartItem) => i.orderType === 'dine-in');
   const hasTakeout = order.items.some((i: CartItem) => i.orderType === 'takeout');
@@ -111,8 +132,6 @@ function toOrderListFormat(order: any, paid: boolean) {
     ? order.tableNumbers.map((tableNumber: number) => `Table ${tableNumber}`).join(' + ')
     : order.isQueued ? 'Queue' : '—';
 
-  const hasAssignedTable = Boolean(order.tableNumber || (Array.isArray(order.tableNumbers) && order.tableNumbers.length > 0));
-
   return {
     orderNumber: order.orderNumber,
     customer: order.customerName,
@@ -124,7 +143,7 @@ function toOrderListFormat(order: any, paid: boolean) {
     discount: order.discount,
     discountType: discountTypeLabel,
     paymentStatus: paid ? 'Paid' as const : 'Not Paid' as const,
-    orderStatus: paid ? (hasAssignedTable ? 'Served' as const : 'Completed' as const) : 'Pending' as const,
+    orderStatus: 'Pending' as const,
     date: getLocalDateKey(now),
     time: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
     cashier: order.cashier,
@@ -200,6 +219,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
   const [isInQueue, setIsInQueue] = useState(false);
   const [queuePosition, setQueuePosition] = useState<number | null>(null);
   const [hoveredProductId, setHoveredProductId] = useState<number | null>(null);
+  const [hoveredProductPreview, setHoveredProductPreview] = useState<{ left: number; top: number; width: number } | null>(null);
   const customizeProductId = customizeItemIndex !== null ? cart[customizeItemIndex]?.id : null;
   const productRecipeQuery = useProductRecipeQuery(currentUser?.id, customizeProductId);
   const hoveredProductRecipeQuery = useProductRecipeQuery(currentUser?.id, hoveredProductId);
@@ -214,7 +234,8 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       category: product.category_name ?? 'Uncategorized',
       categoryName: product.category_name ?? null,
       image: product.image_url || storeBrand?.logo || '',
-      availableQuantity: Number(product.available_quantity ?? 0),
+      availableQuantity: Number(product.available_orders ?? product.availableOrders ?? product.available_quantity ?? 0),
+      availableOrders: Number(product.available_orders ?? product.availableOrders ?? product.available_quantity ?? 0),
       servings: finiteNumberIncludingZeroOrUndefined(product.servings),
       prepTimeMinutes: finiteNumberIncludingZeroOrUndefined(product.prep_time_minutes),
       ingredients: (product.ingredients ?? []).map((ingredient: any) => ({
@@ -234,9 +255,16 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
         ? product.modifiers.map((modifier: any): Modifier => ({
             id: String(modifier.id),
             name: String(modifier.name),
-            type: 'remove',
+            group: String(modifier.group ?? 'Modifiers'),
+            type: modifier.type === 'note' ? 'note' : 'remove',
             itemId: modifier.itemId,
             itemName: modifier.itemName,
+            quantityAvailable: modifier.quantityAvailable,
+            unit: modifier.unit,
+            stockStatus: modifier.stockStatus,
+            requiresStock: modifier.requiresStock,
+            priceDelta: Number(modifier.priceDelta ?? 0),
+            priceDeltaPercent: Number(modifier.priceDeltaPercent ?? 0),
           }))
         : [],
     }));
@@ -323,9 +351,16 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
           ? modifiers.map((modifier: any): Modifier => ({
               id: String(modifier.id),
               name: String(modifier.name),
-              type: 'remove',
+              group: String(modifier.group ?? 'Modifiers'),
+              type: modifier.type === 'note' ? 'note' : 'remove',
               itemId: modifier.itemId,
               itemName: modifier.itemName,
+              quantityAvailable: modifier.quantityAvailable,
+              unit: modifier.unit,
+              stockStatus: modifier.stockStatus,
+              requiresStock: modifier.requiresStock,
+              priceDelta: Number(modifier.priceDelta ?? 0),
+              priceDeltaPercent: Number(modifier.priceDeltaPercent ?? 0),
             }))
           : item.modifiers,
       };
@@ -470,12 +505,23 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
   }, [customerName, orders, customerRecommendationEnabled, posProducts]);
 
   const addToCart = (product: MenuProduct, orderType?: 'dine-in' | 'takeout') => {
+    const availableQuantity = finiteNumberIncludingZeroOrUndefined(product.availableQuantity);
+    const quantityInCart = cart
+      .filter((item) => item.id === product.id)
+      .reduce((sum, item) => sum + Number(item.quantity ?? 0), 0);
+
+    if (availableQuantity !== undefined && quantityInCart >= availableQuantity) {
+      setValidationError(`${product.name} only has ${availableQuantity} available order${availableQuantity === 1 ? '' : 's'}.`);
+      return;
+    }
+
     const typeToUse = orderType || (diningOption === 'dine-in' || diningOption === 'takeout' ? diningOption : 'dine-in');
     const newItem: CartItem = {
       id: product.id,
       name: product.name,
       price: product.price,
       image: product.image,
+      availableQuantity,
       quantity: 1,
       prepTimeMinutes: product.prepTimeMinutes ?? 0,
       customizationPrepMinutes: 0,
@@ -494,8 +540,21 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
     if (newQuantity <= 0) {
       setCart(cart.filter((_, i) => i !== index));
     } else {
+      const targetItem = cart[index];
+      const sameProductQuantityOutsideLine = cart
+        .filter((item, itemIndex) => itemIndex !== index && item.id === targetItem?.id)
+        .reduce((sum, item) => sum + Number(item.quantity ?? 0), 0);
+      const maxLineQuantity = targetItem?.availableQuantity !== undefined
+        ? Math.max(0, targetItem.availableQuantity - sameProductQuantityOutsideLine)
+        : newQuantity;
+      const nextQuantity = Math.min(newQuantity, maxLineQuantity);
+
+      if (targetItem?.availableQuantity !== undefined && newQuantity > maxLineQuantity) {
+        setValidationError(`${targetItem.name} only has ${targetItem.availableQuantity} available order${targetItem.availableQuantity === 1 ? '' : 's'}.`);
+      }
+
       setCart(cart.map((item, i) =>
-        i === index ? { ...item, quantity: newQuantity } : item
+        i === index ? { ...item, quantity: nextQuantity } : item
       ));
     }
   };
@@ -509,6 +568,8 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
   const toggleModifier = (index: number, modifierId: string) => {
     setCart(cart.map((item, i) => {
       if (i !== index) return item;
+      const modifier = (item.modifiers ?? []).find((option) => option.id === modifierId);
+      if (modifier?.stockStatus === 'unavailable') return item;
       const selectedModifierIds = item.selectedModifierIds ?? [];
       const selected = selectedModifierIds.includes(modifierId);
       return {
@@ -635,7 +696,15 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
     return matchesCategory && matchesSearch;
   });
 
-  const itemAdditionalCost = (item: CartItem) => item.ingredients.reduce((sum, ingredient) => sum + Number(ingredient.additional_price ?? 0), 0) * item.quantity;
+  const modifierPrice = (item: CartItem) => (item.modifiers ?? [])
+    .filter((modifier) => (item.selectedModifierIds ?? []).includes(modifier.id))
+    .reduce((sum, modifier) => sum + Number(modifier.priceDelta ?? 0) + (item.price * (Number(modifier.priceDeltaPercent ?? 0) / 100)), 0);
+  const formatModifierPrice = (modifier: Modifier) => {
+    if (modifier.priceDeltaPercent) return `${modifier.priceDeltaPercent > 0 ? '+' : ''}${modifier.priceDeltaPercent}%`;
+    if (modifier.priceDelta) return `${modifier.priceDelta > 0 ? '+' : '-'}₱${Math.abs(modifier.priceDelta)}`;
+    return '';
+  };
+  const itemAdditionalCost = (item: CartItem) => (item.ingredients.reduce((sum, ingredient) => sum + Number(ingredient.additional_price ?? 0), 0) + modifierPrice(item)) * item.quantity;
   const itemLineTotal = (item: CartItem) => (item.price * item.quantity) + itemAdditionalCost(item);
   function applySelectedModifiers(item: CartItem) {
     const selectedModifierIds = item.selectedModifierIds ?? [];
@@ -691,36 +760,58 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       quantityChanges.length > 0;
   };
   const estimateItemMinutes = (item: CartItem) => {
-    const baseMinutes = Math.max(0, Number(item.prepTimeMinutes ?? 0));
+    const baseMinutes = clampMinutes(Number(item.prepTimeMinutes ?? DEFAULT_ITEM_PREP_MINUTES), 0, MAX_ITEM_PREP_MINUTES);
     const customizationMinutes = hasItemCustomization(item)
       ? Math.max(0, Number(settings.customization_prep_time_minutes ?? 0))
       : 0;
-    const lineMinutes = baseMinutes + customizationMinutes;
+    const lineMinutes = clampMinutes(baseMinutes + customizationMinutes, 0, MAX_ITEM_PREP_MINUTES);
     return settings.prep_time_strategy === 'sequential'
       ? lineMinutes * Math.max(1, Number(item.quantity ?? 1))
       : lineMinutes;
   };
-  const cartPrepMinutes = settings.prep_time_strategy === 'sequential'
+  const rawCartPrepMinutes = settings.prep_time_strategy === 'sequential'
     ? cart.reduce((sum, item) => sum + estimateItemMinutes(item), 0)
     : cart.reduce((max, item) => Math.max(max, estimateItemMinutes(item)), 0);
+  const cartPrepMinutes = cart.length > 0 ? clampMinutes(rawCartPrepMinutes, DEFAULT_ITEM_PREP_MINUTES, MAX_CART_PREP_MINUTES) : 0;
+  const estimateExistingOrderMinutes = (order: Order) => {
+    const itemMinutes = order.items.map((item) => {
+      const baseMinutes = clampMinutes(Number(item.prepTimeMinutes ?? DEFAULT_ITEM_PREP_MINUTES), 0, MAX_ITEM_PREP_MINUTES);
+      const customizationMinutes = Math.max(0, Number(item.customizationPrepMinutes ?? 0));
+      const lineMinutes = clampMinutes(baseMinutes + customizationMinutes, 0, MAX_ITEM_PREP_MINUTES);
+      const quantity = Math.max(1, Number(item.quantity ?? 1));
+      return lineMinutes > 0
+        ? settings.prep_time_strategy === 'sequential' ? lineMinutes * quantity : lineMinutes
+        : DEFAULT_ITEM_PREP_MINUTES * quantity;
+    });
+    if (itemMinutes.length === 0) return 0;
+    const rawEstimate = settings.prep_time_strategy === 'sequential'
+      ? itemMinutes.reduce((sum, minutes) => sum + minutes, 0)
+      : Math.max(0, ...itemMinutes);
+    return clampMinutes(rawEstimate, 0, MAX_CART_PREP_MINUTES);
+  };
+  const remainingEstimateMinutes = (order: Order) => {
+    if (!['Pending', 'Preparing'].includes(order.orderStatus)) return 0;
+    const estimate = estimateExistingOrderMinutes(order);
+    if (!Number.isFinite(estimate) || estimate <= 0) return 0;
+    return Math.max(0, estimate - Math.max(0, order.runningTimeMinutes ?? 0));
+  };
   const activeKitchenWorkloadMinutes = settings.enable_estimated_prep_time
     ? orders
-        .filter((order) => order.orderStatus !== 'Completed' && order.orderStatus !== 'Ready')
-        .reduce((sum, order) => {
-          const estimate = Number(order.estimatedPrepMinutes ?? 0);
-          if (!Number.isFinite(estimate) || estimate <= 0) return sum;
-          const elapsed = order.runningTimeMinutes ?? 0;
-          return sum + Math.max(0, estimate - elapsed);
-        }, 0)
+        .reduce((sum, order) => sum + remainingEstimateMinutes(order), 0)
+    : 0;
+  const queueDelayMinutes = activeKitchenWorkloadMinutes > 0
+    ? clampMinutes(Math.ceil(activeKitchenWorkloadMinutes / KITCHEN_PARALLEL_ORDER_CAPACITY), 0, MAX_QUEUE_DELAY_MINUTES)
     : 0;
   const estimatedWaitingMinutes = settings.enable_estimated_prep_time
-    ? Math.max(0, Math.ceil(cartPrepMinutes + activeKitchenWorkloadMinutes))
+    ? cart.length > 0
+      ? clampMinutes(Math.ceil(cartPrepMinutes + queueDelayMinutes), DEFAULT_ITEM_PREP_MINUTES, MAX_CUSTOMER_WAIT_MINUTES)
+      : 0
     : 0;
   const estimatedReadyAt = settings.enable_estimated_prep_time && estimatedWaitingMinutes > 0
     ? new Date(Date.now() + estimatedWaitingMinutes * 60000)
     : null;
   const estimatedReadyTimeLabel = estimatedReadyAt
-    ? estimatedReadyAt.toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })
+    ? formatManilaTime(estimatedReadyAt)
     : '';
   const subtotal = cart.reduce((sum, item) => sum + itemLineTotal(item), 0);
   const serviceFee = settings.enable_service_charge ? subtotal * (settings.service_charge_rate / 100) : 0;
@@ -763,6 +854,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
     categoryName: posProducts.find((product) => product.id === item.id)?.categoryName ?? null,
     price: item.price,
     quantity: item.quantity,
+    lineTotal: itemLineTotal(item),
     orderType: item.orderType,
     notes: item.notes,
     modifiers: (item.modifiers ?? []).filter((modifier) => (item.selectedModifierIds ?? []).includes(modifier.id)),
@@ -1220,6 +1312,39 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
 
   const dineInItems = cart.filter(item => item.orderType === 'dine-in');
   const takeoutItems = cart.filter(item => item.orderType === 'takeout');
+  const updateHoveredProductPreview = (element: HTMLElement) => {
+    const rect = element.getBoundingClientRect();
+    setHoveredProductPreview({
+      left: rect.left + rect.width / 2,
+      top: rect.top + rect.height / 2,
+      width: Math.min(320, Math.max(280, rect.width * 1.18)),
+    });
+  };
+  const clearHoveredProductPreview = (productId: number) => {
+    setHoveredProductId((current) => (current === productId ? null : current));
+    setHoveredProductPreview(null);
+  };
+  const hoveredProduct = hoveredProductId
+    ? filteredProducts.find((product) => product.id === hoveredProductId)
+    : undefined;
+  const hoveredProductAvailableOrders = hoveredProduct
+    ? finiteNumberIncludingZeroOrUndefined(hoveredProduct.availableOrders ?? hoveredProduct.availableQuantity)
+    : undefined;
+  const hoveredProductCartQuantity = hoveredProduct
+    ? cart.filter((item) => item.id === hoveredProduct.id).reduce((sum, item) => sum + Number(item.quantity ?? 0), 0)
+    : 0;
+  const hoveredProductRemainingOrders = hoveredProductAvailableOrders !== undefined
+    ? Math.max(0, hoveredProductAvailableOrders - hoveredProductCartQuantity)
+    : undefined;
+  const hoveredRecipeDetails = hoveredProductRecipeQuery.data as Record<string, unknown> | undefined;
+  const hoveredProductPrepTimeMinutes = hoveredProduct
+    ? finiteNumberIncludingZeroOrUndefined(
+        hoveredRecipeDetails?.prep_time_minutes ?? hoveredRecipeDetails?.prepTimeMinutes ?? hoveredProduct.prepTimeMinutes,
+      )
+    : undefined;
+  const hoveredProductServings = hoveredProduct
+    ? finiteNumberIncludingZeroOrUndefined(hoveredRecipeDetails?.servings ?? hoveredProduct.servings)
+    : undefined;
 
   return (
     <div className="flex h-screen bg-background">
@@ -1288,76 +1413,59 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
 
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
             {filteredProducts.map(product => {
-              const hoveredRecipeDetails =
-                product.id === hoveredProductId
-                  ? hoveredProductRecipeQuery.data as Record<string, unknown> | undefined
-                  : undefined;
-              const resolvedPrepTimeMinutes = finiteNumberIncludingZeroOrUndefined(
-                hoveredRecipeDetails?.prep_time_minutes ?? hoveredRecipeDetails?.prepTimeMinutes ?? product.prepTimeMinutes,
-              );
-              const resolvedServings = finiteNumberIncludingZeroOrUndefined(
-                hoveredRecipeDetails?.servings ?? product.servings,
-              );
+              const availableOrders = finiteNumberIncludingZeroOrUndefined(product.availableOrders ?? product.availableQuantity);
+              const cartQuantity = cart
+                .filter((item) => item.id === product.id)
+                .reduce((sum, item) => sum + Number(item.quantity ?? 0), 0);
+              const remainingOrders = availableOrders !== undefined ? Math.max(0, availableOrders - cartQuantity) : undefined;
+              const isUnavailable = remainingOrders !== undefined && remainingOrders <= 0;
 
               return (
                 <button
                 key={product.id}
                 onClick={() => addToCart(product)}
-                onMouseEnter={() => setHoveredProductId(product.id)}
-                onMouseLeave={() => setHoveredProductId((current) => (current === product.id ? null : current))}
-                onFocus={() => setHoveredProductId(product.id)}
-                onBlur={() => setHoveredProductId((current) => (current === product.id ? null : current))}
-                disabled={product.availableQuantity !== undefined && product.availableQuantity <= 0}
-                className="group relative isolate overflow-visible rounded-2xl text-left transition-transform duration-300 ease-out hover:z-30 hover:-translate-y-3 hover:scale-[1.18] focus-visible:z-30 focus-visible:-translate-y-3 focus-visible:scale-[1.18] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                onMouseEnter={(event) => {
+                  if (!isUnavailable) {
+                    setHoveredProductId(product.id);
+                    updateHoveredProductPreview(event.currentTarget);
+                  }
+                }}
+                onMouseLeave={() => clearHoveredProductPreview(product.id)}
+                onFocus={(event) => {
+                  if (!isUnavailable) {
+                    setHoveredProductId(product.id);
+                    updateHoveredProductPreview(event.currentTarget);
+                  }
+                }}
+                onBlur={() => clearHoveredProductPreview(product.id)}
+                disabled={isUnavailable}
+                className={`group relative isolate overflow-visible rounded-2xl text-left transition-transform duration-300 ease-out focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 ${
+                  isUnavailable
+                    ? 'cursor-not-allowed'
+                    : 'hover:z-30 hover:-translate-y-3 hover:scale-[1.18] focus-visible:z-30 focus-visible:-translate-y-3 focus-visible:scale-[1.18]'
+                }`}
               >
-                <div className="overflow-hidden rounded-2xl border border-border bg-white p-2.5 shadow-sm transition-all duration-300 ease-out group-hover:border-primary/35 group-hover:shadow-[0_18px_38px_rgba(15,23,42,0.18)] group-focus-visible:border-primary/35 group-focus-visible:shadow-[0_18px_38px_rgba(15,23,42,0.18)]">
+                <div className={`overflow-hidden rounded-2xl border border-border bg-white p-2.5 shadow-sm transition-all duration-300 ease-out ${
+                  isUnavailable
+                    ? ''
+                    : 'group-hover:border-primary/35 group-hover:shadow-[0_18px_38px_rgba(15,23,42,0.18)] group-focus-visible:border-primary/35 group-focus-visible:shadow-[0_18px_38px_rgba(15,23,42,0.18)]'
+                }`}>
                   <div className="aspect-square overflow-hidden rounded-xl bg-muted">
                   <img
                     src={product.image}
                     alt={product.name}
-                    className="h-full w-full object-cover transition-transform duration-300 ease-out group-hover:scale-[1.06] group-focus-visible:scale-[1.06]"
+                    className={`h-full w-full object-cover transition-transform duration-300 ease-out ${
+                      isUnavailable ? '' : 'group-hover:scale-[1.06] group-focus-visible:scale-[1.06]'
+                    }`}
                   />
                 </div>
                 <h3 className="mt-3 line-clamp-2 text-sm font-semibold text-foreground">{product.name}</h3>
+                {remainingOrders !== undefined && (
+                  <p className={`mt-1 text-[11px] font-semibold ${remainingOrders > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                    Available Orders: {remainingOrders}
+                  </p>
+                )}
                 <p className="text-xs text-primary font-medium">₱ {product.price.toFixed(2)}</p>
-                </div>
-                <div className="pointer-events-none absolute left-1/2 top-1/2 z-20 w-[118%] max-w-[280px] -translate-x-1/2 -translate-y-1/2 opacity-0 transition-all duration-300 ease-out group-hover:opacity-100 group-focus-visible:opacity-100">
-                  <div className="overflow-hidden rounded-[1.35rem] border border-primary/20 bg-white shadow-[0_24px_48px_rgba(15,23,42,0.22)] ring-1 ring-primary/10">
-                    <div className="aspect-[16/10] overflow-hidden bg-slate-100">
-                      <img
-                        src={product.image}
-                        alt={product.name}
-                        className="h-full w-full object-contain p-2"
-                      />
-                    </div>
-                    <div className="space-y-3 p-4">
-                      <div className="min-w-0 space-y-2">
-                        <h3 className="text-base font-semibold leading-5 text-foreground">{product.name}</h3>
-                        <p className="text-xs leading-5 text-muted-foreground">
-                          {product.description || 'No description available.'}
-                        </p>
-                      </div>
-                      <p className="shrink-0 text-xs font-semibold text-primary">₱ {product.price.toFixed(2)}</p>
-                    </div>
-                    <div className="mx-4 mb-4 space-y-1.5 rounded-xl bg-slate-50 px-3 py-2.5 text-xs">
-                      <p className="text-foreground">
-                        <span className="font-semibold text-slate-700">Prep Time:</span>{' '}
-                          {resolvedPrepTimeMinutes !== undefined
-                            ? `${resolvedPrepTimeMinutes} mins`
-                            : hoveredProductRecipeQuery.isFetching && product.id === hoveredProductId
-                              ? 'Loading...'
-                              : 'N/A'}
-                      </p>
-                      <p className="text-foreground">
-                        <span className="font-semibold text-slate-700">Servings:</span>{' '}
-                          {resolvedServings !== undefined
-                            ? resolvedServings
-                            : hoveredProductRecipeQuery.isFetching && product.id === hoveredProductId
-                              ? 'Loading...'
-                              : 'N/A'}
-                      </p>
-                    </div>
-                  </div>
                 </div>
                 </button>
               );
@@ -1721,6 +1829,58 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
         </button>
       </div>
 
+      {hoveredProduct && hoveredProductPreview && (
+        <div
+          className="pointer-events-none fixed z-[45] -translate-x-1/2 -translate-y-1/2 transition-all duration-300 ease-out"
+          style={{
+            left: hoveredProductPreview.left,
+            top: hoveredProductPreview.top,
+            width: hoveredProductPreview.width,
+          }}
+        >
+          <div className="overflow-hidden rounded-[1.35rem] border border-primary/20 bg-white shadow-[0_24px_48px_rgba(15,23,42,0.22)] ring-1 ring-primary/10">
+            <div className="aspect-[16/10] overflow-hidden bg-slate-100">
+              <img
+                src={hoveredProduct.image}
+                alt={hoveredProduct.name}
+                className="h-full w-full object-contain p-2"
+              />
+            </div>
+            <div className="space-y-3 p-4">
+              <div className="min-w-0 space-y-2">
+                <h3 className="text-base font-semibold leading-5 text-foreground">{hoveredProduct.name}</h3>
+                <p className="text-xs leading-5 text-muted-foreground">
+                  {hoveredProduct.description || 'No description available.'}
+                </p>
+              </div>
+              <p className="shrink-0 text-xs font-semibold text-primary">₱ {hoveredProduct.price.toFixed(2)}</p>
+            </div>
+            <div className="mx-4 mb-4 space-y-1.5 rounded-xl bg-slate-50 px-3 py-2.5 text-xs">
+              <p className="text-foreground">
+                <span className="font-semibold text-slate-700">Available Orders:</span>{' '}
+                {hoveredProductRemainingOrders !== undefined ? hoveredProductRemainingOrders : 'N/A'}
+              </p>
+              <p className="text-foreground">
+                <span className="font-semibold text-slate-700">Prep Time:</span>{' '}
+                {hoveredProductPrepTimeMinutes !== undefined
+                  ? `${hoveredProductPrepTimeMinutes} mins`
+                  : hoveredProductRecipeQuery.isFetching
+                    ? 'Loading...'
+                    : 'N/A'}
+              </p>
+              <p className="text-foreground">
+                <span className="font-semibold text-slate-700">Servings:</span>{' '}
+                {hoveredProductServings !== undefined
+                  ? hoveredProductServings
+                  : hoveredProductRecipeQuery.isFetching
+                    ? 'Loading...'
+                    : 'N/A'}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Order Preview Modal */}
       {showPreview && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 overflow-y-auto">
@@ -1945,16 +2105,45 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
               {(cart[customizeItemIndex].modifiers ?? []).length > 0 && (
                 <div className="mb-4">
                   <label className="block text-xs text-muted-foreground mb-2">Modifiers:</label>
-                  <div className="space-y-2">
-                    {(cart[customizeItemIndex].modifiers ?? []).map((modifier) => (
-                      <label key={modifier.id} className="flex items-center gap-2 rounded-lg border border-border p-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={(cart[customizeItemIndex].selectedModifierIds ?? []).includes(modifier.id)}
-                          onChange={() => toggleModifier(customizeItemIndex, modifier.id)}
-                        />
-                        <span>{modifier.name}</span>
-                      </label>
+                  <div className="space-y-3">
+                    {Object.entries((cart[customizeItemIndex].modifiers ?? []).reduce<Record<string, Modifier[]>>((groups, modifier) => {
+                      const group = modifier.group ?? 'Modifiers';
+                      groups[group] = [...(groups[group] ?? []), modifier];
+                      return groups;
+                    }, {})).map(([group, options]) => (
+                      <div key={group} className="rounded-lg border border-border p-3">
+                        <p className="mb-2 text-xs font-semibold text-foreground">{group}</p>
+                        <div className="space-y-2">
+                          {options.map((modifier) => {
+                            const disabled = modifier.stockStatus === 'unavailable';
+                            return (
+                              <label
+                                key={modifier.id}
+                                className={`flex items-center justify-between gap-2 rounded-lg border p-2 text-sm ${disabled ? 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400' : 'border-border hover:bg-muted/50'}`}
+                              >
+                                <span className="flex min-w-0 items-center gap-2">
+                                  <input
+                                    type="checkbox"
+                                    name={`modifier-${customizeItemIndex}-${group}`}
+                                    checked={(cart[customizeItemIndex].selectedModifierIds ?? []).includes(modifier.id)}
+                                    onChange={() => toggleModifier(customizeItemIndex, modifier.id)}
+                                    disabled={disabled}
+                                  />
+                                  <span className="truncate">
+                                    {modifier.name}
+                                    {formatModifierPrice(modifier) && <span className="ml-1 text-xs text-primary">{formatModifierPrice(modifier)}</span>}
+                                  </span>
+                                </span>
+                                {modifier.itemId && (
+                                  <span className="shrink-0 text-[10px] text-muted-foreground">
+                                    {disabled ? 'Out of stock' : `${Number(modifier.quantityAvailable ?? 0)} ${modifier.unit ?? ''}`}
+                                  </span>
+                                )}
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
                     ))}
                   </div>
                 </div>
@@ -2105,26 +2294,47 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
               </div>
 
               <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3">
-                {filteredProducts.map(product => (
+                {filteredProducts.map(product => {
+                  const availableOrders = finiteNumberIncludingZeroOrUndefined(product.availableOrders ?? product.availableQuantity);
+                  const cartQuantity = cart
+                    .filter((item) => item.id === product.id)
+                    .reduce((sum, item) => sum + Number(item.quantity ?? 0), 0);
+                  const remainingOrders = availableOrders !== undefined ? Math.max(0, availableOrders - cartQuantity) : undefined;
+                  const isUnavailable = remainingOrders !== undefined && remainingOrders <= 0;
+
+                  return (
                   <button
                     key={product.id}
                     onClick={() => {
                       addToCart(product, 'takeout');
                     }}
-                    className="group rounded-lg border border-border bg-white p-2.5 text-left shadow-sm transition-all duration-150 ease-out hover:-translate-y-0.5 hover:border-secondary/50 hover:bg-secondary/[0.03] hover:shadow-lg focus-visible:-translate-y-0.5 focus-visible:border-secondary/50 focus-visible:ring-2 focus-visible:ring-secondary/20"
+                    disabled={isUnavailable}
+                    className={`group rounded-lg border border-border bg-white p-2.5 text-left shadow-sm transition-all duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-50 ${
+                      isUnavailable
+                        ? 'cursor-not-allowed'
+                        : 'hover:-translate-y-0.5 hover:border-secondary/50 hover:bg-secondary/[0.03] hover:shadow-lg focus-visible:-translate-y-0.5 focus-visible:border-secondary/50 focus-visible:ring-2 focus-visible:ring-secondary/20'
+                    }`}
                   >
                     <div className="mb-2 aspect-square overflow-hidden rounded-lg bg-muted">
                       <img
                         src={product.image}
                         alt={product.name}
-                        className="h-full w-full object-cover transition-transform duration-150 ease-out group-hover:scale-[1.03]"
+                        className={`h-full w-full object-cover transition-transform duration-150 ease-out ${
+                          isUnavailable ? '' : 'group-hover:scale-[1.03]'
+                        }`}
                       />
                     </div>
                     <h3 className="text-xs font-medium mb-0.5 line-clamp-1">{product.name}</h3>
+                    {remainingOrders !== undefined && (
+                      <p className={`mb-1 text-[11px] font-semibold ${remainingOrders > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                        Available Orders: {remainingOrders}
+                      </p>
+                    )}
                     {product.description && <p className="text-xs text-muted-foreground mb-1 line-clamp-2">{product.description}</p>}
                     <p className="text-xs text-secondary font-medium">₱ {product.price.toFixed(2)}</p>
                   </button>
-                ))}
+                  );
+                })}
               </div>
             </div>
             <div className="p-5 border-t border-border flex-shrink-0">
@@ -2365,7 +2575,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                 {settings.enable_estimated_prep_time && successOrderDetails.estimatedPrepMinutes !== undefined && (
                   <p className="text-sm mb-2">
                     <strong>Estimated Ready:</strong> {successOrderDetails.estimatedPrepMinutes} minutes
-                    {successOrderDetails.estimatedReadyAt ? ` (${new Date(successOrderDetails.estimatedReadyAt).toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })})` : ''}
+                    {successOrderDetails.estimatedReadyAt ? ` (${formatManilaTime(successOrderDetails.estimatedReadyAt)})` : ''}
                   </p>
                 )}
                 <p className="text-sm mb-2">

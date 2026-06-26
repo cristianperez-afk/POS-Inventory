@@ -20,6 +20,7 @@ import {
   rejectPurchaseOrder,
   submitPurchaseOrder,
   updatePurchaseOrder,
+  updateSupplier,
 } from '../../../app/api/client';
 import {
   domainQueryKeys,
@@ -195,10 +196,10 @@ export function useRestaurantPurchaseOrdersQuery<
   );
 }
 
-export function useRestaurantSuppliersQuery() {
+export function useRestaurantSuppliersQuery(params?: { isActive?: boolean; enabled?: boolean }) {
   return useSuppliersQuery(
-    { module: 'RESTAURANT' },
-    { select: mapRestaurantSuppliers },
+    { module: 'RESTAURANT', isActive: params?.isActive ?? true },
+    { enabled: params?.enabled, select: mapRestaurantSuppliers },
   );
 }
 
@@ -540,6 +541,28 @@ export function useCreateRestaurantSupplierMutation() {
   return useDomainMutation(
     (data: Record<string, unknown>) =>
       createSupplier({ ...data, module: 'RESTAURANT' }),
+    [domainQueryKeys.suppliers, domainQueryKeys.purchaseOrders],
+  );
+}
+
+export function useUpdateRestaurantSupplierMutation() {
+  return useDomainMutation(
+    ({ id, data }: { id: string; data: Record<string, unknown> }) =>
+      updateSupplier(id, data, 'RESTAURANT'),
+    [domainQueryKeys.suppliers, domainQueryKeys.purchaseOrders],
+  );
+}
+
+export function useArchiveRestaurantSupplierMutation() {
+  return useDomainMutation(
+    (id: string) => updateSupplier(id, { isActive: false }, 'RESTAURANT'),
+    [domainQueryKeys.suppliers, domainQueryKeys.purchaseOrders],
+  );
+}
+
+export function useRestoreRestaurantSupplierMutation() {
+  return useDomainMutation(
+    (id: string) => updateSupplier(id, { isActive: true }, 'RESTAURANT'),
     [domainQueryKeys.suppliers, domainQueryKeys.purchaseOrders],
   );
 }

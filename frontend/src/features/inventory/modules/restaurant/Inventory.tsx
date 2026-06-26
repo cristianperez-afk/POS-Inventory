@@ -55,6 +55,7 @@ export function Inventory() {
   const [pendingDeactivateId, setPendingDeactivateId] = useState<number | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [expiryPeriodFilter, setExpiryPeriodFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
   const [costHistoryItem, setCostHistoryItem] = useState<{ id: string; name: string } | null>(null);
   const [showRecentModal, setShowRecentModal] = useState(false);
 
@@ -109,10 +110,22 @@ export function Inventory() {
         (p.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
         (p.sku || '').toLowerCase().includes(searchQuery.toLowerCase());
       const matchesExpiryPeriod = expiryPeriodFilter === "all" || (p.expiryPeriod || "") === expiryPeriodFilter;
+      const matchesStatus = statusFilter === "all" ||
+        getStockStatus(p.stock, p.maxStock, p.minStock, p.reorderPoint).label === statusFilter;
       // Archived (deactivated) items are hidden unless the user opts to see them.
       const matchesArchived = showArchived || p.isActive !== false;
-      return matchesCategory && matchesSearch && matchesExpiryPeriod && matchesArchived;
+      return matchesCategory && matchesSearch && matchesExpiryPeriod && matchesStatus && matchesArchived;
     });
+  };
+
+  // Both search and the status tiles narrow the tree; either should auto-expand
+  // folders so matching products are visible without manual drilling.
+  const isTreeFiltered = searchQuery !== "" || statusFilter !== "all";
+
+  // Clicking a status tile filters the tree by that status; clicking the active
+  // tile again (or the Total tile) clears the filter.
+  const toggleStatusFilter = (status: string) => {
+    setStatusFilter((current) => (current === status ? "all" : status));
   };
 
   const getProductCountInSubCategory = (mainCategory: string, subCategory: string) => {
@@ -120,7 +133,7 @@ export function Inventory() {
   };
 
   const getProductCountInMainCategory = (mainCategory: string) => {
-    if (searchQuery === "") {
+    if (searchQuery === "" && statusFilter === "all") {
       return products.filter(p => p.category.startsWith(mainCategory + " > ")).length;
     }
     return categoryHierarchy[mainCategory]?.reduce((count, sub) =>
@@ -235,7 +248,7 @@ export function Inventory() {
         {userRole === "admin" && (
           <button
             onClick={() => setShowInitialStockModal(true)}
-            className="px-4 py-2 bg-muted text-foreground border border-border rounded-xl hover:bg-muted/80 transition-colors text-sm font-medium flex items-center gap-2"
+            className="px-4 py-2 bg-muted text-foreground border border-border rounded-xl hover:bg-muted/80 hover:-translate-y-0.5 hover:shadow-md hover:border-primary/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-sm transition-all duration-200 text-sm font-medium flex items-center gap-2"
           >
             <PlusCircle className="w-4 h-4" />
             Initial Stock Setup
@@ -278,32 +291,33 @@ export function Inventory() {
           </select>
         </div>
 
-        {/* Stats Row */}
+        {/* Stats Row — click a tile to filter the tree by stock status */}
         <div className="grid grid-cols-6 gap-4 mt-4 pt-4 border-t border-border">
-          <div className="text-center">
-            <p className="text-xl font-bold text-foreground">{products.length}</p>
-            <p className="text-muted-foreground text-sm">Total</p>
-          </div>
-          <div className="text-center">
-            <p className="text-xl font-bold text-black">{products.filter(p => getStockStatus(p.stock, p.maxStock, p.minStock, p.reorderPoint).label === "Out of Stock").length}</p>
-            <p className="text-muted-foreground text-sm">Out</p>
-          </div>
-          <div className="text-center">
-            <p className="text-xl font-bold text-red-600">{products.filter(p => getStockStatus(p.stock, p.maxStock, p.minStock, p.reorderPoint).label === "Critical Stock").length}</p>
-            <p className="text-muted-foreground text-sm">Critical</p>
-          </div>
-          <div className="text-center">
-            <p className="text-xl font-bold text-orange-600">{products.filter(p => getStockStatus(p.stock, p.maxStock, p.minStock, p.reorderPoint).label === "Low Stock").length}</p>
-            <p className="text-muted-foreground text-sm">Low</p>
-          </div>
-          <div className="text-center">
-            <p className="text-xl font-bold text-yellow-700">{products.filter(p => getStockStatus(p.stock, p.maxStock, p.minStock, p.reorderPoint).label === "Medium Stock").length}</p>
-            <p className="text-muted-foreground text-sm">Medium</p>
-          </div>
-          <div className="text-center">
-            <p className="text-xl font-bold text-green-600">{products.filter(p => getStockStatus(p.stock, p.maxStock, p.minStock, p.reorderPoint).label === "Healthy Stock").length}</p>
-            <p className="text-muted-foreground text-sm">Healthy</p>
-          </div>
+          {[
+            { status: "all", label: "Total", valueClass: "text-foreground", count: products.length },
+            { status: "Out of Stock", label: "Out", valueClass: "text-black", count: products.filter(p => getStockStatus(p.stock, p.maxStock, p.minStock, p.reorderPoint).label === "Out of Stock").length },
+            { status: "Critical Stock", label: "Critical", valueClass: "text-red-600", count: products.filter(p => getStockStatus(p.stock, p.maxStock, p.minStock, p.reorderPoint).label === "Critical Stock").length },
+            { status: "Low Stock", label: "Low", valueClass: "text-orange-600", count: products.filter(p => getStockStatus(p.stock, p.maxStock, p.minStock, p.reorderPoint).label === "Low Stock").length },
+            { status: "Medium Stock", label: "Medium", valueClass: "text-yellow-700", count: products.filter(p => getStockStatus(p.stock, p.maxStock, p.minStock, p.reorderPoint).label === "Medium Stock").length },
+            { status: "Healthy Stock", label: "Healthy", valueClass: "text-green-600", count: products.filter(p => getStockStatus(p.stock, p.maxStock, p.minStock, p.reorderPoint).label === "Healthy Stock").length },
+          ].map((tile) => {
+            const isActive = statusFilter === tile.status;
+            return (
+              <button
+                type="button"
+                key={tile.label}
+                onClick={() => toggleStatusFilter(tile.status)}
+                aria-pressed={isActive}
+                aria-label={`Filter by ${tile.label}`}
+                className={`group text-center rounded-xl py-3 px-2 border transition-all duration-200 cursor-pointer hover:-translate-y-1 hover:shadow-lg hover:shadow-primary/25 hover:border-primary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-md ${
+                  isActive ? "border-primary bg-primary/5 shadow-md shadow-primary/20" : "border-transparent"
+                }`}
+              >
+                <p className={`text-xl font-bold ${tile.valueClass}`}>{tile.count}</p>
+                <p className="text-muted-foreground text-sm">{tile.label}</p>
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -311,7 +325,7 @@ export function Inventory() {
       <div className="bg-card rounded-2xl shadow-sm border border-border overflow-hidden p-4">
         <div className="space-y-4">
           {mainCategories.map((mainCategory) => {
-            const hasMatchingProducts = searchQuery !== "" &&
+            const hasMatchingProducts = isTreeFiltered &&
               (categoryHierarchy[mainCategory]?.some(sub => getProductsInCategory(mainCategory, sub).length > 0) ?? false);
             const isMainExpanded = expandedMainCategories.has(mainCategory) || hasMatchingProducts;
             const mainCategoryCount = getProductCountInMainCategory(mainCategory);
@@ -346,9 +360,9 @@ export function Inventory() {
                       const subKey = `${mainCategory} > ${subCategory}`;
                       const subCategoryProducts = getProductsInCategory(mainCategory, subCategory);
                       const subCount = subCategoryProducts.length;
-                      const isSubExpanded = expandedSubCategories.has(subKey) || (searchQuery !== "" && subCount > 0);
+                      const isSubExpanded = expandedSubCategories.has(subKey) || (isTreeFiltered && subCount > 0);
 
-                      if (searchQuery && subCount === 0) return null;
+                      if (isTreeFiltered && subCount === 0) return null;
 
                       return (
                         <div key={subKey} className="border-l border-primary/20 ml-4">

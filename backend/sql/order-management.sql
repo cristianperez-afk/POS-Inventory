@@ -267,6 +267,7 @@ CREATE TABLE IF NOT EXISTS orders (
     CHECK (order_status IN ('PENDING', 'PREPARING', 'READY', 'SERVED', 'COMPLETED', 'CANCELLED')),
   payment_status VARCHAR(50) DEFAULT 'NOT_PAID'
     CHECK (payment_status IN ('NOT_PAID', 'PAID', 'REFUNDED', 'PARTIALLY_REFUNDED', 'VOIDED')),
+  ordered_at TIMESTAMP,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   payment_at TIMESTAMP,
   preparing_started_at TIMESTAMP,
@@ -282,6 +283,7 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 
 ALTER TABLE orders
+  ADD COLUMN IF NOT EXISTS ordered_at TIMESTAMP,
   ADD COLUMN IF NOT EXISTS payment_at TIMESTAMP,
   ADD COLUMN IF NOT EXISTS preparing_started_at TIMESTAMP,
   ADD COLUMN IF NOT EXISTS ready_at TIMESTAMP,
@@ -291,6 +293,12 @@ ALTER TABLE orders
   ADD COLUMN IF NOT EXISTS running_time_end TIMESTAMP,
   ADD COLUMN IF NOT EXISTS running_duration BIGINT,
   ADD COLUMN IF NOT EXISTS is_running BOOLEAN NOT NULL DEFAULT FALSE;
+
+UPDATE orders
+SET ordered_at = COALESCE(running_time_start, preparing_started_at, created_at)
+WHERE ordered_at IS NULL
+  AND order_type <> 'RETAIL'
+  AND COALESCE(running_time_start, preparing_started_at, created_at) IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS order_items (
   id BIGSERIAL PRIMARY KEY,

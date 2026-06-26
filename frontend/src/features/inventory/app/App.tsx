@@ -326,7 +326,7 @@ export default function App() {
         <div className="flex-1 overflow-y-auto p-6" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
           <Suspense fallback={<div className="flex items-center justify-center h-full text-gray-400 text-sm">Loading...</div>}>
             {currentView === 'dashboard' && (
-              <DashboardView />
+              <DashboardView onNavigate={(view) => navigateToView(view as ViewType)} />
             )}
             {currentView === 'stock-alerts' && (
               <StockAlertsView />

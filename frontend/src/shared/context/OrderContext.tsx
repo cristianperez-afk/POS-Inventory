@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, useRef, ReactNode } from 'react';
 import { getApiBaseUrl } from '../../auth/services/auth';
 import type { AuthenticatedUser } from '../../auth/types/auth';
-import { getLocalDateKey, parseDatabaseTimestamp } from '../utils/date';
+import { formatManilaTime, getManilaDateKey, parseDatabaseTimestamp } from '../utils/date';
 
 export interface OrderItem {
   name: string;
@@ -32,6 +32,7 @@ export interface Order {
   orderStatus: 'Pending' | 'Preparing' | 'Ready' | 'Served' | 'Completed';
   date: string;
   time: string;
+  orderedAt?: string;
   createdAt?: string;
   paymentAt?: string;
   preparingStartedAt?: string;
@@ -42,6 +43,8 @@ export interface Order {
   completedAt?: string;
   tableStartedAt?: string;
   tableEndedAt?: string;
+  stayStartedAt?: string;
+  stayEndedAt?: string;
   runningTimeStart?: string;
   runningTimeEnd?: string;
   /** Persisted elapsed seconds once the restaurant order is finalized. */
@@ -132,22 +135,40 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
   }, [reloadOrders]);
 
   useEffect(() => {
+    const refreshOrders = () => {
+      void reloadOrders();
+    };
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === 'pos-order-updated-at') refreshOrders();
+    };
+
+    window.addEventListener('pos-order-updated', refreshOrders);
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener('pos-order-updated', refreshOrders);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, [reloadOrders]);
+
+  useEffect(() => {
     const timer = window.setInterval(() => {
       setOrders(prev => prev.map((order) => {
-        if (order.orderStatus === 'Completed') return order;
-
-        const startedAt = order.createdAt ? new Date(order.createdAt) : new Date(`${order.date} ${order.time}`);
-        const tableStartedAt = order.tableStartedAt
-          ? new Date(order.tableStartedAt)
-          : (order.type === 'Dine-In' || order.type === 'Mixed' ? startedAt : null);
+        const prepStartedAt = order.orderedAt ? parseDatabaseTimestamp(order.orderedAt) : null;
+        const prepEndedAt = order.servedAt ? parseDatabaseTimestamp(order.servedAt) : null;
+        const tableStartedAt = order.type === 'Dine-In' || order.type === 'Mixed'
+          ? order.tableStartedAt || order.orderedAt ? parseDatabaseTimestamp(order.tableStartedAt ?? order.orderedAt!) : null
+          : null;
+        const tableEndedAt = order.tableEndedAt ? parseDatabaseTimestamp(order.tableEndedAt) : null;
         const now = new Date();
 
         return {
           ...order,
-          runningTimeMinutes: Math.max(0, Math.round((now.getTime() - startedAt.getTime()) / 60000)),
+          runningTimeMinutes: prepStartedAt
+            ? Math.max(0, Math.floor(((prepEndedAt ?? now).getTime() - prepStartedAt.getTime()) / 60000))
+            : 0,
           customerStayMinutes: tableStartedAt
-            ? Math.max(0, Math.round((now.getTime() - tableStartedAt.getTime()) / 60000))
-            : order.customerStayMinutes,
+            ? Math.max(0, Math.floor(((tableEndedAt ?? now).getTime() - tableStartedAt.getTime()) / 60000))
+            : 0,
         };
       }));
     }, 60000);
@@ -305,13 +326,21 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
     if (!order) return;
     const paymentId = paymentData.paymentId ?? `PAY-${Date.now()}`;
     const receiptId = paymentData.receiptId ?? `REC-${Date.now()}`;
+    const paidAtIso = new Date().toISOString();
+    const staySeconds = calculateElapsedSeconds(order.tableStartedAt ?? order.orderedAt, paidAtIso);
 
     setOrders(prev => prev.map(o =>
       o.id === orderId
         ? {
             ...o,
             paymentStatus: 'Paid' as const,
-            paymentAt: new Date().toISOString(),
+            paymentAt: paidAtIso,
+            orderStatus: o.type === 'Dine-In' || o.type === 'Mixed' ? 'Completed' as const : o.orderStatus,
+            completedAt: o.type === 'Dine-In' || o.type === 'Mixed' ? (o.completedAt ?? paidAtIso) : o.completedAt,
+            tableEndedAt: o.type === 'Dine-In' || o.type === 'Mixed' ? (o.tableEndedAt ?? paidAtIso) : o.tableEndedAt,
+            runningTimeEnd: o.type === 'Dine-In' || o.type === 'Mixed' ? (o.runningTimeEnd ?? paidAtIso) : o.runningTimeEnd,
+            runningDuration: o.type === 'Dine-In' || o.type === 'Mixed' ? (o.runningDuration ?? staySeconds) : o.runningDuration,
+            isRunning: o.type === 'Dine-In' || o.type === 'Mixed' ? false : o.isRunning,
             cashReceived: paymentData.cashReceived,
             changeGiven: paymentData.changeGiven,
             cashier: paymentData.cashier,
@@ -354,17 +383,21 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
     const order = orders.find(o => o.id === orderId);
     if (!order) return;
     const completedAt = new Date();
-    const startedAt = order.createdAt ? new Date(order.createdAt) : new Date(`${order.date} ${order.time}`);
-    const tableStartedAt = order.tableStartedAt ? new Date(order.tableStartedAt) : (order.type === 'Dine-In' || order.type === 'Mixed' ? startedAt : null);
-    const runningTimeMinutes = Math.max(0, Math.round((completedAt.getTime() - startedAt.getTime()) / 60000));
+    const prepStartedAt = order.orderedAt ? parseDatabaseTimestamp(order.orderedAt) : null;
+    const tableStartedAt = order.type === 'Dine-In' || order.type === 'Mixed'
+      ? order.tableStartedAt || order.orderedAt ? parseDatabaseTimestamp(order.tableStartedAt ?? order.orderedAt!) : null
+      : null;
+    const runningTimeMinutes = prepStartedAt
+      ? Math.max(0, Math.floor((completedAt.getTime() - prepStartedAt.getTime()) / 60000))
+      : 0;
     const customerStayMinutes = tableStartedAt
-      ? Math.max(0, Math.round((completedAt.getTime() - tableStartedAt.getTime()) / 60000))
-      : order.customerStayMinutes;
+      ? Math.max(0, Math.floor((completedAt.getTime() - tableStartedAt.getTime()) / 60000))
+      : 0;
     const completedAtIso = completedAt.toISOString();
 
     setOrders(prev => prev.map(o =>
       o.id === orderId
-        ? { ...o, orderStatus: 'Completed' as const, completedAt: completedAtIso, tableEndedAt: completedAtIso, runningTimeMinutes, customerStayMinutes }
+        ? { ...o, orderStatus: 'Completed' as const, completedAt: completedAtIso, tableEndedAt: completedAtIso, runningTimeEnd: o.runningTimeEnd ?? completedAtIso, runningTimeMinutes, customerStayMinutes, isRunning: false }
         : o
     ));
 
@@ -418,13 +451,34 @@ export function useOrders() {
   return ctx;
 }
 
+function calculateElapsedSeconds(start?: string, end?: string) {
+  if (!start) return undefined;
+  const startMs = parseDatabaseTimestamp(start).getTime();
+  const endMs = end ? parseDatabaseTimestamp(end).getTime() : Date.now();
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return undefined;
+  return Math.max(0, Math.floor((endMs - startMs) / 1000));
+}
+
 function mapDatabaseRestaurantOrder(row: any): Order {
-  const createdAt = row.created_at ? parseDatabaseTimestamp(row.created_at) : new Date();
-  const rawCompletedAt = row.completed_at ? parseDatabaseTimestamp(row.completed_at) : null;
-  const runningTimeStart = row.running_time_start ? parseDatabaseTimestamp(row.running_time_start) : null;
-  const runningTimeEnd = row.running_time_end ? parseDatabaseTimestamp(row.running_time_end) : null;
-  const tableStartedAt = row.table_started_at ? parseDatabaseTimestamp(row.table_started_at) : null;
-  const tableEndedAt = row.table_ended_at ? parseDatabaseTimestamp(row.table_ended_at) : null;
+  const valueOf = (...keys: string[]) => {
+    for (const key of keys) {
+      if (row[key] !== null && row[key] !== undefined && row[key] !== '') return row[key];
+    }
+    return undefined;
+  };
+  const orderedAtValue = valueOf('ordered_at', 'orderedAt');
+  const servedAtValue = valueOf('served_at', 'servedAt');
+  const createdAtValue = valueOf('created_at', 'createdAt');
+  const completedAtValue = valueOf('completed_at', 'completedAt');
+  const tableStartedAtValue = valueOf('table_started_at', 'tableStartedAt', 'stayStartedAt');
+  const tableEndedAtValue = valueOf('table_ended_at', 'tableEndedAt', 'stayEndedAt');
+  const orderedAt = orderedAtValue ? parseDatabaseTimestamp(orderedAtValue) : null;
+  const createdAt = createdAtValue ? parseDatabaseTimestamp(createdAtValue) : null;
+  const rawCompletedAt = completedAtValue ? parseDatabaseTimestamp(completedAtValue) : null;
+  const runningTimeStart = valueOf('running_time_start', 'runningTimeStart') ? parseDatabaseTimestamp(valueOf('running_time_start', 'runningTimeStart')) : null;
+  const runningTimeEnd = valueOf('running_time_end', 'runningTimeEnd') ? parseDatabaseTimestamp(valueOf('running_time_end', 'runningTimeEnd')) : null;
+  const tableStartedAt = tableStartedAtValue ? parseDatabaseTimestamp(tableStartedAtValue) : null;
+  const tableEndedAt = tableEndedAtValue ? parseDatabaseTimestamp(tableEndedAtValue) : null;
   const normalizedTimestamp = (value: unknown) => {
     const timestamp = parseDatabaseTimestamp(value);
     return Number.isNaN(timestamp.getTime()) ? undefined : timestamp.toISOString();
@@ -432,7 +486,7 @@ function mapDatabaseRestaurantOrder(row: any): Order {
   const minutesBetween = (start: Date | null, end: Date | null) => {
     if (!start) return undefined;
     const endTime = end ?? new Date();
-    return Math.max(0, Math.round((endTime.getTime() - start.getTime()) / 60000));
+    return Math.max(0, Math.floor((endTime.getTime() - start.getTime()) / 60000));
   };
   const items = Array.isArray(row.items) ? row.items : [];
   const tableName = row.table_name ? String(row.table_name) : '-';
@@ -474,27 +528,30 @@ function mapDatabaseRestaurantOrder(row: any): Order {
     discountType: row.discount_type ?? undefined,
     paymentStatus,
     orderStatus,
-    date: getLocalDateKey(createdAt),
-    time: createdAt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-    createdAt: normalizedTimestamp(row.created_at),
-    paymentAt: normalizedTimestamp(row.payment_at),
-    preparingStartedAt: normalizedTimestamp(row.preparing_started_at),
-    readyAt: normalizedTimestamp(row.ready_at),
-    serviceStartedAt: normalizedTimestamp(row.service_started_at),
-    servedAt: normalizedTimestamp(row.served_at),
-    serviceDuration: row.service_duration !== null && row.service_duration !== undefined ? Number(row.service_duration) : undefined,
-    completedAt: completedAt ? normalizedTimestamp(row.completed_at) : undefined,
-    tableStartedAt: normalizedTimestamp(row.table_started_at),
-    tableEndedAt: normalizedTimestamp(row.table_ended_at),
-    runningTimeStart: normalizedTimestamp(row.running_time_start),
-    runningTimeEnd: normalizedTimestamp(row.running_time_end),
-    runningDuration: row.running_duration !== null && row.running_duration !== undefined ? Number(row.running_duration) : undefined,
-    isRunning: Boolean(row.is_running),
-    // Kept for older consumers; runningDuration is the precise source of truth.
-    runningTimeMinutes: minutesBetween(runningTimeStart ?? createdAt, runningTimeEnd),
-    customerStayMinutes: tableStartedAt ? minutesBetween(tableStartedAt, tableEndedAt ?? completedAt) : undefined,
-    estimatedPrepMinutes: row.estimated_prep_minutes !== null && row.estimated_prep_minutes !== undefined ? Number(row.estimated_prep_minutes) : undefined,
-    estimatedReadyAt: row.estimated_ready_at ?? undefined,
+    date: orderedAt ? getManilaDateKey(orderedAt) : '',
+    time: orderedAt ? formatManilaTime(orderedAt) : '',
+    orderedAt: normalizedTimestamp(orderedAtValue),
+    createdAt: normalizedTimestamp(createdAtValue),
+    paymentAt: normalizedTimestamp(valueOf('payment_at', 'paymentAt')),
+    preparingStartedAt: normalizedTimestamp(valueOf('preparing_started_at', 'preparingStartedAt')),
+    readyAt: normalizedTimestamp(valueOf('ready_at', 'readyAt')),
+    serviceStartedAt: normalizedTimestamp(valueOf('service_started_at', 'serviceStartedAt')),
+    servedAt: normalizedTimestamp(servedAtValue),
+    serviceDuration: valueOf('service_duration', 'serviceDuration') !== undefined ? Number(valueOf('service_duration', 'serviceDuration')) : undefined,
+    completedAt: completedAt ? normalizedTimestamp(completedAtValue) : undefined,
+    tableStartedAt: normalizedTimestamp(tableStartedAtValue),
+    tableEndedAt: normalizedTimestamp(tableEndedAtValue),
+    stayStartedAt: normalizedTimestamp(tableStartedAtValue),
+    stayEndedAt: normalizedTimestamp(tableEndedAtValue),
+    runningTimeStart: normalizedTimestamp(valueOf('running_time_start', 'runningTimeStart')),
+    runningTimeEnd: normalizedTimestamp(valueOf('running_time_end', 'runningTimeEnd')),
+    runningDuration: valueOf('running_duration', 'runningDuration') !== undefined ? Number(valueOf('running_duration', 'runningDuration')) : undefined,
+    isRunning: Boolean(valueOf('is_running', 'isRunning')),
+    // Kept for older consumers; never fall back to created_at for elapsed timers.
+    runningTimeMinutes: minutesBetween(orderedAt, servedAtValue ? parseDatabaseTimestamp(servedAtValue) : null),
+    customerStayMinutes: tableStartedAt && (type === 'Dine-In' || type === 'Mixed') ? minutesBetween(tableStartedAt, tableEndedAt ?? completedAt) : undefined,
+    estimatedPrepMinutes: valueOf('estimated_prep_minutes', 'estimatedPrepMinutes') !== undefined ? Number(valueOf('estimated_prep_minutes', 'estimatedPrepMinutes')) : undefined,
+    estimatedReadyAt: valueOf('estimated_ready_at', 'estimatedReadyAt'),
     items: items.map((item: any) => ({
       name: item.product_name,
       quantity: Number(item.quantity ?? 0),

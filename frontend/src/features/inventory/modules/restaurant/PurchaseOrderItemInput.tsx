@@ -47,6 +47,9 @@ type PurchaseOrderItemInputProps = {
 const UNIT_OPTIONS = ["kg", "g", "pcs", "liter", "bottle", "pack", "box", "dozen"];
 
 const normalizeSearch = (value: string | undefined) => (value || '').trim().toLowerCase();
+const preventNumberWheel = (event: React.WheelEvent<HTMLInputElement>) => {
+  event.currentTarget.blur();
+};
 
 export function PurchaseOrderItemInput({
   supplierName,
@@ -398,11 +401,14 @@ export function PurchaseOrderItemInput({
           <input
             id="po-item-quantity"
             type="number"
+            step="any"
+            inputMode="decimal"
             min="0"
             value={value.quantity}
+            onWheel={preventNumberWheel}
             onChange={(e) => handleFieldChange("quantity", e.target.value)}
             placeholder="0"
-            className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+            className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
           />
         </div>
 
@@ -413,12 +419,14 @@ export function PurchaseOrderItemInput({
           <input
             id="po-item-price"
             type="number"
-            step="0.01"
+            step="any"
+            inputMode="decimal"
             min="0"
             value={value.unitPrice}
+            onWheel={preventNumberWheel}
             onChange={(e) => handleFieldChange("unitPrice", e.target.value)}
             placeholder="0.00"
-            className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+            className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
           />
         </div>
       </div>

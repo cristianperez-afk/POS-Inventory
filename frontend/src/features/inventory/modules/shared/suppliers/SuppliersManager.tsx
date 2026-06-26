@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, X, Users, Building2 } from 'lucide-react';
+import { Archive, Edit, Plus, RotateCcw, X, Users, Building2 } from 'lucide-react';
 
 // A supplier in the shape the shared UI understands. Each module normalizes its
 // own supplier records to this before passing them in.
@@ -11,6 +11,7 @@ export type NormalizedSupplier = {
   phone?: string;
   address?: string;
   category?: string;
+  isActive?: boolean;
 };
 
 export type SupplierCreatePayload = {
@@ -34,8 +35,13 @@ type Props = {
   open: boolean;
   onClose: () => void;
   suppliers: NormalizedSupplier[];
+  archivedSuppliers?: NormalizedSupplier[];
   fields: SupplierFieldDef[];
   onCreate: (payload: SupplierCreatePayload) => Promise<void>;
+  onUpdate?: (id: string, payload: SupplierCreatePayload) => Promise<void>;
+  onArchive?: (id: string) => Promise<void>;
+  onRestore?: (id: string) => Promise<void>;
+  canManage?: boolean;
   // When provided, each supplier row gets an action button (e.g. retail "Create PO").
   onSelectSupplier?: (supplier: NormalizedSupplier) => void;
   selectLabel?: string;
@@ -48,13 +54,19 @@ export function SuppliersManager({
   open,
   onClose,
   suppliers,
+  archivedSuppliers = [],
   fields,
   onCreate,
+  onUpdate,
+  onArchive,
+  onRestore,
+  canManage = false,
   onSelectSupplier,
   selectLabel = 'Select',
 }: Props) {
-  const [mode, setMode] = useState<'list' | 'add'>('list');
+  const [mode, setMode] = useState<'list' | 'archived' | 'add' | 'edit'>('list');
   const [form, setForm] = useState<Record<string, string>>({});
+  const [editingSupplier, setEditingSupplier] = useState<NormalizedSupplier | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -63,6 +75,7 @@ export function SuppliersManager({
     if (open) {
       setMode('list');
       setForm({});
+      setEditingSupplier(null);
       setError(null);
     }
   }, [open]);
@@ -78,16 +91,71 @@ export function SuppliersManager({
     const payload: SupplierCreatePayload = { name: (form.name ?? '').trim() };
     fields.forEach((f) => {
       const v = form[f.key]?.trim();
-      if (v) (payload as any)[f.key] = v;
+      if (f.key === 'name') return;
+      if (mode === 'edit' || v) (payload as any)[f.key] = v ?? '';
     });
     try {
       setSaving(true);
       setError(null);
-      await onCreate(payload);
+      if (mode === 'edit') {
+        const supplierId = editingSupplier?.id;
+        if (!supplierId || !onUpdate) throw new Error('Supplier cannot be edited from this view.');
+        await onUpdate(supplierId, payload);
+      } else {
+        await onCreate(payload);
+      }
       setForm({});
+      setEditingSupplier(null);
       setMode('list');
     } catch (e: any) {
-      setError(e?.message ?? 'Failed to create supplier');
+      setError(e?.message ?? `Failed to ${mode === 'edit' ? 'update' : 'create'} supplier`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const startEdit = (supplier: NormalizedSupplier) => {
+    setEditingSupplier(supplier);
+    setForm({
+      name: supplier.name ?? '',
+      contactPerson: supplier.contactPerson ?? '',
+      email: supplier.email ?? '',
+      phone: supplier.phone ?? '',
+      address: supplier.address ?? '',
+      category: supplier.category ?? '',
+    });
+    setError(null);
+    setMode('edit');
+  };
+
+  const handleArchive = async (supplier: NormalizedSupplier) => {
+    if (!supplier.id || !onArchive) return;
+    const confirmed = window.confirm(`Archive supplier "${supplier.name}"? This will hide it from supplier lists and new purchase orders.`);
+    if (!confirmed) return;
+    try {
+      setSaving(true);
+      setError(null);
+      await onArchive(supplier.id);
+      if (editingSupplier?.id === supplier.id) {
+        setEditingSupplier(null);
+        setForm({});
+        setMode('list');
+      }
+    } catch (e: any) {
+      setError(e?.message ?? 'Failed to archive supplier');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleRestore = async (supplier: NormalizedSupplier) => {
+    if (!supplier.id || !onRestore) return;
+    try {
+      setSaving(true);
+      setError(null);
+      await onRestore(supplier.id);
+    } catch (e: any) {
+      setError(e?.message ?? 'Failed to restore supplier');
     } finally {
       setSaving(false);
     }
@@ -117,7 +185,19 @@ export function SuppliersManager({
 
         {mode === 'list' ? (
           <>
-            <div className="flex justify-end mb-4">
+            <div className="flex flex-wrap justify-end gap-2 mb-4">
+              {canManage && (
+                <button
+                  onClick={() => {
+                    setError(null);
+                    setMode('archived');
+                  }}
+                  className="px-4 py-2 bg-white border border-[rgba(0,0,0,0.1)] text-[#323B42] rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-[#F8FAFB]"
+                >
+                  <Archive className="size-4" />
+                  Archived ({archivedSuppliers.length})
+                </button>
+              )}
               <button
                 onClick={() => {
                   setForm({});
@@ -156,14 +236,36 @@ export function SuppliersManager({
                           )}
                         </div>
                       </div>
-                      {onSelectSupplier && (
-                        <button
-                          onClick={() => onSelectSupplier(s)}
-                          className="px-3 py-1.5 bg-[#007A5E] text-white rounded-[6px] text-[13px] font-medium hover:bg-[#008967]"
-                        >
-                          {selectLabel}
-                        </button>
-                      )}
+                      <div className="flex items-center gap-2">
+                        {onSelectSupplier && (
+                          <button
+                            onClick={() => onSelectSupplier(s)}
+                            className="px-3 py-1.5 bg-[#007A5E] text-white rounded-[6px] text-[13px] font-medium hover:bg-[#008967]"
+                          >
+                            {selectLabel}
+                          </button>
+                        )}
+                        {canManage && onUpdate && (
+                          <button
+                            onClick={() => startEdit(s)}
+                            disabled={saving}
+                            className="px-3 py-1.5 bg-white border border-[rgba(0,0,0,0.1)] text-[#323B42] rounded-[6px] text-[13px] font-medium hover:bg-[#F8FAFB] inline-flex items-center gap-1.5"
+                          >
+                            <Edit className="size-3.5" />
+                            Edit
+                          </button>
+                        )}
+                        {canManage && onArchive && s.id && (
+                          <button
+                            onClick={() => handleArchive(s)}
+                            disabled={saving}
+                            className="px-3 py-1.5 bg-[#fff7ed] border border-[#fed7aa] text-[#9a3412] rounded-[6px] text-[13px] font-medium hover:bg-[#ffedd5] inline-flex items-center gap-1.5 disabled:opacity-60"
+                          >
+                            <Archive className="size-3.5" />
+                            Archive
+                          </button>
+                        )}
+                      </div>
                     </div>
                     <div className="grid grid-cols-2 gap-3 mt-2">
                       {s.contactPerson && (
@@ -178,8 +280,76 @@ export function SuppliersManager({
               </div>
             )}
           </>
+        ) : mode === 'archived' ? (
+          <>
+            <div className="flex justify-between items-center mb-4">
+              <button
+                onClick={() => {
+                  setError(null);
+                  setMode('list');
+                }}
+                disabled={saving}
+                className="px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] font-medium text-[#323B42] hover:bg-[#F8FAFB] disabled:opacity-50"
+              >
+                Back
+              </button>
+              <p className="text-[13px] text-[#6b7280]">{archivedSuppliers.length} archived</p>
+            </div>
+
+            {archivedSuppliers.length === 0 ? (
+              <div className="text-center py-12">
+                <Archive className="size-14 text-[#d1d5dc] mx-auto mb-3" />
+                <p className="text-[14px] text-[#6b7280]">No archived suppliers.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {archivedSuppliers.map((s, idx) => (
+                  <div
+                    key={s.id ?? idx}
+                    className="bg-[#fff7ed] border border-[#fed7aa] rounded-[12px] p-4"
+                  >
+                    <div className="flex items-start justify-between gap-3 mb-2">
+                      <div className="flex items-center gap-3">
+                        <div className="size-9 bg-[#9a3412] rounded-[8px] flex items-center justify-center text-white font-bold">
+                          {s.name.charAt(0).toUpperCase()}
+                        </div>
+                        <div>
+                          <h4 className="text-[15px] font-semibold text-[#323B42]">{s.name}</h4>
+                          <p className="text-[12px] text-[#9a3412]">Archived</p>
+                        </div>
+                      </div>
+                      {canManage && onRestore && s.id && (
+                        <button
+                          onClick={() => handleRestore(s)}
+                          disabled={saving}
+                          className="px-3 py-1.5 bg-[#007A5E] text-white rounded-[6px] text-[13px] font-medium hover:bg-[#008967] inline-flex items-center gap-1.5 disabled:opacity-60"
+                        >
+                          <RotateCcw className="size-3.5" />
+                          Restore
+                        </button>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-2 gap-3 mt-2">
+                      {s.contactPerson && <Field label="Contact Person" value={s.contactPerson} />}
+                      {s.phone && <Field label="Phone" value={s.phone} />}
+                      {s.email && <Field label="Email" value={s.email} />}
+                      {s.address && <Field label="Address" value={s.address} />}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
         ) : (
           <>
+            <div className="mb-4">
+              <h4 className="text-[16px] font-semibold text-[#323B42]">
+                {mode === 'edit' ? 'Edit Supplier' : 'Add Supplier'}
+              </h4>
+              {mode === 'edit' && editingSupplier && (
+                <p className="text-[12px] text-[#6b7280]">Updating {editingSupplier.name}</p>
+              )}
+            </div>
             <div className="space-y-3">
               {fields.map((f) => (
                 <div key={f.key}>
@@ -210,6 +380,8 @@ export function SuppliersManager({
               <button
                 onClick={() => {
                   setMode('list');
+                  setEditingSupplier(null);
+                  setForm({});
                   setError(null);
                 }}
                 disabled={saving}
@@ -222,7 +394,7 @@ export function SuppliersManager({
                 disabled={saving}
                 className="flex-1 px-4 py-2 bg-[#007A5E] text-white rounded-[8px] text-[14px] font-medium hover:bg-[#008967] disabled:opacity-60"
               >
-                {saving ? 'Saving…' : 'Add Supplier'}
+                {saving ? 'Saving...' : mode === 'edit' ? 'Save Changes' : 'Add Supplier'}
               </button>
             </div>
           </>

@@ -244,8 +244,8 @@ export class InventoryApiService {
           size = COALESCE($17, size),
           condition = COALESCE($18, condition),
           "locationId" = COALESCE($19, "locationId"),
-          "expiryDate" = COALESCE($20, "expiryDate"),
-          "expiryPeriod" = COALESCE($21, "expiryPeriod"),
+          "expiryDate" = CASE WHEN $24 THEN NULL ELSE COALESCE($20, "expiryDate") END,
+          "expiryPeriod" = CASE WHEN $24 THEN NULL ELSE COALESCE($21, "expiryPeriod") END,
           "storageTemperature" = COALESCE($22, "storageTemperature"),
           "isActive" = COALESCE($23, "isActive"),
           "updatedAt" = CURRENT_TIMESTAMP
@@ -276,6 +276,7 @@ export class InventoryApiService {
         body.expiryPeriod ?? null,
         body.storageTemperature ?? null,
         body.isActive === undefined ? null : Boolean(body.isActive),
+        Boolean(body.noExpiry),
       ],
     );
 
@@ -463,6 +464,7 @@ export class InventoryApiService {
         SELECT
           r.*,
           COALESCE(ingredients.items, '[]'::json) AS ingredients,
+          COALESCE(availability."availableOrders", 0) AS "availableOrders",
           row_to_json(menu_item.*) AS "menuItem"
         FROM "Recipe" r
         LEFT JOIN "InventoryItem" menu_item ON menu_item.id = r."menuItemId"
@@ -475,6 +477,20 @@ export class InventoryApiService {
               'unit', ri.unit,
               'unitCost', ri."unitCost",
               'totalCost', ri."totalCost",
+              'physicalStock', COALESCE(item.quantity, 0),
+              'usableStock',
+                CASE
+                  WHEN item."expiryDate" IS NOT NULL AND item."expiryDate"::date < CURRENT_DATE THEN 0
+                  ELSE COALESCE(item.quantity, 0)
+                END,
+              'stockStatus',
+                CASE
+                  WHEN item.id IS NULL THEN 'missing'
+                  WHEN item."expiryDate" IS NOT NULL AND item."expiryDate"::date < CURRENT_DATE THEN 'expired'
+                  WHEN COALESCE(item.quantity, 0) < ri.quantity THEN 'insufficient'
+                  WHEN COALESCE(item.quantity, 0) <= COALESCE(item."reorderPoint", item."minStock", 0) THEN 'low'
+                  ELSE 'available'
+                END,
               'item', row_to_json(item.*)
             )
             ORDER BY item.name
@@ -483,11 +499,35 @@ export class InventoryApiService {
           JOIN "InventoryItem" item ON item.id = ri."itemId"
           WHERE ri."recipeId" = r.id
         ) ingredients ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT
+            CASE
+              WHEN COUNT(*) = 0 OR BOOL_OR(ri.quantity IS NULL OR ri.quantity <= 0) THEN 0
+              ELSE GREATEST(
+                0,
+                FLOOR(MIN(
+                  CASE
+                    WHEN item."expiryDate" IS NOT NULL AND item."expiryDate"::date < CURRENT_DATE THEN 0
+                    ELSE COALESCE(item.quantity, 0)::numeric
+                  END / NULLIF(ri.quantity, 0)
+                ))::integer
+              )
+            END AS "availableOrders"
+          FROM "RecipeIngredient" ri
+          JOIN "InventoryItem" item ON item.id = ri."itemId"
+          WHERE ri."recipeId" = r.id
+        ) availability ON TRUE
         WHERE r."businessId" = $1
           AND ($2::text IS NULL OR r."isActive" = ($2::boolean))
+          AND (
+            CASE
+              WHEN $3::text = 'true' THEN r."archivedAt" IS NOT NULL
+              ELSE r."archivedAt" IS NULL
+            END
+          )
         ORDER BY r.name ASC
       `,
-      [scope.businessId, query.active ?? null],
+      [scope.businessId, query.active ?? null, query.archived ?? null],
     );
     return this.paged(rows);
   }
@@ -505,8 +545,69 @@ export class InventoryApiService {
     return this.saveRecipe(scope, id, body);
   }
 
-  async deleteRecipe(headers: HeadersLike, id: string) {
+  /**
+   * Soft-delete: archives the recipe so it can be restored later. A recipe that has
+   * ever been sold (referenced by a KitchenOrder) cannot be hard-deleted without
+   * destroying sales history, so archiving is the default. Pass `permanent` only for
+   * recipes that have never been used — that is enforced below.
+   */
+  async deleteRecipe(headers: HeadersLike, id: string, permanent = false) {
     const scope = await this.resolveScope(headers);
+    if (permanent) return this.purgeRecipe(scope, id);
+
+    const rows = await this.safeQuery<{ id: string; menuItemId: string | null }>(
+      `UPDATE "Recipe"
+         SET "archivedAt" = CURRENT_TIMESTAMP, "isActive" = FALSE, "updatedAt" = CURRENT_TIMESTAMP
+       WHERE id = $1 AND "businessId" = $2
+       RETURNING id, "menuItemId"`,
+      [id, scope.businessId],
+    );
+    if (!rows[0]) throw new NotFoundException('Recipe was not found.');
+
+    // Hide the linked menu item from the POS, but keep the row so historical
+    // orders that reference it still resolve.
+    if (rows[0].menuItemId) {
+      await this.safeQuery(
+        `UPDATE products SET is_available = FALSE, updated_at = CURRENT_TIMESTAMP WHERE inventory_item_id = $1`,
+        [rows[0].menuItemId],
+      );
+    }
+    return rows[0];
+  }
+
+  /** Bring an archived recipe back and re-list its menu item on the POS. */
+  async restoreRecipe(headers: HeadersLike, id: string) {
+    const scope = await this.resolveScope(headers);
+    const rows = await this.safeQuery<{ id: string; menuItemId: string | null }>(
+      `UPDATE "Recipe"
+         SET "archivedAt" = NULL, "isActive" = TRUE, "updatedAt" = CURRENT_TIMESTAMP
+       WHERE id = $1 AND "businessId" = $2
+       RETURNING id, "menuItemId"`,
+      [id, scope.businessId],
+    );
+    if (!rows[0]) throw new NotFoundException('Recipe was not found.');
+
+    if (rows[0].menuItemId) {
+      await this.safeQuery(
+        `UPDATE products SET is_available = TRUE, updated_at = CURRENT_TIMESTAMP WHERE inventory_item_id = $1`,
+        [rows[0].menuItemId],
+      );
+    }
+    return rows[0];
+  }
+
+  /** Hard-delete — only allowed when the recipe has no sales history. */
+  private async purgeRecipe(scope: Scope, id: string) {
+    const usage = await this.safeQuery<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM "KitchenOrder" WHERE "recipeId" = $1 AND "businessId" = $2`,
+      [id, scope.businessId],
+    );
+    if (Number(usage[0]?.count ?? 0) > 0) {
+      throw new BadRequestException(
+        'This recipe has sales history and cannot be permanently deleted. Archive it instead.',
+      );
+    }
+
     const rows = await this.safeQuery<{ id: string; menuItemId: string | null }>(
       `DELETE FROM "Recipe" WHERE id = $1 AND "businessId" = $2 RETURNING id, "menuItemId"`,
       [id, scope.businessId],
@@ -761,7 +862,9 @@ export class InventoryApiService {
                   o.order_status,
                   o.total_amount,
                   o.payment_status,
+                  COALESCE(o.ordered_at, o.running_time_start, o.preparing_started_at, o.created_at) AS ordered_at,
                   o.created_at,
+                  o.updated_at,
                   o.completed_at,
                   o.payment_at,
                   o.preparing_started_at,
@@ -872,19 +975,56 @@ export class InventoryApiService {
                   WHEN order_status = 'SERVED' THEN 'SERVED'
                   ELSE order_status
                 END AS status,
+                ordered_at AS "orderedAt",
                 created_at AS "createdAt",
-                COALESCE(completed_at, created_at) AS "updatedAt",
+                COALESCE(completed_at, updated_at, created_at) AS "updatedAt",
                 payment_at AS "paymentAt",
                 preparing_started_at AS "preparingStartedAt",
                 ready_at AS "readyAt",
                 service_started_at AS "serviceStartedAt",
-                served_at AS "servedAt",
-                service_duration AS "serviceDuration",
+                COALESCE(
+                  served_at,
+                  CASE WHEN order_status IN ('SERVED', 'COMPLETED') THEN running_time_end END,
+                  CASE WHEN order_status IN ('SERVED', 'COMPLETED') THEN completed_at END,
+                  CASE WHEN order_status IN ('SERVED', 'COMPLETED') THEN updated_at END
+                ) AS "servedAt",
+                COALESCE(
+                  NULLIF(service_duration, 0),
+                  CASE
+                    WHEN order_status IN ('SERVED', 'COMPLETED') THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (
+                      COALESCE(served_at, running_time_end, completed_at, updated_at, created_at)
+                      - COALESCE(
+                        CASE WHEN ordered_at <= COALESCE(served_at, running_time_end, completed_at, updated_at, created_at) THEN ordered_at END,
+                        CASE WHEN running_time_start <= COALESCE(served_at, running_time_end, completed_at, updated_at, created_at) THEN running_time_start END,
+                        CASE WHEN preparing_started_at <= COALESCE(served_at, running_time_end, completed_at, updated_at, created_at) THEN preparing_started_at END,
+                        created_at,
+                        COALESCE(served_at, running_time_end, completed_at, updated_at, created_at)
+                      )
+                    )))::BIGINT)
+                    ELSE service_duration
+                  END
+                ) AS "serviceDuration",
                 estimated_prep_minutes AS "estimatedPrepMinutes",
                 estimated_ready_at AS "estimatedReadyAt",
                 completed_at AS "completedAt",
-                table_started_at AS "tableStartedAt",
-                table_ended_at AS "tableEndedAt",
+                COALESCE(table_started_at, CASE WHEN order_type IN ('DINE_IN', 'MIXED') THEN COALESCE(ordered_at, running_time_start, preparing_started_at, created_at) END) AS "tableStartedAt",
+                COALESCE(
+                  table_ended_at,
+                  CASE
+                    WHEN order_type IN ('DINE_IN', 'MIXED')
+                      AND (running_time_end IS NOT NULL OR order_status IN ('COMPLETED', 'CANCELLED'))
+                    THEN COALESCE(running_time_end, completed_at, payment_at, updated_at)
+                  END
+                ) AS "tableEndedAt",
+                COALESCE(table_started_at, CASE WHEN order_type IN ('DINE_IN', 'MIXED') THEN COALESCE(ordered_at, running_time_start, preparing_started_at, created_at) END) AS "stayStartedAt",
+                COALESCE(
+                  table_ended_at,
+                  CASE
+                    WHEN order_type IN ('DINE_IN', 'MIXED')
+                      AND (running_time_end IS NOT NULL OR order_status IN ('COMPLETED', 'CANCELLED'))
+                    THEN COALESCE(running_time_end, completed_at, payment_at, updated_at)
+                  END
+                ) AS "stayEndedAt",
                 running_time_start AS "runningTimeStart",
                 running_time_end AS "runningTimeEnd",
                 running_duration AS "runningDuration",
@@ -923,7 +1063,7 @@ export class InventoryApiService {
       const orderId = Number(id.replace('pos-order-', ''));
       if (!Number.isFinite(orderId)) throw new BadRequestException('Invalid POS order id.');
 
-      const posStatus = nextStatus;
+      const requestedStatus = nextStatus;
       const rows = await this.safeQuery<Record<string, unknown>>(
         `
           WITH scoped_user AS (
@@ -935,22 +1075,56 @@ export class InventoryApiService {
             LIMIT 1
           )
           UPDATE orders
-          SET order_status = $3::varchar,
-              preparing_started_at = CASE WHEN $3::varchar = 'PREPARING' THEN COALESCE(preparing_started_at, CURRENT_TIMESTAMP) ELSE preparing_started_at END,
+          SET order_status = CASE
+                WHEN order_type = 'TAKEOUT' AND $3::varchar = 'SERVED' THEN 'COMPLETED'
+                ELSE $3::varchar
+              END,
+              ordered_at = CASE
+                WHEN $3::varchar IN ('PREPARING', 'READY', 'SERVED', 'COMPLETED')
+                  THEN COALESCE(ordered_at, running_time_start, preparing_started_at, created_at, CURRENT_TIMESTAMP)
+                ELSE ordered_at
+              END,
+              preparing_started_at = CASE
+                WHEN $3::varchar IN ('PREPARING', 'READY', 'SERVED', 'COMPLETED')
+                  THEN COALESCE(preparing_started_at, ordered_at, running_time_start, created_at, CURRENT_TIMESTAMP)
+                ELSE preparing_started_at
+              END,
               ready_at = CASE WHEN $3::varchar = 'READY' THEN COALESCE(ready_at, CURRENT_TIMESTAMP) ELSE ready_at END,
-              service_started_at = CASE WHEN $3::varchar = 'READY' THEN COALESCE(service_started_at, CURRENT_TIMESTAMP) ELSE service_started_at END,
-              table_started_at = CASE WHEN $3::varchar = 'READY' AND order_type IN ('DINE_IN', 'MIXED') THEN COALESCE(table_started_at, CURRENT_TIMESTAMP) ELSE table_started_at END,
+              service_started_at = CASE WHEN $3::varchar IN ('PREPARING', 'READY', 'SERVED', 'COMPLETED') THEN COALESCE(service_started_at, ordered_at, preparing_started_at, CURRENT_TIMESTAMP) ELSE service_started_at END,
+              table_started_at = CASE WHEN $3::varchar IN ('PREPARING', 'READY', 'SERVED', 'COMPLETED') AND order_type IN ('DINE_IN', 'MIXED') THEN COALESCE(table_started_at, ordered_at, running_time_start, CURRENT_TIMESTAMP) ELSE table_started_at END,
               served_at = CASE WHEN $3::varchar = 'SERVED' THEN COALESCE(served_at, CURRENT_TIMESTAMP) ELSE served_at END,
-              service_duration = CASE WHEN $3::varchar = 'SERVED' AND service_started_at IS NOT NULL THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - service_started_at)))::BIGINT) ELSE service_duration END,
-              completed_at = CASE WHEN $3::varchar IN ('SERVED', 'COMPLETED') THEN COALESCE(completed_at, CURRENT_TIMESTAMP) ELSE completed_at END,
-              table_ended_at = CASE WHEN $3::varchar IN ('COMPLETED', 'CANCELLED') THEN COALESCE(table_ended_at, CURRENT_TIMESTAMP) ELSE table_ended_at END,
+              running_time_start = CASE
+                WHEN $3::varchar IN ('PREPARING', 'READY', 'SERVED', 'COMPLETED')
+                  THEN COALESCE(running_time_start, ordered_at, CURRENT_TIMESTAMP)
+                ELSE running_time_start
+              END,
+              service_duration = CASE
+                WHEN $3::varchar = 'SERVED'
+                  THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (
+                    COALESCE(served_at, CURRENT_TIMESTAMP)
+                    - COALESCE(
+                      CASE WHEN ordered_at <= COALESCE(served_at, CURRENT_TIMESTAMP) THEN ordered_at END,
+                      CASE WHEN running_time_start <= COALESCE(served_at, CURRENT_TIMESTAMP) THEN running_time_start END,
+                      CASE WHEN preparing_started_at <= COALESCE(served_at, CURRENT_TIMESTAMP) THEN preparing_started_at END,
+                      created_at,
+                      COALESCE(served_at, CURRENT_TIMESTAMP)
+                    )
+                  )))::BIGINT)
+                ELSE service_duration
+              END,
+              completed_at = CASE
+                WHEN $3::varchar IN ('COMPLETED', 'CANCELLED') OR (order_type = 'TAKEOUT' AND $3::varchar = 'SERVED')
+                  THEN COALESCE(completed_at, CURRENT_TIMESTAMP)
+                ELSE completed_at
+              END,
+              table_ended_at = CASE WHEN order_type IN ('DINE_IN', 'MIXED') AND $3::varchar IN ('COMPLETED', 'CANCELLED') THEN COALESCE(table_ended_at, CURRENT_TIMESTAMP) ELSE table_ended_at END,
               -- Kitchen status updates must respect the restaurant lifecycle:
               -- a takeout stops at completion; a dine-in Pay Later order only
               -- stops after payment; a paid dine-in may stop when explicitly
               -- marked completed (or later when its table is released).
               running_time_end = CASE
                 WHEN COALESCE(is_running, FALSE) = TRUE
-                  AND running_time_start IS NOT NULL
+                  AND COALESCE(running_time_start, CURRENT_TIMESTAMP) IS NOT NULL
                   AND (
                     $3::varchar = 'CANCELLED'
                     OR (order_type = 'TAKEOUT' AND $3::varchar IN ('SERVED', 'COMPLETED'))
@@ -961,18 +1135,26 @@ export class InventoryApiService {
               END,
               running_duration = CASE
                 WHEN COALESCE(is_running, FALSE) = TRUE
-                  AND running_time_start IS NOT NULL
+                  AND COALESCE(running_time_start, CURRENT_TIMESTAMP) IS NOT NULL
                   AND (
                     $3::varchar = 'CANCELLED'
                     OR (order_type = 'TAKEOUT' AND $3::varchar IN ('SERVED', 'COMPLETED'))
                     OR (order_type IN ('DINE_IN', 'MIXED') AND payment_status = 'PAID' AND $3::varchar = 'COMPLETED')
                   )
-                  THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - running_time_start)))::BIGINT)
+                  THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (
+                    CURRENT_TIMESTAMP - COALESCE(
+                      CASE WHEN ordered_at <= CURRENT_TIMESTAMP THEN ordered_at END,
+                      CASE WHEN running_time_start <= CURRENT_TIMESTAMP THEN running_time_start END,
+                      CASE WHEN preparing_started_at <= CURRENT_TIMESTAMP THEN preparing_started_at END,
+                      created_at,
+                      CURRENT_TIMESTAMP
+                    )
+                  )))::BIGINT)
                 ELSE running_duration
               END,
               is_running = CASE
                 WHEN COALESCE(is_running, FALSE) = TRUE
-                  AND running_time_start IS NOT NULL
+                  AND COALESCE(running_time_start, CURRENT_TIMESTAMP) IS NOT NULL
                   AND (
                     $3::varchar = 'CANCELLED'
                     OR (order_type = 'TAKEOUT' AND $3::varchar IN ('SERVED', 'COMPLETED'))
@@ -985,12 +1167,39 @@ export class InventoryApiService {
           WHERE id = $4
             AND store_id = (SELECT store_id FROM scoped_user)
             AND order_type <> 'RETAIL'
-          RETURNING id
+          RETURNING
+            id,
+            order_number AS "orderNumber",
+            order_status AS status,
+            COALESCE(ordered_at, running_time_start, preparing_started_at, created_at) AS "orderedAt",
+            COALESCE(
+              served_at,
+              CASE WHEN order_status IN ('SERVED', 'COMPLETED') THEN running_time_end END,
+              CASE WHEN order_status IN ('SERVED', 'COMPLETED') THEN completed_at END,
+              CASE WHEN order_status IN ('SERVED', 'COMPLETED') THEN updated_at END
+            ) AS "servedAt",
+            COALESCE(
+              NULLIF(service_duration, 0),
+              CASE
+                WHEN order_status IN ('SERVED', 'COMPLETED') THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (
+                  COALESCE(served_at, running_time_end, completed_at, updated_at, created_at)
+                  - COALESCE(
+                    CASE WHEN ordered_at <= COALESCE(served_at, running_time_end, completed_at, updated_at, created_at) THEN ordered_at END,
+                    CASE WHEN running_time_start <= COALESCE(served_at, running_time_end, completed_at, updated_at, created_at) THEN running_time_start END,
+                    CASE WHEN preparing_started_at <= COALESCE(served_at, running_time_end, completed_at, updated_at, created_at) THEN preparing_started_at END,
+                    created_at,
+                    COALESCE(served_at, running_time_end, completed_at, updated_at, created_at)
+                  )
+                )))::BIGINT)
+                ELSE service_duration
+              END
+            ) AS "serviceDuration",
+            updated_at AS "updatedAt"
         `,
-        [posUserId ?? '', scope.user.email, posStatus, orderId],
+        [posUserId ?? '', scope.user.email, requestedStatus, orderId],
       );
       if (!rows[0]) throw new NotFoundException('POS kitchen order not found.');
-      return { id, status: nextStatus };
+      return { ...rows[0], id };
     }
 
     const kitchenStatus = nextStatus === 'CANCELLED' ? 'VOIDED' : nextStatus;
@@ -1011,6 +1220,9 @@ export class InventoryApiService {
 
   async listSuppliers(headers: HeadersLike, query: Record<string, string | undefined>) {
     const scope = await this.resolveScope(headers);
+    if (query.isActive === 'false' && scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can view archived suppliers.');
+    }
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
         SELECT *
@@ -1064,6 +1276,24 @@ export class InventoryApiService {
 
   async updateSupplier(headers: HeadersLike, id: string, body: Record<string, unknown>) {
     const scope = await this.resolveScope(headers);
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can edit or archive suppliers.');
+    }
+    if (body.name !== undefined) {
+      const name = String(body.name ?? '').trim();
+      if (!name) throw new BadRequestException('Supplier name is required.');
+      const existing = await this.safeQuery<{ id: string }>(
+        `SELECT id FROM "Supplier"
+         WHERE "businessId" = $1
+           AND module = $2::"BusinessModule"
+           AND lower(name) = lower($3)
+           AND id <> $4
+         LIMIT 1`,
+        [scope.businessId, scope.module, name, id],
+      );
+      if (existing[0]) throw new ConflictException(`Supplier "${name}" already exists`);
+      body.name = name;
+    }
     const allowed = ['name', 'contactPerson', 'email', 'phone', 'address', 'category', 'categoryId', 'isActive'];
     const sets: string[] = [];
     const params: unknown[] = [];
@@ -1092,8 +1322,15 @@ export class InventoryApiService {
 
   async deleteSupplier(headers: HeadersLike, id: string) {
     const scope = await this.resolveScope(headers);
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can archive suppliers.');
+    }
     const rows = await this.safeQuery<{ id: string }>(
-      `DELETE FROM "Supplier" WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule" RETURNING id`,
+      `UPDATE "Supplier"
+       SET "isActive" = FALSE,
+           "updatedAt" = CURRENT_TIMESTAMP
+       WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule"
+       RETURNING id`,
       [id, scope.businessId, scope.module],
     );
     if (!rows[0]) throw new NotFoundException(`Supplier #${id} not found`);
@@ -2405,8 +2642,16 @@ export class InventoryApiService {
   private async ensurePosKitchenEstimateColumns() {
     await this.safeQuery(`
       ALTER TABLE orders
+        ADD COLUMN IF NOT EXISTS ordered_at TIMESTAMP,
         ADD COLUMN IF NOT EXISTS estimated_prep_minutes INT,
         ADD COLUMN IF NOT EXISTS estimated_ready_at TIMESTAMP
+    `);
+    await this.safeQuery(`
+      UPDATE orders
+      SET ordered_at = COALESCE(running_time_start, preparing_started_at, created_at)
+      WHERE ordered_at IS NULL
+        AND order_type <> 'RETAIL'
+        AND COALESCE(running_time_start, preparing_started_at, created_at) IS NOT NULL
     `);
     await this.safeQuery(`
       ALTER TABLE order_items

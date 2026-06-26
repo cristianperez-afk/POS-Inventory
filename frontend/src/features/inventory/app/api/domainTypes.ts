@@ -274,6 +274,9 @@ export interface ApiRecipeIngredient {
   unit?: string | null;
   unitCost?: number | null;
   totalCost?: number | null;
+  physicalStock?: number;
+  usableStock?: number;
+  stockStatus?: 'available' | 'low' | 'insufficient' | 'expired' | 'missing';
 }
 
 export interface ApiRecipe {
@@ -287,6 +290,7 @@ export interface ApiRecipe {
   targetFoodCost?: number | null;
   sellingPrice?: number | null;
   isActive: boolean;
+  archivedAt?: string | null;
   imageUrl?: string | null;
   isVegetarian: boolean;
   isVegan: boolean;
@@ -298,6 +302,7 @@ export interface ApiRecipe {
   menuItemId?: string | null;
   menuItem?: ApiInventoryItem | null;
   ingredients: ApiRecipeIngredient[];
+  availableOrders: number;
   createdAt: string;
   updatedAt?: string;
 }
@@ -352,16 +357,25 @@ export interface ApiKitchenOrder {
   sale?: { id: string; transactionNumber: string } | null;
   items?: ApiKitchenOrderItem[];
   completedBy?: ApiActor | null;
+  orderedAt?: string | null;
   createdAt: string;
   updatedAt?: string;
   paymentAt?: string | null;
   preparingStartedAt?: string | null;
   readyAt?: string | null;
+  servedAt?: string | null;
+  serviceDuration?: number | string | null;
   estimatedPrepMinutes?: number | string | null;
   estimatedReadyAt?: string | null;
   completedAt?: string | null;
   tableStartedAt?: string | null;
   tableEndedAt?: string | null;
+  stayStartedAt?: string | null;
+  stayEndedAt?: string | null;
+  runningTimeStart?: string | null;
+  runningTimeEnd?: string | null;
+  runningDuration?: number | string | null;
+  isRunning?: boolean | null;
 }
 
 export interface ApiCategory {

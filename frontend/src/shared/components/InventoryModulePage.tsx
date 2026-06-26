@@ -66,10 +66,12 @@ export function InventoryModulePage({
   currentPage,
   currentUser,
   showHeader = false,
+  onNavigate,
 }: {
   currentPage: Page;
   currentUser: AuthenticatedUser | null;
   showHeader?: boolean;
+  onNavigate?: (page: Page) => void;
 }) {
   const inventoryUser = useMemo(() => toInventoryUser(currentUser), [currentUser]);
   const isRestaurant = currentUser?.store_type === 'RESTAURANT';
@@ -119,7 +121,7 @@ export function InventoryModulePage({
             </div>
             <div className="flex-1 overflow-y-auto px-6 pb-6 pt-4">
               <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-slate-500">Loading inventory...</div>}>
-                {isRestaurant ? renderRestaurantPage(currentPage) : renderRetailPage(currentPage, inventoryUser)}
+                {isRestaurant ? renderRestaurantPage(currentPage) : renderRetailPage(currentPage, inventoryUser, onNavigate)}
               </Suspense>
             </div>
           </div>
@@ -145,7 +147,18 @@ function toInventoryUser(user: AuthenticatedUser | null): InventoryUser | null {
   };
 }
 
-function renderRetailPage(page: Page, currentUser: InventoryUser | null): ReactNode {
+// The retail dashboard cards emit neutral targets; map them to inventory pages.
+const DASHBOARD_TARGET_TO_PAGE: Record<string, Page> = {
+  inventory: 'inventory-items',
+  'stock-alerts': 'inventory-stock-alerts',
+  reports: 'inventory-reports',
+};
+
+function renderRetailPage(page: Page, currentUser: InventoryUser | null, onNavigate?: (page: Page) => void): ReactNode {
+  const dashboardNavigate = (target: string) => {
+    const next = DASHBOARD_TARGET_TO_PAGE[target];
+    if (next) onNavigate?.(next);
+  };
   switch (page) {
     case 'inventory-stock-alerts':
       return <RetailStockAlerts />;
@@ -170,7 +183,7 @@ function renderRetailPage(page: Page, currentUser: InventoryUser | null): ReactN
     case 'inventory-user-management':
       return <RetailUserManagement currentUser={currentUser} />;
     default:
-      return <RetailDashboard />;
+      return <RetailDashboard onNavigate={dashboardNavigate} />;
   }
 }
 

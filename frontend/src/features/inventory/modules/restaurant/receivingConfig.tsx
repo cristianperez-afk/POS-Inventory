@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { WheelEvent } from 'react';
 import { Pencil, Plus, Settings, Trash2, X } from 'lucide-react';
 import {
   useCancelRestaurantGoodsReceiptMutation,
@@ -21,6 +22,10 @@ import type {
 type QualityCriterion = { key: string; label: string };
 
 const QUALITY_CRITERIA_STORAGE_KEY = 'restaurant-goods-received-quality-criteria';
+
+const preventNumberWheel = (event: WheelEvent<HTMLInputElement>) => {
+  event.currentTarget.blur();
+};
 
 const DEFAULT_INSPECTION_CRITERIA: QualityCriterion[] = [
   { key: 'appearance', label: 'Appearance & Freshness' },
@@ -136,9 +141,9 @@ function CriteriaManager({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-2 rounded-[8px] border border-[rgba(0,0,0,0.1)] bg-white px-3 py-2 text-[13px] font-medium text-[#323B42] hover:bg-[#F8FAFB]"
+        className="group inline-flex items-center gap-2 rounded-[8px] border border-[rgba(0,0,0,0.1)] bg-white px-3 py-2 text-[13px] font-medium text-[#323B42] shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-[#007A5E]/60 hover:bg-[#F8FAFB] hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-[#007A5E]/40 active:translate-y-0 active:shadow-sm"
       >
-        <Settings className="size-4 text-[#007A5E]" />
+        <Settings className="size-4 text-[#007A5E] transition-transform duration-200 group-hover:rotate-45" />
         Manage Criteria
       </button>
 
@@ -355,19 +360,25 @@ export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
                   <p className="text-[12px] text-[#323B42]">{c.label}</p>
                   <input
                     type="number"
+                    step="any"
+                    inputMode="decimal"
                     min="0"
                     value={s.passed}
+                    onWheel={preventNumberWheel}
                     onChange={(e) => setScore(c.key, 'passed', e.target.value)}
-                    className="rounded-[6px] border border-[rgba(0,0,0,0.1)] px-2 py-1.5 text-[13px] focus:outline-none focus:border-[#007A5E]"
+                    className="rounded-[6px] border border-[rgba(0,0,0,0.1)] px-2 py-1.5 text-[13px] focus:outline-none focus:border-[#007A5E] [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                     aria-label={`${c.label} passed`}
                   />
                   <span className="text-center text-[12px] text-[#6b7280]">/</span>
                   <input
                     type="number"
+                    step="any"
+                    inputMode="decimal"
                     min="1"
                     value={s.total}
+                    onWheel={preventNumberWheel}
                     onChange={(e) => setScore(c.key, 'total', e.target.value)}
-                    className="rounded-[6px] border border-[rgba(0,0,0,0.1)] px-2 py-1.5 text-[13px] focus:outline-none focus:border-[#007A5E]"
+                    className="rounded-[6px] border border-[rgba(0,0,0,0.1)] px-2 py-1.5 text-[13px] focus:outline-none focus:border-[#007A5E] [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                     aria-label={`${c.label} total`}
                   />
                   <input

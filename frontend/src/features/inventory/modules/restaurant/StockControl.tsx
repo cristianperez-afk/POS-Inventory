@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Package, Search, TrendingDown, TrendingUp, AlertCircle, RefreshCw, Download, BarChart3, Calendar, Clock } from "lucide-react";
 import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   useRestaurantAdjustmentsQuery,
   useRestaurantInventoryMovementsQuery,
@@ -76,6 +77,7 @@ export function StockControl() {
   const { data: wasteLogs = [] } = useRestaurantWasteQuery();
   const { data: adjustments = [] } = useRestaurantAdjustmentsQuery();
   const { data: inventoryMovements = [] } = useRestaurantInventoryMovementsQuery();
+  const queryClient = useQueryClient();
 
   const getRecordedOutflowQuantity = (productName: string) => {
     const targetName = normalizeName(productName);
@@ -174,8 +176,10 @@ export function StockControl() {
   });
 
   const filteredLowStockItems = lowStockItems.filter(item => {
-    return (item.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+    const matchesSearch = (item.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
            (item.id || '').toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesStatus = statusFilter === "all" || item.status === statusFilter;
+    return matchesSearch && matchesStatus;
   });
 
   const filteredExpiryItems = expiryItems.filter(item => {
@@ -294,24 +298,44 @@ export function StockControl() {
     }
   };
 
+  // Cards drive the view/filters in-place. Out-of-stock / critical / low are
+  // alerts, so they open the Low Stock Alerts tab narrowed to that status.
+  // Medium / healthy / total value only exist in the Overview table, and
+  // Expiring Soon switches to the Expiring Items view.
+  const showAlert = (status: string) => {
+    setViewType("low-stock");
+    setStatusFilter(status);
+  };
+  const showStatus = (status: string) => {
+    setViewType("control");
+    setStatusFilter(status);
+  };
+  const showExpiring = () => {
+    setViewType("expiring");
+    setExpiryDateFilter("next3");
+  };
+
   const stats = [
-    { label: "Total Stock Value", value: `₱${stockItems.reduce((sum, item) => sum + item.totalValue, 0).toLocaleString()}`, icon: Package, color: "linear-gradient(to right, #009BA5, #00A7A5)" },
-    { label: "Out of Stock", value: stockItems.filter(i => i.status === "out-of-stock").length, icon: AlertCircle, color: "linear-gradient(to right, #000000, #52525B)" },
-    { label: "Critical Stock", value: stockItems.filter(i => i.status === "critical").length, icon: AlertCircle, color: "linear-gradient(to right, #DC2626, #EF4444)" },
-    { label: "Low Stock", value: stockItems.filter(i => i.status === "low").length, icon: TrendingDown, color: "linear-gradient(to right, #F59E0B, #FCD34D)" },
-    { label: "Medium Stock", value: stockItems.filter(i => i.status === "medium").length, icon: BarChart3, color: "linear-gradient(to right, #F59E0B, #FBBF24)" },
-    { label: "Healthy Stock", value: stockItems.filter(i => i.status === "healthy").length, icon: Package, color: "linear-gradient(to right, #007A5E, #008967)" },
-    { label: "Expiring Soon", value: expiryItems.filter(i => i.daysUntilExpiry <= 3).length, icon: Calendar, color: "linear-gradient(to right, #F59E0B, #DC2626)" },
+    { label: "Total Stock Value", value: `₱${stockItems.reduce((sum, item) => sum + item.totalValue, 0).toLocaleString()}`, icon: Package, color: "linear-gradient(to right, #009BA5, #00A7A5)", onClick: () => showStatus("all") },
+    { label: "Out of Stock", value: stockItems.filter(i => i.status === "out-of-stock").length, icon: AlertCircle, color: "linear-gradient(to right, #000000, #52525B)", onClick: () => showAlert("out-of-stock") },
+    { label: "Critical Stock", value: stockItems.filter(i => i.status === "critical").length, icon: AlertCircle, color: "linear-gradient(to right, #DC2626, #EF4444)", onClick: () => showAlert("critical") },
+    { label: "Low Stock", value: stockItems.filter(i => i.status === "low").length, icon: TrendingDown, color: "linear-gradient(to right, #F59E0B, #FCD34D)", onClick: () => showAlert("low") },
+    { label: "Medium Stock", value: stockItems.filter(i => i.status === "medium").length, icon: BarChart3, color: "linear-gradient(to right, #F59E0B, #FBBF24)", onClick: () => showStatus("medium") },
+    { label: "Healthy Stock", value: stockItems.filter(i => i.status === "healthy").length, icon: Package, color: "linear-gradient(to right, #007A5E, #008967)", onClick: () => showStatus("healthy") },
+    { label: "Expiring Soon", value: expiryItems.filter(i => i.daysUntilExpiry <= 3).length, icon: Calendar, color: "linear-gradient(to right, #F59E0B, #DC2626)", onClick: showExpiring },
   ];
 
-  const handleRefresh = () => {
+  const handleRefresh = async () => {
     setIsRefreshing(true);
-    // Simulate data refresh
-    setTimeout(() => {
-      setIsRefreshing(false);
-      // In a real app, this would fetch fresh data from the backend
+    try {
+      // Refetch stock data (inventory, waste, adjustments, movements) from the backend.
+      await queryClient.invalidateQueries();
       toast.success("Stock data refreshed successfully!");
-    }, 1000);
+    } catch {
+      toast.error("Failed to refresh stock data");
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
   const handleExportReport = () => {
@@ -373,14 +397,14 @@ export function StockControl() {
           <button
             onClick={handleRefresh}
             disabled={isRefreshing}
-            className="px-6 py-3 bg-muted text-foreground rounded-2xl hover:bg-muted/80 transition-all duration-200 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-6 py-3 bg-muted text-foreground rounded-2xl border border-transparent hover:bg-muted/80 hover:-translate-y-0.5 hover:shadow-md hover:border-primary/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-sm transition-all duration-200 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:translate-y-0 disabled:shadow-none disabled:border-transparent"
           >
             <RefreshCw className={`w-5 h-5 ${isRefreshing ? "animate-spin" : ""}`} />
             {isRefreshing ? "Refreshing..." : "Refresh"}
           </button>
           <button
             onClick={handleExportReport}
-            className="px-6 py-3 bg-gradient-to-r from-primary to-secondary text-white rounded-2xl hover:shadow-lg hover:shadow-primary/30 transition-all duration-200 flex items-center gap-2"
+            className="px-6 py-3 bg-gradient-to-r from-primary to-secondary text-white rounded-2xl hover:-translate-y-0.5 hover:shadow-lg hover:shadow-primary/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-md transition-all duration-200 flex items-center gap-2"
           >
             <Download className="w-5 h-5" />
             Export Report
@@ -393,7 +417,13 @@ export function StockControl() {
         {stats.map((stat, index) => {
           const Icon = stat.icon;
           return (
-            <div key={index} className="bg-card rounded-2xl p-6 shadow-sm border border-border overflow-hidden min-w-0">
+            <button
+              type="button"
+              key={index}
+              onClick={stat.onClick}
+              aria-label={`Filter by ${stat.label}`}
+              className="group text-left w-full bg-card rounded-2xl p-6 shadow-sm border border-border overflow-hidden min-w-0 cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-xl hover:shadow-primary/25 hover:border-primary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-lg active:shadow-primary/30 active:border-primary"
+            >
               <div className="flex items-center gap-3 mb-3">
                 <div className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: stat.color }}>
                   <Icon className="w-6 h-6 text-white" />
@@ -401,7 +431,7 @@ export function StockControl() {
               </div>
               <p className="text-muted-foreground text-sm mb-2 truncate">{stat.label}</p>
               <p className="text-xl font-bold text-foreground break-words">{stat.value}</p>
-            </div>
+            </button>
           );
         })}
       </div>
@@ -420,7 +450,7 @@ export function StockControl() {
           Overview
         </button>
         <button
-          onClick={() => setViewType("low-stock")}
+          onClick={() => { setViewType("low-stock"); setStatusFilter("all"); }}
           className={`px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200 flex items-center gap-2 ${
             viewType === "low-stock"
               ? "bg-primary text-white shadow-md"

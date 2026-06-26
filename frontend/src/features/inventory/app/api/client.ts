@@ -252,9 +252,10 @@ export function getItemsSoldReport(params?: { module?: BusinessModule; from?: st
   return request<ItemsSoldReport>(`/api/reports/items-sold${suffix}`);
 }
 
-export function getRecipes(params?: { active?: boolean }) {
+export function getRecipes(params?: { active?: boolean; archived?: boolean }) {
   const query = new URLSearchParams();
   if (params?.active !== undefined) query.set('active', String(params.active));
+  if (params?.archived !== undefined) query.set('archived', String(params.archived));
   const suffix = query.toString() ? `?${query.toString()}` : '';
   return request<PagedResponse<ApiRecipe>>(`/api/recipes${suffix}`).then((r) => r.data);
 }
@@ -273,9 +274,16 @@ export function updateRecipe(id: string, data: unknown) {
   });
 }
 
-export function deleteRecipe(id: string) {
-  return request<ApiRecipe>(`/api/recipes/${id}`, {
+export function deleteRecipe(id: string, permanent = false) {
+  const suffix = permanent ? '?permanent=true' : '';
+  return request<ApiRecipe>(`/api/recipes/${id}${suffix}`, {
     method: 'DELETE',
+  });
+}
+
+export function restoreRecipe(id: string) {
+  return request<ApiRecipe>(`/api/recipes/${id}/restore`, {
+    method: 'POST',
   });
 }
 
@@ -300,11 +308,16 @@ export function voidKitchenOrder(id: string, voidReason: string) {
   });
 }
 
-export function updateKitchenOrderStatus(id: string, status: KitchenOrderStatus) {
-  return request<ApiKitchenOrder>(`/api/kitchen-orders/${id}/status`, {
+export async function updateKitchenOrderStatus(id: string, status: KitchenOrderStatus) {
+  const order = await request<ApiKitchenOrder>(`/api/kitchen-orders/${id}/status`, {
     method: 'PATCH',
     body: JSON.stringify({ status }),
   });
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('pos-order-updated', { detail: { id, status } }));
+    window.localStorage.setItem('pos-order-updated-at', String(Date.now()));
+  }
+  return order;
 }
 
 export function getLocations() {
