@@ -2122,14 +2122,53 @@ export class InventoryApiService {
     return this.getPurchaseOrderRow(scope, id);
   }
 
+  // Shared SELECT for transfer reads: each transfer carries its line items (with the
+  // linked inventory item), both locations, and the creator — matching ApiTransfer.
+  private transferSelectSql() {
+    return `
+      SELECT
+        tr.id, tr."transferNumber", tr."fromLocationId", tr."toLocationId", tr.status,
+        tr.notes, tr."createdById", tr."completedAt", tr."createdAt", tr."updatedAt", tr.module,
+        row_to_json(fl.*) AS "fromLocation",
+        row_to_json(tl.*) AS "toLocation",
+        CASE WHEN cu.id IS NULL THEN NULL
+          ELSE json_build_object('id', cu.id, 'name', cu.name, 'email', cu.email) END AS "createdBy",
+        COALESCE(items.items, '[]'::json) AS items
+      FROM "Transfer" tr
+      LEFT JOIN "Location" fl ON fl.id = tr."fromLocationId"
+      LEFT JOIN "Location" tl ON tl.id = tr."toLocationId"
+      LEFT JOIN "User" cu ON cu.id = tr."createdById"
+      LEFT JOIN LATERAL (
+        SELECT json_agg(
+          json_build_object(
+            'id', ti.id,
+            'inventoryItemId', ti."inventoryItemId",
+            'quantity', ti.quantity,
+            'inventoryItem', CASE WHEN ii.id IS NULL THEN NULL
+              ELSE json_build_object('id', ii.id, 'name', ii.name, 'sku', ii.sku, 'unit', ii.unit, 'price', ii.price, 'category', ii.category) END
+          ) ORDER BY ti."createdAt"
+        ) AS items
+        FROM "TransferItem" ti
+        LEFT JOIN "InventoryItem" ii ON ii.id = ti."inventoryItemId"
+        WHERE ti."transferId" = tr.id
+      ) items ON TRUE
+    `;
+  }
+
+  private async getTransferRow(scope: Scope, id: string) {
+    const rows = await this.safeQuery<Record<string, unknown>>(
+      `${this.transferSelectSql()} WHERE tr.id = $1 AND tr."businessId" = $2 LIMIT 1`,
+      [id, scope.businessId],
+    );
+    if (!rows[0]) throw new NotFoundException(`Transfer #${id} not found`);
+    return rows[0];
+  }
+
   async listTransfers(headers: HeadersLike, query: Record<string, string | undefined>) {
     const scope = await this.resolveScope(headers);
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
-        SELECT tr.*, row_to_json(fl.*) AS "fromLocation", row_to_json(tl.*) AS "toLocation"
-        FROM "Transfer" tr
-        LEFT JOIN "Location" fl ON fl.id = tr."fromLocationId"
-        LEFT JOIN "Location" tl ON tl.id = tr."toLocationId"
+        ${this.transferSelectSql()}
         WHERE tr."businessId" = $1
           AND tr.module = $2::"BusinessModule"
           AND ($3::text IS NULL OR tr.status = $3::"TransferStatus")
@@ -2138,6 +2177,377 @@ export class InventoryApiService {
       [scope.businessId, query.module ?? scope.module, query.status ?? null],
     );
     return this.paged(rows);
+  }
+
+  async getTransfer(headers: HeadersLike, id: string) {
+    const scope = await this.resolveScope(headers);
+    return this.getTransferRow(scope, id);
+  }
+
+  private normalizeTransferItems(value: unknown): { inventoryItemId: string; quantity: number }[] {
+    if (!Array.isArray(value)) return [];
+    return value
+      .map((raw) => {
+        const item = raw as Record<string, unknown>;
+        return {
+          inventoryItemId: String(item.inventoryItemId ?? ''),
+          quantity: Number(item.quantity ?? 0),
+        };
+      })
+      .filter((item) => item.inventoryItemId && item.quantity > 0);
+  }
+
+  // Creates a stock transfer between two locations in DRAFT/PENDING state. No stock
+  // moves yet — stock leaves the source on dispatch and arrives at the destination
+  // on completion (a two-phase, "in transit" model).
+  async createTransfer(headers: HeadersLike, body: Record<string, unknown>) {
+    const scope = await this.resolveScope(headers);
+    const fromLocationId = String(body.fromLocationId ?? '');
+    const toLocationId = String(body.toLocationId ?? '');
+    if (!fromLocationId || !toLocationId) {
+      throw new BadRequestException('Both a source and destination location are required.');
+    }
+    if (fromLocationId === toLocationId) {
+      throw new BadRequestException('Source and destination locations must be different.');
+    }
+
+    const items = this.normalizeTransferItems(body.items);
+    if (items.length === 0) {
+      throw new BadRequestException('A transfer must include at least one item.');
+    }
+
+    // Validate locations belong to this business.
+    const locationRows = await this.safeQuery<{ id: string }>(
+      `SELECT id FROM "Location" WHERE id = ANY($1::text[]) AND "businessId" = $2`,
+      [[fromLocationId, toLocationId], scope.businessId],
+    );
+    if (locationRows.length !== 2) {
+      throw new BadRequestException('One or both locations are unavailable for this business.');
+    }
+
+    // Validate items exist, belong to the business, and currently live at the source.
+    const itemIds = [...new Set(items.map((i) => i.inventoryItemId))];
+    const invRows = await this.safeQuery<{ id: string; quantity: number; name: string; locationId: string }>(
+      `SELECT id, quantity, name, "locationId" FROM "InventoryItem" WHERE id = ANY($1::text[]) AND "businessId" = $2`,
+      [itemIds, scope.businessId],
+    );
+    const invMap = new Map(invRows.map((r) => [r.id, r]));
+    for (const line of items) {
+      const inv = invMap.get(line.inventoryItemId);
+      if (!inv) throw new BadRequestException('One or more items are unavailable for this business.');
+      if (inv.locationId !== fromLocationId) {
+        throw new BadRequestException(`"${inv.name}" is not stored at the selected source location.`);
+      }
+      if (line.quantity > Number(inv.quantity)) {
+        throw new BadRequestException(`Transfer quantity for "${inv.name}" exceeds available stock.`);
+      }
+    }
+
+    const transferId = randomUUID();
+    const transferNumber = `TR-${Date.now()}`;
+    const createdById = scope.user.id === 'pos-bridge' ? null : scope.user.id;
+
+    await this.databaseService.withTransaction(async (client) => {
+      await client.query(
+        `
+          INSERT INTO "Transfer" (
+            id, "transferNumber", "fromLocationId", "toLocationId", status,
+            notes, "businessId", module, "createdById", "updatedAt"
+          )
+          VALUES ($1, $2, $3, $4, 'PENDING', $5, $6, $7::"BusinessModule", $8, CURRENT_TIMESTAMP)
+        `,
+        [transferId, transferNumber, fromLocationId, toLocationId, body.notes ?? null, scope.businessId, scope.module, createdById],
+      );
+      for (const line of items) {
+        await client.query(
+          `INSERT INTO "TransferItem" (id, "transferId", "inventoryItemId", quantity) VALUES ($1, $2, $3, $4)`,
+          [randomUUID(), transferId, line.inventoryItemId, line.quantity],
+        );
+      }
+    });
+
+    await this.recordAudit(scope, {
+      category: 'Transfer',
+      action: 'Transfer Requested',
+      entityType: 'Transfer',
+      entityId: transferId,
+      entityName: transferNumber,
+      quantity: `${items.length} item(s)`,
+      status: 'pending',
+      summary: `${items.reduce((s, i) => s + i.quantity, 0)} unit(s) requested`,
+    });
+    return this.getTransferRow(scope, transferId);
+  }
+
+  // Dispatch: PENDING -> IN_TRANSIT. Stock leaves the source location now (it is "in
+  // transit"), recorded as a TRANSFER_OUT movement per item.
+  async dispatchTransfer(headers: HeadersLike, id: string) {
+    const scope = await this.resolveScope(headers);
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can dispatch transfers.');
+    }
+
+    await this.databaseService.withTransaction(async (client) => {
+      const transferRows = await client.query<{ id: string; status: string; fromLocationId: string; transferNumber: string }>(
+        `SELECT id, status, "fromLocationId", "transferNumber" FROM "Transfer"
+         WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule" FOR UPDATE`,
+        [id, scope.businessId, scope.module],
+      );
+      const transfer = transferRows.rows[0];
+      if (!transfer) throw new NotFoundException(`Transfer #${id} not found`);
+      if (transfer.status !== 'PENDING') {
+        throw new BadRequestException('Only pending transfers can be dispatched.');
+      }
+
+      const lineRows = await client.query<{ inventoryItemId: string; quantity: number }>(
+        `SELECT "inventoryItemId", quantity FROM "TransferItem" WHERE "transferId" = $1`,
+        [id],
+      );
+
+      for (const line of lineRows.rows) {
+        const invRows = await client.query<{ quantity: number; unit: string | null; name: string }>(
+          `SELECT quantity, unit, name FROM "InventoryItem" WHERE id = $1 AND "businessId" = $2 FOR UPDATE`,
+          [line.inventoryItemId, scope.businessId],
+        );
+        const inv = invRows.rows[0];
+        if (!inv) throw new BadRequestException('A transferred item is no longer available.');
+        const previousQuantity = Number(inv.quantity);
+        const newQuantity = previousQuantity - Number(line.quantity);
+        if (newQuantity < 0) {
+          throw new BadRequestException(`Dispatching would make "${inv.name}" stock negative.`);
+        }
+        await client.query(
+          `UPDATE "InventoryItem" SET quantity = $1, "updatedAt" = CURRENT_TIMESTAMP WHERE id = $2`,
+          [newQuantity, line.inventoryItemId],
+        );
+        await client.query(
+          `
+            INSERT INTO "StockMovement" (
+              id, type, quantity, "previousQuantity", "newQuantity", unit,
+              reason, "referenceType", "referenceId", notes, "itemId",
+              "locationId", "businessId", module, "createdById"
+            )
+            VALUES ($1, 'TRANSFER_OUT', $2, $3, $4, $5, 'Transfer dispatched', 'TRANSFER', $6, $7, $8, $9, $10, $11::"BusinessModule", $12)
+          `,
+          [
+            randomUUID(), Number(line.quantity), previousQuantity, newQuantity, inv.unit,
+            id, `Dispatched on ${transfer.transferNumber}`, line.inventoryItemId,
+            transfer.fromLocationId, scope.businessId, scope.module,
+            scope.user.id === 'pos-bridge' ? null : scope.user.id,
+          ],
+        );
+      }
+
+      await client.query(
+        `UPDATE "Transfer" SET status = 'IN_TRANSIT', "updatedAt" = CURRENT_TIMESTAMP WHERE id = $1`,
+        [id],
+      );
+    });
+
+    await this.recordAudit(scope, {
+      category: 'Transfer',
+      action: 'Transfer Dispatched',
+      entityType: 'Transfer',
+      entityId: id,
+      status: 'in_transit',
+      summary: 'Stock removed from source location',
+    });
+    return this.getTransferRow(scope, id);
+  }
+
+  // Complete: IN_TRANSIT -> COMPLETED. Stock arrives at the destination. The
+  // destination item is matched by name + type at the destination location; if none
+  // exists yet, a new row is created there (with null sku/barcode to respect the
+  // per-business uniqueness constraints).
+  async completeTransfer(headers: HeadersLike, id: string) {
+    await this.ensureInventoryItemOperationalColumns();
+    const scope = await this.resolveScope(headers);
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can complete transfers.');
+    }
+
+    await this.databaseService.withTransaction(async (client) => {
+      const transferRows = await client.query<{ id: string; status: string; toLocationId: string; transferNumber: string }>(
+        `SELECT id, status, "toLocationId", "transferNumber" FROM "Transfer"
+         WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule" FOR UPDATE`,
+        [id, scope.businessId, scope.module],
+      );
+      const transfer = transferRows.rows[0];
+      if (!transfer) throw new NotFoundException(`Transfer #${id} not found`);
+      if (transfer.status !== 'IN_TRANSIT') {
+        throw new BadRequestException('Only in-transit transfers can be completed.');
+      }
+
+      const lineRows = await client.query<{ inventoryItemId: string; quantity: number }>(
+        `SELECT "inventoryItemId", quantity FROM "TransferItem" WHERE "transferId" = $1`,
+        [id],
+      );
+
+      for (const line of lineRows.rows) {
+        const srcRows = await client.query<Record<string, unknown>>(
+          `SELECT * FROM "InventoryItem" WHERE id = $1 AND "businessId" = $2`,
+          [line.inventoryItemId, scope.businessId],
+        );
+        const src = srcRows.rows[0];
+        if (!src) throw new BadRequestException('A transferred item is no longer available.');
+
+        // Find an existing item of the same identity already at the destination.
+        const destRows = await client.query<{ id: string; quantity: number; unit: string | null }>(
+          `SELECT id, quantity, unit FROM "InventoryItem"
+           WHERE "businessId" = $1 AND "locationId" = $2
+             AND lower(name) = lower($3) AND "itemType" = $4::"InventoryItemType"
+           LIMIT 1`,
+          [scope.businessId, transfer.toLocationId, String(src.name), String(src.itemType)],
+        );
+
+        let destItemId: string;
+        let destPrev: number;
+        let destUnit: string | null;
+        if (destRows.rows[0]) {
+          const dest = destRows.rows[0];
+          destItemId = dest.id;
+          destPrev = Number(dest.quantity);
+          destUnit = dest.unit;
+          await client.query(
+            `UPDATE "InventoryItem" SET quantity = quantity + $1, "updatedAt" = CURRENT_TIMESTAMP WHERE id = $2`,
+            [Number(line.quantity), destItemId],
+          );
+        } else {
+          destItemId = randomUUID();
+          destPrev = 0;
+          destUnit = (src.unit as string | null) ?? null;
+          await client.query(
+            `
+              INSERT INTO "InventoryItem" (
+                id, name, description, "itemType", sku, barcode, category, "targetCustomer",
+                subcategory, size, condition, quantity, price, "costPrice",
+                "imageUrl", unit, "minStock", "maxStock", "reorderPoint",
+                "expiryDate", "storageTemperature", "locationId", "businessId", "updatedAt"
+              )
+              VALUES (
+                $1, $2, $3, $4::"InventoryItemType", NULL, NULL, $5, $6,
+                $7, $8, $9, $10, $11, $12,
+                $13, $14, $15, $16, $17,
+                $18, $19, $20, $21, CURRENT_TIMESTAMP
+              )
+            `,
+            [
+              destItemId, src.name, src.description ?? null, String(src.itemType), src.category, src.targetCustomer ?? null,
+              src.subcategory ?? null, src.size ?? null, src.condition ?? null, Number(line.quantity), Number(src.price ?? 0), src.costPrice ?? null,
+              src.imageUrl ?? null, destUnit, src.minStock ?? null, src.maxStock ?? null, src.reorderPoint ?? null,
+              src.expiryDate ?? null, src.storageTemperature ?? null, transfer.toLocationId, scope.businessId,
+            ],
+          );
+        }
+
+        await client.query(
+          `
+            INSERT INTO "StockMovement" (
+              id, type, quantity, "previousQuantity", "newQuantity", unit,
+              reason, "referenceType", "referenceId", notes, "itemId",
+              "locationId", "businessId", module, "createdById"
+            )
+            VALUES ($1, 'TRANSFER_IN', $2, $3, $4, $5, 'Transfer received', 'TRANSFER', $6, $7, $8, $9, $10, $11::"BusinessModule", $12)
+          `,
+          [
+            randomUUID(), Number(line.quantity), destPrev, destPrev + Number(line.quantity), destUnit,
+            id, `Received from ${transfer.transferNumber}`, destItemId,
+            transfer.toLocationId, scope.businessId, scope.module,
+            scope.user.id === 'pos-bridge' ? null : scope.user.id,
+          ],
+        );
+      }
+
+      await client.query(
+        `UPDATE "Transfer" SET status = 'COMPLETED', "completedAt" = CURRENT_TIMESTAMP, "updatedAt" = CURRENT_TIMESTAMP WHERE id = $1`,
+        [id],
+      );
+    });
+
+    await this.recordAudit(scope, {
+      category: 'Transfer',
+      action: 'Transfer Completed',
+      entityType: 'Transfer',
+      entityId: id,
+      status: 'completed',
+      summary: 'Stock received at destination location',
+    });
+    return this.getTransferRow(scope, id);
+  }
+
+  // Cancel: allowed while PENDING or IN_TRANSIT. If it was already dispatched, the
+  // in-transit stock is returned to the source location.
+  async cancelTransfer(headers: HeadersLike, id: string) {
+    const scope = await this.resolveScope(headers);
+
+    await this.databaseService.withTransaction(async (client) => {
+      const transferRows = await client.query<{ id: string; status: string; fromLocationId: string; transferNumber: string }>(
+        `SELECT id, status, "fromLocationId", "transferNumber" FROM "Transfer"
+         WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule" FOR UPDATE`,
+        [id, scope.businessId, scope.module],
+      );
+      const transfer = transferRows.rows[0];
+      if (!transfer) throw new NotFoundException(`Transfer #${id} not found`);
+      if (!['PENDING', 'IN_TRANSIT'].includes(transfer.status)) {
+        throw new BadRequestException('Only pending or in-transit transfers can be cancelled.');
+      }
+      // Staff may cancel their own pending request, but cancelling an in-transit
+      // transfer returns stock to the source, so that is an Admin-only action.
+      if (transfer.status === 'IN_TRANSIT' && scope.user.role !== 'Admin') {
+        throw new ForbiddenException('Only an Admin can cancel a transfer that is already in transit.');
+      }
+
+      // Return in-transit stock to the source.
+      if (transfer.status === 'IN_TRANSIT') {
+        const lineRows = await client.query<{ inventoryItemId: string; quantity: number }>(
+          `SELECT "inventoryItemId", quantity FROM "TransferItem" WHERE "transferId" = $1`,
+          [id],
+        );
+        for (const line of lineRows.rows) {
+          const invRows = await client.query<{ quantity: number; unit: string | null }>(
+            `SELECT quantity, unit FROM "InventoryItem" WHERE id = $1 AND "businessId" = $2 FOR UPDATE`,
+            [line.inventoryItemId, scope.businessId],
+          );
+          const inv = invRows.rows[0];
+          if (!inv) continue;
+          const previousQuantity = Number(inv.quantity);
+          await client.query(
+            `UPDATE "InventoryItem" SET quantity = quantity + $1, "updatedAt" = CURRENT_TIMESTAMP WHERE id = $2`,
+            [Number(line.quantity), line.inventoryItemId],
+          );
+          await client.query(
+            `
+              INSERT INTO "StockMovement" (
+                id, type, quantity, "previousQuantity", "newQuantity", unit,
+                reason, "referenceType", "referenceId", notes, "itemId",
+                "locationId", "businessId", module, "createdById"
+              )
+              VALUES ($1, 'TRANSFER_IN', $2, $3, $4, $5, 'Transfer cancelled — stock returned', 'TRANSFER', $6, $7, $8, $9, $10, $11::"BusinessModule", $12)
+            `,
+            [
+              randomUUID(), Number(line.quantity), previousQuantity, previousQuantity + Number(line.quantity), inv.unit,
+              id, `Returned from cancelled ${transfer.transferNumber}`, line.inventoryItemId,
+              transfer.fromLocationId, scope.businessId, scope.module,
+              scope.user.id === 'pos-bridge' ? null : scope.user.id,
+            ],
+          );
+        }
+      }
+
+      await client.query(
+        `UPDATE "Transfer" SET status = 'CANCELLED', "updatedAt" = CURRENT_TIMESTAMP WHERE id = $1`,
+        [id],
+      );
+    });
+
+    await this.recordAudit(scope, {
+      category: 'Transfer',
+      action: 'Transfer Cancelled',
+      entityType: 'Transfer',
+      entityId: id,
+      status: 'cancelled',
+    });
+    return this.getTransferRow(scope, id);
   }
 
   async listSales(headers: HeadersLike, query: Record<string, string | undefined>) {

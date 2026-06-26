@@ -43,6 +43,9 @@ export default function TransfersView({
   const locations = locationsQuery.data ?? [];
   const inventory = inventoryQuery.data ?? [];
   const loading = transfersQuery.isLoading || locationsQuery.isLoading || inventoryQuery.isLoading;
+  // Staff can request (create) and cancel a pending transfer; only an Admin can
+  // dispatch/complete it (those steps move stock). Mirrors the backend guards.
+  const isAdmin = currentUser?.role === 'Admin';
   const [activeTab, setActiveTab] = useState<'transfers' | 'adjustments'>('transfers');
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [showItemSelector, setShowItemSelector] = useState(false);
@@ -255,9 +258,11 @@ export default function TransfersView({
 
                 {transfer.status === 'PENDING' && (
                   <div className="flex gap-2">
-                    <button onClick={() => handleDispatch(transfer.id)} className="flex-1 px-4 py-2 bg-secondary text-white rounded-[8px] text-[14px] font-medium hover:bg-secondary">
-                      Start Transit
-                    </button>
+                    {isAdmin && (
+                      <button onClick={() => handleDispatch(transfer.id)} className="flex-1 px-4 py-2 bg-secondary text-white rounded-[8px] text-[14px] font-medium hover:bg-secondary">
+                        Start Transit
+                      </button>
+                    )}
                     <button onClick={() => handleCancel(transfer.id)} className="flex-1 px-4 py-2 border border-destructive text-destructive rounded-[8px] text-[14px] font-medium hover:bg-destructive/10">
                       Cancel
                     </button>
@@ -265,14 +270,18 @@ export default function TransfersView({
                 )}
 
                 {transfer.status === 'IN_TRANSIT' && (
-                  <div className="flex gap-2">
-                    <button onClick={() => handleComplete(transfer.id)} className="flex-1 px-4 py-2 bg-secondary text-white rounded-[8px] text-[14px] font-medium hover:bg-secondary">
-                      Complete Transfer
-                    </button>
-                    <button onClick={() => handleCancel(transfer.id)} className="flex-1 px-4 py-2 border border-destructive text-destructive rounded-[8px] text-[14px] font-medium hover:bg-destructive/10">
-                      Cancel
-                    </button>
-                  </div>
+                  isAdmin ? (
+                    <div className="flex gap-2">
+                      <button onClick={() => handleComplete(transfer.id)} className="flex-1 px-4 py-2 bg-secondary text-white rounded-[8px] text-[14px] font-medium hover:bg-secondary">
+                        Complete Transfer
+                      </button>
+                      <button onClick={() => handleCancel(transfer.id)} className="flex-1 px-4 py-2 border border-destructive text-destructive rounded-[8px] text-[14px] font-medium hover:bg-destructive/10">
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="text-[13px] text-muted-foreground text-center py-2">In transit — awaiting an Admin to complete.</p>
+                  )
                 )}
               </div>
             ))
