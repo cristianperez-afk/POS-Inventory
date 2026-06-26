@@ -1255,9 +1255,12 @@ export function ReportsView() {
             </button>
           </div>
 
-          <div className="bg-destructive/10 border-2 border-destructive rounded-[14px] p-4 mb-6">
-            <p className="text-[14px] text-destructive font-semibold">âš ï¸ Warning</p>
-            <p className="text-[12px] text-foreground mt-1">
+          <div className="rounded-[14px] border-2 border-red-300 bg-red-50 p-4 mb-6 dark:border-red-700 dark:bg-red-950/40">
+            <p className="flex items-center gap-2 text-[14px] font-semibold text-red-800 dark:text-red-200">
+              <AlertTriangle className="size-4" />
+              Warning
+            </p>
+            <p className="text-[12px] text-red-900 mt-1 dark:text-red-100">
               This report contains sensitive financial and operational data. Access is restricted to administrators only.
               Do not share this information with unauthorized personnel.
             </p>
@@ -1361,22 +1364,22 @@ export function ReportsView() {
                 <p className="text-[14px] text-muted-foreground text-center py-4">No critical events recorded</p>
               ) : (
                 confidentialReportData.criticalEvents.slice(0, 10).map((event, index) => (
-                  <div key={index} className="flex items-start justify-between p-3 bg-destructive/10 rounded-[8px] border border-destructive">
+                  <div key={index} className="flex items-start justify-between p-3 rounded-[8px] border border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-950/30">
                     <div>
                       <div className="flex items-center gap-2 mb-1">
-                        <span className="bg-destructive text-white px-2 py-1 rounded text-[11px] font-bold">
+                        <span className="rounded bg-red-700 px-2 py-1 text-[11px] font-bold text-white dark:bg-red-300 dark:text-red-950">
                           {event.type}
                         </span>
-                        <p className="text-[14px] font-medium text-foreground">{event.description}</p>
+                        <p className="text-[14px] font-medium text-red-950 dark:text-red-100">{event.description}</p>
                       </div>
-                      <p className="text-[12px] text-muted-foreground">Created by: {event.createdBy}</p>
+                      <p className="text-[12px] text-red-800 dark:text-red-200">Created by: {event.createdBy}</p>
                     </div>
                     <div className="text-right">
-                      <p className="text-[12px] text-foreground">{event.date}</p>
+                      <p className="text-[12px] text-red-900 dark:text-red-100">{event.date}</p>
                       <span className={`text-[11px] font-medium ${
                         event.status === 'Approved' ? 'text-success' :
-                        event.status === 'Pending' ? 'text-warning' :
-                        'text-destructive'
+                        event.status === 'Pending' ? 'text-amber-700 dark:text-amber-200' :
+                        'text-red-700 dark:text-red-200'
                       }`}>
                         {event.status}
                       </span>

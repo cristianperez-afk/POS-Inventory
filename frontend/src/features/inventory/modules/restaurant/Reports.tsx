@@ -1350,11 +1350,11 @@ export function Reports() {
           </div>
 
           {/* Warning banner */}
-          <div className="bg-red-50 border-2 border-red-500 rounded-2xl p-4 mb-6 flex items-start gap-3">
-            <AlertTriangle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+          <div className="flex items-start gap-3 rounded-2xl border-2 border-red-300 bg-red-50 p-4 mb-6 dark:border-red-700 dark:bg-red-950/40">
+            <AlertTriangle className="w-5 h-5 text-red-700 flex-shrink-0 mt-0.5 dark:text-red-200" />
             <div>
-              <p className="text-sm font-semibold text-red-600">Warning</p>
-              <p className="text-xs text-foreground mt-1">
+              <p className="text-sm font-semibold text-red-800 dark:text-red-200">Warning</p>
+              <p className="text-xs text-red-900 mt-1 dark:text-red-100">
                 This report contains sensitive operational and user data. Access is restricted to administrators only.
                 Do not share this information with unauthorized personnel.
               </p>
