@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell } from "recharts";
-import { ChevronDown, ChevronRight, Clock, Download, TrendingUp, PhilippinePeso, ShoppingCart, Eye, AlertTriangle, ClipboardList } from "lucide-react";
+import { ChevronDown, ChevronRight, Clock, Download, TrendingUp, PhilippinePeso, ShoppingCart, Eye, AlertTriangle, ClipboardList, Search, Activity } from "lucide-react";
 import {
   useRestaurantAdjustmentsQuery,
   useRestaurantGoodsRecordsQuery,
@@ -16,7 +16,7 @@ import {
 import { useSession } from "../../app/hooks/useSession";
 import { defaultCategoryHierarchy, formatCurrency, getInventoryValue, splitCategory } from "../lib/inventoryLogic";
 
-type TabType = 'overview' | 'inventory' | 'consumption' | 'orders' | 'operations' | 'audit' | 'financial' | 'confidential';
+type TabType = 'overview' | 'inventory' | 'consumption' | 'orders' | 'operations' | 'audit' | 'admin';
 
 const COLORS = ["#007A5E", "#009BA5", "#F59E0B", "#DC2626", "#8B5CF6", "#EC4899", "#10b981"];
 
@@ -112,6 +112,12 @@ export function Reports() {
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [expandedPosTransactions, setExpandedPosTransactions] = useState<Record<string, boolean>>({});
   const [auditModuleFilter, setAuditModuleFilter] = useState('all');
+  const [activityQuery, setActivityQuery] = useState('');
+  const [activityDateFrom, setActivityDateFrom] = useState('');
+  const [activityDateTo, setActivityDateTo] = useState('');
+  const [activityUserFilter, setActivityUserFilter] = useState('All');
+  const [activityModuleFilter, setActivityModuleFilter] = useState('All');
+  const [activityActionFilter, setActivityActionFilter] = useState('All');
   const [consumptionFrom, setConsumptionFrom] = useState('');
   const [consumptionTo, setConsumptionTo] = useState('');
   const consumptionQuery = useRestaurantIngredientConsumptionQuery({
@@ -392,6 +398,49 @@ export function Reports() {
     return { byRole, byStatus, criticalEvents };
   }, [isAdmin, users, wasteLogs, adjustments]);
 
+  // Activity Log — a POS-style event feed over the real audit trail, with the same
+  // filter set as the POS Activity Log page (date range, user, module, action,
+  // free-text search).
+  const activityUsers = useMemo(() => {
+    const map = new Map<string, string>();
+    auditTrail.forEach((entry) => {
+      const value = (entry.performedBy || '').trim();
+      if (value && !map.has(value)) map.set(value, entry.performedByName || value);
+    });
+    return Array.from(map.entries())
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [auditTrail]);
+
+  const activityModules = useMemo(
+    () => ['All', ...Array.from(new Set(auditTrail.map((e) => e.module).filter(Boolean))).sort()],
+    [auditTrail],
+  );
+  const activityActions = useMemo(
+    () => ['All', ...Array.from(new Set(auditTrail.map((e) => e.action).filter(Boolean))).sort()],
+    [auditTrail],
+  );
+
+  const activityLog = useMemo(() => {
+    const query = activityQuery.trim().toLowerCase();
+    return auditTrail.filter((entry) => {
+      if (activityUserFilter !== 'All' && normalizeAuditActor(entry.performedBy) !== normalizeAuditActor(activityUserFilter)) return false;
+      if (activityModuleFilter !== 'All' && entry.module !== activityModuleFilter) return false;
+      if (activityActionFilter !== 'All' && entry.action !== activityActionFilter) return false;
+      const day = (entry.date || '').slice(0, 10);
+      if (activityDateFrom && (!day || day < activityDateFrom)) return false;
+      if (activityDateTo && (!day || day > activityDateTo)) return false;
+      if (query) {
+        const haystack = [
+          entry.performedByName, entry.performedBy, entry.module, entry.action,
+          entry.item, entry.quantity, entry.details,
+        ].join(' ').toLowerCase();
+        if (!haystack.includes(query)) return false;
+      }
+      return true;
+    });
+  }, [auditTrail, activityUserFilter, activityModuleFilter, activityActionFilter, activityDateFrom, activityDateTo, activityQuery]);
+
   // ── Export ──────────────────────────────────────────────────────────────────
   const handleExport = () => {
     const timestamp = new Date().toISOString().split('T')[0];
@@ -462,16 +511,14 @@ export function Reports() {
           entry.details,
         ].map(csvValue).join(',') + '\n';
       });
-    } else if (activeTab === 'financial') {
+    } else if (activeTab === 'admin') {
       if (!isAdmin) return;
       csv = 'Metric,Value\n';
       csv += `Total Inventory Value,${financialData.totalInventoryValue.toFixed(2)}\n`;
       csv += `Total PO Spending,${financialData.totalPOSpending.toFixed(2)}\n`;
       csv += `Waste Loss,${financialData.wasteValue.toFixed(2)}\n`;
       csv += `Asset Health Score,${financialData.assetHealthScore.toFixed(1)}%\n`;
-    } else if (activeTab === 'confidential') {
-      if (!isAdmin) return;
-      csv = 'CONFIDENTIAL\n\nUser List\nName,Email,Role,Status,Last Login\n';
+      csv += '\nUser List\nName,Email,Role,Status,Last Login\n';
       users.forEach(u => {
         csv += `${u.name},${u.email},${u.role},${u.status},${u.lastLogin || ''}\n`;
       });
@@ -542,12 +589,9 @@ export function Reports() {
           Audit Trail
         </button>
         {isAdmin && (
-          <button onClick={() => setActiveTab('financial')} className={tabCls('financial')}>Financial Report</button>
-        )}
-        {isAdmin && (
-          <button onClick={() => setActiveTab('confidential')} className={tabCls('confidential', true)}>
+          <button onClick={() => setActiveTab('admin')} className={tabCls('admin')}>
             <Eye className="w-4 h-4" />
-            Confidential
+            Admin Report
           </button>
         )}
       </div>
@@ -1195,20 +1239,7 @@ export function Reports() {
         </div>
       )}
 
-      {activeTab === 'financial' && !isAdmin && (
-        <div className="bg-card border border-border rounded-2xl p-12 text-center">
-          <div className="bg-red-100 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4">
-            <Eye className="w-10 h-10 text-red-600" />
-          </div>
-          <h3 className="text-xl font-bold text-foreground mb-2">Access Denied</h3>
-          <p className="text-sm text-muted-foreground">
-            You do not have permission to view financial reports.<br />
-            This section is restricted to administrators only.
-          </p>
-        </div>
-      )}
-
-      {activeTab === 'financial' && isAdmin && (
+      {activeTab === 'admin' && isAdmin && (
         <div>
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-xl font-semibold text-foreground">Financial Report</h3>
@@ -1313,22 +1344,9 @@ export function Reports() {
         </div>
       )}
 
-      {/* ── Confidential (admin only) ──────────────────────────────────────────── */}
-      {activeTab === 'confidential' && !isAdmin && (
-        <div className="bg-card border border-border rounded-2xl p-12 text-center">
-          <div className="bg-red-100 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4">
-            <Eye className="w-10 h-10 text-red-600" />
-          </div>
-          <h3 className="text-xl font-bold text-foreground mb-2">Access Denied</h3>
-          <p className="text-sm text-muted-foreground">
-            You do not have permission to view confidential reports.<br />
-            This section is restricted to administrators only.
-          </p>
-        </div>
-      )}
-
-      {activeTab === 'confidential' && isAdmin && confidentialData && (
-        <div>
+      {/* ── Confidential / Security (part of the merged Admin Report) ───────────── */}
+      {activeTab === 'admin' && isAdmin && confidentialData && (
+        <div className="mt-6 pt-6 border-t border-border">
           {/* Badge + export */}
           <div className="flex items-center gap-3 mb-4">
             <div className="bg-red-600 text-white px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-2">
@@ -1374,32 +1392,64 @@ export function Reports() {
             </div>
           </div>
 
-          {/* User Activity Log */}
+          {/* Activity Log */}
           <div className="bg-card border border-border rounded-2xl p-6 mb-4">
-            <h4 className="text-base font-semibold text-foreground mb-4">User Activity Log</h4>
-            <div className="space-y-2">
-              {users.length === 0 ? (
-                <p className="py-6 text-center text-sm text-muted-foreground">No user data available</p>
-              ) : users.map(u => (
-                <div key={u.id} className="flex items-center justify-between p-3 bg-muted/30 rounded-xl">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0 ${
-                      u.role === 'admin' ? 'bg-red-600' : u.role === 'manager' ? 'bg-primary' : 'bg-secondary'
-                    }`}>
-                      {(u.name || '?').charAt(0).toUpperCase()}
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-foreground">{u.name}</p>
-                      <p className="text-xs text-muted-foreground">{u.email}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className={`px-2 py-1 rounded-lg text-xs font-medium capitalize ${statusPill(u.role)}`}>{u.role}</span>
-                    <span className={`px-2 py-1 rounded-lg text-xs font-medium capitalize ${statusPill(u.status)}`}>{u.status}</span>
-                    <p className="text-xs text-muted-foreground w-28 text-right">{u.lastLogin || '—'}</p>
-                  </div>
-                </div>
-              ))}
+            <div className="flex items-center gap-2 mb-1">
+              <Activity className="w-4 h-4 text-primary" />
+              <h4 className="text-base font-semibold text-foreground">Activity Log</h4>
+            </div>
+            <p className="text-xs text-muted-foreground mb-4">
+              Review recorded inventory actions and staff activity. {activityLog.length} of {auditTrail.length} entr{auditTrail.length === 1 ? 'y' : 'ies'}.
+            </p>
+
+            <div className="mb-4 grid gap-3 md:grid-cols-5">
+              <input type="date" value={activityDateFrom} onChange={(e) => setActivityDateFrom(e.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm bg-background" />
+              <input type="date" value={activityDateTo} onChange={(e) => setActivityDateTo(e.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm bg-background" />
+              <select value={activityUserFilter} onChange={(e) => setActivityUserFilter(e.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm bg-background">
+                <option value="All">All Users</option>
+                {activityUsers.map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}
+              </select>
+              <select value={activityModuleFilter} onChange={(e) => setActivityModuleFilter(e.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm bg-background">
+                {activityModules.map((m) => <option key={m} value={m}>{m === 'All' ? 'All Modules' : m}</option>)}
+              </select>
+              <select value={activityActionFilter} onChange={(e) => setActivityActionFilter(e.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm bg-background">
+                {activityActions.map((a) => <option key={a} value={a}>{a === 'All' ? 'All Actions' : a}</option>)}
+              </select>
+              <div className="relative md:col-span-5">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <input value={activityQuery} onChange={(e) => setActivityQuery(e.target.value)} placeholder="Search activity details..." className="w-full rounded-lg border border-border py-2 pl-9 pr-3 text-sm bg-background" />
+              </div>
+            </div>
+
+            <div className="overflow-x-auto rounded-lg border border-border">
+              <table className="w-full text-sm min-w-[760px]">
+                <thead className="bg-muted/50">
+                  <tr>
+                    <th className="px-4 py-3 text-left font-semibold text-foreground">Date &amp; Time</th>
+                    <th className="px-4 py-3 text-left font-semibold text-foreground">User</th>
+                    <th className="px-4 py-3 text-left font-semibold text-foreground">Role</th>
+                    <th className="px-4 py-3 text-left font-semibold text-foreground">Module</th>
+                    <th className="px-4 py-3 text-left font-semibold text-foreground">Action</th>
+                    <th className="px-4 py-3 text-left font-semibold text-foreground">Details</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {activityLog.length === 0 ? (
+                    <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">No activity found.</td></tr>
+                  ) : activityLog.slice(0, 200).map((entry) => (
+                    <tr key={entry.id} className="align-top hover:bg-muted/30 transition-colors">
+                      <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">{formatAuditDate(entry.date)}</td>
+                      <td className="px-4 py-3 text-foreground">{entry.performedByName || 'System'}</td>
+                      <td className="px-4 py-3"><span className="capitalize">{entry.performedByRole || '—'}</span></td>
+                      <td className="px-4 py-3"><span className="inline-flex rounded-lg bg-muted px-2 py-1 text-xs font-medium text-foreground">{entry.module}</span></td>
+                      <td className="px-4 py-3 capitalize text-foreground">{entry.action.toLowerCase()}</td>
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {[entry.item && `${entry.item}${entry.quantity ? ` (${entry.quantity})` : ''}`, entry.details].filter(Boolean).join(' — ') || '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
 

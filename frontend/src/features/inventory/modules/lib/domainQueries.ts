@@ -241,7 +241,7 @@ export function useSalesQuery<TData = ApiSale[]>(
 }
 
 export function useBundlesQuery<TData = ApiBundle[]>(
-  params?: { status?: string },
+  params?: { status?: string; archived?: boolean },
   options?: SelectOptions<ApiBundle[], TData>,
 ) {
   return useQuery({

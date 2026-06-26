@@ -245,6 +245,60 @@ export class InventoryApiController {
     return this.inventoryApiService.listBundles(request.headers, query);
   }
 
+  @Post('bundles')
+  createBundle(@Req() request: RequestLike, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.createBundle(request.headers, body);
+  }
+
+  @Get('bundles/:id')
+  getBundle(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.getBundle(request.headers, id);
+  }
+
+  @Patch('bundles/:id')
+  updateBundle(@Req() request: RequestLike, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.updateBundle(request.headers, id, body);
+  }
+
+  @Patch('bundles/:id/approve')
+  approveBundle(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.approveBundle(request.headers, id);
+  }
+
+  @Patch('bundles/:id/reject')
+  rejectBundle(
+    @Req() request: RequestLike,
+    @Param('id') id: string,
+    @Body() body: { rejectionReason?: string; reason?: string },
+  ) {
+    return this.inventoryApiService.rejectBundle(request.headers, id, body);
+  }
+
+  @Patch('bundles/:id/activate')
+  activateBundle(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.activateBundle(request.headers, id);
+  }
+
+  @Patch('bundles/:id/deactivate')
+  deactivateBundle(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.deactivateBundle(request.headers, id);
+  }
+
+  @Patch('bundles/:id/archive')
+  archiveBundle(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.archiveBundle(request.headers, id);
+  }
+
+  @Post('bundles/:id/restore')
+  restoreBundle(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.restoreBundle(request.headers, id);
+  }
+
+  @Delete('bundles/:id')
+  deleteBundle(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.deleteBundle(request.headers, id);
+  }
+
   @Get('adjustments')
   listAdjustments(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
     return this.inventoryApiService.listAdjustments(request.headers, query);
