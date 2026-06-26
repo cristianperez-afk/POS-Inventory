@@ -250,7 +250,7 @@ export function useBundlesQuery<TData = ApiBundle[]>(
 }
 
 export function useRecipesQuery<TData = ApiRecipe[]>(
-  params?: { active?: boolean },
+  params?: { active?: boolean; archived?: boolean },
   options?: SelectOptions<ApiRecipe[], TData>,
 ) {
   return useQuery({

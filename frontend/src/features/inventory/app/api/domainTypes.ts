@@ -287,6 +287,7 @@ export interface ApiRecipe {
   targetFoodCost?: number | null;
   sellingPrice?: number | null;
   isActive: boolean;
+  archivedAt?: string | null;
   imageUrl?: string | null;
   isVegetarian: boolean;
   isVegan: boolean;
