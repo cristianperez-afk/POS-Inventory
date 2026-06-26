@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type WheelEvent } from "react";
 import { ChefHat, Plus, Search, Edit, Trash2, X, Save, Calculator, Scale, Upload, Archive, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "../../app/hooks/useSession";
@@ -28,6 +28,13 @@ type Ingredient = {
   unitCost: number;
   totalCost: number;
 };
+
+const preventNumberWheel = (event: WheelEvent<HTMLInputElement>) => {
+  event.currentTarget.blur();
+};
+
+const numberInputClassName =
+  "[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none";
 
 type RecipeModifier = {
   id: string;
@@ -1315,10 +1322,13 @@ export function RecipeBOM() {
                     id="servings"
                     name="servings"
                     type="number"
+                    step="any"
+                    inputMode="decimal"
                     min="1"
                     value={newRecipe.servings}
+                    onWheel={preventNumberWheel}
                     onChange={handleInputChange}
-                    className="w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                    className={`w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${numberInputClassName}`}
                     required
                   />
                 </div>
@@ -1333,10 +1343,12 @@ export function RecipeBOM() {
                     type="number"
                     min="1"
                     max="100"
-                    step="0.01"
+                    step="any"
+                    inputMode="decimal"
                     value={newRecipe.yieldPercentage}
+                    onWheel={preventNumberWheel}
                     onChange={handleInputChange}
-                    className="w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                    className={`w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${numberInputClassName}`}
                     required
                   />
                 </div>
@@ -1351,10 +1363,12 @@ export function RecipeBOM() {
                     type="number"
                     min="1"
                     max="100"
-                    step="0.01"
+                    step="any"
+                    inputMode="decimal"
                     value={newRecipe.targetFoodCost}
+                    onWheel={preventNumberWheel}
                     onChange={handleInputChange}
-                    className="w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                    className={`w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${numberInputClassName}`}
                     required
                   />
                   <p className="mt-1 text-[11px] text-muted-foreground">Used to compute the suggested price from current ingredient cost.</p>
@@ -1369,11 +1383,13 @@ export function RecipeBOM() {
                     name="sellingPrice"
                     type="number"
                     min="0.01"
-                    step="0.01"
+                    step="any"
+                    inputMode="decimal"
                     value={newRecipe.sellingPrice}
+                    onWheel={preventNumberWheel}
                     onChange={handleInputChange}
                     placeholder={formatMoney(calculateSuggestedSellingPrice())}
-                    className="w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                    className={`w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${numberInputClassName}`}
                   />
                   <p className="mt-1 text-[11px] text-muted-foreground">Leave blank to use the suggested price; edit this when the client wants a different menu price.</p>
                 </div>
@@ -1386,10 +1402,13 @@ export function RecipeBOM() {
                     id="prepTime"
                     name="prepTime"
                     type="number"
+                    step="any"
+                    inputMode="decimal"
                     min="0"
                     value={newRecipe.prepTime}
+                    onWheel={preventNumberWheel}
                     onChange={handleInputChange}
-                    className="w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                    className={`w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${numberInputClassName}`}
                     required
                   />
                 </div>
@@ -1475,11 +1494,13 @@ export function RecipeBOM() {
                       id="quantity"
                       name="quantity"
                       type="number"
-                      step="0.01"
+                      step="any"
+                      inputMode="decimal"
                       min="0.01"
                       value={currentIngredient.quantity}
+                      onWheel={preventNumberWheel}
                       onChange={handleIngredientInputChange}
-                      className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                      className={`w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${numberInputClassName}`}
                     />
                   </div>
 
@@ -1509,10 +1530,12 @@ export function RecipeBOM() {
                       id="unitCost"
                       name="unitCost"
                       type="number"
-                      step="0.01"
+                      step="any"
+                      inputMode="decimal"
                       value={currentIngredient.unitCost}
+                      onWheel={preventNumberWheel}
                       onChange={handleIngredientInputChange}
-                      className="w-full px-3 py-2 text-sm bg-muted/50 border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                      className={`w-full px-3 py-2 text-sm bg-muted/50 border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${numberInputClassName}`}
                       readOnly
                     />
                   </div>

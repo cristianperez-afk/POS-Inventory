@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type WheelEvent } from "react";
 import { Apple, PhilippinePeso, Hash, Folder, Save, X, Calendar, Plus, FolderPlus, ShieldAlert, Check } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "../../app/hooks/useSession";
@@ -59,6 +59,13 @@ const splitCategory = (value: string | undefined) => {
   const [main = "", sub = ""] = (value || "").split(" > ");
   return { main, sub };
 };
+
+const preventNumberWheel = (event: WheelEvent<HTMLInputElement>) => {
+  event.currentTarget.blur();
+};
+
+const numberInputClassName =
+  "[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none";
 
 export function AddProduct({ onClose }: { onClose?: () => void } = {}) {
   const { currentUser } = useSession();
@@ -608,11 +615,13 @@ export function AddProduct({ onClose }: { onClose?: () => void } = {}) {
                       id="price"
                       name="price"
                       type="number"
-                      step="0.01"
+                      step="any"
+                      inputMode="decimal"
                       value={formData.price}
+                      onWheel={preventNumberWheel}
                       onChange={handleChange}
                       placeholder="0.00"
-                      className="w-full pl-10 pr-2 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary transition-all"
+                      className={`w-full pl-10 pr-2 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary transition-all ${numberInputClassName}`}
                       required
                     />
                   </div>
@@ -626,10 +635,13 @@ export function AddProduct({ onClose }: { onClose?: () => void } = {}) {
                     id="stock"
                     name="stock"
                     type="number"
+                    step="any"
+                    inputMode="decimal"
                     value={formData.stock}
+                    onWheel={preventNumberWheel}
                     onChange={handleChange}
                     placeholder="0"
-                    className="w-full px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary transition-all"
+                    className={`w-full px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary transition-all ${numberInputClassName}`}
                     required
                   />
                 </div>
@@ -665,10 +677,13 @@ export function AddProduct({ onClose }: { onClose?: () => void } = {}) {
                     id="minStock"
                     name="minStock"
                     type="number"
+                    step="any"
+                    inputMode="decimal"
                     value={formData.minStock}
+                    onWheel={preventNumberWheel}
                     onChange={handleChange}
                     placeholder="Critical threshold"
-                    className="w-full px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary transition-all"
+                    className={`w-full px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary transition-all ${numberInputClassName}`}
                   />
                 </div>
 
@@ -680,10 +695,13 @@ export function AddProduct({ onClose }: { onClose?: () => void } = {}) {
                     id="maxStock"
                     name="maxStock"
                     type="number"
+                    step="any"
+                    inputMode="decimal"
                     value={formData.maxStock}
+                    onWheel={preventNumberWheel}
                     onChange={handleChange}
                     placeholder="Maximum capacity"
-                    className="w-full px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary transition-all"
+                    className={`w-full px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary transition-all ${numberInputClassName}`}
                   />
                 </div>
 
@@ -695,10 +713,13 @@ export function AddProduct({ onClose }: { onClose?: () => void } = {}) {
                     id="reorderPoint"
                     name="reorderPoint"
                     type="number"
+                    step="any"
+                    inputMode="decimal"
                     value={formData.reorderPoint}
+                    onWheel={preventNumberWheel}
                     onChange={handleChange}
                     placeholder="Low stock threshold"
-                    className="w-full px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary transition-all"
+                    className={`w-full px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary transition-all ${numberInputClassName}`}
                   />
                 </div>
 

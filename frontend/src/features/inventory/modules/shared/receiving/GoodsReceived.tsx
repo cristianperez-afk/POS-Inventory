@@ -1,4 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
+import type { WheelEvent } from 'react';
 import {
   Search,
   X,
@@ -9,6 +10,15 @@ import {
   Eye,
   Upload,
 } from 'lucide-react';
+
+const preventNumberWheel = (event: WheelEvent<HTMLInputElement>) => {
+  event.currentTarget.blur();
+};
+
+const parseDecimalInput = (value: string) => {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
 
 // ─── Shared types ────────────────────────────────────────────────────────────
 // One PO line awaiting receipt. `orderedQty` is the quantity still to receive.
@@ -716,27 +726,33 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
                         <label className="block text-[12px] font-medium text-[#323B42] mb-2">Accepted Qty *</label>
                         <input
                           type="number"
+                          step="any"
+                          inputMode="decimal"
                           min="0"
                           max={line.orderedQty}
                           value={draft.acceptedQty}
+                          onWheel={preventNumberWheel}
                           onChange={(e) =>
-                            patchDraft(line.id, line, { acceptedQty: parseInt(e.target.value) || 0 })
+                            patchDraft(line.id, line, { acceptedQty: parseDecimalInput(e.target.value) })
                           }
-                          className="w-full px-3 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+                          className="w-full px-3 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E] [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                         />
                       </div>
                       <div>
                         <label className="block text-[12px] font-medium text-[#323B42] mb-2">Rejected Qty</label>
                         <input
                           type="number"
+                          step="any"
+                          inputMode="decimal"
                           min="0"
                           max={line.orderedQty - draft.acceptedQty}
                           value={draft.rejectedQty}
                           disabled={rejectedMode === 'auto-remainder'}
+                          onWheel={preventNumberWheel}
                           onChange={(e) =>
-                            patchDraft(line.id, line, { rejectedQty: parseInt(e.target.value) || 0 })
+                            patchDraft(line.id, line, { rejectedQty: parseDecimalInput(e.target.value) })
                           }
-                          className={`w-full px-3 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E] ${
+                          className={`w-full px-3 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E] [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none ${
                             rejectedMode === 'auto-remainder' ? 'bg-[#e9ecef] cursor-not-allowed' : ''
                           }`}
                         />

@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { useSession } from "../../app/hooks/useSession";
 import { PurchaseOrderItemInput, PurchaseOrderItemInputValue } from "./PurchaseOrderItemInput";
 import {
+  useArchiveRestaurantSupplierMutation,
   useApproveRestaurantPurchaseOrderMutation,
   useCancelRestaurantPurchaseOrderMutation,
   useCreateRestaurantSupplierMutation,
@@ -11,6 +12,8 @@ import {
   useRestaurantGlobalProductsQuery,
   useRestaurantPurchaseOrdersQuery,
   useRestaurantSuppliersQuery,
+  useRestoreRestaurantSupplierMutation,
+  useUpdateRestaurantSupplierMutation,
   useRestaurantUsersQuery,
   useSaveRestaurantPurchaseOrderMutation,
 } from "../lib/restaurant";
@@ -265,11 +268,15 @@ export function PurchaseOrders() {
   };
 
   const { data: suppliers = [] } = useRestaurantSuppliersQuery();
+  const { data: archivedSuppliers = [] } = useRestaurantSuppliersQuery({ isActive: false, enabled: userRole === "admin" });
   const saveOrder = useSaveRestaurantPurchaseOrderMutation();
   const approveOrder = useApproveRestaurantPurchaseOrderMutation();
   const rejectOrder = useRejectRestaurantPurchaseOrderMutation();
   const cancelOrder = useCancelRestaurantPurchaseOrderMutation();
   const addSupplier = useCreateRestaurantSupplierMutation();
+  const updateSupplier = useUpdateRestaurantSupplierMutation();
+  const archiveSupplier = useArchiveRestaurantSupplierMutation();
+  const restoreSupplier = useRestoreRestaurantSupplierMutation();
 
   // Get available products from selected supplier
   const availableProducts = newOrder.supplier
@@ -1196,6 +1203,14 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
           phone: s.phone,
           address: s.address,
         }))}
+        archivedSuppliers={archivedSuppliers.map((s) => ({
+          id: s.backendId ?? s.id,
+          name: s.name,
+          contactPerson: s.contact,
+          email: s.email,
+          phone: s.phone,
+          address: s.address,
+        }))}
         fields={[
           { key: 'name', label: 'Supplier Name', required: true, placeholder: 'e.g., Fresh Farms Co.' },
           { key: 'contactPerson', label: 'Contact Person', required: true, placeholder: 'e.g., John Doe' },
@@ -1213,6 +1228,33 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
           });
           setNewOrder((prev) => ({ ...prev, supplier: payload.name }));
         }}
+        onUpdate={async (id, payload) => {
+          const previousSupplierName = suppliers.find((supplier) => (supplier.backendId ?? supplier.id) === id)?.name;
+          await updateSupplier.mutateAsync({
+            id,
+            data: {
+              name: payload.name,
+              contactPerson: payload.contactPerson,
+              email: payload.email,
+              phone: payload.phone,
+              address: payload.address,
+            },
+          });
+          if (previousSupplierName) {
+            setNewOrder((prev) => prev.supplier === previousSupplierName ? { ...prev, supplier: payload.name } : prev);
+          }
+        }}
+        onArchive={async (id) => {
+          const archivedSupplierName = suppliers.find((supplier) => (supplier.backendId ?? supplier.id) === id)?.name;
+          await archiveSupplier.mutateAsync(id);
+          if (archivedSupplierName) {
+            setNewOrder((prev) => prev.supplier === archivedSupplierName ? { ...prev, supplier: '' } : prev);
+          }
+        }}
+        onRestore={async (id) => {
+          await restoreSupplier.mutateAsync(id);
+        }}
+        canManage={userRole === "admin"}
       />
 
       {/* Pending Approval Modal */}

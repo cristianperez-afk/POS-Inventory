@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { Plus, X, Search, Package, ShoppingCart, CheckCircle, XCircle, Clock, Eye, Users, Trash2 } from 'lucide-react';
 import {
+  useArchiveRetailSupplierMutation,
   useApproveRetailPurchaseOrderMutation,
   useCancelRetailPurchaseOrderMutation,
   useCreateRetailPurchaseOrderMutation,
@@ -11,8 +12,10 @@ import {
   useRetailLocationsQuery,
   useRetailPurchaseOrderRecordsQuery,
   useRetailSuppliersQuery,
+  useRestoreRetailSupplierMutation,
   useSaveRetailInventoryMutation,
   useSubmitRetailPurchaseOrderMutation,
+  useUpdateRetailSupplierMutation,
 } from '../lib/retail';
 import { categorySubcategories, generalMerchandiseSubcategories } from '../../app/utils/constants';
 import { SuppliersManager, type NormalizedSupplier } from '../shared/suppliers/SuppliersManager';
@@ -101,8 +104,10 @@ export default function PurchaseOrdersView({
 }: {
   currentUser: { email: string; role: string } | null;
 }) {
+  const isAdmin = currentUser?.role === 'Admin';
   const ordersQuery = useRetailPurchaseOrderRecordsQuery();
   const suppliersQuery = useRetailSuppliersQuery();
+  const archivedSuppliersQuery = useRetailSuppliersQuery({ isActive: false, enabled: isAdmin });
   const inventoryQuery = useRetailInventoryRecordsQuery();
   const locationsQuery = useRetailLocationsQuery();
   const createPurchaseOrderMutation = useCreateRetailPurchaseOrderMutation();
@@ -111,9 +116,13 @@ export default function PurchaseOrdersView({
   const rejectPurchaseOrderMutation = useRejectRetailPurchaseOrderMutation();
   const cancelPurchaseOrderMutation = useCancelRetailPurchaseOrderMutation();
   const createSupplierMutation = useCreateRetailSupplierMutation();
+  const updateSupplierMutation = useUpdateRetailSupplierMutation();
+  const archiveSupplierMutation = useArchiveRetailSupplierMutation();
+  const restoreSupplierMutation = useRestoreRetailSupplierMutation();
   const saveInventoryMutation = useSaveRetailInventoryMutation();
   const orders = ordersQuery.data ?? [];
   const suppliers = suppliersQuery.data ?? [];
+  const archivedSuppliers = archivedSuppliersQuery.data ?? [];
   const inventory = inventoryQuery.data ?? [];
   const locations = locationsQuery.data ?? [];
   const loading = ordersQuery.isLoading || suppliersQuery.isLoading || inventoryQuery.isLoading;
@@ -381,7 +390,6 @@ export default function PurchaseOrdersView({
         : o.status === filterStatus,
   );
   const submittedPOs = orders.filter(o => o.status === 'SUBMITTED');
-  const isAdmin = currentUser?.role === 'Admin';
 
   const getDeliveryDelayBadge = (order: { expectedDelivery?: string | null; status: string }) => {
     if (!isPurchaseOrderDelayed(order.expectedDelivery, order.status, now)) return null;
@@ -949,6 +957,7 @@ export default function PurchaseOrdersView({
         open={showSuppliersModal}
         onClose={() => setShowSuppliersModal(false)}
         suppliers={suppliers as NormalizedSupplier[]}
+        archivedSuppliers={archivedSuppliers as NormalizedSupplier[]}
         fields={[
           { key: 'name', label: 'Name', required: true, placeholder: 'Supplier name' },
           { key: 'contactPerson', label: 'Contact Person', placeholder: 'Contact name' },
@@ -960,6 +969,22 @@ export default function PurchaseOrdersView({
         onCreate={async (payload) => {
           await createSupplierMutation.mutateAsync(payload);
         }}
+        onUpdate={async (id, payload) => {
+          await updateSupplierMutation.mutateAsync({ id, data: payload });
+          setPOForm((current) =>
+            current.supplierId === id ? { ...current, supplierName: payload.name } : current
+          );
+        }}
+        onArchive={async (id) => {
+          await archiveSupplierMutation.mutateAsync(id);
+          setPOForm((current) =>
+            current.supplierId === id ? { ...current, supplierId: undefined, supplierName: '' } : current
+          );
+        }}
+        onRestore={async (id) => {
+          await restoreSupplierMutation.mutateAsync(id);
+        }}
+        canManage={isAdmin}
         onSelectSupplier={(s) => {
           setPOForm({ ...poForm, supplierId: s.id, supplierName: s.name });
           setShowSuppliersModal(false);

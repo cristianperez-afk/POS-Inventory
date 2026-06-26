@@ -1220,6 +1220,9 @@ export class InventoryApiService {
 
   async listSuppliers(headers: HeadersLike, query: Record<string, string | undefined>) {
     const scope = await this.resolveScope(headers);
+    if (query.isActive === 'false' && scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can view archived suppliers.');
+    }
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
         SELECT *
@@ -1273,6 +1276,24 @@ export class InventoryApiService {
 
   async updateSupplier(headers: HeadersLike, id: string, body: Record<string, unknown>) {
     const scope = await this.resolveScope(headers);
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can edit or archive suppliers.');
+    }
+    if (body.name !== undefined) {
+      const name = String(body.name ?? '').trim();
+      if (!name) throw new BadRequestException('Supplier name is required.');
+      const existing = await this.safeQuery<{ id: string }>(
+        `SELECT id FROM "Supplier"
+         WHERE "businessId" = $1
+           AND module = $2::"BusinessModule"
+           AND lower(name) = lower($3)
+           AND id <> $4
+         LIMIT 1`,
+        [scope.businessId, scope.module, name, id],
+      );
+      if (existing[0]) throw new ConflictException(`Supplier "${name}" already exists`);
+      body.name = name;
+    }
     const allowed = ['name', 'contactPerson', 'email', 'phone', 'address', 'category', 'categoryId', 'isActive'];
     const sets: string[] = [];
     const params: unknown[] = [];
@@ -1301,8 +1322,15 @@ export class InventoryApiService {
 
   async deleteSupplier(headers: HeadersLike, id: string) {
     const scope = await this.resolveScope(headers);
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can archive suppliers.');
+    }
     const rows = await this.safeQuery<{ id: string }>(
-      `DELETE FROM "Supplier" WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule" RETURNING id`,
+      `UPDATE "Supplier"
+       SET "isActive" = FALSE,
+           "updatedAt" = CURRENT_TIMESTAMP
+       WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule"
+       RETURNING id`,
       [id, scope.businessId, scope.module],
     );
     if (!rows[0]) throw new NotFoundException(`Supplier #${id} not found`);
