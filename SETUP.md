@@ -82,6 +82,7 @@ Use these Render backend environment variables:
 ```env
 DATABASE_URL=postgresql://postgres.<project-ref>:<password>@<pooler-host>:6543/postgres?sslmode=no-verify
 DIRECT_URL=postgresql://postgres.<project-ref>:<password>@<pooler-host>:5432/postgres?sslmode=no-verify
+DB_POOL_MAX=1
 ```
 
 Keep the backend build command:
@@ -91,3 +92,11 @@ npm install && npm run db:deploy
 ```
 
 If Render fails with `P1001` against `db.<project-ref>.supabase.co:5432`, `DIRECT_URL` is using Supabase's direct IPv6 host. Replace it with the session pooler URL above, or enable Supabase's IPv4 add-on.
+
+If Render fails with `P3005` because the database schema is not empty, the database already has tables but no Prisma migration history. If this is the intended existing database and it already matches this repo schema, add this Render env var for one deploy:
+
+```env
+PRISMA_BASELINE_EXISTING_DB=true
+```
+
+Redeploy once, then remove `PRISMA_BASELINE_EXISTING_DB` after the deploy succeeds. The deploy script will mark the existing migrations as applied and future deploys will run normal pending migrations only.
