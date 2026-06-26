@@ -96,7 +96,8 @@ export default function App() {
       const parsedUser = JSON.parse(savedUser) as AuthenticatedUser;
       const savedPage = window.sessionStorage.getItem(SESSION_PAGE_KEY) as Page | null;
       const defaultPage = getDefaultPageForUser(parsedUser);
-      const nextPage = savedPage && savedPage !== 'login' && canAccessPage(parsedUser, savedPage) ? savedPage : defaultPage;
+      const normalizedSavedPage = savedPage && savedPage !== 'login' ? normalizePageForUserStore(parsedUser, savedPage) : savedPage;
+      const nextPage = normalizedSavedPage && normalizedSavedPage !== 'login' && canAccessPage(parsedUser, normalizedSavedPage) ? normalizedSavedPage : defaultPage;
       setCurrentUser(parsedUser);
       setCurrentPage(nextPage);
       window.sessionStorage.setItem(SESSION_PAGE_KEY, nextPage);
@@ -199,6 +200,10 @@ export default function App() {
   const navigateTo = (page: Page) => {
     if (page === 'inventory-user-management') {
       page = 'admin-dashboard';
+    }
+
+    if (currentUser) {
+      page = normalizePageForUserStore(currentUser, page);
     }
 
     if (isInventoryPage(page) && !INVENTORY_MODULES_ENABLED) {
@@ -310,6 +315,7 @@ export default function App() {
                   isAdmin={isStoreAdminUser}
                   storeBrand={storeBrand}
                   userName={currentUser?.full_name}
+                  userRole={currentUser?.role}
                   storeType={currentUser?.store_type}
                   staffType={currentUser?.staff_type}
                 />
@@ -417,6 +423,12 @@ function isInventoryManagerUser(user: AuthenticatedUser | null | undefined) {
   return user.role === 'ADMIN' && user.staff_type === 'INVENTORY_STAFF';
 }
 
+function normalizePageForUserStore(user: AuthenticatedUser, page: Page): Page {
+  if (user.store_type === 'RETAIL_STORE' && page === 'reports') return 'retail-reports';
+  if (user.store_type === 'RESTAURANT' && page === 'retail-reports') return 'reports';
+  return page;
+}
+
 function isInventoryPage(page: Page) {
   return page.startsWith('inventory-');
 }
@@ -441,26 +453,14 @@ function canAccessPage(user: AuthenticatedUser, page: Page) {
   if (user.role === 'ADMIN') {
     return [
       'admin-dashboard',
-      'retail-pos-dashboard',
-      'retail-transactions',
-      'retail-reports',
-      'pos-dashboard',
-      'order-list',
-      'reports',
       'activity-log',
       'store-information',
       'store-settings',
-    ].includes(page) || isInventoryPage(page);
+    ].includes(page) || isManagerPosPageForStore(user, page) || isInventoryPage(page);
   }
 
   if (isPosManagerUser(user)) {
-    return [
-      'retail-pos-dashboard',
-      'retail-transactions',
-      'retail-reports',
-      'pos-dashboard',
-      'order-list',
-      'reports',
+    return isManagerPosPageForStore(user, page) || [
       'activity-log',
       'store-information',
       'store-settings',
@@ -473,6 +473,59 @@ function canAccessPage(user: AuthenticatedUser, page: Page) {
 
   if (user.staff_type === 'INVENTORY_STAFF') {
     return isInventoryPage(page);
+  }
+
+  return isPosPageForStore(user, page);
+}
+
+function isManagerPosPageForStore(user: AuthenticatedUser, page: Page) {
+  if (user.store_type === 'RETAIL_STORE') {
+    return [
+      'retail-pos-dashboard',
+      'retail-transactions',
+      'retail-reports',
+    ].includes(page);
+  }
+
+  if (user.store_type === 'RESTAURANT') {
+    return [
+      'pos-dashboard',
+      'order-list',
+      'reports',
+    ].includes(page);
+  }
+
+  return [
+    'retail-pos-dashboard',
+    'retail-transactions',
+    'retail-reports',
+    'pos-dashboard',
+    'order-list',
+    'reports',
+  ].includes(page);
+}
+
+function isPosPageForStore(user: AuthenticatedUser, page: Page) {
+  if (user.store_type === 'RETAIL_STORE') {
+    return [
+      'retail-dashboard',
+      'retail-pos-dashboard',
+      'retail-sales',
+      'retail-transactions',
+      'retail-reports',
+    ].includes(page);
+  }
+
+  if (user.store_type === 'RESTAURANT') {
+    return [
+      'pos-dashboard',
+      'create-order',
+      'table-management',
+      'payment',
+      'receipt',
+      'order-list',
+      'reports',
+    ].includes(page);
   }
 
   return isPosPage(page);

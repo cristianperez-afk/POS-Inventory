@@ -641,7 +641,8 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
     <div className="flex h-screen bg-background">
       <Sidebar currentPage="retail-sales" onNavigate={onNavigate} onLogout={onLogout} storeType={storeType} staffType={staffType} storeBrand={storeBrand} userName={userName} userRole={userRole} />
 
-      <div className="flex-1 overflow-auto bg-gray-50">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-gray-50 xl:flex-row">
+      <div className="min-w-0 flex-1 overflow-auto bg-gray-50">
         <div className="p-5">
           <h2 className="mb-4 text-lg font-semibold">Product Menu</h2>
 
@@ -827,7 +828,7 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
       </div>
 
       {/* Right sidebar - Cart */}
-      <div className="w-[420px] bg-white border-l border-border p-5 flex flex-col">
+      <div className="flex max-h-[48vh] w-full shrink-0 flex-col border-t border-border bg-white p-5 xl:max-h-none xl:w-[clamp(480px,34vw,620px)] xl:border-l xl:border-t-0">
         <div className="mb-6 flex items-center gap-3">
           <ShoppingBag className="h-5 w-5 text-emerald-600" />
           <h3 className="text-base font-semibold">Shopping Cart</h3>
@@ -866,9 +867,9 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
           </button>
         </div>
 
-        <div className="mb-4 overflow-hidden rounded-lg border border-border">
-          <div className="max-h-[248px] overflow-auto">
-            <table className="w-full border-collapse text-sm">
+        <div className="mb-4 min-h-0 overflow-hidden rounded-lg border border-border xl:flex-1">
+          <div className="max-h-[248px] overflow-auto xl:h-full xl:max-h-none">
+            <table className="w-full min-w-[540px] border-collapse text-sm">
               <thead className="sticky top-0 bg-white shadow-[0_1px_0_#e5e7eb]">
                 <tr className="text-left text-xs font-semibold text-foreground">
                   <th className="w-10 border-r border-border px-3 py-3 text-center">#</th>
@@ -1090,6 +1091,7 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
           Proceed to Checkout
         </button>
         </div>
+      </div>
       </div>
 
       {showVoidModal && (
