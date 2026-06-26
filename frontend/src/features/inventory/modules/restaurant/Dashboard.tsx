@@ -465,7 +465,7 @@ export function Dashboard() {
             {pendingOrders.map((order) => (
               <div
                 key={order.id}
-                className="flex items-center justify-between p-4 bg-amber-50 border border-amber-200 rounded-xl"
+                className="flex items-center justify-between p-4 bg-amber-50 border border-amber-200 rounded-xl text-slate-900"
               >
                 <div className="flex items-center gap-4">
                   <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center border border-amber-200">
@@ -473,24 +473,24 @@ export function Dashboard() {
                   </div>
                   <div>
                     <div className="flex items-center gap-2 mb-1">
-                      <h3 className="font-semibold text-foreground">{order.id}</h3>
+                      <h3 className="font-semibold text-slate-950">{order.id}</h3>
                       <span className="px-2 py-0.5 bg-amber-200 text-amber-800 rounded text-xs font-medium">
                         Pending Approval
                       </span>
                     </div>
-                    <p className="text-sm text-muted-foreground">
-                      Supplier: <span className="font-medium text-foreground">{order.supplier}</span> •
-                      Created by: <span className="font-medium text-foreground">{order.createdBy}</span> •
+                    <p className="text-sm text-slate-700">
+                      Supplier: <span className="font-medium text-slate-950">{order.supplier}</span> •
+                      Created by: <span className="font-medium text-slate-950">{order.createdBy}</span> •
                       {order.items} item{order.items !== 1 ? 's' : ''}
                     </p>
-                    <p className="text-xs text-muted-foreground mt-1">
+                    <p className="text-xs text-slate-600 mt-1">
                       Expected Delivery: {new Date(order.expectedDelivery).toLocaleDateString()}
                     </p>
                   </div>
                 </div>
                 <div className="text-right">
-                  <p className="text-xs text-muted-foreground">Total Amount</p>
-                  <p className="text-lg font-bold text-foreground">₱{order.total.toLocaleString()}</p>
+                  <p className="text-xs text-slate-600">Total Amount</p>
+                  <p className="text-lg font-bold text-slate-950">₱{order.total.toLocaleString()}</p>
                 </div>
               </div>
             ))}

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { History, LogOut, PanelLeftClose, PanelLeftOpen, Search, StoreIcon, UserPlus } from 'lucide-react';
+import { History, LogOut, PanelLeftClose, PanelLeftOpen, Search, Settings, StoreIcon, UserPlus } from 'lucide-react';
 import { getApiBaseUrl } from '../../auth/services/auth';
 import type { AuthenticatedUser } from '../../auth/types/auth';
 import type { Page, StoreBrand } from '../App';
@@ -203,29 +203,29 @@ function ActivityLogContent({
         <p className="text-sm text-muted-foreground">Review important POS actions and staff activity.</p>
       </div>
 
-      <div className="mb-5 grid gap-3 rounded-lg border border-border bg-white p-4 md:grid-cols-5">
-        <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm" />
-        <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm" />
-        <select value={userFilter} onChange={(event) => setUserFilter(event.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm">
+      <div className="mb-5 grid gap-3 rounded-lg border border-border bg-card p-4 text-foreground md:grid-cols-5">
+        <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="rounded-lg border border-border bg-input-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary" />
+        <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="rounded-lg border border-border bg-input-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary" />
+        <select value={userFilter} onChange={(event) => setUserFilter(event.target.value)} className="rounded-lg border border-border bg-input-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary">
           <option value="All">All Users</option>
           {users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
         </select>
-        <select value={moduleFilter} onChange={(event) => setModuleFilter(event.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm">
+        <select value={moduleFilter} onChange={(event) => setModuleFilter(event.target.value)} className="rounded-lg border border-border bg-input-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary">
           {modules.map((module) => <option key={module} value={module}>{module === 'All' ? 'All Modules' : module}</option>)}
         </select>
-        <select value={actionFilter} onChange={(event) => setActionFilter(event.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm">
+        <select value={actionFilter} onChange={(event) => setActionFilter(event.target.value)} className="rounded-lg border border-border bg-input-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary">
           {actions.map((action) => <option key={action} value={action}>{action === 'All' ? 'All Actions' : action}</option>)}
         </select>
         <div className="relative md:col-span-5">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search activity details..." className="w-full rounded-lg border border-border py-2 pl-9 pr-3 text-sm" />
+          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search activity details..." className="w-full rounded-lg border border-border bg-input-background py-2 pl-9 pr-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary" />
         </div>
       </div>
 
       {error && <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
 
-      <div className="overflow-hidden rounded-lg border border-border bg-white">
-        <table className="w-full text-sm">
+      <div className="overflow-hidden rounded-lg border border-border bg-card text-foreground">
+        <table className="w-full text-sm text-foreground">
           <thead className="bg-muted">
             <tr>
               <th className="px-4 py-3 text-left">Date & Time</th>
@@ -248,7 +248,7 @@ function ActivityLogContent({
                 <td className="px-4 py-3">{roleLabel(log.user_role, storeType)}</td>
                 <td className="px-4 py-3">{log.module}</td>
                 <td className="px-4 py-3">{log.action}</td>
-                <td className="whitespace-pre-line px-4 py-3 text-slate-700">{log.details}</td>
+                <td className="whitespace-pre-line px-4 py-3 text-foreground">{log.details}</td>
               </tr>
             ))}
           </tbody>
@@ -273,10 +273,10 @@ function SuperadminActivityLogLayout({
   const goToDashboard = () => onNavigate('superadmin-dashboard');
 
   return (
-    <div className="min-h-screen bg-[#f8fafc] text-[#007a5e]">
+    <div className="min-h-screen bg-background text-foreground">
       <aside
         className={`fixed inset-y-0 left-0 z-30 flex flex-col text-white transition-[width] duration-300 ease-in-out ${isSidebarCollapsed ? 'w-20 overflow-visible' : 'w-80 overflow-y-auto no-scrollbar'}`}
-        style={{ background: 'linear-gradient(180deg, #003534 0%, #007a5e 100%)' }}
+        style={{ background: 'linear-gradient(180deg, var(--sidebar) 0%, var(--primary) 100%)' }}
       >
         <div className={`relative border-b border-white/10 transition-all duration-300 ease-in-out ${isSidebarCollapsed ? 'px-3 py-4' : 'px-4 pb-4 pt-5'}`}>
           <button
@@ -316,7 +316,7 @@ function SuperadminActivityLogLayout({
           <button
             type="button"
             onClick={goToDashboard}
-            className={`mb-4 flex h-[52px] w-full items-center rounded-lg border border-transparent text-white transition hover:bg-[#007a5e]/15 hover:text-slate-100 ${
+            className={`mb-4 flex h-[52px] w-full items-center rounded-lg border border-transparent text-white transition hover:bg-primary/15 hover:text-slate-100 ${
               isSidebarCollapsed ? 'justify-center gap-0 px-0' : 'gap-4 px-4 text-left'
             }`}
           >
@@ -328,7 +328,7 @@ function SuperadminActivityLogLayout({
           <button
             type="button"
             onClick={goToDashboard}
-            className={`flex h-[52px] w-full items-center rounded-lg border border-transparent text-white transition hover:bg-[#007a5e]/15 hover:text-slate-100 ${
+            className={`flex h-[52px] w-full items-center rounded-lg border border-transparent text-white transition hover:bg-primary/15 hover:text-slate-100 ${
               isSidebarCollapsed ? 'justify-center gap-0 px-0' : 'gap-4 px-4 text-left'
             }`}
           >
@@ -340,14 +340,26 @@ function SuperadminActivityLogLayout({
           <button
             type="button"
             onClick={() => onNavigate('activity-log')}
-            className={`mt-4 flex h-[52px] w-full items-center rounded-lg border border-[#00a7a5]/25 text-white transition ${
+            className={`mt-4 flex h-[52px] w-full items-center rounded-lg border border-primary/25 text-white transition ${
               isSidebarCollapsed ? 'justify-center gap-0 px-0' : 'gap-4 px-4 text-left'
             }`}
-            style={{ background: 'linear-gradient(135deg, #008967 0%, #007a5e 100%)', boxShadow: '0 0 18px rgba(0,167,165,0.16)' }}
+            style={{ background: 'linear-gradient(135deg, var(--primary) 0%, var(--secondary-accent) 100%)', boxShadow: '0 0 18px color-mix(in srgb, var(--primary) 35%, transparent)' }}
           >
             <History className="h-6 w-6 shrink-0" strokeWidth={1.8} />
             <span className={`overflow-hidden whitespace-nowrap text-base font-semibold transition-all duration-300 ease-in-out ${isSidebarCollapsed ? 'w-0 opacity-0' : 'flex-1 opacity-100'}`}>
               {!isSidebarCollapsed && 'Activity Log'}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => onNavigate('general-settings')}
+            className={`mt-4 flex h-[52px] w-full items-center rounded-lg border border-transparent text-white transition hover:bg-primary/15 hover:text-slate-100 ${
+              isSidebarCollapsed ? 'justify-center gap-0 px-0' : 'gap-4 px-4 text-left'
+            }`}
+          >
+            <Settings className="h-6 w-6 shrink-0" strokeWidth={1.8} />
+            <span className={`overflow-hidden whitespace-nowrap text-base font-medium transition-all duration-300 ease-in-out ${isSidebarCollapsed ? 'w-0 opacity-0' : 'flex-1 opacity-100'}`}>
+              {!isSidebarCollapsed && 'Settings'}
             </span>
           </button>
         </nav>

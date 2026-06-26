@@ -275,7 +275,7 @@ export function UserManagementView({
 
       {/* Stats Cards */}
       <div className="grid grid-cols-3 gap-4 mb-6">
-        <div className="bg-white border border-border rounded-[14px] p-6">
+        <div className="bg-card border border-border rounded-[14px] p-6">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-muted-foreground text-[12px] mb-1">Total Users</p>
@@ -290,7 +290,7 @@ export function UserManagementView({
             </div>
           </div>
         </div>
-        <div className="bg-white border border-border rounded-[14px] p-6">
+        <div className="bg-card border border-border rounded-[14px] p-6">
           <p className="text-muted-foreground text-[12px] mb-3">Users by Role</p>
           <div className="space-y-2">
             <div className="flex items-center justify-between">
@@ -303,7 +303,7 @@ export function UserManagementView({
             </div>
           </div>
         </div>
-        <div className="bg-white border border-border rounded-[14px] p-6">
+        <div className="bg-card border border-border rounded-[14px] p-6">
           <p className="text-muted-foreground text-[12px] mb-1">Active Rate</p>
           <p className="text-foreground text-[28px] font-bold">
             {userStats.total > 0 ? Math.round((userStats.active / userStats.total) * 100) : 0}%
@@ -313,7 +313,7 @@ export function UserManagementView({
       </div>
 
       {/* Search and Filters */}
-      <div className="bg-white border border-border rounded-[14px] mb-4 p-4">
+      <div className="bg-card border border-border rounded-[14px] mb-4 p-4">
         <div className="flex items-center gap-4">
           <div className="flex-1 relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
@@ -330,7 +330,7 @@ export function UserManagementView({
             <select
               value={filterRole}
               onChange={(e) => setFilterRole(e.target.value)}
-              className="px-3 py-2 border border-border rounded-[8px] text-[14px] bg-white focus:outline-none focus:border-secondary"
+              className="px-3 py-2 border border-border rounded-[8px] text-[14px] bg-card focus:outline-none focus:border-secondary"
             >
               <option value="all">All Roles</option>
               <option value="Admin">Admin</option>
@@ -345,7 +345,7 @@ export function UserManagementView({
             <select
               value={filterStatus}
               onChange={(e) => setFilterStatus(e.target.value)}
-              className="px-3 py-2 border border-border rounded-[8px] text-[14px] bg-white focus:outline-none focus:border-secondary"
+              className="px-3 py-2 border border-border rounded-[8px] text-[14px] bg-card focus:outline-none focus:border-secondary"
             >
               <option value="all">All Status</option>
               <option value="Active">Active</option>
@@ -356,7 +356,7 @@ export function UserManagementView({
       </div>
 
       {/* Users List */}
-      <div className="bg-white border border-border rounded-[14px] overflow-hidden">
+      <div className="bg-card border border-border rounded-[14px] overflow-hidden">
         <table className="w-full">
           <thead className="bg-muted border-b border-border">
             <tr>
@@ -449,7 +449,7 @@ export function UserManagementView({
       {/* Add User Modal */}
       {showAddModal && (
         <div className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white rounded-[14px] p-6 w-[500px] max-h-[90vh] overflow-y-auto">
+          <div className="bg-card rounded-[14px] p-6 w-[500px] max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-[20px] font-bold text-foreground">Add New User</h3>
               <button
@@ -566,7 +566,7 @@ export function UserManagementView({
       {/* Edit User Modal */}
       {showEditModal && selectedUser && (
         <div className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white rounded-[14px] p-6 w-[500px] max-h-[90vh] overflow-y-auto">
+          <div className="bg-card rounded-[14px] p-6 w-[500px] max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-[20px] font-bold text-foreground">Edit User</h3>
               <button
@@ -667,7 +667,7 @@ export function UserManagementView({
       {/* Reset Password Modal */}
       {showPasswordModal && selectedUser && (
         <div className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white rounded-[14px] p-6 w-[500px]">
+          <div className="bg-card rounded-[14px] p-6 w-[500px]">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-[20px] font-bold text-foreground">Reset Password</h3>
               <button

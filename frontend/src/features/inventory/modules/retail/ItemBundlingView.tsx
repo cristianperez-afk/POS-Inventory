@@ -279,7 +279,7 @@ export function ItemBundlingView({
       {/* Create / Edit Modal */}
       {(showCreateModal || showEditModal) && (
         <div className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white rounded-[14px] p-6 max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+          <div className="bg-card rounded-[14px] p-6 max-w-3xl w-full max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-[24px] font-bold text-foreground">
                 {showCreateModal ? 'Create New Bundle' : 'Edit Bundle'}
@@ -341,9 +341,9 @@ export function ItemBundlingView({
                         </div>
                         <div className="flex items-center gap-3">
                           <div className="flex items-center gap-2">
-                            <button onClick={() => handleUpdateItemQuantity(fi.inventoryItemId, fi.quantity - 1)} className="w-6 h-6 flex items-center justify-center bg-white border border-border rounded text-foreground hover:bg-muted">-</button>
+                            <button onClick={() => handleUpdateItemQuantity(fi.inventoryItemId, fi.quantity - 1)} className="w-6 h-6 flex items-center justify-center bg-card border border-border rounded text-foreground hover:bg-muted">-</button>
                             <span className="text-[14px] font-medium text-foreground w-8 text-center">{fi.quantity}</span>
-                            <button onClick={() => handleUpdateItemQuantity(fi.inventoryItemId, fi.quantity + 1)} disabled={fi.quantity >= inv.quantity} className="w-6 h-6 flex items-center justify-center bg-white border border-border rounded text-foreground hover:bg-muted disabled:opacity-50">+</button>
+                            <button onClick={() => handleUpdateItemQuantity(fi.inventoryItemId, fi.quantity + 1)} disabled={fi.quantity >= inv.quantity} className="w-6 h-6 flex items-center justify-center bg-card border border-border rounded text-foreground hover:bg-muted disabled:opacity-50">+</button>
                           </div>
                           <span className="text-[14px] font-semibold text-foreground w-20 text-right">₱{(inv.price * fi.quantity).toLocaleString()}</span>
                           <button onClick={() => handleRemoveItemFromBundle(fi.inventoryItemId)} className="text-destructive hover:bg-destructive/10 p-1 rounded">
@@ -393,7 +393,7 @@ export function ItemBundlingView({
       {/* Approval Modal */}
       {showApprovalModal && selectedBundle && (
         <div className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white rounded-[14px] p-6 max-w-lg w-full">
+          <div className="bg-card rounded-[14px] p-6 max-w-lg w-full">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-[20px] font-bold text-foreground">Review Bundle</h3>
               <button onClick={() => { setShowApprovalModal(false); setSelectedBundle(null); setRejectionReason(''); }} className="p-2 hover:bg-muted rounded">
@@ -433,7 +433,7 @@ export function ItemBundlingView({
       {/* Item Selector Modal */}
       {showItemSelector && (
         <div className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white rounded-[14px] p-6 max-w-3xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+          <div className="bg-card rounded-[14px] p-6 max-w-3xl w-full max-h-[90vh] overflow-hidden flex flex-col">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-[20px] font-bold text-foreground">Select Items for Bundle</h3>
               <button onClick={() => { setShowItemSelector(false); setSelectedCategory('all'); setItemSearchTerm(''); }} className="p-2 hover:bg-muted rounded">
@@ -504,14 +504,14 @@ export function ItemBundlingView({
           <p className="text-success text-[12px] mb-1">Active Bundles</p>
           <p className="text-success text-[24px] font-bold">{loading ? '—' : stats.active}</p>
         </button>
-        <div className="bg-white border border-border rounded-[14px] p-4">
+        <div className="bg-card border border-border rounded-[14px] p-4">
           <p className="text-foreground text-[12px] mb-1">Active Value</p>
           <p className="text-secondary text-[24px] font-bold">₱{loading ? '—' : stats.totalValue.toLocaleString()}</p>
         </div>
       </div>
 
       {/* Search and Filters */}
-      <div className="bg-white border border-border rounded-[14px] mb-4 p-4">
+      <div className="bg-card border border-border rounded-[14px] mb-4 p-4">
         <div className="flex items-center gap-4">
           <div className="flex-1 flex items-center gap-2">
             <Search className="size-5 text-muted-foreground" />
@@ -519,7 +519,7 @@ export function ItemBundlingView({
           </div>
           <div className="flex items-center gap-2">
             <label className="text-[14px] font-medium text-foreground">Status:</label>
-            <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className="px-3 py-1.5 border border-border rounded-[6px] text-[14px] bg-white focus:outline-none focus:border-secondary">
+            <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className="px-3 py-1.5 border border-border rounded-[6px] text-[14px] bg-card focus:outline-none focus:border-secondary">
               <option value="all">All Statuses</option>
               <option value="PENDING">Pending</option>
               <option value="APPROVED">Approved</option>
@@ -533,11 +533,11 @@ export function ItemBundlingView({
 
       {/* Bundles Grid */}
       {loading ? (
-        <div className="bg-white border border-border rounded-[14px] p-12 text-center">
+        <div className="bg-card border border-border rounded-[14px] p-12 text-center">
           <p className="text-[14px] text-muted-foreground">Loading...</p>
         </div>
       ) : filteredBundles.length === 0 ? (
-        <div className="bg-white border border-border rounded-[14px] p-12 text-center">
+        <div className="bg-card border border-border rounded-[14px] p-12 text-center">
           <Layers className="size-16 text-muted mx-auto mb-4" />
           <p className="text-[16px] text-foreground font-medium">No bundles found</p>
           <p className="text-[14px] text-muted-foreground mt-1">Create your first bundle to get started</p>
@@ -555,7 +555,7 @@ export function ItemBundlingView({
             const statusStyle = STATUS_COLORS[bundle.status] ?? STATUS_COLORS.PENDING;
 
             return (
-              <div key={bundle.id} className="bg-white border border-border rounded-[14px] p-5 hover:shadow-md transition-shadow flex flex-col">
+              <div key={bundle.id} className="bg-card border border-border rounded-[14px] p-5 hover:shadow-md transition-shadow flex flex-col">
                 <div className="mb-3">
                   <div className="flex items-start justify-between gap-2 mb-2">
                     <h3 className="text-[16px] font-semibold text-foreground line-clamp-2 flex-1">{bundle.name}</h3>

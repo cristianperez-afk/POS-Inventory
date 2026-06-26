@@ -33,6 +33,11 @@ type PosSaleMovement = {
   saleItem: { name: string; quantity: number; unitPrice: number; totalPrice: number } | null;
 };
 
+type InventorySyncSettings = {
+  autoDeductInventoryOnSale: boolean;
+  allowNegativeStock: boolean;
+};
+
 type ColumnInfo = {
   column_name: string;
 };
@@ -1200,6 +1205,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     enableReceiptPrinting?: boolean;
     enabledPaymentMethods?: string[];
     paymentMethodAccounts?: Record<string, unknown>;
+    autoDeductInventoryOnSale?: boolean;
+    allowNegativeStock?: boolean;
+    defaultLowStockThreshold?: number;
+    defaultInventoryUnit?: string;
+    cycleCountIntervalDays?: number;
+    autoReorderThresholdPercent?: number;
+    enableExpiryTracking?: boolean;
+    defaultMarkupPercent?: number;
   }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
@@ -1232,10 +1245,18 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           enable_receipt_printing = COALESCE($16, enable_receipt_printing),
           enabled_payment_methods = COALESCE($17, enabled_payment_methods),
           payment_method_accounts = COALESCE($18, payment_method_accounts),
-          store_type = COALESCE(store_type, $19),
+          auto_deduct_inventory_on_sale = COALESCE($19, auto_deduct_inventory_on_sale),
+          allow_negative_stock = COALESCE($20, allow_negative_stock),
+          default_low_stock_threshold = COALESCE($21, default_low_stock_threshold),
+          default_inventory_unit = COALESCE($22, default_inventory_unit),
+          cycle_count_interval_days = COALESCE($23, cycle_count_interval_days),
+          auto_reorder_threshold_percent = COALESCE($24, auto_reorder_threshold_percent),
+          enable_expiry_tracking = COALESCE($25, enable_expiry_tracking),
+          default_markup_percent = COALESCE($26, default_markup_percent),
+          store_type = COALESCE(store_type, $27),
           updated_at = CURRENT_TIMESTAMP
-        WHERE store_id = $20
-          AND (store_type = $19 OR store_type IS NULL)
+        WHERE store_id = $28
+          AND (store_type = $27 OR store_type IS NULL)
         RETURNING *
       `,
       [
@@ -1257,6 +1278,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         input.enableReceiptPrinting,
         input.enabledPaymentMethods ?? null,
         input.paymentMethodAccounts ? JSON.stringify(input.paymentMethodAccounts) : null,
+        input.autoDeductInventoryOnSale,
+        input.allowNegativeStock,
+        input.defaultLowStockThreshold,
+        input.defaultInventoryUnit,
+        input.cycleCountIntervalDays,
+        input.autoReorderThresholdPercent,
+        input.enableExpiryTracking,
+        input.defaultMarkupPercent,
         admin.store_type,
         admin.store_id,
       ],
@@ -1273,6 +1302,40 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     });
 
     return rows[0];
+  }
+
+  private async getInventorySyncSettingsForStore(client: PoolClient, storeId: number): Promise<InventorySyncSettings> {
+    await this.ensureStoreSettingsSchema();
+
+    const rows = await this.queryWithClient<{
+      auto_deduct_inventory_on_sale: boolean | null;
+      allow_negative_stock: boolean | null;
+    }>(
+      client,
+      `
+        SELECT auto_deduct_inventory_on_sale, allow_negative_stock
+        FROM store_settings
+        WHERE store_id = $1
+        LIMIT 1
+      `,
+      [storeId],
+    );
+
+    return {
+      autoDeductInventoryOnSale: rows[0]?.auto_deduct_inventory_on_sale ?? true,
+      allowNegativeStock: rows[0]?.allow_negative_stock ?? false,
+    };
+  }
+
+  async getDefaultLowStockThreshold(storeId: number): Promise<number> {
+    await this.ensureStoreSettingsSchema();
+
+    const rows = await this.query<{ default_low_stock_threshold: number | null }>(
+      `SELECT default_low_stock_threshold FROM store_settings WHERE store_id = $1 LIMIT 1`,
+      [storeId],
+    );
+
+    return Number(rows[0]?.default_low_stock_threshold ?? 0);
   }
 
   async listDiscountSettingsForAdmin(adminUserId: number) {
@@ -3495,6 +3558,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         );
         const orderId = orderRows[0].id;
         const inventorySaleMovements: PosSaleMovement[] = [];
+        const inventorySyncSettings = isPaid
+          ? await this.getInventorySyncSettingsForStore(client, user.store_id!)
+          : null;
 
       for (const item of input.items ?? []) {
         const itemRows = await this.queryWithClient<{ id: number }>(
@@ -3526,18 +3592,18 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         );
         const orderItemId = itemRows[0].id;
 
-        if (isPaid) {
+        if (isPaid && inventorySyncSettings?.autoDeductInventoryOnSale) {
           if (user.store_type === 'RETAIL_STORE') {
-            await this.deductRetailProduct(client, user.store_id!, orderId, orderItemId, item, item.productId ?? item.id, item.variantId ?? item.variant_id, item.quantity ?? 1, inventorySaleMovements);
+            await this.deductRetailProduct(client, user.store_id!, orderId, orderItemId, item, item.productId ?? item.id, item.variantId ?? item.variant_id, item.quantity ?? 1, inventorySaleMovements, inventorySyncSettings);
           } else {
-            await this.deductRestaurantIngredients(client, user.store_id!, orderId, orderItemId, item, inventorySaleMovements);
+            await this.deductRestaurantIngredients(client, user.store_id!, orderId, orderItemId, item, inventorySaleMovements, inventorySyncSettings);
           }
         } else if (user.store_type === 'RESTAURANT') {
           await this.recordRestaurantIngredientCustomizations(client, user.store_id!, orderItemId, item);
         }
       }
 
-      if (isPaid) {
+      if (isPaid && inventorySyncSettings?.autoDeductInventoryOnSale) {
         await this.writeInventorySaleRecords(client, { user, orderNumber, input, movements: inventorySaleMovements });
       }
 
@@ -4178,7 +4244,18 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return `${String(productId).padStart(8, '0')}${String(index + 1).padStart(4, '0')}`;
   }
 
-  private async deductRetailProduct(client: PoolClient, storeId: number, orderId: number, orderItemId: number, item: any, productId: number, variantId: number, quantity: number, movements: PosSaleMovement[]) {
+  private async deductRetailProduct(
+    client: PoolClient,
+    storeId: number,
+    orderId: number,
+    orderItemId: number,
+    item: any,
+    productId: number,
+    variantId: number,
+    quantity: number,
+    movements: PosSaleMovement[],
+    inventorySyncSettings: InventorySyncSettings,
+  ) {
     const variantRows = await this.queryWithClient<{ stock_quantity: number; product_id: number; size: string | null; color: string | null; inventory_item_id: string | null }>(
       client,
       `
@@ -4199,7 +4276,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       throw new NotFoundException('Product variant was not found for this store.');
     }
 
-    if (Number(variant.stock_quantity ?? 0) < quantity) {
+    if (!inventorySyncSettings.allowNegativeStock && Number(variant.stock_quantity ?? 0) < quantity) {
       throw new BadRequestException('Not enough variant stock for this order.');
     }
 
@@ -4395,6 +4472,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     orderItemId: number,
     item: any,
     movements: PosSaleMovement[],
+    inventorySyncSettings: InventorySyncSettings,
     options: { recordCustomizations?: boolean } = {},
   ) {
     const itemQuantity = Number(item.quantity ?? 1);
@@ -4565,7 +4643,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
-      if (Number(inventory.quantity_available ?? 0) < quantity) {
+      if (!inventorySyncSettings.allowNegativeStock && Number(inventory.quantity_available ?? 0) < quantity) {
         throw new BadRequestException('Not enough ingredient inventory for this order.');
       }
 
@@ -4590,7 +4668,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         const inv = invRows[0];
         if (inv) {
           const previousQuantity = Number(inv.quantity ?? 0);
-          const newQuantity = Math.max(previousQuantity - quantity, 0);
+          const nextQuantity = previousQuantity - quantity;
+          const newQuantity = inventorySyncSettings.allowNegativeStock ? nextQuantity : Math.max(nextQuantity, 0);
           await this.queryWithClient(
             client,
             `
@@ -4657,6 +4736,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
+    const inventorySyncSettings = await this.getInventorySyncSettingsForStore(client, user.store_id);
+    if (!inventorySyncSettings.autoDeductInventoryOnSale) {
+      return;
+    }
+
     const items = await this.queryWithClient<{ id: number; product_id: number; variant_id: number | null; product_name: string; quantity: number; unit_price: string | number }>(
       client,
       `SELECT id, product_id, variant_id, product_name, quantity, unit_price FROM order_items WHERE order_id = $1`,
@@ -4677,6 +4761,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           oi.variant_id,
           Number(oi.quantity ?? 1),
           movements,
+          inventorySyncSettings,
         );
       } else {
         const ingredients = await this.queryWithClient<{
@@ -4795,6 +4880,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             ingredients: customizedIngredients,
           },
           movements,
+          inventorySyncSettings,
           { recordCustomizations: false },
         );
       }
@@ -5243,15 +5329,31 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           enable_ingredient_customization,
           enable_receipt_printing,
           enabled_payment_methods,
-          payment_method_accounts
+          payment_method_accounts,
+          auto_deduct_inventory_on_sale,
+          allow_negative_stock,
+          default_low_stock_threshold,
+          default_inventory_unit,
+          cycle_count_interval_days,
+          auto_reorder_threshold_percent,
+          enable_expiry_tracking,
+          default_markup_percent
         )
-        VALUES ($1, $2, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, 'parallel', 2, TRUE, 0, 0, TRUE, 0, TRUE, TRUE, TRUE, TRUE, ARRAY['Cash', 'GCash', 'Maya', 'Bank Transfer']::TEXT[], '{}'::JSONB)
+        VALUES ($1, $2, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, 'parallel', 2, TRUE, 0, 0, TRUE, 0, TRUE, TRUE, TRUE, TRUE, ARRAY['Cash', 'GCash', 'Maya', 'Bank Transfer']::TEXT[], '{}'::JSONB, TRUE, FALSE, 3, 'unit', 30, 20, FALSE, 30)
         ON CONFLICT (store_id) DO UPDATE
         SET store_type = COALESCE(store_settings.store_type, EXCLUDED.store_type),
             service_charge_rate = COALESCE(store_settings.service_charge_rate, store_settings.service_charge_percentage, 0),
             service_charge_percentage = COALESCE(store_settings.service_charge_percentage, store_settings.service_charge_rate, 0),
             enabled_payment_methods = COALESCE(store_settings.enabled_payment_methods, EXCLUDED.enabled_payment_methods),
             payment_method_accounts = COALESCE(store_settings.payment_method_accounts, EXCLUDED.payment_method_accounts),
+            auto_deduct_inventory_on_sale = COALESCE(store_settings.auto_deduct_inventory_on_sale, EXCLUDED.auto_deduct_inventory_on_sale),
+            allow_negative_stock = COALESCE(store_settings.allow_negative_stock, EXCLUDED.allow_negative_stock),
+            default_low_stock_threshold = COALESCE(store_settings.default_low_stock_threshold, EXCLUDED.default_low_stock_threshold),
+            default_inventory_unit = COALESCE(store_settings.default_inventory_unit, EXCLUDED.default_inventory_unit),
+            cycle_count_interval_days = COALESCE(store_settings.cycle_count_interval_days, EXCLUDED.cycle_count_interval_days),
+            auto_reorder_threshold_percent = COALESCE(store_settings.auto_reorder_threshold_percent, EXCLUDED.auto_reorder_threshold_percent),
+            enable_expiry_tracking = COALESCE(store_settings.enable_expiry_tracking, EXCLUDED.enable_expiry_tracking),
+            default_markup_percent = COALESCE(store_settings.default_markup_percent, EXCLUDED.default_markup_percent),
             updated_at = CURRENT_TIMESTAMP
       `,
       [storeId, storeType],
@@ -5282,6 +5384,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ADD COLUMN IF NOT EXISTS enable_receipt_printing BOOLEAN DEFAULT TRUE,
           ADD COLUMN IF NOT EXISTS enabled_payment_methods TEXT[] DEFAULT ARRAY['Cash', 'GCash', 'Maya', 'Bank Transfer'],
           ADD COLUMN IF NOT EXISTS payment_method_accounts JSONB DEFAULT '{}'::JSONB,
+          ADD COLUMN IF NOT EXISTS auto_deduct_inventory_on_sale BOOLEAN DEFAULT TRUE,
+          ADD COLUMN IF NOT EXISTS allow_negative_stock BOOLEAN DEFAULT FALSE,
+          ADD COLUMN IF NOT EXISTS default_low_stock_threshold INTEGER DEFAULT 3,
+          ADD COLUMN IF NOT EXISTS default_inventory_unit VARCHAR(50) DEFAULT 'unit',
+          ADD COLUMN IF NOT EXISTS cycle_count_interval_days INTEGER DEFAULT 30,
+          ADD COLUMN IF NOT EXISTS auto_reorder_threshold_percent DECIMAL(5,2) DEFAULT 20,
+          ADD COLUMN IF NOT EXISTS enable_expiry_tracking BOOLEAN DEFAULT FALSE,
+          ADD COLUMN IF NOT EXISTS default_markup_percent DECIMAL(5,2) DEFAULT 30,
           ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       `,
@@ -6249,4 +6359,3 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return Math.random().toString(36).slice(-10);
   }
 }
-

@@ -1,4 +1,10 @@
-.restaurant-legacy {
+/*
+ * Scoped to :root:not(.dark) so these light-theme values only apply outside
+ * dark mode. CSS custom properties cascade from the nearest ancestor that
+ * sets them, so without this guard .restaurant-legacy would always win over
+ * the .dark overrides on <html>, even when dark mode is enabled.
+ */
+:root:not(.dark) .restaurant-legacy {
   --font-size: 16px;
   --font-heading: 'Poppins', sans-serif;
   --font-body: 'Inter', sans-serif;
@@ -18,31 +24,24 @@
   --card-foreground: #323B42;
   --popover: #FFFFFF;
   --popover-foreground: #323B42;
-  --primary: #007A5E;
-  --primary-foreground: #FFFFFF;
-  --secondary: #005656;
-  --secondary-foreground: #FFFFFF;
+  /*
+   * --primary / --secondary / --accent / --ring / --sidebar-primary are
+   * intentionally NOT redeclared here. They're user-customizable via the
+   * Primary/Secondary Color pickers in General Settings (applied as inline
+   * styles on <html>); redeclaring them on this wrapper would shadow that
+   * choice for the entire Restaurant Inventory module. Leaving them unset
+   * lets this element inherit the live values from <html>.
+   */
   --muted: #F8FAFB;
   --muted-foreground: #6B7580;
-  --accent: #009BA5;
-  --accent-foreground: #FFFFFF;
   --destructive: #dc2626;
   --destructive-foreground: #FFFFFF;
   --border: rgba(50, 59, 66, 0.15);
   --input: rgba(50, 59, 66, 0.2);
   --input-background: #FFFFFF;
-  --switch-background: #00A7A5;
-  --ring: #007A5E;
-  --chart-1: #007A5E;
-  --chart-2: #008967;
-  --chart-3: #009BA5;
-  --chart-4: #00A7A5;
-  --chart-5: #005656;
   --radius: 0.75rem;
   --sidebar: #003534;
   --sidebar-foreground: #F8FAFB;
-  --sidebar-primary: #007A5E;
-  --sidebar-primary-foreground: #FFFFFF;
   --sidebar-accent: #005656;
   --sidebar-accent-foreground: #F8FAFB;
   --sidebar-border: rgba(0, 167, 165, 0.2);
@@ -59,7 +58,6 @@
 .restaurant-legacy h3,
 .restaurant-legacy h4 {
   font-family: var(--font-heading);
-  color: #003534;
 }
 
 .restaurant-legacy p {

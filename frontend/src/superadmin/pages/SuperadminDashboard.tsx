@@ -18,6 +18,7 @@ import {
   Pencil,
   Plus,
   Search,
+  Settings,
   Store,
   StoreIcon,
   Trash2,
@@ -394,7 +395,7 @@ export function SuperadminDashboard({ currentUser, onLogout, onNavigate }: Super
     <div className="min-h-screen bg-[#f8fafc] text-[#007a5e]">
       <aside
         className={`fixed inset-y-0 left-0 z-30 flex flex-col text-white transition-[width] duration-300 ease-in-out ${isSidebarCollapsed ? 'w-20 overflow-visible' : 'w-80 overflow-y-auto no-scrollbar'}`}
-        style={{ background: 'linear-gradient(180deg, #003534 0%, #007a5e 100%)' }}
+        style={{ background: 'linear-gradient(180deg, var(--sidebar) 0%, var(--primary) 100%)' }}
       >
         <div className={`relative border-b border-white/10 transition-all duration-300 ease-in-out ${isSidebarCollapsed ? 'px-3 py-4' : 'px-4 pb-4 pt-5'}`}>
           <button
@@ -441,12 +442,12 @@ export function SuperadminDashboard({ currentUser, onLogout, onNavigate }: Super
               isSidebarCollapsed ? 'justify-center gap-0 px-0' : 'gap-4 px-4 text-left'
             } ${
               activeSection === 'stores'
-                ? 'border-[#00a7a5]/25 text-white'
-                : 'border-transparent text-white hover:bg-[#007a5e]/15 hover:text-slate-100'
+                ? 'border-primary/25 text-white'
+                : 'border-transparent text-white hover:bg-primary/15 hover:text-slate-100'
             }`}
             style={
               activeSection === 'stores'
-                ? { background: 'linear-gradient(135deg, #008967 0%, #007a5e 100%)', boxShadow: '0 0 18px rgba(0,167,165,0.16)' }
+                ? { background: 'linear-gradient(135deg, var(--primary) 0%, var(--secondary-accent) 100%)', boxShadow: '0 0 18px color-mix(in srgb, var(--primary) 35%, transparent)' }
                 : undefined
             }
           >
@@ -465,12 +466,12 @@ export function SuperadminDashboard({ currentUser, onLogout, onNavigate }: Super
               isSidebarCollapsed ? 'justify-center gap-0 px-0' : 'gap-4 px-4 text-left'
             } ${
               activeSection === 'admins'
-                ? 'border-[#00a7a5]/25 text-white'
-                : 'border-transparent text-white hover:bg-[#007a5e]/15 hover:text-slate-100'
+                ? 'border-primary/25 text-white'
+                : 'border-transparent text-white hover:bg-primary/15 hover:text-slate-100'
             }`}
             style={
               activeSection === 'admins'
-                ? { background: 'linear-gradient(135deg, #008967 0%, #007a5e 100%)', boxShadow: '0 0 18px rgba(0,167,165,0.16)' }
+                ? { background: 'linear-gradient(135deg, var(--primary) 0%, var(--secondary-accent) 100%)', boxShadow: '0 0 18px color-mix(in srgb, var(--primary) 35%, transparent)' }
                 : undefined
             }
           >
@@ -482,13 +483,25 @@ export function SuperadminDashboard({ currentUser, onLogout, onNavigate }: Super
           <button
             type="button"
             onClick={() => onNavigate('activity-log')}
-            className={`mt-4 flex h-[52px] w-full items-center rounded-lg border border-transparent text-white transition hover:bg-[#007a5e]/15 hover:text-slate-100 ${
+            className={`mt-4 flex h-[52px] w-full items-center rounded-lg border border-transparent text-white transition hover:bg-primary/15 hover:text-slate-100 ${
               isSidebarCollapsed ? 'justify-center gap-0 px-0' : 'gap-4 px-4 text-left'
             }`}
           >
             <History className="h-6 w-6 shrink-0" strokeWidth={1.8} />
             <span className={`overflow-hidden whitespace-nowrap text-base font-medium transition-all duration-300 ease-in-out ${isSidebarCollapsed ? 'w-0 opacity-0' : 'flex-1 opacity-100'}`}>
               {!isSidebarCollapsed && 'Activity Log'}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => onNavigate('general-settings')}
+            className={`mt-4 flex h-[52px] w-full items-center rounded-lg border border-transparent text-white transition hover:bg-primary/15 hover:text-slate-100 ${
+              isSidebarCollapsed ? 'justify-center gap-0 px-0' : 'gap-4 px-4 text-left'
+            }`}
+          >
+            <Settings className="h-6 w-6 shrink-0" strokeWidth={1.8} />
+            <span className={`overflow-hidden whitespace-nowrap text-base font-medium transition-all duration-300 ease-in-out ${isSidebarCollapsed ? 'w-0 opacity-0' : 'flex-1 opacity-100'}`}>
+              {!isSidebarCollapsed && 'Settings'}
             </span>
           </button>
         </nav>

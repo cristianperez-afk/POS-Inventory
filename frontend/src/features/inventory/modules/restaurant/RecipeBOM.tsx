@@ -1252,7 +1252,7 @@ export function RecipeBOM() {
                     Picture / Image
                   </label>
                   <div className="grid grid-cols-[88px_minmax(0,1fr)_44px] items-center gap-3">
-                    <div className="flex h-14 w-14 sm:h-20 sm:w-20 items-center justify-center overflow-hidden rounded-lg border border-border bg-white p-2">
+                    <div className="flex h-14 w-14 sm:h-20 sm:w-20 items-center justify-center overflow-hidden rounded-lg border border-border bg-card p-2">
                       {newRecipe.imageUrl ? (
                         <img src={newRecipe.imageUrl} alt="" className="h-full w-full object-cover" />
                       ) : (

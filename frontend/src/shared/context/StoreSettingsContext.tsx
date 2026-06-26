@@ -20,6 +20,14 @@ export interface StoreSettingValues {
   enabled_payment_methods: string[];
   payment_method_accounts: Record<string, PaymentMethodAccount>;
   theme_color: string;
+  auto_deduct_inventory_on_sale: boolean;
+  allow_negative_stock: boolean;
+  default_low_stock_threshold: number;
+  default_inventory_unit: string;
+  cycle_count_interval_days: number;
+  auto_reorder_threshold_percent: number;
+  enable_expiry_tracking: boolean;
+  default_markup_percent: number;
 }
 
 export interface PaymentMethodAccount {
@@ -62,6 +70,14 @@ export const defaultStoreSettings: StoreSettingValues = {
   enabled_payment_methods: ['Cash', 'GCash', 'Maya', 'Bank Transfer'],
   payment_method_accounts: {},
   theme_color: '#008967',
+  auto_deduct_inventory_on_sale: true,
+  allow_negative_stock: false,
+  default_low_stock_threshold: 3,
+  default_inventory_unit: 'unit',
+  cycle_count_interval_days: 30,
+  auto_reorder_threshold_percent: 20,
+  enable_expiry_tracking: false,
+  default_markup_percent: 30,
 };
 
 const StoreSettingsContext = createContext<StoreSettingsContextValue>({
@@ -109,10 +125,6 @@ export function StoreSettingsProvider({ currentUser, children }: { currentUser: 
     void reload();
   }, [currentUser?.id, currentUser?.role, currentUser?.store_id]);
 
-  useEffect(() => {
-    applyThemeColor(settings.theme_color);
-  }, [settings.theme_color]);
-
   const value = useMemo(() => ({ settings, discounts, loading, reload }), [settings, discounts, loading]);
 
   return <StoreSettingsContext.Provider value={value}>{children}</StoreSettingsContext.Provider>;
@@ -141,17 +153,15 @@ export function normalizeStoreSettings(data: any): StoreSettingValues {
     enabled_payment_methods: normalizePaymentMethods(data?.enabled_payment_methods),
     payment_method_accounts: normalizePaymentMethodAccounts(data?.payment_method_accounts),
     theme_color: isHexColor(data?.theme_color) ? data.theme_color : defaultStoreSettings.theme_color,
+    auto_deduct_inventory_on_sale: data?.auto_deduct_inventory_on_sale ?? true,
+    allow_negative_stock: data?.allow_negative_stock ?? false,
+    default_low_stock_threshold: Number(data?.default_low_stock_threshold ?? 3),
+    default_inventory_unit: typeof data?.default_inventory_unit === 'string' && data.default_inventory_unit.trim() ? data.default_inventory_unit : 'unit',
+    cycle_count_interval_days: Number(data?.cycle_count_interval_days ?? 30),
+    auto_reorder_threshold_percent: Number(data?.auto_reorder_threshold_percent ?? 20),
+    enable_expiry_tracking: data?.enable_expiry_tracking ?? false,
+    default_markup_percent: Number(data?.default_markup_percent ?? 30),
   };
-}
-
-function applyThemeColor(color: string) {
-  const root = document.documentElement;
-  root.style.setProperty('--primary', color);
-  root.style.setProperty('--accent', color);
-  root.style.setProperty('--ring', color);
-  root.style.setProperty('--chart-1', color);
-  root.style.setProperty('--sidebar-primary', color);
-  root.style.setProperty('--sidebar-ring', color);
 }
 
 function isHexColor(value: unknown): value is string {

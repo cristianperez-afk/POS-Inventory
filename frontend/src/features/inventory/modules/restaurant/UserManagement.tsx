@@ -326,9 +326,9 @@ export function UserManagement() {
               <li>• All reports and analytics</li>
             </ul>
           </div>
-          <div className="p-4 bg-gray-50 rounded-xl border border-gray-200">
-            <h3 className="font-semibold text-gray-900 mb-3">Staff</h3>
-            <ul className="space-y-2 text-sm text-gray-700">
+          <div className="p-4 bg-muted rounded-xl border border-border">
+            <h3 className="font-semibold text-foreground mb-3">Staff</h3>
+            <ul className="space-y-2 text-sm text-muted-foreground">
               <li>• View inventory</li>
               <li>• Add products</li>
               <li>• Receive goods</li>
@@ -636,4 +636,3 @@ export function UserManagement() {
     </div>
   );
 }
-
