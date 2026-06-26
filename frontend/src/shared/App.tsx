@@ -18,6 +18,8 @@ import { OrderList } from '../restaurant/pages/OrderList';
 import { Reports } from '../restaurant/pages/Reports';
 import { StoreInformation } from './components/StoreInformation';
 import { StoreSettings } from './components/StoreSettings';
+import { ManagerProfile } from './components/ManagerProfile';
+import { ActivityLogPage } from './components/ActivityLogPage';
 import { InventoryModulePage } from './components/InventoryModulePage';
 import { Sidebar } from './components/Sidebar';
 import { OrderProvider } from './context/OrderContext';
@@ -49,8 +51,10 @@ export type Page =
   | 'receipt'
   | 'order-list'
   | 'reports'
+  | 'activity-log'
   | 'store-information'
   | 'store-settings'
+  | 'manager-profile'
   | 'inventory-dashboard'
   | 'inventory-stock-alerts'
   | 'inventory-items'
@@ -172,6 +176,18 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    if (currentUser?.id) {
+      void fetch(`${getApiBaseUrl()}/admin/activity-logs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: currentUser.id,
+          module: 'Authentication',
+          action: 'User Logged Out',
+          details: 'User logged out of the POS system.',
+        }),
+      }).catch(() => undefined);
+    }
     window.sessionStorage.removeItem(SESSION_USER_KEY);
     window.sessionStorage.removeItem(SESSION_PAGE_KEY);
     setCurrentUser(null);
@@ -223,7 +239,7 @@ export default function App() {
   const updateCurrentUser = (updates: Partial<AuthenticatedUser>) => {
     setCurrentUser((user) => (user ? { ...user, ...updates } : user));
   };
-  const isPosAdminUser = isPosManagerUser(currentUser);
+  const isStoreAdminUser = currentUser?.role === 'ADMIN';
 
   return (
     <QueryClientProvider client={appQueryClient}>
@@ -236,10 +252,14 @@ export default function App() {
             <LoginPage onLogin={handleLogin} />
           )}
           {currentPage === 'superadmin-dashboard' && (
-            <SuperadminDashboard currentUser={currentUser} onLogout={handleLogout} />
+            <SuperadminDashboard currentUser={currentUser} onLogout={handleLogout} onNavigate={navigateTo} />
           )}
           {currentPage === 'admin-dashboard' && (
-            <AdminDashboard currentUser={currentUser} storeBrand={storeBrand} onLogout={handleLogout} onNavigate={navigateTo} />
+            currentUser?.role === 'ADMIN' ? (
+              <AdminDashboard currentUser={currentUser} storeBrand={storeBrand} onLogout={handleLogout} onNavigate={navigateTo} />
+            ) : (
+              <UnauthorizedPage currentUser={currentUser} storeBrand={storeBrand} onLogout={handleLogout} onNavigate={navigateTo} />
+            )
           )}
           {currentPage === 'retail-dashboard' && (
             <RetailDashboard currentUser={currentUser} onLogout={handleLogout} onNavigate={navigateTo} storeBrand={storeBrand} userName={currentUser?.full_name} storeType={currentUser?.store_type} staffType={currentUser?.staff_type} />
@@ -250,7 +270,7 @@ export default function App() {
                 <RetailPOSDashboard
                   onLogout={handleLogout}
                   onNavigate={navigateTo}
-                  isAdmin={isPosAdminUser}
+                  isAdmin={isStoreAdminUser}
                   storeBrand={storeBrand}
                   userName={currentUser?.full_name}
                   userRole={currentUser?.role}
@@ -275,7 +295,7 @@ export default function App() {
                 <RetailOrderList
                   onNavigate={navigateTo}
                   onLogout={handleLogout}
-                  isAdmin={isPosAdminUser}
+                  isAdmin={isStoreAdminUser}
                   storeBrand={storeBrand}
                   userName={currentUser?.full_name}
                   userRole={currentUser?.role}
@@ -287,7 +307,7 @@ export default function App() {
                 <RetailReports
                   onNavigate={navigateTo}
                   onLogout={handleLogout}
-                  isAdmin={isPosAdminUser}
+                  isAdmin={isStoreAdminUser}
                   storeBrand={storeBrand}
                   userName={currentUser?.full_name}
                   storeType={currentUser?.store_type}
@@ -297,7 +317,7 @@ export default function App() {
             </RetailOrderProvider>
           )}
           {currentPage === 'pos-dashboard' && (
-            <POSDashboard onLogout={handleLogout} onNavigate={navigateTo} isAdmin={isPosAdminUser} storeBrand={storeBrand} userName={currentUser?.full_name} userRole={currentUser?.role} storeType={currentUser?.store_type} staffType={currentUser?.staff_type} />
+            <POSDashboard onLogout={handleLogout} onNavigate={navigateTo} isAdmin={isStoreAdminUser} storeBrand={storeBrand} userName={currentUser?.full_name} userRole={currentUser?.role} storeType={currentUser?.store_type} staffType={currentUser?.staff_type} />
           )}
           {currentPage === 'create-order' && (
             <CreateOrder currentUser={currentUser} onNavigate={navigateTo} onOrderCreated={setCurrentOrder} onLogout={handleLogout} storeBrand={storeBrand} userName={currentUser?.full_name} storeType={currentUser?.store_type} staffType={currentUser?.staff_type} />
@@ -318,10 +338,13 @@ export default function App() {
             <Receipt onNavigate={navigateTo} currentOrder={currentOrder} onLogout={handleLogout} storeBrand={storeBrand} userName={currentUser?.full_name} storeType={currentUser?.store_type} staffType={currentUser?.staff_type} />
           )}
           {currentPage === 'order-list' && (
-            <OrderList onNavigate={navigateTo} onLogout={handleLogout} isAdmin={isPosAdminUser} storeBrand={storeBrand} userName={currentUser?.full_name} userRole={currentUser?.role} storeType={currentUser?.store_type} staffType={currentUser?.staff_type} />
+            <OrderList onNavigate={navigateTo} onLogout={handleLogout} isAdmin={isStoreAdminUser} storeBrand={storeBrand} userName={currentUser?.full_name} userRole={currentUser?.role} storeType={currentUser?.store_type} staffType={currentUser?.staff_type} />
           )}
           {currentPage === 'reports' && (
-            <Reports onNavigate={navigateTo} onLogout={handleLogout} isAdmin={isPosAdminUser} storeBrand={storeBrand} userName={currentUser?.full_name} userRole={currentUser?.role} storeType={currentUser?.store_type} staffType={currentUser?.staff_type} />
+            <Reports onNavigate={navigateTo} onLogout={handleLogout} isAdmin={isStoreAdminUser} storeBrand={storeBrand} userName={currentUser?.full_name} userRole={currentUser?.role} storeType={currentUser?.store_type} staffType={currentUser?.staff_type} />
+          )}
+          {currentPage === 'activity-log' && (
+            <ActivityLogPage currentUser={currentUser} storeBrand={storeBrand} onLogout={handleLogout} onNavigate={navigateTo} />
           )}
           {currentPage === 'store-information' && (
             <StoreInformation
@@ -336,6 +359,9 @@ export default function App() {
           {currentPage === 'store-settings' && (
             <StoreSettings currentUser={currentUser} storeBrand={storeBrand} onLogout={handleLogout} onNavigate={navigateTo} />
           )}
+          {currentPage === 'manager-profile' && (
+            <ManagerProfile currentUser={currentUser} storeBrand={storeBrand} onLogout={handleLogout} onNavigate={navigateTo} onUserUpdate={updateCurrentUser} />
+          )}
           {isInventoryPage(currentPage) && INVENTORY_MODULES_ENABLED && (
             <div className="flex h-screen">
               <div className="shrink-0">
@@ -344,7 +370,7 @@ export default function App() {
                   storeBrand={storeBrand}
                   onLogout={handleLogout}
                   onNavigate={navigateTo}
-                  isAdmin={isPosAdminUser}
+                  isAdmin={isStoreAdminUser}
                   userName={currentUser?.full_name}
                   userRole={currentUser?.role}
                   storeType={currentUser?.store_type}
@@ -381,6 +407,10 @@ function isPosManagerUser(user: AuthenticatedUser | null | undefined) {
   return user.role === 'ADMIN' && user.staff_type !== 'INVENTORY_STAFF';
 }
 
+function isActualPosManagerUser(user: AuthenticatedUser | null | undefined) {
+  return user?.role === 'POS_MANAGER' || user?.role === 'POS_ADMIN';
+}
+
 function isInventoryManagerUser(user: AuthenticatedUser | null | undefined) {
   if (!user) return false;
   if (user.role === 'INVENTORY_MANAGER' || user.role === 'INVENTORY_ADMIN') return true;
@@ -401,7 +431,13 @@ function canAccessPage(user: AuthenticatedUser, page: Page) {
   }
 
   if (page === 'login') return true;
-  if (user.role === 'SUPERADMIN') return page === 'superadmin-dashboard';
+  if (user.role === 'SUPERADMIN') return page === 'superadmin-dashboard' || page === 'activity-log';
+  if (page === 'manager-profile') {
+    return user.store_type === 'RETAIL_STORE' && isActualPosManagerUser(user);
+  }
+  if (page === 'activity-log') {
+    return (user.store_type === 'RESTAURANT' || user.store_type === 'RETAIL_STORE') && (user.role === 'ADMIN' || isActualPosManagerUser(user));
+  }
   if (user.role === 'ADMIN') {
     return [
       'admin-dashboard',
@@ -411,6 +447,7 @@ function canAccessPage(user: AuthenticatedUser, page: Page) {
       'pos-dashboard',
       'order-list',
       'reports',
+      'activity-log',
       'store-information',
       'store-settings',
     ].includes(page) || isInventoryPage(page);
@@ -418,13 +455,13 @@ function canAccessPage(user: AuthenticatedUser, page: Page) {
 
   if (isPosManagerUser(user)) {
     return [
-      'admin-dashboard',
       'retail-pos-dashboard',
       'retail-transactions',
       'retail-reports',
       'pos-dashboard',
       'order-list',
       'reports',
+      'activity-log',
       'store-information',
       'store-settings',
     ].includes(page);
@@ -503,5 +540,41 @@ function TableManagementRoute({
       storeType={currentUser?.store_type}
       staffType={currentUser?.staff_type}
     />
+  );
+}
+
+function UnauthorizedPage({
+  currentUser,
+  storeBrand,
+  onLogout,
+  onNavigate,
+}: {
+  currentUser: AuthenticatedUser | null;
+  storeBrand: StoreBrand;
+  onLogout: () => void;
+  onNavigate: (page: Page) => void;
+}) {
+  useEffect(() => {
+    if (currentUser) {
+      onNavigate(getDefaultPageForUser(currentUser));
+    }
+  }, [currentUser, onNavigate]);
+
+  return (
+    <div className="flex h-screen">
+      <Sidebar
+        currentPage="pos-dashboard"
+        onNavigate={onNavigate}
+        onLogout={onLogout}
+        isAdmin={currentUser?.role === 'ADMIN'}
+        storeBrand={storeBrand}
+        userName={currentUser?.full_name}
+        userRole={currentUser?.role}
+        storeType={currentUser?.store_type}
+        staffType={currentUser?.staff_type}
+        inventoryEnabled={INVENTORY_MODULES_ENABLED}
+      />
+      <div className="flex-1 bg-background" />
+    </div>
   );
 }

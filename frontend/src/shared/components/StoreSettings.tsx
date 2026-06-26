@@ -278,7 +278,7 @@ export function StoreSettings({ currentUser, storeBrand, onLogout, onNavigate }:
 
   return (
     <div className="flex h-screen">
-      <Sidebar currentPage="store-settings" onNavigate={onNavigate} onLogout={onLogout} isAdmin storeBrand={storeBrand} userName={currentUser?.full_name} userRole={currentUser?.role} storeType={currentUser?.store_type} staffType={currentUser?.staff_type} />
+      <Sidebar currentPage="store-settings" onNavigate={onNavigate} onLogout={onLogout} isAdmin={currentUser?.role === 'ADMIN'} storeBrand={storeBrand} userName={currentUser?.full_name} userRole={currentUser?.role} storeType={currentUser?.store_type} staffType={currentUser?.staff_type} />
       <div className="flex-1 overflow-auto bg-background">
         <main className="min-h-full p-6 lg:p-8">
           <div className="mb-6 flex flex-wrap items-center justify-between gap-4">

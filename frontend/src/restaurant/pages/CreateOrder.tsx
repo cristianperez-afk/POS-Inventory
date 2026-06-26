@@ -219,6 +219,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
   const [isInQueue, setIsInQueue] = useState(false);
   const [queuePosition, setQueuePosition] = useState<number | null>(null);
   const [hoveredProductId, setHoveredProductId] = useState<number | null>(null);
+  const [hoveredProductPreview, setHoveredProductPreview] = useState<{ left: number; top: number; width: number } | null>(null);
   const customizeProductId = customizeItemIndex !== null ? cart[customizeItemIndex]?.id : null;
   const productRecipeQuery = useProductRecipeQuery(currentUser?.id, customizeProductId);
   const hoveredProductRecipeQuery = useProductRecipeQuery(currentUser?.id, hoveredProductId);
@@ -1311,6 +1312,39 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
 
   const dineInItems = cart.filter(item => item.orderType === 'dine-in');
   const takeoutItems = cart.filter(item => item.orderType === 'takeout');
+  const updateHoveredProductPreview = (element: HTMLElement) => {
+    const rect = element.getBoundingClientRect();
+    setHoveredProductPreview({
+      left: rect.left + rect.width / 2,
+      top: rect.top + rect.height / 2,
+      width: Math.min(320, Math.max(280, rect.width * 1.18)),
+    });
+  };
+  const clearHoveredProductPreview = (productId: number) => {
+    setHoveredProductId((current) => (current === productId ? null : current));
+    setHoveredProductPreview(null);
+  };
+  const hoveredProduct = hoveredProductId
+    ? filteredProducts.find((product) => product.id === hoveredProductId)
+    : undefined;
+  const hoveredProductAvailableOrders = hoveredProduct
+    ? finiteNumberIncludingZeroOrUndefined(hoveredProduct.availableOrders ?? hoveredProduct.availableQuantity)
+    : undefined;
+  const hoveredProductCartQuantity = hoveredProduct
+    ? cart.filter((item) => item.id === hoveredProduct.id).reduce((sum, item) => sum + Number(item.quantity ?? 0), 0)
+    : 0;
+  const hoveredProductRemainingOrders = hoveredProductAvailableOrders !== undefined
+    ? Math.max(0, hoveredProductAvailableOrders - hoveredProductCartQuantity)
+    : undefined;
+  const hoveredRecipeDetails = hoveredProductRecipeQuery.data as Record<string, unknown> | undefined;
+  const hoveredProductPrepTimeMinutes = hoveredProduct
+    ? finiteNumberIncludingZeroOrUndefined(
+        hoveredRecipeDetails?.prep_time_minutes ?? hoveredRecipeDetails?.prepTimeMinutes ?? hoveredProduct.prepTimeMinutes,
+      )
+    : undefined;
+  const hoveredProductServings = hoveredProduct
+    ? finiteNumberIncludingZeroOrUndefined(hoveredRecipeDetails?.servings ?? hoveredProduct.servings)
+    : undefined;
 
   return (
     <div className="flex h-screen bg-background">
@@ -1384,30 +1418,26 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                 .filter((item) => item.id === product.id)
                 .reduce((sum, item) => sum + Number(item.quantity ?? 0), 0);
               const remainingOrders = availableOrders !== undefined ? Math.max(0, availableOrders - cartQuantity) : undefined;
-              const hoveredRecipeDetails =
-                product.id === hoveredProductId
-                  ? hoveredProductRecipeQuery.data as Record<string, unknown> | undefined
-                  : undefined;
-              const resolvedPrepTimeMinutes = finiteNumberIncludingZeroOrUndefined(
-                hoveredRecipeDetails?.prep_time_minutes ?? hoveredRecipeDetails?.prepTimeMinutes ?? product.prepTimeMinutes,
-              );
-              const resolvedServings = finiteNumberIncludingZeroOrUndefined(
-                hoveredRecipeDetails?.servings ?? product.servings,
-              );
               const isUnavailable = remainingOrders !== undefined && remainingOrders <= 0;
 
               return (
                 <button
                 key={product.id}
                 onClick={() => addToCart(product)}
-                onMouseEnter={() => {
-                  if (!isUnavailable) setHoveredProductId(product.id);
+                onMouseEnter={(event) => {
+                  if (!isUnavailable) {
+                    setHoveredProductId(product.id);
+                    updateHoveredProductPreview(event.currentTarget);
+                  }
                 }}
-                onMouseLeave={() => setHoveredProductId((current) => (current === product.id ? null : current))}
-                onFocus={() => {
-                  if (!isUnavailable) setHoveredProductId(product.id);
+                onMouseLeave={() => clearHoveredProductPreview(product.id)}
+                onFocus={(event) => {
+                  if (!isUnavailable) {
+                    setHoveredProductId(product.id);
+                    updateHoveredProductPreview(event.currentTarget);
+                  }
                 }}
-                onBlur={() => setHoveredProductId((current) => (current === product.id ? null : current))}
+                onBlur={() => clearHoveredProductPreview(product.id)}
                 disabled={isUnavailable}
                 className={`group relative isolate overflow-visible rounded-2xl text-left transition-transform duration-300 ease-out focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 ${
                   isUnavailable
@@ -1437,50 +1467,6 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                 )}
                 <p className="text-xs text-primary font-medium">₱ {product.price.toFixed(2)}</p>
                 </div>
-                {!isUnavailable && (
-                <div className="pointer-events-none absolute left-1/2 top-1/2 z-20 w-[118%] max-w-[280px] -translate-x-1/2 -translate-y-1/2 opacity-0 transition-all duration-300 ease-out group-hover:opacity-100 group-focus-visible:opacity-100">
-                  <div className="overflow-hidden rounded-[1.35rem] border border-primary/20 bg-white shadow-[0_24px_48px_rgba(15,23,42,0.22)] ring-1 ring-primary/10">
-                    <div className="aspect-[16/10] overflow-hidden bg-slate-100">
-                      <img
-                        src={product.image}
-                        alt={product.name}
-                        className="h-full w-full object-contain p-2"
-                      />
-                    </div>
-                    <div className="space-y-3 p-4">
-                      <div className="min-w-0 space-y-2">
-                        <h3 className="text-base font-semibold leading-5 text-foreground">{product.name}</h3>
-                        <p className="text-xs leading-5 text-muted-foreground">
-                          {product.description || 'No description available.'}
-                        </p>
-                      </div>
-                      <p className="shrink-0 text-xs font-semibold text-primary">₱ {product.price.toFixed(2)}</p>
-                    </div>
-                    <div className="mx-4 mb-4 space-y-1.5 rounded-xl bg-slate-50 px-3 py-2.5 text-xs">
-                      <p className="text-foreground">
-                        <span className="font-semibold text-slate-700">Available Orders:</span>{' '}
-                        {remainingOrders !== undefined ? remainingOrders : 'N/A'}
-                      </p>
-                      <p className="text-foreground">
-                        <span className="font-semibold text-slate-700">Prep Time:</span>{' '}
-                          {resolvedPrepTimeMinutes !== undefined
-                            ? `${resolvedPrepTimeMinutes} mins`
-                            : hoveredProductRecipeQuery.isFetching && product.id === hoveredProductId
-                              ? 'Loading...'
-                              : 'N/A'}
-                      </p>
-                      <p className="text-foreground">
-                        <span className="font-semibold text-slate-700">Servings:</span>{' '}
-                          {resolvedServings !== undefined
-                            ? resolvedServings
-                            : hoveredProductRecipeQuery.isFetching && product.id === hoveredProductId
-                              ? 'Loading...'
-                              : 'N/A'}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-                )}
                 </button>
               );
             })}
@@ -1842,6 +1828,58 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
           PREVIEW ORDER
         </button>
       </div>
+
+      {hoveredProduct && hoveredProductPreview && (
+        <div
+          className="pointer-events-none fixed z-[45] -translate-x-1/2 -translate-y-1/2 transition-all duration-300 ease-out"
+          style={{
+            left: hoveredProductPreview.left,
+            top: hoveredProductPreview.top,
+            width: hoveredProductPreview.width,
+          }}
+        >
+          <div className="overflow-hidden rounded-[1.35rem] border border-primary/20 bg-white shadow-[0_24px_48px_rgba(15,23,42,0.22)] ring-1 ring-primary/10">
+            <div className="aspect-[16/10] overflow-hidden bg-slate-100">
+              <img
+                src={hoveredProduct.image}
+                alt={hoveredProduct.name}
+                className="h-full w-full object-contain p-2"
+              />
+            </div>
+            <div className="space-y-3 p-4">
+              <div className="min-w-0 space-y-2">
+                <h3 className="text-base font-semibold leading-5 text-foreground">{hoveredProduct.name}</h3>
+                <p className="text-xs leading-5 text-muted-foreground">
+                  {hoveredProduct.description || 'No description available.'}
+                </p>
+              </div>
+              <p className="shrink-0 text-xs font-semibold text-primary">₱ {hoveredProduct.price.toFixed(2)}</p>
+            </div>
+            <div className="mx-4 mb-4 space-y-1.5 rounded-xl bg-slate-50 px-3 py-2.5 text-xs">
+              <p className="text-foreground">
+                <span className="font-semibold text-slate-700">Available Orders:</span>{' '}
+                {hoveredProductRemainingOrders !== undefined ? hoveredProductRemainingOrders : 'N/A'}
+              </p>
+              <p className="text-foreground">
+                <span className="font-semibold text-slate-700">Prep Time:</span>{' '}
+                {hoveredProductPrepTimeMinutes !== undefined
+                  ? `${hoveredProductPrepTimeMinutes} mins`
+                  : hoveredProductRecipeQuery.isFetching
+                    ? 'Loading...'
+                    : 'N/A'}
+              </p>
+              <p className="text-foreground">
+                <span className="font-semibold text-slate-700">Servings:</span>{' '}
+                {hoveredProductServings !== undefined
+                  ? hoveredProductServings
+                  : hoveredProductRecipeQuery.isFetching
+                    ? 'Loading...'
+                    : 'N/A'}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Order Preview Modal */}
       {showPreview && (
