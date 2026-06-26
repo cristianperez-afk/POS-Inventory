@@ -1,5 +1,7 @@
+import { getManilaDateKey } from '../../../../shared/utils/date';
+
 export const formatDate = (value: string) =>
-  value ? new Date(value).toISOString().split('T')[0] : '';
+  value ? getManilaDateKey(value) : '';
 
 export const formatPeso = (value: number | null | undefined) =>
   `₱${Number(value ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;

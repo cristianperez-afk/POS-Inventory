@@ -9,6 +9,7 @@ import {
 } from "../lib/restaurant";
 import { useSession } from "../../app/hooks/useSession";
 import { defaultCategoryHierarchy, formatCurrency, getInventoryValue, isExpiringSoon, splitCategory, type InventoryProduct } from "../lib/inventoryLogic";
+import { formatManilaFullDateTime, getManilaDateKey } from "../../../../shared/utils/date";
 
 type PendingOrder = {
   id: string;
@@ -182,9 +183,8 @@ export function Dashboard() {
   }));
 
   const formatActivityTimestamp = (timestamp: string) => {
-    const date = new Date(timestamp);
-    if (Number.isNaN(date.getTime())) return timestamp;
-    return date.toLocaleString([], { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const formatted = formatManilaFullDateTime(timestamp);
+    return formatted === 'Invalid Date' ? timestamp : formatted;
   };
 
   const allInventoryData = products.map((product) => {
@@ -484,7 +484,7 @@ export function Dashboard() {
                       {order.items} item{order.items !== 1 ? 's' : ''}
                     </p>
                     <p className="text-xs text-slate-600 mt-1">
-                      Expected Delivery: {new Date(order.expectedDelivery).toLocaleDateString()}
+                      Expected Delivery: {getManilaDateKey(order.expectedDelivery)}
                     </p>
                   </div>
                 </div>

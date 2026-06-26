@@ -26,6 +26,7 @@ import {
   getDeliveryDelayLabel,
   isPurchaseOrderDelayed,
 } from '../lib/purchaseOrderDelivery';
+import { getManilaDateKey } from '../../../../shared/utils/date';
 
 const STATUS_LABEL: Record<string, string> = {
   DRAFT: 'Draft',
@@ -1042,7 +1043,7 @@ export default function PurchaseOrdersView({
                   {getDeliveryDelayBadge(order)}
                 </div>
                 <p className="text-[14px] text-foreground">Supplier: <span className="font-medium">{order.supplier?.name ?? '—'}</span></p>
-                <p className="text-[14px] text-foreground">Date: {new Date(order.createdAt).toLocaleDateString()}</p>
+                <p className="text-[14px] text-foreground">Date: {getManilaDateKey(order.createdAt)}</p>
                 <p className="text-[14px] text-foreground">Expected Delivery: {formatExpectedDelivery(order.expectedDelivery)}</p>
                 {order.paymentMethod && <p className="text-[14px] text-foreground">Payment: {order.paymentMethod}</p>}
               </div>
@@ -1126,7 +1127,7 @@ export default function PurchaseOrdersView({
                       <div>
                         <h4 className="text-[18px] font-semibold text-foreground">{po.orderNumber}</h4>
                         <p className="text-[14px] text-muted-foreground">Supplier: {po.supplier?.name ?? '—'}</p>
-                        <p className="text-[14px] text-muted-foreground">Date: {new Date(po.createdAt).toLocaleDateString()}</p>
+                        <p className="text-[14px] text-muted-foreground">Date: {getManilaDateKey(po.createdAt)}</p>
                         <p className="text-[14px] text-muted-foreground">Expected Delivery: {formatExpectedDelivery(po.expectedDelivery)}</p>
                         <div className="mt-2">{getDeliveryDelayBadge(po)}</div>
                       </div>

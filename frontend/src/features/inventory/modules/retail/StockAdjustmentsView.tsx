@@ -11,6 +11,7 @@ import {
   type RetailAdjustmentType,
   type RetailStockAdjustment,
 } from '../lib/retail';
+import { formatManilaFullDateTime } from '../../../../shared/utils/date';
 
 // Each type maps to a stock direction. RECOUNT is special — the entered number is the
 // new counted quantity, and the change is the difference from current stock.
@@ -39,7 +40,7 @@ const statusBadgeClass = (status: string) => {
 };
 
 const formatDate = (value?: string | null) =>
-  value ? new Date(value).toLocaleString() : '—';
+  value ? formatManilaFullDateTime(value) : '—';
 
 export default function StockAdjustmentsView({
   currentUser,

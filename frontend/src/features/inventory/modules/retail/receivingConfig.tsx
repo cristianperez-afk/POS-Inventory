@@ -12,6 +12,7 @@ import type {
   ReceiptRecord,
   ResolvedReceivingConfig,
 } from '../shared/receiving/GoodsReceived';
+import { getManilaDateKey } from '../../../../shared/utils/date';
 
 // Maps the retail purchase-order data onto the shared Goods Received contract.
 export function useRetailReceivingConfig(): ResolvedReceivingConfig {
@@ -66,7 +67,7 @@ export function useRetailReceivingConfig(): ResolvedReceivingConfig {
       orderNumber: receipt.receiptNumber,
       purchaseOrderNumber: receipt.purchaseOrder?.orderNumber ?? receipt.purchaseOrderId,
       supplier: receipt.purchaseOrder?.supplier?.name ?? '',
-      receivedDate: receipt.createdAt ? new Date(receipt.createdAt).toLocaleDateString() : '',
+      receivedDate: receipt.createdAt ? getManilaDateKey(receipt.createdAt) : '',
       receivedAt: receipt.createdAt ?? undefined,
       receivedBy: receipt.receivedBy?.name ?? receipt.receivedBy?.email ?? '',
       status,

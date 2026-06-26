@@ -11,6 +11,7 @@ import {
   useRetailTransferRecordsQuery,
 } from '../lib/retail';
 import StockAdjustmentsView from './StockAdjustmentsView';
+import { getManilaDateKey } from '../../../../shared/utils/date';
 
 const TRANSFER_STATUS_LABEL: Record<string, string> = {
   PENDING: 'Pending',
@@ -230,7 +231,7 @@ export default function TransfersView({
                       <ArrowRightLeft className="size-4 text-secondary" />
                       <span className="font-medium">{transfer.toLocation?.name}</span>
                     </div>
-                    <p className="text-[13px] text-muted-foreground">Date: {new Date(transfer.createdAt).toLocaleDateString()}</p>
+                    <p className="text-[13px] text-muted-foreground">Date: {getManilaDateKey(transfer.createdAt)}</p>
                     {transfer.createdBy && <p className="text-[13px] text-muted-foreground">Created by: {transfer.createdBy.name}</p>}
                     {transfer.notes && <p className="text-[13px] text-muted-foreground mt-1">Notes: {transfer.notes}</p>}
                   </div>

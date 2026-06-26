@@ -11,6 +11,7 @@ import {
   useRestaurantWasteQuery,
 } from "../lib/restaurant";
 import { StockAdjustments } from "./StockAdjustments";
+import { getLocalDateKey } from "../../../../shared/utils/date";
 
 type TransferStatus = "pending" | "approved" | "in-transit" | "completed" | "rejected";
 type AdjustmentType = "damage" | "shrinkage" | "waste" | "found" | "correction";
@@ -272,7 +273,7 @@ export function Transfers() {
   const transferStats = [
     { label: "Pending Approvals", value: transfers.filter(t => t.status === "pending").length, icon: Clock, color: "from-yellow-500 to-orange-500", filter: "pending" },
     { label: "In Transit", value: transfers.filter(t => t.status === "in-transit").length, icon: ArrowLeftRight, color: "from-purple-500 to-indigo-500", filter: "in-transit" },
-    { label: "Completed Today", value: transfers.filter(t => t.status === "completed" && t.completedDate === new Date().toISOString().split('T')[0]).length, icon: CheckCircle, color: "from-green-500 to-emerald-500", filter: "completed" },
+    { label: "Completed Today", value: transfers.filter(t => t.status === "completed" && t.completedDate === getLocalDateKey()).length, icon: CheckCircle, color: "from-green-500 to-emerald-500", filter: "completed" },
   ];
 
   return (

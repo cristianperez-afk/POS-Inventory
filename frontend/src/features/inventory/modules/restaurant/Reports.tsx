@@ -15,6 +15,7 @@ import {
 } from "../lib/restaurant";
 import { useSession } from "../../app/hooks/useSession";
 import { defaultCategoryHierarchy, formatCurrency, getInventoryValue, splitCategory } from "../lib/inventoryLogic";
+import { formatManilaFullDateTime, getLocalDateKey } from "../../../../shared/utils/date";
 
 type TabType = 'overview' | 'inventory' | 'consumption' | 'orders' | 'operations' | 'audit' | 'financial' | 'confidential';
 
@@ -42,15 +43,8 @@ const statusPill = (status: string) => {
 
 const formatAuditDate = (value?: string) => {
   if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString('en-PH', {
-    year: 'numeric',
-    month: 'short',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  const formatted = formatManilaFullDateTime(value);
+  return formatted === 'Invalid Date' ? value : formatted;
 };
 
 const csvValue = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
@@ -394,7 +388,7 @@ export function Reports() {
 
   // ── Export ──────────────────────────────────────────────────────────────────
   const handleExport = () => {
-    const timestamp = new Date().toISOString().split('T')[0];
+    const timestamp = getLocalDateKey();
     let csv = '';
     let filename = `restaurant_${activeTab}_${timestamp}.csv`;
 

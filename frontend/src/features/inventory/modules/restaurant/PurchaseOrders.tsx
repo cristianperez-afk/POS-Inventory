@@ -25,6 +25,7 @@ import {
   isPurchaseOrderDelayed,
 } from "../lib/purchaseOrderDelivery";
 import { SuppliersManager } from "../shared/suppliers/SuppliersManager";
+import { formatManilaFullDateTime } from "../../../../shared/utils/date";
 
 // Helper function to normalize product names (capitalize first letter of each word, trim)
 const normalizeProductName = (name: string | undefined): string => {
@@ -927,7 +928,7 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
                       <p className="mt-1 text-sm text-red-800">{selectedOrder.rejectionNote}</p>
                       <p className="mt-2 text-xs text-red-700">
                         Rejected by {selectedOrder.rejectedBy || "Admin"}
-                        {selectedOrder.rejectedAt ? ` on ${new Date(selectedOrder.rejectedAt).toLocaleString()}` : ""}
+                        {selectedOrder.rejectedAt ? ` on ${formatManilaFullDateTime(selectedOrder.rejectedAt)}` : ""}
                       </p>
                     </div>
                   </div>

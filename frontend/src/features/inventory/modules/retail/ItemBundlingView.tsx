@@ -24,6 +24,7 @@ import {
   useRetailInventoryRecordsQuery,
   useUpdateRetailBundleMutation,
 } from '../lib/retail';
+import { getManilaDateKey } from '../../../../shared/utils/date';
 
 export function ItemBundlingView({
   currentUser
@@ -403,7 +404,7 @@ export function ItemBundlingView({
             <div className="mb-4 p-4 bg-muted rounded-[8px]">
               <h4 className="text-[16px] font-semibold text-foreground mb-2">{selectedBundle.name}</h4>
               <p className="text-[13px] text-muted-foreground">Created by: {selectedBundle.createdBy?.name ?? 'N/A'}</p>
-              <p className="text-[13px] text-muted-foreground">Date: {new Date(selectedBundle.createdAt).toLocaleDateString()}</p>
+              <p className="text-[13px] text-muted-foreground">Date: {getManilaDateKey(selectedBundle.createdAt)}</p>
               <p className="text-[13px] text-muted-foreground">Items: {(selectedBundle.items ?? []).length}</p>
               <p className="text-[13px] text-muted-foreground">Discount: {selectedBundle.discount}%</p>
               <p className="text-[16px] font-bold text-secondary mt-2">Price: ₱{selectedBundle.price.toLocaleString()}</p>
@@ -594,11 +595,11 @@ export function ItemBundlingView({
 
                 <div className="border-t border-border/50 pt-3 mb-3">
                   <p className="text-[11px] text-muted-foreground truncate">
-                    Created: {new Date(bundle.createdAt).toLocaleDateString()} by {bundle.createdBy?.name ?? 'N/A'}
+                    Created: {getManilaDateKey(bundle.createdAt)} by {bundle.createdBy?.name ?? 'N/A'}
                   </p>
                   {bundle.approvedBy && bundle.approvedAt && (
                     <p className="text-[10px] text-success truncate">
-                      Approved by {bundle.approvedBy.name} on {new Date(bundle.approvedAt).toLocaleDateString()}
+                      Approved by {bundle.approvedBy.name} on {getManilaDateKey(bundle.approvedAt)}
                     </p>
                   )}
                   {bundle.rejectionReason && (

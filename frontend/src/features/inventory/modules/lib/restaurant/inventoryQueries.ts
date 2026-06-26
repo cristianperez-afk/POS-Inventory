@@ -17,11 +17,11 @@ import {
   useStockMovementsQuery,
 } from '../domainQueries';
 import { isRecentlyAdded } from '../../../app/utils/format';
+import { getManilaDateKey } from '../../../../../shared/utils/date';
 
 const toDateInput = (value?: string | null) => {
   if (!value) return '';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
+  return getManilaDateKey(value);
 };
 
 async function getRestaurantInventory() {

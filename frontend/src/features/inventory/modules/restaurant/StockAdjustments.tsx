@@ -12,6 +12,7 @@ import {
   type RestaurantAdjustmentType,
   type RestaurantStockAdjustment,
 } from "../lib/restaurant";
+import { formatManilaFullDateTime } from "../../../../shared/utils/date";
 
 const ADJUSTMENT_TYPES: {
   type: RestaurantAdjustmentType;
@@ -37,7 +38,7 @@ const statusBadgeClass = (status: string) => {
   return map[status] ?? "bg-muted text-muted-foreground";
 };
 
-const formatDate = (value?: string | null) => (value ? new Date(value).toLocaleString() : "—");
+const formatDate = (value?: string | null) => (value ? formatManilaFullDateTime(value) : "—");
 
 export function StockAdjustments({ embedded = false }: { embedded?: boolean } = {}) {
   const { currentUser } = useSession();
