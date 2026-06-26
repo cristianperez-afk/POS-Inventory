@@ -10,6 +10,7 @@ import {
   Eye,
   Upload,
 } from 'lucide-react';
+import { formatManilaDateTime, parseDatabaseTimestamp } from '../../../../../shared/utils/date';
 
 const preventNumberWheel = (event: WheelEvent<HTMLInputElement>) => {
   event.currentTarget.blur();
@@ -184,16 +185,9 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
   const formatReceivedDateTime = (record: ReceiptRecord) => {
     const value = record.receivedAt || record.receivedDate;
     if (!value) return 'N/A';
-    const date = new Date(value);
+    const date = parseDatabaseTimestamp(value);
     if (Number.isNaN(date.getTime())) return record.receivedDate || value;
-    return date.toLocaleString('en-PH', {
-      timeZone: 'Asia/Manila',
-      year: 'numeric',
-      month: 'short',
-      day: '2-digit',
-      hour: 'numeric',
-      minute: '2-digit',
-    });
+    return formatManilaDateTime(value);
   };
 
   const stats = useMemo(
@@ -222,7 +216,7 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
 
     let matchesMonths = true;
     if (monthsFilter !== 'all' && r.receivedAt) {
-      const received = new Date(r.receivedAt);
+      const received = parseDatabaseTimestamp(r.receivedAt);
       if (!Number.isNaN(received.getTime())) {
         const cutoff = new Date();
         cutoff.setMonth(cutoff.getMonth() - Number(monthsFilter));

@@ -10,6 +10,7 @@ import {
   useRestoreRestaurantRecipeMutation,
   useSaveRestaurantRecipeMutation,
 } from "../lib/restaurant";
+import { getManilaDateKey } from "../../../../shared/utils/date";
 
 type Ingredient = {
   id: string;
@@ -1911,7 +1912,7 @@ export function RecipeBOM() {
                                   <> | Usable: {formatNumber(usableStock)} {ing.inventoryUnit || ing.unit}</>
                                 )}
                                 {stockStatus === "expired" && ing.inventoryExpiry && (
-                                  <> | Expired: {new Date(ing.inventoryExpiry).toLocaleDateString()}</>
+                                  <> | Expired: {getManilaDateKey(ing.inventoryExpiry)}</>
                                 )}
                               </p>
                             </td>

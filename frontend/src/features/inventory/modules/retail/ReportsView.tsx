@@ -18,15 +18,12 @@ import { categorySubcategories, CHART_COLORS } from '../../app/utils/constants';
 import { autoSortItem } from '../../app/utils/autoSortingRules';
 import { useSession } from '../../app/hooks/useSession';
 import { useRetailWorkspace, useRetailAuditLogsQuery } from '../lib/retail';
+import { formatManilaFullDateTime, getLocalDateKey } from '../../../../shared/utils/date';
 
 const formatAuditDate = (value?: string) => {
   if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString('en-PH', {
-    year: 'numeric', month: 'short', day: '2-digit',
-    hour: '2-digit', minute: '2-digit',
-  });
+  const formatted = formatManilaFullDateTime(value);
+  return formatted === '-' ? value : formatted;
 };
 
 export function ReportsView() {
@@ -294,7 +291,7 @@ export function ReportsView() {
 
   const handleExportReport = (reportType: string) => {
     let csvContent = '';
-    const timestamp = new Date().toISOString().split('T')[0];
+    const timestamp = getLocalDateKey();
     let filename = `${reportType}_Report_${timestamp}.csv`;
 
     switch (reportType) {

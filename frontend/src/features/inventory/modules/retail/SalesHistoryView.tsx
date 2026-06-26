@@ -6,6 +6,7 @@ import {
   useRetailLocationsQuery,
   useRetailSalesQuery,
 } from '../lib/retail';
+import { formatManilaFullDateTime, getLocalDateKey, parseDatabaseTimestamp } from '../../../../shared/utils/date';
 
 type Sale = {
   id: string;
@@ -33,12 +34,8 @@ const STATUS_PILL: Record<string, string> = {
 };
 
 const formatDateTime = (value: string) => {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString('en-PH', {
-    year: 'numeric', month: 'short', day: '2-digit',
-    hour: '2-digit', minute: '2-digit',
-  });
+  const formatted = formatManilaFullDateTime(value);
+  return formatted === '-' ? value : formatted;
 };
 
 export default function SalesHistoryView({
@@ -79,7 +76,7 @@ export default function SalesHistoryView({
   const filteredSales = useMemo(() => {
     const term = search.trim().toLowerCase();
     return sales.filter((s) => {
-      if (rangeStart && new Date(s.createdAt) < rangeStart) return false;
+      if (rangeStart && parseDatabaseTimestamp(s.createdAt) < rangeStart) return false;
       if (locationId !== 'all' && s.location?.id !== locationId) return false;
       if (status !== 'all' && s.status !== status) return false;
       if (paymentMethod !== 'all' && s.paymentMethod !== paymentMethod) return false;
@@ -150,7 +147,7 @@ export default function SalesHistoryView({
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = `Sales_History_${new Date().toISOString().split('T')[0]}.csv`;
+    link.download = `Sales_History_${getLocalDateKey()}.csv`;
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();

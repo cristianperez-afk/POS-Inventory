@@ -32,6 +32,7 @@ import {
 } from '../domainQueries';
 import { useRestaurantProductMergeMetadataQuery } from './shared';
 import { toDateTimeLocalInput } from '../purchaseOrderDelivery';
+import { getManilaDateKey } from '../../../../../shared/utils/date';
 
 type RestaurantProductMergeMetadata = {
   aliases?: Record<string, string>;
@@ -69,8 +70,7 @@ function parseReceiptItemNotes(notes?: string | null): ReceiptItemQualityMetadat
 
 const toDateInput = (value?: string | null) => {
   if (!value) return '';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
+  return getManilaDateKey(value);
 };
 
 const formatActorName = (actor: any) =>

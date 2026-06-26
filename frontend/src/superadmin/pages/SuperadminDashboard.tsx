@@ -27,7 +27,7 @@ import {
 } from 'lucide-react';
 import { LogoutConfirmDialog } from '../../shared/components/LogoutConfirmDialog';
 import { DeleteConfirmDialog } from '../../shared/components/DeleteConfirmDialog';
-import { getLocalDateKey } from '../../shared/utils/date';
+import { getLocalDateKey, getManilaDateKey } from '../../shared/utils/date';
 
 interface AdminSummary {
   id: number;
@@ -546,7 +546,7 @@ export function SuperadminDashboard({ currentUser, onLogout, onNavigate }: Super
             <div className="flex items-center gap-5">
               <div className="relative">
                 <button type="button" className="flex h-10 items-center gap-3 rounded-md border border-slate-200 bg-white px-4 text-base text-[#007a5e]">
-                  {new Date(selectedDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                  {getManilaDateKey(selectedDate)}
                   <CalendarDays className="h-4 w-4 text-slate-500" />
                 </button>
                 <input

@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState, useRef, ReactNode } from 'react';
 import { getApiBaseUrl } from '../../auth/services/auth';
 import type { AuthenticatedUser } from '../../auth/types/auth';
-import { getLocalDateKey, getManilaTime } from '../../shared/utils/date';
+import { getLocalDateKey, getManilaTime, parseDatabaseTimestamp } from '../../shared/utils/date';
 
 export interface OrderItem {
   id?: number;
@@ -309,7 +309,7 @@ export function useOrders() {
 }
 
 function mapDatabaseRetailOrder(row: any): Order {
-  const createdAt = row.created_at ? new Date(row.created_at) : new Date();
+  const createdAt = row.created_at ? parseDatabaseTimestamp(row.created_at) : new Date();
   const items = Array.isArray(row.items) ? row.items : [];
 
   return {

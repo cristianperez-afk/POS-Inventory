@@ -7,7 +7,7 @@ import { useOrders, Order } from '../../shared/context/OrderContext';
 import { useTables } from '../../shared/context/TableContext';
 import { TableAssignmentNotification } from '../../shared/components/TableAssignmentNotification';
 import { DeleteConfirmDialog } from '../../shared/components/DeleteConfirmDialog';
-import { formatManilaTime } from '../../shared/utils/date';
+import { formatManilaFullDateTime, formatManilaTime } from '../../shared/utils/date';
 
 interface TableManagementProps {
   onNavigate: (page: Page) => void;
@@ -1255,9 +1255,9 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
                         <div className="grid grid-cols-2 gap-2 text-sm text-muted-foreground">
                           <p><strong>Party Size:</strong> {entry.partySize} people</p>
                           <p><strong>Total Amount:</strong> ₱{entry.totalAmount.toFixed(2)}</p>
-                          <p><strong>Time Occupied:</strong> {new Date(entry.timeOccupied).toLocaleString()}</p>
+                          <p><strong>Time Occupied:</strong> {formatManilaFullDateTime(entry.timeOccupied)}</p>
                           {entry.timeReleased && (
-                            <p><strong>Time Released:</strong> {new Date(entry.timeReleased).toLocaleString()}</p>
+                            <p><strong>Time Released:</strong> {formatManilaFullDateTime(entry.timeReleased)}</p>
                           )}
                         </div>
                       </div>
