@@ -59,6 +59,7 @@ export const domainQueryKeys = {
   recipes: ['recipes'] as const,
   kitchenOrders: ['kitchen-orders'] as const,
   restaurantSettings: ['restaurant-settings'] as const,
+  auditLogs: ['audit-logs'] as const,
 };
 
 const domainInvalidationDependencies = new Map<string, QueryKey[]>([

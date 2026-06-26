@@ -4,7 +4,6 @@ import { ChevronDown, ChevronRight, Clock, Download, TrendingUp, PhilippinePeso,
 import {
   useRestaurantAdjustmentsQuery,
   useRestaurantGoodsRecordsQuery,
-  useRestaurantInventoryMovementsQuery,
   useRestaurantIngredientConsumptionQuery,
   useRestaurantInventoryQuery,
   useRestaurantKitchenOrdersQuery,
@@ -12,6 +11,7 @@ import {
   useRestaurantTransfersQuery,
   useRestaurantUsersQuery,
   useRestaurantWasteQuery,
+  useRestaurantAuditLogsQuery,
 } from "../lib/restaurant";
 import { useSession } from "../../app/hooks/useSession";
 import { defaultCategoryHierarchy, formatCurrency, getInventoryValue, splitCategory } from "../lib/inventoryLogic";
@@ -138,9 +138,11 @@ export function Reports() {
   const { data: adjustments = [] } = useRestaurantAdjustmentsQuery();
   const { data: wasteLogs = [] } = useRestaurantWasteQuery();
   const { data: goodsReceived = [] } = useRestaurantGoodsRecordsQuery();
-  const { data: inventoryMovements = [] } = useRestaurantInventoryMovementsQuery();
   const { data: posOrders = [] } = useRestaurantKitchenOrdersQuery();
   const { data: users = [] } = useRestaurantUsersQuery(isAdmin);
+  // Real audit trail — one row per recorded activity (create / update / delete /
+  // status change / receive / adjust / setting change) written by the backend.
+  const { data: auditTrail = [] } = useRestaurantAuditLogsQuery();
 
   const inventoryValue = getInventoryValue(products);
 
@@ -322,113 +324,6 @@ export function Reports() {
 
     return { totalInventoryValue, totalPOSpending, receivedPOValue, wasteValue, categoryValue, assetHealthScore };
   }, [products, purchaseOrders, receivedPOs, wasteLogs]);
-
-  const auditTrail = useMemo(() => {
-    const entries = [
-      ...inventoryMovements.map(movement => ({
-        id: `movement-${movement.id}`,
-        date: movement.date || '',
-        module: 'Inventory',
-        action: String(movement.type || 'Stock Movement').replace(/_/g, ' '),
-        item: movement.item || 'Item',
-        quantity: movement.quantity ? `${movement.quantity} ${movement.unit || ''}`.trim() : '',
-        performedBy: movement.createdBy || movement.by || '',
-        reference: movement.sourceId || movement.source || movement.id,
-        details: [
-          movement.previousQuantity !== undefined && movement.newQuantity !== undefined
-            ? `${movement.previousQuantity} to ${movement.newQuantity}`
-            : '',
-          movement.notes || movement.reason || '',
-          movement.location ? `Location: ${movement.location}` : '',
-        ].filter(Boolean).join(' | '),
-        status: 'recorded',
-      })),
-      ...posOrders.map(order => ({
-        id: `pos-${order.id}`,
-        date: order.voidedAt || order.orderedAt || '',
-        module: 'POS / Kitchen',
-        action: order.status === 'voided' ? 'Receipt Voided' : 'Receipt Completed',
-        item: order.recipeName || 'Menu item',
-        quantity: order.quantity ? `${order.quantity} order(s)` : '',
-        performedBy: order.completedBy || '',
-        reference: order.receiptNo || order.id,
-        details: [
-          order.modifiers?.length ? `Modifiers: ${order.modifiers.join(', ')}` : '',
-          order.voidReason ? `Void reason: ${order.voidReason}` : '',
-          order.notes || '',
-        ].filter(Boolean).join(' | '),
-        status: order.status || 'recorded',
-      })),
-      ...goodsReceived.map(receipt => ({
-        id: `receipt-${receipt.backendId || receipt.id}`,
-        date: receipt.receivedDate || '',
-        module: 'Goods Received',
-        action: 'Receipt Verified',
-        item: `${receipt.items || receipt.receivedItems?.length || 0} item(s)`,
-        quantity: `${(receipt.receivedItems || []).reduce((sum: number, item: any) => sum + (item.acceptedQuantity || 0), 0)} accepted`,
-        performedBy: receipt.receivedBy || '',
-        reference: receipt.id,
-        details: receipt.notes || `PO: ${receipt.poId || 'N/A'}`,
-        status: receipt.status || 'recorded',
-      })),
-      ...purchaseOrders.map(order => ({
-        id: `po-${order.backendId || order.id}`,
-        date: order.createdAt || order.date || '',
-        module: 'Purchase Order',
-        action: `PO ${order.status || 'created'}`,
-        item: order.supplier || 'Supplier',
-        quantity: `${order.items || order.orderItems?.length || 0} item(s)`,
-        performedBy: order.createdBy || '',
-        reference: order.id,
-        details: order.rejectionNote || `Total: ${formatCurrency(order.total || 0)}`,
-        status: order.status || 'recorded',
-      })),
-      ...transfers.map(transfer => ({
-        id: `transfer-${transfer.backendId || transfer.id}`,
-        date: transfer.completedDate || transfer.requestDate || '',
-        module: 'Transfer',
-        action: `Transfer ${transfer.status || 'requested'}`,
-        item: transfer.item || 'Multiple items',
-        quantity: transfer.quantity ? `${transfer.quantity} ${transfer.unit || ''}`.trim() : '',
-        performedBy: transfer.requestedByEmail || transfer.requestedBy || '',
-        reference: transfer.id,
-        details: `${transfer.from || 'Source'} to ${transfer.to || 'Destination'}`,
-        status: transfer.status || 'recorded',
-      })),
-      ...adjustments.map(adjustment => ({
-        id: `adjustment-${adjustment.id}`,
-        date: adjustment.date || '',
-        module: 'Adjustment',
-        action: adjustment.type || 'Correction',
-        item: adjustment.item || 'Item',
-        quantity: adjustment.quantity ? `${adjustment.quantity} ${adjustment.unit || ''}`.trim() : '',
-        performedBy: adjustment.adjustedBy || '',
-        reference: adjustment.id,
-        details: adjustment.reason || adjustment.notes || '',
-        status: 'recorded',
-      })),
-      ...wasteLogs.map(waste => ({
-        id: `waste-${waste.id}`,
-        date: waste.date || '',
-        module: 'Waste',
-        action: waste.wasteType || 'Waste Log',
-        item: waste.item || 'Item',
-        quantity: waste.quantity ? `${waste.quantity} ${waste.unit || ''}`.trim() : '',
-        performedBy: waste.loggedBy || '',
-        reference: waste.id,
-        details: waste.notes || `Value: ${formatCurrency(waste.totalValue || 0)}`,
-        status: 'recorded',
-      })),
-    ];
-
-    return entries
-      .filter(entry => entry.date || entry.reference)
-      .sort((a, b) => {
-        const aTime = new Date(a.date).getTime();
-        const bTime = new Date(b.date).getTime();
-        return (Number.isNaN(bTime) ? 0 : bTime) - (Number.isNaN(aTime) ? 0 : aTime);
-      });
-  }, [inventoryMovements, posOrders, goodsReceived, purchaseOrders, transfers, adjustments, wasteLogs]);
 
   const visibleAuditTrail = useMemo(() => {
     if (hasFullAuditTrailAccess) return auditTrail;
