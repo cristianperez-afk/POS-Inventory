@@ -57,7 +57,7 @@ type KitchenOrder = {
 };
 
 const STATUS_STYLES: Record<KitchenStatus, string> = {
-  pending: "border-slate-300 bg-slate-50 text-slate-700",
+  pending: "border-border bg-muted text-foreground",
   preparing: "border-amber-300 bg-amber-50 text-amber-700",
   ready: "border-emerald-300 bg-emerald-50 text-emerald-700",
   served: "border-sky-300 bg-sky-50 text-sky-700",

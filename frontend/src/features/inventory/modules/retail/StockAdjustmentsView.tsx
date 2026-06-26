@@ -11,6 +11,7 @@ import {
   type RetailAdjustmentType,
   type RetailStockAdjustment,
 } from '../lib/retail';
+import { formatManilaFullDateTime } from '../../../../shared/utils/date';
 
 // Each type maps to a stock direction. RECOUNT is special — the entered number is the
 // new counted quantity, and the change is the difference from current stock.
@@ -39,7 +40,7 @@ const statusBadgeClass = (status: string) => {
 };
 
 const formatDate = (value?: string | null) =>
-  value ? new Date(value).toLocaleString() : '—';
+  value ? formatManilaFullDateTime(value) : '—';
 
 export default function StockAdjustmentsView({
   currentUser,
@@ -186,7 +187,7 @@ export default function StockAdjustmentsView({
 
       <div className="grid grid-cols-[420px_1fr] gap-4 flex-1 min-h-0">
         {/* Left: create form */}
-        <div className="bg-white border border-border rounded-[14px] p-5 flex flex-col overflow-y-auto">
+        <div className="bg-card border border-border rounded-[14px] p-5 flex flex-col overflow-y-auto">
           <div className="flex items-center gap-2 mb-4">
             <SlidersHorizontal className="size-5 text-secondary" />
             <h3 className="font-semibold text-foreground text-[15px]">New Adjustment</h3>
@@ -256,7 +257,7 @@ export default function StockAdjustmentsView({
                 type="button"
                 onClick={() => setType(t)}
                 className={`text-left px-3 py-2 rounded-[8px] border text-[12px] transition-colors ${
-                  type === t ? 'border-secondary bg-secondary/10' : 'border-border bg-white hover:bg-muted'
+                  type === t ? 'border-secondary bg-secondary/10' : 'border-border bg-card hover:bg-muted'
                 }`}
               >
                 <p className="font-semibold text-foreground">{title}</p>
@@ -323,7 +324,7 @@ export default function StockAdjustmentsView({
         </div>
 
         {/* Right: adjustments list */}
-        <div className="bg-white border border-border rounded-[14px] p-5 flex flex-col overflow-hidden">
+        <div className="bg-card border border-border rounded-[14px] p-5 flex flex-col overflow-hidden">
           <div className="flex items-center gap-2 mb-3">
             <Clock className="size-5 text-secondary" />
             <h3 className="font-semibold text-foreground text-[15px]">Adjustment History</h3>
@@ -371,7 +372,7 @@ export default function StockAdjustmentsView({
       {/* Reject modal */}
       {rejectingId && (
         <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white rounded-[14px] p-6 max-w-md w-full">
+          <div className="bg-card rounded-[14px] p-6 max-w-md w-full">
             <div className="flex items-center gap-2 mb-2 text-destructive">
               <ShieldAlert className="size-5" />
               <h3 className="text-[18px] font-bold">Reject Adjustment</h3>

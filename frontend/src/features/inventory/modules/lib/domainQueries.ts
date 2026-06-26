@@ -59,6 +59,7 @@ export const domainQueryKeys = {
   recipes: ['recipes'] as const,
   kitchenOrders: ['kitchen-orders'] as const,
   restaurantSettings: ['restaurant-settings'] as const,
+  auditLogs: ['audit-logs'] as const,
 };
 
 const domainInvalidationDependencies = new Map<string, QueryKey[]>([
@@ -240,7 +241,7 @@ export function useSalesQuery<TData = ApiSale[]>(
 }
 
 export function useBundlesQuery<TData = ApiBundle[]>(
-  params?: { status?: string },
+  params?: { status?: string; archived?: boolean },
   options?: SelectOptions<ApiBundle[], TData>,
 ) {
   return useQuery({

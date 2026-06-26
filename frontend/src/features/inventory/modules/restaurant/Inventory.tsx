@@ -13,6 +13,7 @@ import {
   useUpsertRestaurantCategoryHierarchyMutation,
 } from "../lib/restaurant";
 import { AddProduct } from "./AddProduct";
+import { getManilaDateKey } from "../../../../shared/utils/date";
 
 type Product = {
   id: number;
@@ -857,13 +858,7 @@ export function Inventory() {
                             {formatQuantity(p.stock)} {p.unit}
                           </p>
                           <p className="text-xs text-muted-foreground">
-                            {p.addedDate
-                              ? new Date(p.addedDate).toLocaleDateString(undefined, {
-                                  month: "short",
-                                  day: "numeric",
-                                  year: "numeric",
-                                })
-                              : "—"}
+                            {p.addedDate ? getManilaDateKey(p.addedDate) : "—"}
                           </p>
                         </div>
                       </div>

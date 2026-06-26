@@ -1,3 +1,5 @@
+import { getManilaDateKey } from '../../../../shared/utils/date';
+
 // Types
 export interface Supplier {
   id: string;
@@ -1005,7 +1007,7 @@ export function generateSales(): Sale[] {
     const daysAgo = Math.floor(Math.random() * 30);
     const saleDate = new Date();
     saleDate.setDate(saleDate.getDate() - daysAgo);
-    const dateStr = saleDate.toISOString().split('T')[0];
+    const dateStr = getManilaDateKey(saleDate);
     const timeStr = `${String(Math.floor(Math.random() * 12) + 9).padStart(2, '0')}:${String(Math.floor(Math.random() * 60)).padStart(2, '0')}`;
 
     sales.push({

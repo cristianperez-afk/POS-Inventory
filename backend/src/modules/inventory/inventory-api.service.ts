@@ -295,6 +295,17 @@ export class InventoryApiService {
       ],
     );
     await this.syncInventoryItemToPos(id);
+    await this.recordAudit(scope, {
+      category: 'Inventory',
+      action: 'Item Created',
+      entityType: 'InventoryItem',
+      entityId: id,
+      entityName: name,
+      quantity: `${Number(body.quantity ?? 0)} ${String(body.unit ?? '')}`.trim(),
+      status: 'active',
+      summary: `Added ${name} (${category})`,
+      metadata: { itemType, category, subcategory, locationId },
+    });
     return rows[0];
   }
 
@@ -396,7 +407,29 @@ export class InventoryApiService {
 
     if (!rows[0]) throw new NotFoundException('Inventory item was not found.');
     await this.syncInventoryItemToPos(id);
-    return rows[0];
+    const updated = rows[0] as Record<string, unknown>;
+    const archiveChanged = body.isActive !== undefined;
+    const action = archiveChanged
+      ? (Boolean(body.isActive) ? 'Item Restored' : 'Item Archived')
+      : 'Item Updated';
+    await this.recordAudit(scope, {
+      category: 'Inventory',
+      action,
+      entityType: 'InventoryItem',
+      entityId: id,
+      entityName: String(updated.name ?? body.name ?? 'Item'),
+      quantity:
+        quantityChange !== null
+          ? `${quantityChange} ${String(updated.unit ?? body.unit ?? '')}`.trim()
+          : null,
+      status: updated.isActive === false ? 'archived' : 'active',
+      summary:
+        quantityChange !== null
+          ? `Stock set to ${quantityChange}`
+          : `Updated ${Object.keys(body).join(', ') || 'details'}`,
+      metadata: { changedFields: Object.keys(body) },
+    });
+    return updated;
   }
 
   // Detailed receiving/cost history for a single inventory item, sourced from the
@@ -520,6 +553,14 @@ export class InventoryApiService {
       `,
       [randomUUID(), name, address, manager, phone, scope.businessId],
     );
+    await this.recordAudit(scope, {
+      category: 'Location',
+      action: 'Location Created',
+      entityType: 'Location',
+      entityId: String((rows[0] as Record<string, unknown>)?.id ?? ''),
+      entityName: name,
+      summary: [address, manager].filter(Boolean).join(' • ') || undefined,
+    });
     return rows[0];
   }
 
@@ -569,6 +610,14 @@ export class InventoryApiService {
         scope.businessId,
       ],
     );
+    await this.recordAudit(scope, {
+      category: 'Category',
+      action: 'Category Saved',
+      entityType: 'Category',
+      entityId: String((rows[0] as Record<string, unknown>)?.id ?? ''),
+      entityName: String(body.name ?? 'Uncategorized'),
+      summary: body.description ? String(body.description) : undefined,
+    });
     return rows[0];
   }
 
@@ -687,6 +736,13 @@ export class InventoryApiService {
         [rows[0].menuItemId],
       );
     }
+    await this.recordAudit(scope, {
+      category: 'Recipe',
+      action: 'Recipe Archived',
+      entityType: 'Recipe',
+      entityId: id,
+      status: 'archived',
+    });
     return rows[0];
   }
 
@@ -708,6 +764,13 @@ export class InventoryApiService {
         [rows[0].menuItemId],
       );
     }
+    await this.recordAudit(scope, {
+      category: 'Recipe',
+      action: 'Recipe Restored',
+      entityType: 'Recipe',
+      entityId: id,
+      status: 'active',
+    });
     return rows[0];
   }
 
@@ -739,6 +802,14 @@ export class InventoryApiService {
         [rows[0].menuItemId, scope.businessId],
       );
     }
+    await this.recordAudit(scope, {
+      category: 'Recipe',
+      action: 'Recipe Deleted',
+      entityType: 'Recipe',
+      entityId: id,
+      status: 'deleted',
+      summary: 'Permanently removed',
+    });
     return rows[0];
   }
 
@@ -831,6 +902,15 @@ export class InventoryApiService {
     });
 
     await this.syncInventoryItemToPos(result.menuItemId, result.recipeId, body.isActive !== false);
+    await this.recordAudit(scope, {
+      category: 'Recipe',
+      action: recipeId ? 'Recipe Updated' : 'Recipe Created',
+      entityType: 'Recipe',
+      entityId: result.recipeId,
+      entityName: String(body.name).trim(),
+      summary: `${ingredients.length} ingredient(s) • ${String(body.category).trim()}`,
+      status: body.isActive !== false ? 'active' : 'inactive',
+    });
     return result.recipe;
   }
 
@@ -1314,6 +1394,14 @@ export class InventoryApiService {
         [posUserId ?? '', scope.user.email, requestedStatus, orderId],
       );
       if (!rows[0]) throw new NotFoundException('POS kitchen order not found.');
+      await this.recordAudit(scope, {
+        category: 'POS / Kitchen',
+        action: `Order ${nextStatus.charAt(0) + nextStatus.slice(1).toLowerCase()}`,
+        entityType: 'Order',
+        entityId: id,
+        status: nextStatus.toLowerCase(),
+        summary: `POS order status set to ${nextStatus}`,
+      });
       return { ...rows[0], id };
     }
 
@@ -1330,6 +1418,14 @@ export class InventoryApiService {
       [kitchenStatus, id, scope.businessId],
     );
     if (!rows[0]) throw new NotFoundException('Kitchen order not found.');
+    await this.recordAudit(scope, {
+      category: 'POS / Kitchen',
+      action: kitchenStatus === 'VOIDED' ? 'Order Voided' : `Order ${nextStatus.charAt(0) + nextStatus.slice(1).toLowerCase()}`,
+      entityType: 'KitchenOrder',
+      entityId: id,
+      entityName: String((rows[0] as Record<string, unknown>).recipeName ?? '') || undefined,
+      status: kitchenStatus.toLowerCase(),
+    });
     return rows[0];
   }
 
@@ -1386,6 +1482,14 @@ export class InventoryApiService {
         scope.module,
       ],
     );
+    await this.recordAudit(scope, {
+      category: 'Supplier',
+      action: 'Supplier Created',
+      entityType: 'Supplier',
+      entityId: String((rows[0] as Record<string, unknown>)?.id ?? ''),
+      entityName: name,
+      summary: [body.contactPerson, body.phone, body.email].filter(Boolean).join(' • ') || undefined,
+    });
     return rows[0];
   }
 
@@ -1432,6 +1536,20 @@ export class InventoryApiService {
       params,
     );
     if (!rows[0]) throw new NotFoundException(`Supplier #${id} not found`);
+    const supplier = rows[0] as Record<string, unknown>;
+    const isActiveChanged = body.isActive !== undefined;
+    await this.recordAudit(scope, {
+      category: 'Supplier',
+      action: isActiveChanged
+        ? (Boolean(body.isActive) ? 'Supplier Activated' : 'Supplier Deactivated')
+        : 'Supplier Updated',
+      entityType: 'Supplier',
+      entityId: id,
+      entityName: String(supplier.name ?? ''),
+      status: supplier.isActive === false ? 'inactive' : 'active',
+      summary: `Updated ${Object.keys(body).join(', ')}`,
+      metadata: { changedFields: Object.keys(body) },
+    });
     return rows[0];
   }
 
@@ -1440,15 +1558,23 @@ export class InventoryApiService {
     if (scope.user.role !== 'Admin') {
       throw new ForbiddenException('Only an Admin can archive suppliers.');
     }
-    const rows = await this.safeQuery<{ id: string }>(
+    const rows = await this.safeQuery<{ id: string; name?: string }>(
       `UPDATE "Supplier"
        SET "isActive" = FALSE,
            "updatedAt" = CURRENT_TIMESTAMP
        WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule"
-       RETURNING id`,
+       RETURNING id, name`,
       [id, scope.businessId, scope.module],
     );
     if (!rows[0]) throw new NotFoundException(`Supplier #${id} not found`);
+    await this.recordAudit(scope, {
+      category: 'Supplier',
+      action: 'Supplier Archived',
+      entityType: 'Supplier',
+      entityId: id,
+      entityName: rows[0].name ?? undefined,
+      status: 'inactive',
+    });
     return rows[0];
   }
 
@@ -1636,6 +1762,16 @@ export class InventoryApiService {
       }
     });
 
+    await this.recordAudit(scope, {
+      category: 'Purchase Order',
+      action: 'PO Created',
+      entityType: 'PurchaseOrder',
+      entityId: poId,
+      entityName: orderNumber,
+      quantity: `${items.length} item(s)`,
+      status: 'draft',
+      summary: `Total ${totalAmount.toFixed(2)}`,
+    });
     return this.getPurchaseOrderRow(scope, poId);
   }
 
@@ -1710,7 +1846,16 @@ export class InventoryApiService {
       }
     });
 
-    return this.getPurchaseOrderRow(scope, id);
+    const updatedPo = await this.getPurchaseOrderRow(scope, id);
+    await this.recordAudit(scope, {
+      category: 'Purchase Order',
+      action: 'PO Updated',
+      entityType: 'PurchaseOrder',
+      entityId: id,
+      entityName: String((updatedPo as Record<string, unknown>)?.orderNumber ?? '') || undefined,
+      status: 'draft',
+    });
+    return updatedPo;
   }
 
   async submitPurchaseOrder(headers: HeadersLike, id: string) {
@@ -1725,7 +1870,17 @@ export class InventoryApiService {
       [id, scope.businessId, scope.module, nextStatus],
     );
     if (!rows[0]) throw new BadRequestException('Only DRAFT orders can be submitted.');
-    return this.getPurchaseOrderRow(scope, id);
+    const submittedPo = await this.getPurchaseOrderRow(scope, id);
+    await this.recordAudit(scope, {
+      category: 'Purchase Order',
+      action: autoApprove ? 'PO Approved' : 'PO Submitted',
+      entityType: 'PurchaseOrder',
+      entityId: id,
+      entityName: String((submittedPo as Record<string, unknown>)?.orderNumber ?? '') || undefined,
+      status: nextStatus.toLowerCase(),
+      summary: autoApprove ? 'Auto-approved on submission' : 'Submitted for approval',
+    });
+    return submittedPo;
   }
 
   async approvePurchaseOrder(headers: HeadersLike, id: string) {
@@ -1739,7 +1894,16 @@ export class InventoryApiService {
       [id, scope.businessId, scope.module],
     );
     if (!rows[0]) throw new BadRequestException('Only SUBMITTED orders can be approved.');
-    return this.getPurchaseOrderRow(scope, id);
+    const approvedPo = await this.getPurchaseOrderRow(scope, id);
+    await this.recordAudit(scope, {
+      category: 'Purchase Order',
+      action: 'PO Approved',
+      entityType: 'PurchaseOrder',
+      entityId: id,
+      entityName: String((approvedPo as Record<string, unknown>)?.orderNumber ?? '') || undefined,
+      status: 'approved',
+    });
+    return approvedPo;
   }
 
   async rejectPurchaseOrder(headers: HeadersLike, id: string, body: { reason?: string }) {
@@ -1755,7 +1919,17 @@ export class InventoryApiService {
       [reason, id, scope.businessId, scope.module],
     );
     if (!rows[0]) throw new BadRequestException('Only SUBMITTED or APPROVED orders can be rejected.');
-    return this.getPurchaseOrderRow(scope, id);
+    const rejectedPo = await this.getPurchaseOrderRow(scope, id);
+    await this.recordAudit(scope, {
+      category: 'Purchase Order',
+      action: 'PO Rejected',
+      entityType: 'PurchaseOrder',
+      entityId: id,
+      entityName: String((rejectedPo as Record<string, unknown>)?.orderNumber ?? '') || undefined,
+      status: 'rejected',
+      summary: `Reason: ${reason}`,
+    });
+    return rejectedPo;
   }
 
   async cancelPurchaseOrder(headers: HeadersLike, id: string) {
@@ -1766,7 +1940,16 @@ export class InventoryApiService {
       [id, scope.businessId, scope.module],
     );
     if (!rows[0]) throw new BadRequestException('Order not found, or RECEIVED orders cannot be cancelled.');
-    return this.getPurchaseOrderRow(scope, id);
+    const cancelledPo = await this.getPurchaseOrderRow(scope, id);
+    await this.recordAudit(scope, {
+      category: 'Purchase Order',
+      action: 'PO Cancelled',
+      entityType: 'PurchaseOrder',
+      entityId: id,
+      entityName: String((cancelledPo as Record<string, unknown>)?.orderNumber ?? '') || undefined,
+      status: 'cancelled',
+    });
+    return cancelledPo;
   }
 
   private normalizeProofImages(value: unknown) {
@@ -1894,7 +2077,17 @@ export class InventoryApiService {
       );
     });
 
-    return this.getPurchaseOrderRow(scope, id);
+    const grPo = await this.getPurchaseOrderRow(scope, id);
+    await this.recordAudit(scope, {
+      category: 'Goods Received',
+      action: action === 'reject' ? 'Goods Rejected' : 'Goods Receipt Cancelled',
+      entityType: 'PurchaseOrder',
+      entityId: id,
+      entityName: String((grPo as Record<string, unknown>)?.orderNumber ?? '') || undefined,
+      status: action === 'reject' ? 'rejected' : 'cancelled',
+      summary: `Reason: ${reason}`,
+    });
+    return grPo;
   }
 
   // Receive (full or partial): adds accepted qty to stock with weighted-average
@@ -1904,6 +2097,11 @@ export class InventoryApiService {
     await this.ensurePurchaseOrderItemOperationalColumns();
     const scope = await this.resolveScope(headers);
     const dtoItems = Array.isArray(body.items) ? (body.items as Record<string, unknown>[]) : [];
+
+    // Captured inside the transaction for the audit entry written afterwards.
+    let auditOrderNumber = '';
+    let auditAcceptedQty = 0;
+    let auditFinalStatus = '';
 
     await this.databaseService.withTransaction(async (client) => {
       const poRows = await client.query<{ id: string; status: string; orderNumber: string }>(
@@ -1915,6 +2113,7 @@ export class InventoryApiService {
       if (!['APPROVED', 'PARTIALLY_RECEIVED'].includes(po.status)) {
         throw new BadRequestException('Only APPROVED or PARTIALLY_RECEIVED orders can be received.');
       }
+      auditOrderNumber = po.orderNumber;
 
       const poItemRows = await client.query<{
         id: string;
@@ -2086,23 +2285,74 @@ export class InventoryApiService {
       const isComplete = allItems.rows.every(
         (r) => Number(r.receivedQty) + Number(r.rejectedQty) >= Number(r.quantity),
       );
+      auditFinalStatus = isComplete ? 'received' : 'partially_received';
+      auditAcceptedQty = receiptItems.reduce((sum, it) => sum + Number(it.receivedQty ?? 0), 0);
       await client.query(
         `UPDATE "PurchaseOrder" SET status = $1::"PurchaseOrderStatus", "receivedById" = $2, "receivedAt" = $3, "updatedAt" = CURRENT_TIMESTAMP WHERE id = $4`,
         [isComplete ? 'RECEIVED' : 'PARTIALLY_RECEIVED', scope.user.id, isComplete ? new Date() : null, id],
       );
     });
 
+    await this.recordAudit(scope, {
+      category: 'Goods Received',
+      action: auditFinalStatus === 'received' ? 'Goods Received (Full)' : 'Goods Received (Partial)',
+      entityType: 'PurchaseOrder',
+      entityId: id,
+      entityName: auditOrderNumber || undefined,
+      quantity: `${auditAcceptedQty} accepted`,
+      status: auditFinalStatus,
+      summary: body.notes ? String(body.notes) : `Received against PO ${auditOrderNumber}`,
+    });
     return this.getPurchaseOrderRow(scope, id);
+  }
+
+  // Shared SELECT for transfer reads: each transfer carries its line items (with the
+  // linked inventory item), both locations, and the creator — matching ApiTransfer.
+  private transferSelectSql() {
+    return `
+      SELECT
+        tr.id, tr."transferNumber", tr."fromLocationId", tr."toLocationId", tr.status,
+        tr.notes, tr."createdById", tr."completedAt", tr."createdAt", tr."updatedAt", tr.module,
+        row_to_json(fl.*) AS "fromLocation",
+        row_to_json(tl.*) AS "toLocation",
+        CASE WHEN cu.id IS NULL THEN NULL
+          ELSE json_build_object('id', cu.id, 'name', cu.name, 'email', cu.email) END AS "createdBy",
+        COALESCE(items.items, '[]'::json) AS items
+      FROM "Transfer" tr
+      LEFT JOIN "Location" fl ON fl.id = tr."fromLocationId"
+      LEFT JOIN "Location" tl ON tl.id = tr."toLocationId"
+      LEFT JOIN "User" cu ON cu.id = tr."createdById"
+      LEFT JOIN LATERAL (
+        SELECT json_agg(
+          json_build_object(
+            'id', ti.id,
+            'inventoryItemId', ti."inventoryItemId",
+            'quantity', ti.quantity,
+            'inventoryItem', CASE WHEN ii.id IS NULL THEN NULL
+              ELSE json_build_object('id', ii.id, 'name', ii.name, 'sku', ii.sku, 'unit', ii.unit, 'price', ii.price, 'category', ii.category) END
+          ) ORDER BY ti."createdAt"
+        ) AS items
+        FROM "TransferItem" ti
+        LEFT JOIN "InventoryItem" ii ON ii.id = ti."inventoryItemId"
+        WHERE ti."transferId" = tr.id
+      ) items ON TRUE
+    `;
+  }
+
+  private async getTransferRow(scope: Scope, id: string) {
+    const rows = await this.safeQuery<Record<string, unknown>>(
+      `${this.transferSelectSql()} WHERE tr.id = $1 AND tr."businessId" = $2 LIMIT 1`,
+      [id, scope.businessId],
+    );
+    if (!rows[0]) throw new NotFoundException(`Transfer #${id} not found`);
+    return rows[0];
   }
 
   async listTransfers(headers: HeadersLike, query: Record<string, string | undefined>) {
     const scope = await this.resolveScope(headers);
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
-        SELECT tr.*, row_to_json(fl.*) AS "fromLocation", row_to_json(tl.*) AS "toLocation"
-        FROM "Transfer" tr
-        LEFT JOIN "Location" fl ON fl.id = tr."fromLocationId"
-        LEFT JOIN "Location" tl ON tl.id = tr."toLocationId"
+        ${this.transferSelectSql()}
         WHERE tr."businessId" = $1
           AND tr.module = $2::"BusinessModule"
           AND ($3::text IS NULL OR tr.status = $3::"TransferStatus")
@@ -2111,6 +2361,377 @@ export class InventoryApiService {
       [scope.businessId, query.module ?? scope.module, query.status ?? null],
     );
     return this.paged(rows);
+  }
+
+  async getTransfer(headers: HeadersLike, id: string) {
+    const scope = await this.resolveScope(headers);
+    return this.getTransferRow(scope, id);
+  }
+
+  private normalizeTransferItems(value: unknown): { inventoryItemId: string; quantity: number }[] {
+    if (!Array.isArray(value)) return [];
+    return value
+      .map((raw) => {
+        const item = raw as Record<string, unknown>;
+        return {
+          inventoryItemId: String(item.inventoryItemId ?? ''),
+          quantity: Number(item.quantity ?? 0),
+        };
+      })
+      .filter((item) => item.inventoryItemId && item.quantity > 0);
+  }
+
+  // Creates a stock transfer between two locations in DRAFT/PENDING state. No stock
+  // moves yet — stock leaves the source on dispatch and arrives at the destination
+  // on completion (a two-phase, "in transit" model).
+  async createTransfer(headers: HeadersLike, body: Record<string, unknown>) {
+    const scope = await this.resolveScope(headers);
+    const fromLocationId = String(body.fromLocationId ?? '');
+    const toLocationId = String(body.toLocationId ?? '');
+    if (!fromLocationId || !toLocationId) {
+      throw new BadRequestException('Both a source and destination location are required.');
+    }
+    if (fromLocationId === toLocationId) {
+      throw new BadRequestException('Source and destination locations must be different.');
+    }
+
+    const items = this.normalizeTransferItems(body.items);
+    if (items.length === 0) {
+      throw new BadRequestException('A transfer must include at least one item.');
+    }
+
+    // Validate locations belong to this business.
+    const locationRows = await this.safeQuery<{ id: string }>(
+      `SELECT id FROM "Location" WHERE id = ANY($1::text[]) AND "businessId" = $2`,
+      [[fromLocationId, toLocationId], scope.businessId],
+    );
+    if (locationRows.length !== 2) {
+      throw new BadRequestException('One or both locations are unavailable for this business.');
+    }
+
+    // Validate items exist, belong to the business, and currently live at the source.
+    const itemIds = [...new Set(items.map((i) => i.inventoryItemId))];
+    const invRows = await this.safeQuery<{ id: string; quantity: number; name: string; locationId: string }>(
+      `SELECT id, quantity, name, "locationId" FROM "InventoryItem" WHERE id = ANY($1::text[]) AND "businessId" = $2`,
+      [itemIds, scope.businessId],
+    );
+    const invMap = new Map(invRows.map((r) => [r.id, r]));
+    for (const line of items) {
+      const inv = invMap.get(line.inventoryItemId);
+      if (!inv) throw new BadRequestException('One or more items are unavailable for this business.');
+      if (inv.locationId !== fromLocationId) {
+        throw new BadRequestException(`"${inv.name}" is not stored at the selected source location.`);
+      }
+      if (line.quantity > Number(inv.quantity)) {
+        throw new BadRequestException(`Transfer quantity for "${inv.name}" exceeds available stock.`);
+      }
+    }
+
+    const transferId = randomUUID();
+    const transferNumber = `TR-${Date.now()}`;
+    const createdById = scope.user.id === 'pos-bridge' ? null : scope.user.id;
+
+    await this.databaseService.withTransaction(async (client) => {
+      await client.query(
+        `
+          INSERT INTO "Transfer" (
+            id, "transferNumber", "fromLocationId", "toLocationId", status,
+            notes, "businessId", module, "createdById", "updatedAt"
+          )
+          VALUES ($1, $2, $3, $4, 'PENDING', $5, $6, $7::"BusinessModule", $8, CURRENT_TIMESTAMP)
+        `,
+        [transferId, transferNumber, fromLocationId, toLocationId, body.notes ?? null, scope.businessId, scope.module, createdById],
+      );
+      for (const line of items) {
+        await client.query(
+          `INSERT INTO "TransferItem" (id, "transferId", "inventoryItemId", quantity) VALUES ($1, $2, $3, $4)`,
+          [randomUUID(), transferId, line.inventoryItemId, line.quantity],
+        );
+      }
+    });
+
+    await this.recordAudit(scope, {
+      category: 'Transfer',
+      action: 'Transfer Requested',
+      entityType: 'Transfer',
+      entityId: transferId,
+      entityName: transferNumber,
+      quantity: `${items.length} item(s)`,
+      status: 'pending',
+      summary: `${items.reduce((s, i) => s + i.quantity, 0)} unit(s) requested`,
+    });
+    return this.getTransferRow(scope, transferId);
+  }
+
+  // Dispatch: PENDING -> IN_TRANSIT. Stock leaves the source location now (it is "in
+  // transit"), recorded as a TRANSFER_OUT movement per item.
+  async dispatchTransfer(headers: HeadersLike, id: string) {
+    const scope = await this.resolveScope(headers);
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can dispatch transfers.');
+    }
+
+    await this.databaseService.withTransaction(async (client) => {
+      const transferRows = await client.query<{ id: string; status: string; fromLocationId: string; transferNumber: string }>(
+        `SELECT id, status, "fromLocationId", "transferNumber" FROM "Transfer"
+         WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule" FOR UPDATE`,
+        [id, scope.businessId, scope.module],
+      );
+      const transfer = transferRows.rows[0];
+      if (!transfer) throw new NotFoundException(`Transfer #${id} not found`);
+      if (transfer.status !== 'PENDING') {
+        throw new BadRequestException('Only pending transfers can be dispatched.');
+      }
+
+      const lineRows = await client.query<{ inventoryItemId: string; quantity: number }>(
+        `SELECT "inventoryItemId", quantity FROM "TransferItem" WHERE "transferId" = $1`,
+        [id],
+      );
+
+      for (const line of lineRows.rows) {
+        const invRows = await client.query<{ quantity: number; unit: string | null; name: string }>(
+          `SELECT quantity, unit, name FROM "InventoryItem" WHERE id = $1 AND "businessId" = $2 FOR UPDATE`,
+          [line.inventoryItemId, scope.businessId],
+        );
+        const inv = invRows.rows[0];
+        if (!inv) throw new BadRequestException('A transferred item is no longer available.');
+        const previousQuantity = Number(inv.quantity);
+        const newQuantity = previousQuantity - Number(line.quantity);
+        if (newQuantity < 0) {
+          throw new BadRequestException(`Dispatching would make "${inv.name}" stock negative.`);
+        }
+        await client.query(
+          `UPDATE "InventoryItem" SET quantity = $1, "updatedAt" = CURRENT_TIMESTAMP WHERE id = $2`,
+          [newQuantity, line.inventoryItemId],
+        );
+        await client.query(
+          `
+            INSERT INTO "StockMovement" (
+              id, type, quantity, "previousQuantity", "newQuantity", unit,
+              reason, "referenceType", "referenceId", notes, "itemId",
+              "locationId", "businessId", module, "createdById"
+            )
+            VALUES ($1, 'TRANSFER_OUT', $2, $3, $4, $5, 'Transfer dispatched', 'TRANSFER', $6, $7, $8, $9, $10, $11::"BusinessModule", $12)
+          `,
+          [
+            randomUUID(), Number(line.quantity), previousQuantity, newQuantity, inv.unit,
+            id, `Dispatched on ${transfer.transferNumber}`, line.inventoryItemId,
+            transfer.fromLocationId, scope.businessId, scope.module,
+            scope.user.id === 'pos-bridge' ? null : scope.user.id,
+          ],
+        );
+      }
+
+      await client.query(
+        `UPDATE "Transfer" SET status = 'IN_TRANSIT', "updatedAt" = CURRENT_TIMESTAMP WHERE id = $1`,
+        [id],
+      );
+    });
+
+    await this.recordAudit(scope, {
+      category: 'Transfer',
+      action: 'Transfer Dispatched',
+      entityType: 'Transfer',
+      entityId: id,
+      status: 'in_transit',
+      summary: 'Stock removed from source location',
+    });
+    return this.getTransferRow(scope, id);
+  }
+
+  // Complete: IN_TRANSIT -> COMPLETED. Stock arrives at the destination. The
+  // destination item is matched by name + type at the destination location; if none
+  // exists yet, a new row is created there (with null sku/barcode to respect the
+  // per-business uniqueness constraints).
+  async completeTransfer(headers: HeadersLike, id: string) {
+    await this.ensureInventoryItemOperationalColumns();
+    const scope = await this.resolveScope(headers);
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can complete transfers.');
+    }
+
+    await this.databaseService.withTransaction(async (client) => {
+      const transferRows = await client.query<{ id: string; status: string; toLocationId: string; transferNumber: string }>(
+        `SELECT id, status, "toLocationId", "transferNumber" FROM "Transfer"
+         WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule" FOR UPDATE`,
+        [id, scope.businessId, scope.module],
+      );
+      const transfer = transferRows.rows[0];
+      if (!transfer) throw new NotFoundException(`Transfer #${id} not found`);
+      if (transfer.status !== 'IN_TRANSIT') {
+        throw new BadRequestException('Only in-transit transfers can be completed.');
+      }
+
+      const lineRows = await client.query<{ inventoryItemId: string; quantity: number }>(
+        `SELECT "inventoryItemId", quantity FROM "TransferItem" WHERE "transferId" = $1`,
+        [id],
+      );
+
+      for (const line of lineRows.rows) {
+        const srcRows = await client.query<Record<string, unknown>>(
+          `SELECT * FROM "InventoryItem" WHERE id = $1 AND "businessId" = $2`,
+          [line.inventoryItemId, scope.businessId],
+        );
+        const src = srcRows.rows[0];
+        if (!src) throw new BadRequestException('A transferred item is no longer available.');
+
+        // Find an existing item of the same identity already at the destination.
+        const destRows = await client.query<{ id: string; quantity: number; unit: string | null }>(
+          `SELECT id, quantity, unit FROM "InventoryItem"
+           WHERE "businessId" = $1 AND "locationId" = $2
+             AND lower(name) = lower($3) AND "itemType" = $4::"InventoryItemType"
+           LIMIT 1`,
+          [scope.businessId, transfer.toLocationId, String(src.name), String(src.itemType)],
+        );
+
+        let destItemId: string;
+        let destPrev: number;
+        let destUnit: string | null;
+        if (destRows.rows[0]) {
+          const dest = destRows.rows[0];
+          destItemId = dest.id;
+          destPrev = Number(dest.quantity);
+          destUnit = dest.unit;
+          await client.query(
+            `UPDATE "InventoryItem" SET quantity = quantity + $1, "updatedAt" = CURRENT_TIMESTAMP WHERE id = $2`,
+            [Number(line.quantity), destItemId],
+          );
+        } else {
+          destItemId = randomUUID();
+          destPrev = 0;
+          destUnit = (src.unit as string | null) ?? null;
+          await client.query(
+            `
+              INSERT INTO "InventoryItem" (
+                id, name, description, "itemType", sku, barcode, category, "targetCustomer",
+                subcategory, size, condition, quantity, price, "costPrice",
+                "imageUrl", unit, "minStock", "maxStock", "reorderPoint",
+                "expiryDate", "storageTemperature", "locationId", "businessId", "updatedAt"
+              )
+              VALUES (
+                $1, $2, $3, $4::"InventoryItemType", NULL, NULL, $5, $6,
+                $7, $8, $9, $10, $11, $12,
+                $13, $14, $15, $16, $17,
+                $18, $19, $20, $21, CURRENT_TIMESTAMP
+              )
+            `,
+            [
+              destItemId, src.name, src.description ?? null, String(src.itemType), src.category, src.targetCustomer ?? null,
+              src.subcategory ?? null, src.size ?? null, src.condition ?? null, Number(line.quantity), Number(src.price ?? 0), src.costPrice ?? null,
+              src.imageUrl ?? null, destUnit, src.minStock ?? null, src.maxStock ?? null, src.reorderPoint ?? null,
+              src.expiryDate ?? null, src.storageTemperature ?? null, transfer.toLocationId, scope.businessId,
+            ],
+          );
+        }
+
+        await client.query(
+          `
+            INSERT INTO "StockMovement" (
+              id, type, quantity, "previousQuantity", "newQuantity", unit,
+              reason, "referenceType", "referenceId", notes, "itemId",
+              "locationId", "businessId", module, "createdById"
+            )
+            VALUES ($1, 'TRANSFER_IN', $2, $3, $4, $5, 'Transfer received', 'TRANSFER', $6, $7, $8, $9, $10, $11::"BusinessModule", $12)
+          `,
+          [
+            randomUUID(), Number(line.quantity), destPrev, destPrev + Number(line.quantity), destUnit,
+            id, `Received from ${transfer.transferNumber}`, destItemId,
+            transfer.toLocationId, scope.businessId, scope.module,
+            scope.user.id === 'pos-bridge' ? null : scope.user.id,
+          ],
+        );
+      }
+
+      await client.query(
+        `UPDATE "Transfer" SET status = 'COMPLETED', "completedAt" = CURRENT_TIMESTAMP, "updatedAt" = CURRENT_TIMESTAMP WHERE id = $1`,
+        [id],
+      );
+    });
+
+    await this.recordAudit(scope, {
+      category: 'Transfer',
+      action: 'Transfer Completed',
+      entityType: 'Transfer',
+      entityId: id,
+      status: 'completed',
+      summary: 'Stock received at destination location',
+    });
+    return this.getTransferRow(scope, id);
+  }
+
+  // Cancel: allowed while PENDING or IN_TRANSIT. If it was already dispatched, the
+  // in-transit stock is returned to the source location.
+  async cancelTransfer(headers: HeadersLike, id: string) {
+    const scope = await this.resolveScope(headers);
+
+    await this.databaseService.withTransaction(async (client) => {
+      const transferRows = await client.query<{ id: string; status: string; fromLocationId: string; transferNumber: string }>(
+        `SELECT id, status, "fromLocationId", "transferNumber" FROM "Transfer"
+         WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule" FOR UPDATE`,
+        [id, scope.businessId, scope.module],
+      );
+      const transfer = transferRows.rows[0];
+      if (!transfer) throw new NotFoundException(`Transfer #${id} not found`);
+      if (!['PENDING', 'IN_TRANSIT'].includes(transfer.status)) {
+        throw new BadRequestException('Only pending or in-transit transfers can be cancelled.');
+      }
+      // Staff may cancel their own pending request, but cancelling an in-transit
+      // transfer returns stock to the source, so that is an Admin-only action.
+      if (transfer.status === 'IN_TRANSIT' && scope.user.role !== 'Admin') {
+        throw new ForbiddenException('Only an Admin can cancel a transfer that is already in transit.');
+      }
+
+      // Return in-transit stock to the source.
+      if (transfer.status === 'IN_TRANSIT') {
+        const lineRows = await client.query<{ inventoryItemId: string; quantity: number }>(
+          `SELECT "inventoryItemId", quantity FROM "TransferItem" WHERE "transferId" = $1`,
+          [id],
+        );
+        for (const line of lineRows.rows) {
+          const invRows = await client.query<{ quantity: number; unit: string | null }>(
+            `SELECT quantity, unit FROM "InventoryItem" WHERE id = $1 AND "businessId" = $2 FOR UPDATE`,
+            [line.inventoryItemId, scope.businessId],
+          );
+          const inv = invRows.rows[0];
+          if (!inv) continue;
+          const previousQuantity = Number(inv.quantity);
+          await client.query(
+            `UPDATE "InventoryItem" SET quantity = quantity + $1, "updatedAt" = CURRENT_TIMESTAMP WHERE id = $2`,
+            [Number(line.quantity), line.inventoryItemId],
+          );
+          await client.query(
+            `
+              INSERT INTO "StockMovement" (
+                id, type, quantity, "previousQuantity", "newQuantity", unit,
+                reason, "referenceType", "referenceId", notes, "itemId",
+                "locationId", "businessId", module, "createdById"
+              )
+              VALUES ($1, 'TRANSFER_IN', $2, $3, $4, $5, 'Transfer cancelled — stock returned', 'TRANSFER', $6, $7, $8, $9, $10, $11::"BusinessModule", $12)
+            `,
+            [
+              randomUUID(), Number(line.quantity), previousQuantity, previousQuantity + Number(line.quantity), inv.unit,
+              id, `Returned from cancelled ${transfer.transferNumber}`, line.inventoryItemId,
+              transfer.fromLocationId, scope.businessId, scope.module,
+              scope.user.id === 'pos-bridge' ? null : scope.user.id,
+            ],
+          );
+        }
+      }
+
+      await client.query(
+        `UPDATE "Transfer" SET status = 'CANCELLED', "updatedAt" = CURRENT_TIMESTAMP WHERE id = $1`,
+        [id],
+      );
+    });
+
+    await this.recordAudit(scope, {
+      category: 'Transfer',
+      action: 'Transfer Cancelled',
+      entityType: 'Transfer',
+      entityId: id,
+      status: 'cancelled',
+    });
+    return this.getTransferRow(scope, id);
   }
 
   async listSales(headers: HeadersLike, query: Record<string, string | undefined>) {
@@ -2340,27 +2961,473 @@ export class InventoryApiService {
         scope.user.id,
       ],
     );
+    const movement = rows[0] as Record<string, unknown>;
+    const movementType = String(body.type ?? 'ADJUSTMENT').replace(/_/g, ' ');
+    // Resolve the item name for a readable audit line (the movement row only has the id).
+    const itemRows = body.itemId
+      ? await this.safeQuery<{ name: string; unit: string | null }>(
+          `SELECT name, unit FROM "InventoryItem" WHERE id = $1 LIMIT 1`,
+          [String(body.itemId)],
+        )
+      : [];
+    await this.recordAudit(scope, {
+      category: 'Stock Movement',
+      action: movementType,
+      entityType: 'StockMovement',
+      entityId: String(movement?.id ?? ''),
+      entityName: itemRows[0]?.name ?? undefined,
+      quantity: `${Number(body.quantity ?? 0)} ${String(body.unit ?? itemRows[0]?.unit ?? '')}`.trim(),
+      status: 'recorded',
+      summary: [
+        body.previousQuantity !== undefined && body.newQuantity !== undefined
+          ? `${Number(body.previousQuantity)} → ${Number(body.newQuantity)}`
+          : '',
+        body.reason ? String(body.reason) : '',
+        body.notes ? String(body.notes) : '',
+      ].filter(Boolean).join(' | ') || undefined,
+    });
     return rows[0];
   }
 
+  // Shared SELECT/FROM/JOIN for bundle reads. Each bundle row carries its line
+  // items (with the linked inventory item's name/price/stock), the creator and
+  // approver actors, and its location, matching the ApiBundle shape the retail
+  // Item Bundling screen renders.
+  // Soft-delete/archive support for bundles is added on demand (same runtime-DDL
+  // pattern as the other ensure helpers) so the feature works without a migration.
+  private bundleArchiveColumnReady = false;
+
+  private async ensureBundleArchiveColumn() {
+    if (this.bundleArchiveColumnReady) return;
+    await this.safeQuery(
+      `ALTER TABLE "BundlePackage" ADD COLUMN IF NOT EXISTS "archivedAt" TIMESTAMP`,
+    );
+    this.bundleArchiveColumnReady = true;
+  }
+
+  private bundleSelectSql() {
+    return `
+      SELECT
+        bp.id, bp.name, bp.description, bp."imageUrl", bp.discount, bp.price, bp.status,
+        bp."rejectionReason", bp."locationId", bp."createdById", bp."approvedById",
+        bp."approvedAt", bp."archivedAt", bp."createdAt", bp."updatedAt",
+        CASE WHEN cu.id IS NULL THEN NULL
+          ELSE json_build_object('id', cu.id, 'name', cu.name, 'email', cu.email) END AS "createdBy",
+        CASE WHEN au.id IS NULL THEN NULL
+          ELSE json_build_object('id', au.id, 'name', au.name, 'email', au.email) END AS "approvedBy",
+        CASE WHEN l.id IS NULL THEN NULL
+          ELSE json_build_object('id', l.id, 'name', l.name) END AS location,
+        COALESCE(items.items, '[]'::json) AS items
+      FROM "BundlePackage" bp
+      LEFT JOIN "User" cu ON cu.id = bp."createdById"
+      LEFT JOIN "User" au ON au.id = bp."approvedById"
+      LEFT JOIN "Location" l ON l.id = bp."locationId"
+      LEFT JOIN LATERAL (
+        SELECT json_agg(
+          json_build_object(
+            'id', bi.id,
+            'inventoryItemId', bi."inventoryItemId",
+            'quantity', bi.quantity,
+            'inventoryItem', CASE WHEN ii.id IS NULL THEN NULL
+              ELSE json_build_object(
+                'id', ii.id, 'name', ii.name, 'price', ii.price,
+                'quantity', ii.quantity, 'category', ii.category
+              ) END
+          ) ORDER BY bi."createdAt"
+        ) AS items
+        FROM "BundleItem" bi
+        LEFT JOIN "InventoryItem" ii ON ii.id = bi."inventoryItemId"
+        WHERE bi."bundleId" = bp.id
+      ) items ON TRUE
+    `;
+  }
+
+  private async getBundleRow(scope: Scope, id: string) {
+    await this.ensureBundleArchiveColumn();
+    const rows = await this.safeQuery<Record<string, unknown>>(
+      `${this.bundleSelectSql()} WHERE bp.id = $1 AND bp."businessId" = $2 LIMIT 1`,
+      [id, scope.businessId],
+    );
+    if (!rows[0]) throw new NotFoundException(`Bundle #${id} not found`);
+    return rows[0];
+  }
+
+  // Recomputes a bundle's price from current inventory prices: the sum of each
+  // line item's (item price × quantity), discounted by the bundle discount %.
+  private async computeBundlePrice(
+    businessId: string,
+    items: { inventoryItemId: string; quantity: number }[],
+    discount: number,
+  ) {
+    const itemIds = [...new Set(items.map((i) => i.inventoryItemId))];
+    if (itemIds.length === 0) return 0;
+    const invRows = await this.safeQuery<{ id: string; price: number }>(
+      `SELECT id, price FROM "InventoryItem" WHERE id = ANY($1::text[]) AND "businessId" = $2`,
+      [itemIds, businessId],
+    );
+    const priceMap = new Map(invRows.map((r) => [r.id, Number(r.price)]));
+    const original = items.reduce(
+      (sum, i) => sum + (priceMap.get(i.inventoryItemId) ?? 0) * i.quantity,
+      0,
+    );
+    return original * (1 - discount / 100);
+  }
+
   async listBundles(headers: HeadersLike, query: Record<string, string | undefined>) {
+    await this.ensureBundleArchiveColumn();
     const scope = await this.resolveScope(headers);
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
-        SELECT bp.*, COALESCE(items.items, '[]'::json) AS items
-        FROM "BundlePackage" bp
-        LEFT JOIN LATERAL (
-          SELECT json_agg(bi.* ORDER BY bi."createdAt") AS items
-          FROM "BundleItem" bi
-          WHERE bi."bundleId" = bp.id
-        ) items ON TRUE
+        ${this.bundleSelectSql()}
         WHERE bp."businessId" = $1
           AND ($2::text IS NULL OR bp.status = $2::"BundleStatus")
+          AND (
+            CASE
+              WHEN $3::text = 'true' THEN bp."archivedAt" IS NOT NULL
+              ELSE bp."archivedAt" IS NULL
+            END
+          )
         ORDER BY bp."createdAt" DESC
       `,
-      [scope.businessId, query.status ?? null],
+      [scope.businessId, query.status ?? null, query.archived ?? null],
     );
     return this.paged(rows);
+  }
+
+  async getBundle(headers: HeadersLike, id: string) {
+    await this.ensureBundleArchiveColumn();
+    const scope = await this.resolveScope(headers);
+    return this.getBundleRow(scope, id);
+  }
+
+  private normalizeBundleItems(value: unknown): { inventoryItemId: string; quantity: number }[] {
+    if (!Array.isArray(value)) return [];
+    return value
+      .map((raw) => {
+        const item = raw as Record<string, unknown>;
+        return {
+          inventoryItemId: String(item.inventoryItemId ?? ''),
+          quantity: Number(item.quantity ?? 0),
+        };
+      })
+      .filter((item) => item.inventoryItemId && item.quantity > 0);
+  }
+
+  async createBundle(headers: HeadersLike, body: Record<string, unknown>) {
+    const scope = await this.resolveScope(headers);
+    const name = String(body.name ?? '').trim();
+    if (!name) throw new BadRequestException('Bundle name is required.');
+
+    const items = this.normalizeBundleItems(body.items);
+    if (items.length === 0) {
+      throw new BadRequestException('A bundle must include at least one item.');
+    }
+    const discount = Math.min(Math.max(Number(body.discount ?? 0), 0), 100);
+
+    const itemIds = [...new Set(items.map((i) => i.inventoryItemId))];
+    const countRows = await this.safeQuery<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM "InventoryItem" WHERE id = ANY($1::text[]) AND "businessId" = $2`,
+      [itemIds, scope.businessId],
+    );
+    if (Number(countRows[0]?.count ?? 0) !== itemIds.length) {
+      throw new BadRequestException('One or more items are unavailable for this business.');
+    }
+
+    const price = await this.computeBundlePrice(scope.businessId, items, discount);
+    const bundleId = randomUUID();
+    const createdById = scope.user.id === 'pos-bridge' ? null : scope.user.id;
+    const locationId = body.locationId
+      ? String(body.locationId)
+      : await this.getDefaultLocationId(scope.businessId).catch(() => null);
+
+    await this.databaseService.withTransaction(async (client) => {
+      await client.query(
+        `
+          INSERT INTO "BundlePackage" (
+            id, name, description, "imageUrl", discount, price, status,
+            "locationId", "businessId", "createdById", "updatedAt"
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', $7, $8, $9, CURRENT_TIMESTAMP)
+        `,
+        [bundleId, name, body.description ?? null, body.imageUrl ?? null, discount, price, locationId, scope.businessId, createdById],
+      );
+      for (const item of items) {
+        await client.query(
+          `INSERT INTO "BundleItem" (id, "bundleId", "inventoryItemId", quantity) VALUES ($1, $2, $3, $4)`,
+          [randomUUID(), bundleId, item.inventoryItemId, item.quantity],
+        );
+      }
+    });
+
+    await this.recordAudit(scope, {
+      category: 'Bundle',
+      action: 'Bundle Created',
+      entityType: 'BundlePackage',
+      entityId: bundleId,
+      entityName: name,
+      quantity: `${items.length} item(s)`,
+      status: 'pending',
+      summary: `${discount}% off • ₱${price.toFixed(2)}`,
+    });
+    return this.getBundleRow(scope, bundleId);
+  }
+
+  async updateBundle(headers: HeadersLike, id: string, body: Record<string, unknown>) {
+    const scope = await this.resolveScope(headers);
+    const existing = await this.safeQuery<{ status: string; discount: number }>(
+      `SELECT status, discount FROM "BundlePackage" WHERE id = $1 AND "businessId" = $2 LIMIT 1`,
+      [id, scope.businessId],
+    );
+    if (!existing[0]) throw new NotFoundException(`Bundle #${id} not found`);
+    if (existing[0].status === 'ACTIVE' && scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can edit an active bundle.');
+    }
+
+    const nextItems = body.items === undefined ? null : this.normalizeBundleItems(body.items);
+    if (nextItems && nextItems.length === 0) {
+      throw new BadRequestException('A bundle must include at least one item.');
+    }
+    const discount =
+      body.discount === undefined
+        ? Number(existing[0].discount)
+        : Math.min(Math.max(Number(body.discount), 0), 100);
+
+    await this.databaseService.withTransaction(async (client) => {
+      if (nextItems) {
+        await client.query(`DELETE FROM "BundleItem" WHERE "bundleId" = $1`, [id]);
+        for (const item of nextItems) {
+          await client.query(
+            `INSERT INTO "BundleItem" (id, "bundleId", "inventoryItemId", quantity) VALUES ($1, $2, $3, $4)`,
+            [randomUUID(), id, item.inventoryItemId, item.quantity],
+          );
+        }
+      }
+
+      // Recompute price from whatever the bundle now contains.
+      const lineRows = await client.query<{ inventoryItemId: string; quantity: number }>(
+        `SELECT "inventoryItemId", quantity FROM "BundleItem" WHERE "bundleId" = $1`,
+        [id],
+      );
+      const price = await this.computeBundlePrice(
+        scope.businessId,
+        lineRows.rows.map((r) => ({ inventoryItemId: r.inventoryItemId, quantity: Number(r.quantity) })),
+        discount,
+      );
+
+      // Editing a rejected bundle resubmits it for approval.
+      const resubmit = existing[0].status === 'REJECTED';
+      await client.query(
+        `
+          UPDATE "BundlePackage"
+          SET name = COALESCE($2, name),
+              description = $3,
+              "imageUrl" = COALESCE($4, "imageUrl"),
+              discount = $5,
+              price = $6,
+              status = CASE WHEN $7 THEN 'PENDING'::"BundleStatus" ELSE status END,
+              "rejectionReason" = CASE WHEN $7 THEN NULL ELSE "rejectionReason" END,
+              "updatedAt" = CURRENT_TIMESTAMP
+          WHERE id = $1
+        `,
+        [
+          id,
+          body.name === undefined ? null : String(body.name).trim(),
+          body.description ?? null,
+          body.imageUrl ?? null,
+          discount,
+          price,
+          resubmit,
+        ],
+      );
+    });
+
+    await this.recordAudit(scope, {
+      category: 'Bundle',
+      action: 'Bundle Updated',
+      entityType: 'BundlePackage',
+      entityId: id,
+      entityName: body.name ? String(body.name).trim() : undefined,
+      summary: `Updated ${Object.keys(body).join(', ')}`,
+    });
+    return this.getBundleRow(scope, id);
+  }
+
+  async approveBundle(headers: HeadersLike, id: string) {
+    const scope = await this.resolveScope(headers);
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can approve bundles.');
+    }
+    const approvedById = scope.user.id === 'pos-bridge' ? null : scope.user.id;
+    const rows = await this.safeQuery<{ id: string; name: string }>(
+      `UPDATE "BundlePackage"
+         SET status = 'APPROVED', "approvedById" = $1, "approvedAt" = CURRENT_TIMESTAMP,
+             "rejectionReason" = NULL, "updatedAt" = CURRENT_TIMESTAMP
+       WHERE id = $2 AND "businessId" = $3 AND status = 'PENDING'
+       RETURNING id, name`,
+      [approvedById, id, scope.businessId],
+    );
+    if (!rows[0]) throw new BadRequestException('Only pending bundles can be approved.');
+    await this.recordAudit(scope, {
+      category: 'Bundle',
+      action: 'Bundle Approved',
+      entityType: 'BundlePackage',
+      entityId: id,
+      entityName: rows[0].name,
+      status: 'approved',
+    });
+    return this.getBundleRow(scope, id);
+  }
+
+  async rejectBundle(headers: HeadersLike, id: string, body: { rejectionReason?: string; reason?: string }) {
+    const scope = await this.resolveScope(headers);
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can reject bundles.');
+    }
+    const reason = String(body?.rejectionReason ?? body?.reason ?? '').trim();
+    if (!reason) throw new BadRequestException('A rejection reason is required.');
+    const rows = await this.safeQuery<{ id: string; name: string }>(
+      `UPDATE "BundlePackage"
+         SET status = 'REJECTED', "rejectionReason" = $1, "updatedAt" = CURRENT_TIMESTAMP
+       WHERE id = $2 AND "businessId" = $3 AND status = 'PENDING'
+       RETURNING id, name`,
+      [reason, id, scope.businessId],
+    );
+    if (!rows[0]) throw new BadRequestException('Only pending bundles can be rejected.');
+    await this.recordAudit(scope, {
+      category: 'Bundle',
+      action: 'Bundle Rejected',
+      entityType: 'BundlePackage',
+      entityId: id,
+      entityName: rows[0].name,
+      status: 'rejected',
+      summary: `Reason: ${reason}`,
+    });
+    return this.getBundleRow(scope, id);
+  }
+
+  async activateBundle(headers: HeadersLike, id: string) {
+    const scope = await this.resolveScope(headers);
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can activate bundles.');
+    }
+    const rows = await this.safeQuery<{ id: string; name: string }>(
+      `UPDATE "BundlePackage"
+         SET status = 'ACTIVE', "updatedAt" = CURRENT_TIMESTAMP
+       WHERE id = $1 AND "businessId" = $2 AND status IN ('APPROVED', 'INACTIVE')
+       RETURNING id, name`,
+      [id, scope.businessId],
+    );
+    if (!rows[0]) throw new BadRequestException('Only approved or inactive bundles can be activated.');
+    await this.recordAudit(scope, {
+      category: 'Bundle',
+      action: 'Bundle Activated',
+      entityType: 'BundlePackage',
+      entityId: id,
+      entityName: rows[0].name,
+      status: 'active',
+    });
+    return this.getBundleRow(scope, id);
+  }
+
+  async deactivateBundle(headers: HeadersLike, id: string) {
+    const scope = await this.resolveScope(headers);
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can deactivate bundles.');
+    }
+    const rows = await this.safeQuery<{ id: string; name: string }>(
+      `UPDATE "BundlePackage"
+         SET status = 'INACTIVE', "updatedAt" = CURRENT_TIMESTAMP
+       WHERE id = $1 AND "businessId" = $2 AND status = 'ACTIVE'
+       RETURNING id, name`,
+      [id, scope.businessId],
+    );
+    if (!rows[0]) throw new BadRequestException('Only active bundles can be deactivated.');
+    await this.recordAudit(scope, {
+      category: 'Bundle',
+      action: 'Bundle Deactivated',
+      entityType: 'BundlePackage',
+      entityId: id,
+      entityName: rows[0].name,
+      status: 'inactive',
+    });
+    return this.getBundleRow(scope, id);
+  }
+
+  // Soft-delete: hides the bundle from the active list but keeps the row (and its
+  // items) so it can be restored later. Any non-archived bundle can be archived.
+  async archiveBundle(headers: HeadersLike, id: string) {
+    await this.ensureBundleArchiveColumn();
+    const scope = await this.resolveScope(headers);
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can archive bundles.');
+    }
+    const rows = await this.safeQuery<{ id: string; name: string }>(
+      `UPDATE "BundlePackage"
+         SET "archivedAt" = CURRENT_TIMESTAMP, "updatedAt" = CURRENT_TIMESTAMP
+       WHERE id = $1 AND "businessId" = $2 AND "archivedAt" IS NULL
+       RETURNING id, name`,
+      [id, scope.businessId],
+    );
+    if (!rows[0]) throw new BadRequestException('Bundle not found or already archived.');
+    await this.recordAudit(scope, {
+      category: 'Bundle',
+      action: 'Bundle Archived',
+      entityType: 'BundlePackage',
+      entityId: id,
+      entityName: rows[0].name,
+      status: 'archived',
+    });
+    return this.getBundleRow(scope, id);
+  }
+
+  async restoreBundle(headers: HeadersLike, id: string) {
+    await this.ensureBundleArchiveColumn();
+    const scope = await this.resolveScope(headers);
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can restore bundles.');
+    }
+    const rows = await this.safeQuery<{ id: string; name: string }>(
+      `UPDATE "BundlePackage"
+         SET "archivedAt" = NULL, "updatedAt" = CURRENT_TIMESTAMP
+       WHERE id = $1 AND "businessId" = $2 AND "archivedAt" IS NOT NULL
+       RETURNING id, name`,
+      [id, scope.businessId],
+    );
+    if (!rows[0]) throw new BadRequestException('Bundle not found or is not archived.');
+    await this.recordAudit(scope, {
+      category: 'Bundle',
+      action: 'Bundle Restored',
+      entityType: 'BundlePackage',
+      entityId: id,
+      entityName: rows[0].name,
+      status: 'restored',
+    });
+    return this.getBundleRow(scope, id);
+  }
+
+  async deleteBundle(headers: HeadersLike, id: string) {
+    const scope = await this.resolveScope(headers);
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can delete bundles.');
+    }
+    const rows = await this.databaseService.withTransaction(async (client) => {
+      await client.query(`DELETE FROM "BundleItem" WHERE "bundleId" = $1`, [id]);
+      const result = await client.query<{ id: string; name: string }>(
+        `DELETE FROM "BundlePackage" WHERE id = $1 AND "businessId" = $2 RETURNING id, name`,
+        [id, scope.businessId],
+      );
+      return result.rows;
+    });
+    if (!rows[0]) throw new NotFoundException(`Bundle #${id} not found`);
+    await this.recordAudit(scope, {
+      category: 'Bundle',
+      action: 'Bundle Deleted',
+      entityType: 'BundlePackage',
+      entityId: id,
+      entityName: rows[0].name,
+      status: 'deleted',
+    });
+    return rows[0];
   }
 
   async listAdjustments(headers: HeadersLike, query: Record<string, string | undefined>) {
@@ -2462,6 +3529,16 @@ export class InventoryApiService {
       }
     });
 
+    await this.recordAudit(scope, {
+      category: 'Adjustment',
+      action: 'Adjustment Requested',
+      entityType: 'StockAdjustment',
+      entityId: adjustmentId,
+      entityName: adjustmentNumber,
+      quantity: `${items.length} item(s)`,
+      status: 'pending',
+      summary: `${type} • ${reason}`,
+    });
     return this.getAdjustment(headers, adjustmentId);
   }
 
@@ -2472,6 +3549,8 @@ export class InventoryApiService {
     }
 
     const lowStockCandidates: LowStockCandidate[] = [];
+    let auditAdjNumber = '';
+    let auditAdjType = '';
 
     await this.databaseService.withTransaction(async (client) => {
       lowStockCandidates.length = 0; // reset in case the transaction retries
@@ -2489,6 +3568,8 @@ export class InventoryApiService {
       if (adj.status !== 'PENDING') {
         throw new BadRequestException('Only PENDING adjustments can be approved.');
       }
+      auditAdjNumber = String(adj.adjustmentNumber ?? '');
+      auditAdjType = String(adj.type ?? '');
 
       const itemRows = await client.query<{
         inventoryItemId: string;
@@ -2571,6 +3652,16 @@ export class InventoryApiService {
     // Best-effort low-stock alerts after the adjustment commits.
     await this.notifyLowStock(scope.businessId, lowStockCandidates).catch(() => undefined);
 
+    await this.recordAudit(scope, {
+      category: 'Adjustment',
+      action: 'Adjustment Approved',
+      entityType: 'StockAdjustment',
+      entityId: id,
+      entityName: auditAdjNumber || undefined,
+      quantity: `${lowStockCandidates.length} item(s)`,
+      status: 'approved',
+      summary: `${auditAdjType} adjustment applied to stock`,
+    });
     return this.getAdjustment(headers, id);
   }
 
@@ -2578,8 +3669,9 @@ export class InventoryApiService {
   // reorder threshold (downward only), de-duped against existing unread alerts,
   // to every Inventory Manager in the business.
   private async notifyLowStock(businessId: string, items: LowStockCandidate[]) {
+    const defaultThreshold = await this.databaseService.getDefaultLowStockThreshold(Number(businessId));
     const crossed = items.filter((item) => {
-      const threshold = item.reorderPoint ?? item.minStock ?? 0;
+      const threshold = item.reorderPoint ?? item.minStock ?? defaultThreshold;
       return threshold > 0 && item.previousQuantity > threshold && item.newQuantity <= threshold;
     });
     if (crossed.length === 0) return;
@@ -2604,7 +3696,7 @@ export class InventoryApiService {
       if (existing[0]) continue;
 
       const unit = item.unit ? ` ${item.unit}` : '';
-      const threshold = item.reorderPoint ?? item.minStock;
+      const threshold = item.reorderPoint ?? item.minStock ?? defaultThreshold;
       const message = `"${item.name}" is low — ${item.newQuantity}${unit} left (reorder at ${threshold}${unit}).`;
 
       for (const userId of recipientIds) {
@@ -2640,6 +3732,14 @@ export class InventoryApiService {
     if (!rows[0]) {
       throw new BadRequestException('Adjustment not found or is not PENDING.');
     }
+    await this.recordAudit(scope, {
+      category: 'Adjustment',
+      action: 'Adjustment Rejected',
+      entityType: 'StockAdjustment',
+      entityId: id,
+      status: 'rejected',
+      summary: `Reason: ${reason}`,
+    });
     return this.getAdjustment(headers, id);
   }
 
@@ -2799,6 +3899,14 @@ export class InventoryApiService {
       `,
       [randomUUID(), key, JSON.stringify(value ?? null), scope.businessId],
     );
+    await this.recordAudit(scope, {
+      category: 'Settings',
+      action: 'Setting Updated',
+      entityType: 'RestaurantSetting',
+      entityId: key,
+      entityName: key,
+      summary: `Updated ${key}`,
+    });
     return rows[0];
   }
 
@@ -2808,6 +3916,26 @@ export class InventoryApiService {
       [id],
     );
     if (!rows[0]) throw new NotFoundException(`${tableName} row was not found.`);
+    return rows[0];
+  }
+
+  // Audited inventory-item delete. Routed through here (instead of the generic
+  // deleteById) so the action is attributed to the acting user in the audit trail.
+  async deleteInventoryItem(headers: HeadersLike, id: string) {
+    const scope = await this.resolveScope(headers);
+    const rows = await this.safeQuery<Record<string, unknown>>(
+      `DELETE FROM "InventoryItem" WHERE id = $1 AND "businessId" = $2 RETURNING *`,
+      [id, scope.businessId],
+    );
+    if (!rows[0]) throw new NotFoundException('Inventory item was not found.');
+    await this.recordAudit(scope, {
+      category: 'Inventory',
+      action: 'Item Deleted',
+      entityType: 'InventoryItem',
+      entityId: id,
+      entityName: String(rows[0].name ?? '') || undefined,
+      status: 'deleted',
+    });
     return rows[0];
   }
 
@@ -2845,6 +3973,149 @@ export class InventoryApiService {
         ADD COLUMN IF NOT EXISTS prep_time_minutes INT,
         ADD COLUMN IF NOT EXISTS customization_prep_minutes INT DEFAULT 0
     `);
+  }
+
+  // ─── Audit Trail ───────────────────────────────────────────────────────────
+  // The "AuditLog" table is created on demand (same runtime-DDL pattern as the
+  // operational column helpers above) so deployments without a fresh migration
+  // still get a working audit trail.
+  private auditTableReady = false;
+
+  private async ensureAuditLogTable() {
+    if (this.auditTableReady) return;
+    await this.safeQuery(`
+      CREATE TABLE IF NOT EXISTS "AuditLog" (
+        id                 TEXT PRIMARY KEY,
+        "businessId"       TEXT NOT NULL,
+        module             TEXT NOT NULL DEFAULT 'RETAIL',
+        category           TEXT NOT NULL,
+        action             TEXT NOT NULL,
+        "entityType"       TEXT,
+        "entityId"         TEXT,
+        "entityName"       TEXT,
+        summary            TEXT,
+        quantity           TEXT,
+        status             TEXT,
+        metadata           JSONB,
+        "performedById"    TEXT,
+        "performedByName"  TEXT,
+        "performedByEmail" TEXT,
+        "performedByRole"  TEXT,
+        "createdAt"        TIMESTAMP NOT NULL DEFAULT now()
+      )
+    `);
+    await this.safeQuery(
+      `CREATE INDEX IF NOT EXISTS "AuditLog_business_createdAt_idx" ON "AuditLog" ("businessId", "createdAt")`,
+    );
+    await this.safeQuery(
+      `CREATE INDEX IF NOT EXISTS "AuditLog_business_module_createdAt_idx" ON "AuditLog" ("businessId", "module", "createdAt")`,
+    );
+    this.auditTableReady = true;
+  }
+
+  // Record a single audit entry. Audit logging is best-effort: a failure here must
+  // never break the primary operation the user requested, so everything is wrapped
+  // in a try/catch and swallowed.
+  private async recordAudit(
+    scope: Scope,
+    entry: {
+      category: string;
+      action: string;
+      entityType?: string | null;
+      entityId?: string | null;
+      entityName?: string | null;
+      summary?: string | null;
+      quantity?: string | null;
+      status?: string | null;
+      metadata?: unknown;
+    },
+  ) {
+    try {
+      await this.ensureAuditLogTable();
+      // The POS-bridge fallback actor has no real User row, so we never store its
+      // synthetic id as a performer id (kept null), but still keep the name/email.
+      const performedById = scope.user.id === 'pos-bridge' ? null : scope.user.id;
+      await this.safeQuery(
+        `
+          INSERT INTO "AuditLog" (
+            id, "businessId", module, category, action,
+            "entityType", "entityId", "entityName", summary, quantity, status, metadata,
+            "performedById", "performedByName", "performedByEmail", "performedByRole", "createdAt"
+          )
+          VALUES (
+            $1, $2, $3, $4, $5,
+            $6, $7, $8, $9, $10, $11, $12::jsonb,
+            $13, $14, $15, $16, now()
+          )
+        `,
+        [
+          randomUUID(),
+          scope.businessId,
+          scope.module,
+          entry.category,
+          entry.action,
+          entry.entityType ?? null,
+          entry.entityId ?? null,
+          entry.entityName ?? null,
+          entry.summary ?? null,
+          entry.quantity ?? null,
+          entry.status ?? null,
+          entry.metadata === undefined || entry.metadata === null
+            ? null
+            : JSON.stringify(entry.metadata),
+          performedById,
+          scope.user.name ?? null,
+          scope.user.email ?? null,
+          scope.user.role ?? null,
+        ],
+      );
+    } catch {
+      // Best-effort logging only — never surface audit failures to the caller.
+    }
+  }
+
+  async listAuditLogs(headers: HeadersLike, query: Record<string, string | undefined>) {
+    await this.ensureAuditLogTable();
+    const scope = await this.resolveScope(headers);
+
+    const where = ['"businessId" = $1', 'module = $2'];
+    const params: unknown[] = [scope.businessId, scope.module];
+
+    if (query.category && query.category !== 'all') {
+      params.push(query.category);
+      where.push(`category = $${params.length}`);
+    }
+    if (query.performedByEmail) {
+      params.push(query.performedByEmail.toLowerCase());
+      where.push(`lower("performedByEmail") = $${params.length}`);
+    }
+    if (query.from) {
+      params.push(query.from);
+      where.push(`"createdAt" >= $${params.length}`);
+    }
+    if (query.to) {
+      params.push(query.to);
+      where.push(`"createdAt" <= $${params.length}`);
+    }
+
+    const limit = Math.min(Math.max(Number(query.limit) || 500, 1), 2000);
+    params.push(limit);
+
+    const rows = await this.safeQuery<Record<string, unknown>>(
+      `
+        SELECT
+          id, "businessId", module, category, action,
+          "entityType", "entityId", "entityName", summary, quantity, status, metadata,
+          "performedById", "performedByName", "performedByEmail", "performedByRole", "createdAt"
+        FROM "AuditLog"
+        WHERE ${where.join(' AND ')}
+        ORDER BY "createdAt" DESC
+        LIMIT $${params.length}
+      `,
+      params,
+    );
+
+    return this.paged(rows);
   }
 
   private async resolveScope(headers: HeadersLike): Promise<Scope> {

@@ -1,10 +1,9 @@
 import { useEffect, useState, useMemo } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell } from "recharts";
-import { ChevronDown, ChevronRight, Clock, Download, TrendingUp, PhilippinePeso, ShoppingCart, Eye, AlertTriangle, ClipboardList } from "lucide-react";
+import { ChevronDown, ChevronRight, Clock, Download, TrendingUp, PhilippinePeso, ShoppingCart, Eye, AlertTriangle, ClipboardList, Search, Activity } from "lucide-react";
 import {
   useRestaurantAdjustmentsQuery,
   useRestaurantGoodsRecordsQuery,
-  useRestaurantInventoryMovementsQuery,
   useRestaurantIngredientConsumptionQuery,
   useRestaurantInventoryQuery,
   useRestaurantKitchenOrdersQuery,
@@ -12,11 +11,13 @@ import {
   useRestaurantTransfersQuery,
   useRestaurantUsersQuery,
   useRestaurantWasteQuery,
+  useRestaurantAuditLogsQuery,
 } from "../lib/restaurant";
 import { useSession } from "../../app/hooks/useSession";
 import { defaultCategoryHierarchy, formatCurrency, getInventoryValue, splitCategory } from "../lib/inventoryLogic";
+import { formatManilaFullDateTime, getLocalDateKey } from "../../../../shared/utils/date";
 
-type TabType = 'overview' | 'inventory' | 'consumption' | 'orders' | 'operations' | 'audit' | 'financial' | 'confidential';
+type TabType = 'overview' | 'inventory' | 'consumption' | 'orders' | 'operations' | 'audit' | 'admin';
 
 const COLORS = ["#007A5E", "#009BA5", "#F59E0B", "#DC2626", "#8B5CF6", "#EC4899", "#10b981"];
 
@@ -26,31 +27,24 @@ const statusPill = (status: string) => {
     approved: 'bg-blue-100 text-blue-700',
     partial: 'bg-yellow-100 text-yellow-700',
     rejected: 'bg-red-100 text-red-700',
-    cancelled: 'bg-gray-100 text-gray-600',
+    cancelled: 'bg-muted text-muted-foreground',
     completed: 'bg-green-100 text-green-700',
     'in-transit': 'bg-blue-100 text-blue-700',
     pending: 'bg-yellow-100 text-yellow-700',
     verified: 'bg-green-100 text-green-700',
     admin: 'bg-red-100 text-red-700',
     manager: 'bg-blue-100 text-blue-700',
-    staff: 'bg-gray-100 text-gray-700',
+    staff: 'bg-muted text-muted-foreground',
     active: 'bg-green-100 text-green-700',
-    inactive: 'bg-gray-100 text-gray-600',
+    inactive: 'bg-muted text-muted-foreground',
   };
-  return map[status?.toLowerCase()] ?? 'bg-gray-100 text-gray-600';
+  return map[status?.toLowerCase()] ?? 'bg-muted text-muted-foreground';
 };
 
 const formatAuditDate = (value?: string) => {
   if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString('en-PH', {
-    year: 'numeric',
-    month: 'short',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  const formatted = formatManilaFullDateTime(value);
+  return formatted === 'Invalid Date' ? value : formatted;
 };
 
 const csvValue = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
@@ -112,6 +106,12 @@ export function Reports() {
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [expandedPosTransactions, setExpandedPosTransactions] = useState<Record<string, boolean>>({});
   const [auditModuleFilter, setAuditModuleFilter] = useState('all');
+  const [activityQuery, setActivityQuery] = useState('');
+  const [activityDateFrom, setActivityDateFrom] = useState('');
+  const [activityDateTo, setActivityDateTo] = useState('');
+  const [activityUserFilter, setActivityUserFilter] = useState('All');
+  const [activityModuleFilter, setActivityModuleFilter] = useState('All');
+  const [activityActionFilter, setActivityActionFilter] = useState('All');
   const [consumptionFrom, setConsumptionFrom] = useState('');
   const [consumptionTo, setConsumptionTo] = useState('');
   const consumptionQuery = useRestaurantIngredientConsumptionQuery({
@@ -138,9 +138,11 @@ export function Reports() {
   const { data: adjustments = [] } = useRestaurantAdjustmentsQuery();
   const { data: wasteLogs = [] } = useRestaurantWasteQuery();
   const { data: goodsReceived = [] } = useRestaurantGoodsRecordsQuery();
-  const { data: inventoryMovements = [] } = useRestaurantInventoryMovementsQuery();
   const { data: posOrders = [] } = useRestaurantKitchenOrdersQuery();
   const { data: users = [] } = useRestaurantUsersQuery(isAdmin);
+  // Real audit trail — one row per recorded activity (create / update / delete /
+  // status change / receive / adjust / setting change) written by the backend.
+  const { data: auditTrail = [] } = useRestaurantAuditLogsQuery();
 
   const inventoryValue = getInventoryValue(products);
 
@@ -323,113 +325,6 @@ export function Reports() {
     return { totalInventoryValue, totalPOSpending, receivedPOValue, wasteValue, categoryValue, assetHealthScore };
   }, [products, purchaseOrders, receivedPOs, wasteLogs]);
 
-  const auditTrail = useMemo(() => {
-    const entries = [
-      ...inventoryMovements.map(movement => ({
-        id: `movement-${movement.id}`,
-        date: movement.date || '',
-        module: 'Inventory',
-        action: String(movement.type || 'Stock Movement').replace(/_/g, ' '),
-        item: movement.item || 'Item',
-        quantity: movement.quantity ? `${movement.quantity} ${movement.unit || ''}`.trim() : '',
-        performedBy: movement.createdBy || movement.by || '',
-        reference: movement.sourceId || movement.source || movement.id,
-        details: [
-          movement.previousQuantity !== undefined && movement.newQuantity !== undefined
-            ? `${movement.previousQuantity} to ${movement.newQuantity}`
-            : '',
-          movement.notes || movement.reason || '',
-          movement.location ? `Location: ${movement.location}` : '',
-        ].filter(Boolean).join(' | '),
-        status: 'recorded',
-      })),
-      ...posOrders.map(order => ({
-        id: `pos-${order.id}`,
-        date: order.voidedAt || order.orderedAt || '',
-        module: 'POS / Kitchen',
-        action: order.status === 'voided' ? 'Receipt Voided' : 'Receipt Completed',
-        item: order.recipeName || 'Menu item',
-        quantity: order.quantity ? `${order.quantity} order(s)` : '',
-        performedBy: order.completedBy || '',
-        reference: order.receiptNo || order.id,
-        details: [
-          order.modifiers?.length ? `Modifiers: ${order.modifiers.join(', ')}` : '',
-          order.voidReason ? `Void reason: ${order.voidReason}` : '',
-          order.notes || '',
-        ].filter(Boolean).join(' | '),
-        status: order.status || 'recorded',
-      })),
-      ...goodsReceived.map(receipt => ({
-        id: `receipt-${receipt.backendId || receipt.id}`,
-        date: receipt.receivedDate || '',
-        module: 'Goods Received',
-        action: 'Receipt Verified',
-        item: `${receipt.items || receipt.receivedItems?.length || 0} item(s)`,
-        quantity: `${(receipt.receivedItems || []).reduce((sum: number, item: any) => sum + (item.acceptedQuantity || 0), 0)} accepted`,
-        performedBy: receipt.receivedBy || '',
-        reference: receipt.id,
-        details: receipt.notes || `PO: ${receipt.poId || 'N/A'}`,
-        status: receipt.status || 'recorded',
-      })),
-      ...purchaseOrders.map(order => ({
-        id: `po-${order.backendId || order.id}`,
-        date: order.createdAt || order.date || '',
-        module: 'Purchase Order',
-        action: `PO ${order.status || 'created'}`,
-        item: order.supplier || 'Supplier',
-        quantity: `${order.items || order.orderItems?.length || 0} item(s)`,
-        performedBy: order.createdBy || '',
-        reference: order.id,
-        details: order.rejectionNote || `Total: ${formatCurrency(order.total || 0)}`,
-        status: order.status || 'recorded',
-      })),
-      ...transfers.map(transfer => ({
-        id: `transfer-${transfer.backendId || transfer.id}`,
-        date: transfer.completedDate || transfer.requestDate || '',
-        module: 'Transfer',
-        action: `Transfer ${transfer.status || 'requested'}`,
-        item: transfer.item || 'Multiple items',
-        quantity: transfer.quantity ? `${transfer.quantity} ${transfer.unit || ''}`.trim() : '',
-        performedBy: transfer.requestedByEmail || transfer.requestedBy || '',
-        reference: transfer.id,
-        details: `${transfer.from || 'Source'} to ${transfer.to || 'Destination'}`,
-        status: transfer.status || 'recorded',
-      })),
-      ...adjustments.map(adjustment => ({
-        id: `adjustment-${adjustment.id}`,
-        date: adjustment.date || '',
-        module: 'Adjustment',
-        action: adjustment.type || 'Correction',
-        item: adjustment.item || 'Item',
-        quantity: adjustment.quantity ? `${adjustment.quantity} ${adjustment.unit || ''}`.trim() : '',
-        performedBy: adjustment.adjustedBy || '',
-        reference: adjustment.id,
-        details: adjustment.reason || adjustment.notes || '',
-        status: 'recorded',
-      })),
-      ...wasteLogs.map(waste => ({
-        id: `waste-${waste.id}`,
-        date: waste.date || '',
-        module: 'Waste',
-        action: waste.wasteType || 'Waste Log',
-        item: waste.item || 'Item',
-        quantity: waste.quantity ? `${waste.quantity} ${waste.unit || ''}`.trim() : '',
-        performedBy: waste.loggedBy || '',
-        reference: waste.id,
-        details: waste.notes || `Value: ${formatCurrency(waste.totalValue || 0)}`,
-        status: 'recorded',
-      })),
-    ];
-
-    return entries
-      .filter(entry => entry.date || entry.reference)
-      .sort((a, b) => {
-        const aTime = new Date(a.date).getTime();
-        const bTime = new Date(b.date).getTime();
-        return (Number.isNaN(bTime) ? 0 : bTime) - (Number.isNaN(aTime) ? 0 : aTime);
-      });
-  }, [inventoryMovements, posOrders, goodsReceived, purchaseOrders, transfers, adjustments, wasteLogs]);
-
   const visibleAuditTrail = useMemo(() => {
     if (hasFullAuditTrailAccess) return auditTrail;
     if (!currentUserEmail) return [];
@@ -497,9 +392,52 @@ export function Reports() {
     return { byRole, byStatus, criticalEvents };
   }, [isAdmin, users, wasteLogs, adjustments]);
 
+  // Activity Log — a POS-style event feed over the real audit trail, with the same
+  // filter set as the POS Activity Log page (date range, user, module, action,
+  // free-text search).
+  const activityUsers = useMemo(() => {
+    const map = new Map<string, string>();
+    auditTrail.forEach((entry) => {
+      const value = (entry.performedBy || '').trim();
+      if (value && !map.has(value)) map.set(value, entry.performedByName || value);
+    });
+    return Array.from(map.entries())
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [auditTrail]);
+
+  const activityModules = useMemo(
+    () => ['All', ...Array.from(new Set(auditTrail.map((e) => e.module).filter(Boolean))).sort()],
+    [auditTrail],
+  );
+  const activityActions = useMemo(
+    () => ['All', ...Array.from(new Set(auditTrail.map((e) => e.action).filter(Boolean))).sort()],
+    [auditTrail],
+  );
+
+  const activityLog = useMemo(() => {
+    const query = activityQuery.trim().toLowerCase();
+    return auditTrail.filter((entry) => {
+      if (activityUserFilter !== 'All' && normalizeAuditActor(entry.performedBy) !== normalizeAuditActor(activityUserFilter)) return false;
+      if (activityModuleFilter !== 'All' && entry.module !== activityModuleFilter) return false;
+      if (activityActionFilter !== 'All' && entry.action !== activityActionFilter) return false;
+      const day = (entry.date || '').slice(0, 10);
+      if (activityDateFrom && (!day || day < activityDateFrom)) return false;
+      if (activityDateTo && (!day || day > activityDateTo)) return false;
+      if (query) {
+        const haystack = [
+          entry.performedByName, entry.performedBy, entry.module, entry.action,
+          entry.item, entry.quantity, entry.details,
+        ].join(' ').toLowerCase();
+        if (!haystack.includes(query)) return false;
+      }
+      return true;
+    });
+  }, [auditTrail, activityUserFilter, activityModuleFilter, activityActionFilter, activityDateFrom, activityDateTo, activityQuery]);
+
   // ── Export ──────────────────────────────────────────────────────────────────
   const handleExport = () => {
-    const timestamp = new Date().toISOString().split('T')[0];
+    const timestamp = getLocalDateKey();
     let csv = '';
     let filename = `restaurant_${activeTab}_${timestamp}.csv`;
 
@@ -567,16 +505,14 @@ export function Reports() {
           entry.details,
         ].map(csvValue).join(',') + '\n';
       });
-    } else if (activeTab === 'financial') {
+    } else if (activeTab === 'admin') {
       if (!isAdmin) return;
       csv = 'Metric,Value\n';
       csv += `Total Inventory Value,${financialData.totalInventoryValue.toFixed(2)}\n`;
       csv += `Total PO Spending,${financialData.totalPOSpending.toFixed(2)}\n`;
       csv += `Waste Loss,${financialData.wasteValue.toFixed(2)}\n`;
       csv += `Asset Health Score,${financialData.assetHealthScore.toFixed(1)}%\n`;
-    } else if (activeTab === 'confidential') {
-      if (!isAdmin) return;
-      csv = 'CONFIDENTIAL\n\nUser List\nName,Email,Role,Status,Last Login\n';
+      csv += '\nUser List\nName,Email,Role,Status,Last Login\n';
       users.forEach(u => {
         csv += `${u.name},${u.email},${u.role},${u.status},${u.lastLogin || ''}\n`;
       });
@@ -647,12 +583,9 @@ export function Reports() {
           Audit Trail
         </button>
         {isAdmin && (
-          <button onClick={() => setActiveTab('financial')} className={tabCls('financial')}>Financial Report</button>
-        )}
-        {isAdmin && (
-          <button onClick={() => setActiveTab('confidential')} className={tabCls('confidential', true)}>
+          <button onClick={() => setActiveTab('admin')} className={tabCls('admin')}>
             <Eye className="w-4 h-4" />
-            Confidential
+            Admin Report
           </button>
         )}
       </div>
@@ -1300,20 +1233,7 @@ export function Reports() {
         </div>
       )}
 
-      {activeTab === 'financial' && !isAdmin && (
-        <div className="bg-card border border-border rounded-2xl p-12 text-center">
-          <div className="bg-red-100 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4">
-            <Eye className="w-10 h-10 text-red-600" />
-          </div>
-          <h3 className="text-xl font-bold text-foreground mb-2">Access Denied</h3>
-          <p className="text-sm text-muted-foreground">
-            You do not have permission to view financial reports.<br />
-            This section is restricted to administrators only.
-          </p>
-        </div>
-      )}
-
-      {activeTab === 'financial' && isAdmin && (
+      {activeTab === 'admin' && isAdmin && (
         <div>
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-xl font-semibold text-foreground">Financial Report</h3>
@@ -1418,22 +1338,9 @@ export function Reports() {
         </div>
       )}
 
-      {/* ── Confidential (admin only) ──────────────────────────────────────────── */}
-      {activeTab === 'confidential' && !isAdmin && (
-        <div className="bg-card border border-border rounded-2xl p-12 text-center">
-          <div className="bg-red-100 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4">
-            <Eye className="w-10 h-10 text-red-600" />
-          </div>
-          <h3 className="text-xl font-bold text-foreground mb-2">Access Denied</h3>
-          <p className="text-sm text-muted-foreground">
-            You do not have permission to view confidential reports.<br />
-            This section is restricted to administrators only.
-          </p>
-        </div>
-      )}
-
-      {activeTab === 'confidential' && isAdmin && confidentialData && (
-        <div>
+      {/* ── Confidential / Security (part of the merged Admin Report) ───────────── */}
+      {activeTab === 'admin' && isAdmin && confidentialData && (
+        <div className="mt-6 pt-6 border-t border-border">
           {/* Badge + export */}
           <div className="flex items-center gap-3 mb-4">
             <div className="bg-red-600 text-white px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-2">
@@ -1443,11 +1350,11 @@ export function Reports() {
           </div>
 
           {/* Warning banner */}
-          <div className="bg-red-50 border-2 border-red-500 rounded-2xl p-4 mb-6 flex items-start gap-3">
-            <AlertTriangle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+          <div className="flex items-start gap-3 rounded-2xl border-2 border-red-300 bg-red-50 p-4 mb-6 dark:border-red-700 dark:bg-red-950/40">
+            <AlertTriangle className="w-5 h-5 text-red-700 flex-shrink-0 mt-0.5 dark:text-red-200" />
             <div>
-              <p className="text-sm font-semibold text-red-600">Warning</p>
-              <p className="text-xs text-foreground mt-1">
+              <p className="text-sm font-semibold text-red-800 dark:text-red-200">Warning</p>
+              <p className="text-xs text-red-900 mt-1 dark:text-red-100">
                 This report contains sensitive operational and user data. Access is restricted to administrators only.
                 Do not share this information with unauthorized personnel.
               </p>
@@ -1479,32 +1386,64 @@ export function Reports() {
             </div>
           </div>
 
-          {/* User Activity Log */}
+          {/* Activity Log */}
           <div className="bg-card border border-border rounded-2xl p-6 mb-4">
-            <h4 className="text-base font-semibold text-foreground mb-4">User Activity Log</h4>
-            <div className="space-y-2">
-              {users.length === 0 ? (
-                <p className="py-6 text-center text-sm text-muted-foreground">No user data available</p>
-              ) : users.map(u => (
-                <div key={u.id} className="flex items-center justify-between p-3 bg-muted/30 rounded-xl">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0 ${
-                      u.role === 'admin' ? 'bg-red-600' : u.role === 'manager' ? 'bg-primary' : 'bg-secondary'
-                    }`}>
-                      {(u.name || '?').charAt(0).toUpperCase()}
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-foreground">{u.name}</p>
-                      <p className="text-xs text-muted-foreground">{u.email}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className={`px-2 py-1 rounded-lg text-xs font-medium capitalize ${statusPill(u.role)}`}>{u.role}</span>
-                    <span className={`px-2 py-1 rounded-lg text-xs font-medium capitalize ${statusPill(u.status)}`}>{u.status}</span>
-                    <p className="text-xs text-muted-foreground w-28 text-right">{u.lastLogin || '—'}</p>
-                  </div>
-                </div>
-              ))}
+            <div className="flex items-center gap-2 mb-1">
+              <Activity className="w-4 h-4 text-primary" />
+              <h4 className="text-base font-semibold text-foreground">Activity Log</h4>
+            </div>
+            <p className="text-xs text-muted-foreground mb-4">
+              Review recorded inventory actions and staff activity. {activityLog.length} of {auditTrail.length} entr{auditTrail.length === 1 ? 'y' : 'ies'}.
+            </p>
+
+            <div className="mb-4 grid gap-3 md:grid-cols-5">
+              <input type="date" value={activityDateFrom} onChange={(e) => setActivityDateFrom(e.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm bg-background" />
+              <input type="date" value={activityDateTo} onChange={(e) => setActivityDateTo(e.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm bg-background" />
+              <select value={activityUserFilter} onChange={(e) => setActivityUserFilter(e.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm bg-background">
+                <option value="All">All Users</option>
+                {activityUsers.map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}
+              </select>
+              <select value={activityModuleFilter} onChange={(e) => setActivityModuleFilter(e.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm bg-background">
+                {activityModules.map((m) => <option key={m} value={m}>{m === 'All' ? 'All Modules' : m}</option>)}
+              </select>
+              <select value={activityActionFilter} onChange={(e) => setActivityActionFilter(e.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm bg-background">
+                {activityActions.map((a) => <option key={a} value={a}>{a === 'All' ? 'All Actions' : a}</option>)}
+              </select>
+              <div className="relative md:col-span-5">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <input value={activityQuery} onChange={(e) => setActivityQuery(e.target.value)} placeholder="Search activity details..." className="w-full rounded-lg border border-border py-2 pl-9 pr-3 text-sm bg-background" />
+              </div>
+            </div>
+
+            <div className="overflow-x-auto rounded-lg border border-border">
+              <table className="w-full text-sm min-w-[760px]">
+                <thead className="bg-muted/50">
+                  <tr>
+                    <th className="px-4 py-3 text-left font-semibold text-foreground">Date &amp; Time</th>
+                    <th className="px-4 py-3 text-left font-semibold text-foreground">User</th>
+                    <th className="px-4 py-3 text-left font-semibold text-foreground">Role</th>
+                    <th className="px-4 py-3 text-left font-semibold text-foreground">Module</th>
+                    <th className="px-4 py-3 text-left font-semibold text-foreground">Action</th>
+                    <th className="px-4 py-3 text-left font-semibold text-foreground">Details</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {activityLog.length === 0 ? (
+                    <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">No activity found.</td></tr>
+                  ) : activityLog.slice(0, 200).map((entry) => (
+                    <tr key={entry.id} className="align-top hover:bg-muted/30 transition-colors">
+                      <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">{formatAuditDate(entry.date)}</td>
+                      <td className="px-4 py-3 text-foreground">{entry.performedByName || 'System'}</td>
+                      <td className="px-4 py-3"><span className="capitalize">{entry.performedByRole || '—'}</span></td>
+                      <td className="px-4 py-3"><span className="inline-flex rounded-lg bg-muted px-2 py-1 text-xs font-medium text-foreground">{entry.module}</span></td>
+                      <td className="px-4 py-3 capitalize text-foreground">{entry.action.toLowerCase()}</td>
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {[entry.item && `${entry.item}${entry.quantity ? ` (${entry.quantity})` : ''}`, entry.details].filter(Boolean).join(' — ') || '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
 

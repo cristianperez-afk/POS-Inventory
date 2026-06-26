@@ -18,6 +18,7 @@ import { OrderList } from '../restaurant/pages/OrderList';
 import { Reports } from '../restaurant/pages/Reports';
 import { StoreInformation } from './components/StoreInformation';
 import { StoreSettings } from './components/StoreSettings';
+import { GeneralSettings } from './components/GeneralSettings';
 import { ManagerProfile } from './components/ManagerProfile';
 import { ActivityLogPage } from './components/ActivityLogPage';
 import { InventoryModulePage } from './components/InventoryModulePage';
@@ -30,6 +31,7 @@ import type { AuthenticatedUser } from '../auth/types/auth';
 import { getDefaultStoreLogo } from './utils/defaultStoreLogo';
 import { AppAlertProvider } from './components/AppAlertProvider';
 import { appQueryClient } from '../query/appQueryClient';
+import { applyUserPreferences, loadUserPreferences } from './utils/themePreferences';
 
 const SESSION_USER_KEY = 'bukolabs-pos-current-user';
 const SESSION_PAGE_KEY = 'bukolabs-pos-current-page';
@@ -54,6 +56,7 @@ export type Page =
   | 'activity-log'
   | 'store-information'
   | 'store-settings'
+  | 'general-settings'
   | 'manager-profile'
   | 'inventory-dashboard'
   | 'inventory-stock-alerts'
@@ -68,7 +71,8 @@ export type Page =
   | 'inventory-transfers'
   | 'inventory-multilocation'
   | 'inventory-reports'
-  | 'inventory-user-management';
+  | 'inventory-user-management'
+  | 'inventory-settings';
 
 export interface StoreBrand {
   name: string | null;
@@ -89,6 +93,10 @@ export default function App() {
   const [storeBrand, setStoreBrand] = useState<StoreBrand>({ name: null, logo: null });
 
   useEffect(() => {
+    applyUserPreferences(loadUserPreferences(currentUser?.id));
+  }, [currentUser?.id]);
+
+  useEffect(() => {
     const savedUser = window.sessionStorage.getItem(SESSION_USER_KEY);
     if (!savedUser) return;
 
@@ -96,7 +104,8 @@ export default function App() {
       const parsedUser = JSON.parse(savedUser) as AuthenticatedUser;
       const savedPage = window.sessionStorage.getItem(SESSION_PAGE_KEY) as Page | null;
       const defaultPage = getDefaultPageForUser(parsedUser);
-      const nextPage = savedPage && savedPage !== 'login' && canAccessPage(parsedUser, savedPage) ? savedPage : defaultPage;
+      const normalizedSavedPage = savedPage && savedPage !== 'login' ? normalizePageForUserStore(parsedUser, savedPage) : savedPage;
+      const nextPage = normalizedSavedPage && normalizedSavedPage !== 'login' && canAccessPage(parsedUser, normalizedSavedPage) ? normalizedSavedPage : defaultPage;
       setCurrentUser(parsedUser);
       setCurrentPage(nextPage);
       window.sessionStorage.setItem(SESSION_PAGE_KEY, nextPage);
@@ -199,6 +208,10 @@ export default function App() {
   const navigateTo = (page: Page) => {
     if (page === 'inventory-user-management') {
       page = 'admin-dashboard';
+    }
+
+    if (currentUser) {
+      page = normalizePageForUserStore(currentUser, page);
     }
 
     if (isInventoryPage(page) && !INVENTORY_MODULES_ENABLED) {
@@ -310,6 +323,7 @@ export default function App() {
                   isAdmin={isStoreAdminUser}
                   storeBrand={storeBrand}
                   userName={currentUser?.full_name}
+                  userRole={currentUser?.role}
                   storeType={currentUser?.store_type}
                   staffType={currentUser?.staff_type}
                 />
@@ -359,6 +373,9 @@ export default function App() {
           {currentPage === 'store-settings' && (
             <StoreSettings currentUser={currentUser} storeBrand={storeBrand} onLogout={handleLogout} onNavigate={navigateTo} />
           )}
+          {currentPage === 'general-settings' && (
+            <GeneralSettings currentUser={currentUser} storeBrand={storeBrand} onLogout={handleLogout} onNavigate={navigateTo} />
+          )}
           {currentPage === 'manager-profile' && (
             <ManagerProfile currentUser={currentUser} storeBrand={storeBrand} onLogout={handleLogout} onNavigate={navigateTo} onUserUpdate={updateCurrentUser} />
           )}
@@ -392,6 +409,7 @@ export default function App() {
 
 function getDefaultPageForUser(user: AuthenticatedUser): Page {
   if (user.role === 'SUPERADMIN') return 'superadmin-dashboard';
+  if (user.role === 'ADMIN') return getAdminDefaultWorkspacePage(user);
   if (isInventoryManagerUser(user)) return INVENTORY_MODULES_ENABLED ? 'inventory-dashboard' : 'login';
   if (isPosManagerUser(user) && user.store_type === 'RETAIL_STORE') return 'retail-pos-dashboard';
   if (isPosManagerUser(user) && user.store_type === 'RESTAURANT') return 'pos-dashboard';
@@ -399,6 +417,24 @@ function getDefaultPageForUser(user: AuthenticatedUser): Page {
   if (user.store_type === 'RETAIL_STORE') return 'retail-pos-dashboard';
   if (user.store_type === 'RESTAURANT') return 'pos-dashboard';
   return 'login';
+}
+
+function getAdminDefaultWorkspacePage(user: AuthenticatedUser): Page {
+  const { defaultWorkspace } = loadUserPreferences(user.id);
+
+  if (defaultWorkspace === 'inventory') {
+    return INVENTORY_MODULES_ENABLED ? 'inventory-dashboard' : getAdminPosDefaultPage(user);
+  }
+
+  if (defaultWorkspace === 'reports') {
+    return user.store_type === 'RETAIL_STORE' ? 'retail-reports' : 'reports';
+  }
+
+  return getAdminPosDefaultPage(user);
+}
+
+function getAdminPosDefaultPage(user: AuthenticatedUser): Page {
+  return user.store_type === 'RETAIL_STORE' ? 'retail-pos-dashboard' : 'pos-dashboard';
 }
 
 function isPosManagerUser(user: AuthenticatedUser | null | undefined) {
@@ -417,6 +453,12 @@ function isInventoryManagerUser(user: AuthenticatedUser | null | undefined) {
   return user.role === 'ADMIN' && user.staff_type === 'INVENTORY_STAFF';
 }
 
+function normalizePageForUserStore(user: AuthenticatedUser, page: Page): Page {
+  if (user.store_type === 'RETAIL_STORE' && page === 'reports') return 'retail-reports';
+  if (user.store_type === 'RESTAURANT' && page === 'retail-reports') return 'reports';
+  return page;
+}
+
 function isInventoryPage(page: Page) {
   return page.startsWith('inventory-');
 }
@@ -431,6 +473,7 @@ function canAccessPage(user: AuthenticatedUser, page: Page) {
   }
 
   if (page === 'login') return true;
+  if (page === 'general-settings') return true;
   if (user.role === 'SUPERADMIN') return page === 'superadmin-dashboard' || page === 'activity-log';
   if (page === 'manager-profile') {
     return user.store_type === 'RETAIL_STORE' && isActualPosManagerUser(user);
@@ -441,26 +484,14 @@ function canAccessPage(user: AuthenticatedUser, page: Page) {
   if (user.role === 'ADMIN') {
     return [
       'admin-dashboard',
-      'retail-pos-dashboard',
-      'retail-transactions',
-      'retail-reports',
-      'pos-dashboard',
-      'order-list',
-      'reports',
       'activity-log',
       'store-information',
       'store-settings',
-    ].includes(page) || isInventoryPage(page);
+    ].includes(page) || isManagerPosPageForStore(user, page) || isInventoryPage(page);
   }
 
   if (isPosManagerUser(user)) {
-    return [
-      'retail-pos-dashboard',
-      'retail-transactions',
-      'retail-reports',
-      'pos-dashboard',
-      'order-list',
-      'reports',
+    return isManagerPosPageForStore(user, page) || [
       'activity-log',
       'store-information',
       'store-settings',
@@ -473,6 +504,59 @@ function canAccessPage(user: AuthenticatedUser, page: Page) {
 
   if (user.staff_type === 'INVENTORY_STAFF') {
     return isInventoryPage(page);
+  }
+
+  return isPosPageForStore(user, page);
+}
+
+function isManagerPosPageForStore(user: AuthenticatedUser, page: Page) {
+  if (user.store_type === 'RETAIL_STORE') {
+    return [
+      'retail-pos-dashboard',
+      'retail-transactions',
+      'retail-reports',
+    ].includes(page);
+  }
+
+  if (user.store_type === 'RESTAURANT') {
+    return [
+      'pos-dashboard',
+      'order-list',
+      'reports',
+    ].includes(page);
+  }
+
+  return [
+    'retail-pos-dashboard',
+    'retail-transactions',
+    'retail-reports',
+    'pos-dashboard',
+    'order-list',
+    'reports',
+  ].includes(page);
+}
+
+function isPosPageForStore(user: AuthenticatedUser, page: Page) {
+  if (user.store_type === 'RETAIL_STORE') {
+    return [
+      'retail-dashboard',
+      'retail-pos-dashboard',
+      'retail-sales',
+      'retail-transactions',
+      'retail-reports',
+    ].includes(page);
+  }
+
+  if (user.store_type === 'RESTAURANT') {
+    return [
+      'pos-dashboard',
+      'create-order',
+      'table-management',
+      'payment',
+      'receipt',
+      'order-list',
+      'reports',
+    ].includes(page);
   }
 
   return isPosPage(page);

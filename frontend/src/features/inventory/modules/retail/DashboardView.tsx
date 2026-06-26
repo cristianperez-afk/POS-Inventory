@@ -15,6 +15,7 @@ import { categorySubcategories, CHART_COLORS } from '../../app/utils/constants';
 import { autoSortItem } from '../../app/utils/autoSortingRules';
 import { useRetailWorkspace } from '../lib/retail';
 import { useQueryClient } from '@tanstack/react-query';
+import { getManilaTime } from '../../../../shared/utils/date';
 
 
 export interface StockAlert {
@@ -103,7 +104,7 @@ export function DashboardView({ onNavigate }: { onNavigate?: (view: string) => v
             Overview of your inventory system
             {!isRefreshing && (
               <span className="ml-2 text-[12px] text-muted-foreground">
-                • Last updated: {lastRefreshed.toLocaleTimeString()}
+                • Last updated: {getManilaTime(lastRefreshed)}
               </span>
             )}
           </p>
@@ -112,7 +113,7 @@ export function DashboardView({ onNavigate }: { onNavigate?: (view: string) => v
           <button
             onClick={handleRefresh}
             disabled={isRefreshing}
-            className="bg-white border border-border text-foreground px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-muted hover:-translate-y-0.5 hover:shadow-md hover:border-secondary/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 active:translate-y-0 active:shadow-sm transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:translate-y-0 disabled:shadow-none disabled:border-border"
+            className="bg-card border border-border text-foreground px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-muted hover:-translate-y-0.5 hover:shadow-md hover:border-secondary/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 active:translate-y-0 active:shadow-sm transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:translate-y-0 disabled:shadow-none disabled:border-border"
           >
             <RefreshCw className={`size-4 ${isRefreshing ? 'animate-spin' : ''}`} />
             {isRefreshing ? 'Refreshing...' : 'Refresh'}
@@ -164,7 +165,7 @@ export function DashboardView({ onNavigate }: { onNavigate?: (view: string) => v
       {/* Charts Row */}
       <div className="grid grid-cols-2 gap-4 mb-6">
         {/* Stock Trend Chart */}
-        <div className="bg-white border border-border rounded-[14px] p-6">
+        <div className="bg-card border border-border rounded-[14px] p-6">
           <h3 className="text-[18px] font-semibold text-foreground mb-4">Stock Trend (2026)</h3>
           <LineChart width={400} height={250} data={stockTrendData}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" key="grid-trend" />
@@ -180,7 +181,7 @@ export function DashboardView({ onNavigate }: { onNavigate?: (view: string) => v
         </div>
 
         {/* Category Distribution Chart */}
-        <div className="bg-white border border-border rounded-[14px] p-6">
+        <div className="bg-card border border-border rounded-[14px] p-6">
           <h3 className="text-[18px] font-semibold text-foreground mb-4">Inventory by Category</h3>
           {categoryData.length > 0 ? (
             <div className="flex items-center gap-4">
@@ -235,7 +236,7 @@ export function DashboardView({ onNavigate }: { onNavigate?: (view: string) => v
       {/* Second Charts Row */}
       <div className="grid grid-cols-2 gap-4 mb-6">
         {/* Condition Breakdown Chart */}
-        <div className="bg-white border border-border rounded-[14px] p-6">
+        <div className="bg-card border border-border rounded-[14px] p-6">
           <h3 className="text-[18px] font-semibold text-foreground mb-4">Items by Condition</h3>
           <BarChart width={400} height={250} data={conditionData}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" key="grid-condition" />
@@ -250,7 +251,7 @@ export function DashboardView({ onNavigate }: { onNavigate?: (view: string) => v
         </div>
 
         {/* Quick Stats Grid */}
-        <div className="bg-white border border-border rounded-[14px] p-6">
+        <div className="bg-card border border-border rounded-[14px] p-6">
           <h3 className="text-[18px] font-semibold text-foreground mb-4">Quick Stats</h3>
           <div className="space-y-4">
             <div className="flex items-center justify-between p-3 bg-muted rounded-[8px]">
@@ -293,7 +294,7 @@ export function DashboardView({ onNavigate }: { onNavigate?: (view: string) => v
       {/* Recent Activity & Alerts */}
       <div className="grid grid-cols-2 gap-4">
         {/* Recent Receipts */}
-        <div className="bg-white border border-border rounded-[14px] p-6">
+        <div className="bg-card border border-border rounded-[14px] p-6">
           <h3 className="text-[18px] font-semibold text-foreground mb-4">Recent Receipts</h3>
           {recentReceipts.length === 0 ? (
             <p className="text-[14px] text-muted-foreground text-center py-8">No recent receipts</p>
@@ -316,7 +317,7 @@ export function DashboardView({ onNavigate }: { onNavigate?: (view: string) => v
         </div>
 
         {/* Low Stock Alerts */}
-        <div className="bg-white border border-border rounded-[14px] p-6">
+        <div className="bg-card border border-border rounded-[14px] p-6">
           <h3 className="text-[18px] font-semibold text-foreground mb-4">Low Stock Alerts</h3>
           {stockAlerts.length === 0 ? (
             <p className="text-[14px] text-muted-foreground text-center py-8">No low stock alerts</p>
@@ -345,7 +346,7 @@ export function DashboardView({ onNavigate }: { onNavigate?: (view: string) => v
   );
 }
 
-// Stat Card Component — becomes a clickable, navigating card when given an onClick.
+// Stat Card Component becomes a clickable, navigating card when given an onClick.
 function StatCard({ title, value, change, subtitle, color, iconColor, isWarning, icon, onClick }: any) {
   const content = (
     <>
@@ -377,14 +378,14 @@ function StatCard({ title, value, change, subtitle, color, iconColor, isWarning,
       <button
         type="button"
         onClick={onClick}
-        className="text-left w-full bg-white border border-border rounded-[14px] p-6 shadow-sm cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-lg hover:border-secondary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/40 active:translate-y-0 active:shadow-md"
+        className="text-left w-full bg-card border border-border rounded-[14px] p-6 shadow-sm cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-lg hover:border-secondary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/40 active:translate-y-0 active:shadow-md"
       >
         {content}
       </button>
     );
   }
 
-  return <div className="bg-white border border-border rounded-[14px] p-6">{content}</div>;
+  return <div className="bg-card border border-border rounded-[14px] p-6">{content}</div>;
 }
 
 // Stock Alerts View

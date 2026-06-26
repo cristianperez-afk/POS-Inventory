@@ -507,6 +507,10 @@ function mapDatabaseRestaurantOrder(row: any): Order {
     row.order_status === 'SERVED' ? 'Served' :
     row.order_status === 'COMPLETED' ? 'Completed' :
     'Pending';
+  const estimatedPrepMinutes = valueOf('estimated_prep_minutes', 'estimatedPrepMinutes') !== undefined ? Number(valueOf('estimated_prep_minutes', 'estimatedPrepMinutes')) : undefined;
+  const computedEstimatedReadyAt = orderedAt && Number.isFinite(Number(estimatedPrepMinutes)) && Number(estimatedPrepMinutes) > 0
+    ? new Date(orderedAt.getTime() + Math.ceil(Number(estimatedPrepMinutes)) * 60000).toISOString()
+    : normalizedTimestamp(valueOf('estimated_ready_at', 'estimatedReadyAt'));
   const completedAt = orderStatus === 'Completed' ? rawCompletedAt : null;
   const isQueued = Boolean(queueMatch) && orderStatus !== 'Completed';
   const type: Order['type'] =
@@ -550,8 +554,8 @@ function mapDatabaseRestaurantOrder(row: any): Order {
     // Kept for older consumers; never fall back to created_at for elapsed timers.
     runningTimeMinutes: minutesBetween(orderedAt, servedAtValue ? parseDatabaseTimestamp(servedAtValue) : null),
     customerStayMinutes: tableStartedAt && (type === 'Dine-In' || type === 'Mixed') ? minutesBetween(tableStartedAt, tableEndedAt ?? completedAt) : undefined,
-    estimatedPrepMinutes: valueOf('estimated_prep_minutes', 'estimatedPrepMinutes') !== undefined ? Number(valueOf('estimated_prep_minutes', 'estimatedPrepMinutes')) : undefined,
-    estimatedReadyAt: valueOf('estimated_ready_at', 'estimatedReadyAt'),
+    estimatedPrepMinutes,
+    estimatedReadyAt: computedEstimatedReadyAt,
     items: items.map((item: any) => ({
       name: item.product_name,
       quantity: Number(item.quantity ?? 0),

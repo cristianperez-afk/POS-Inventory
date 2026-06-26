@@ -6,6 +6,7 @@ import { SessionProvider } from '@inventory/app/hooks/useSession';
 import { NotificationBell } from '@inventory/app/components/NotificationBell';
 import type { AuthenticatedUser } from '../../auth/types/auth';
 import type { Page } from '../App';
+import { InventorySettings } from './InventorySettings';
 import '@inventory/modules/restaurant/restaurantLegacyTheme.css';
 
 const RetailDashboard = lazy(() => import('@inventory/modules/retail/RetailViews').then((m) => ({ default: m.DashboardView })));
@@ -60,6 +61,7 @@ const pageTitles: Partial<Record<Page, string>> = {
   'inventory-multilocation': 'Multilocation',
   'inventory-reports': 'Inventory Reports',
   'inventory-user-management': 'Inventory User Management',
+  'inventory-settings': 'Inventory Settings',
 };
 
 export function InventoryModulePage({
@@ -108,7 +110,7 @@ export function InventoryModulePage({
   return (
     <QueryClientProvider client={appQueryClient}>
       <SessionProvider key={inventoryUser?.id ?? 'guest'}>
-        <div className={`h-screen flex-1 overflow-hidden bg-[#f8fafb] ${isRestaurant ? 'restaurant-legacy' : ''}`}>
+        <div className={`h-screen flex-1 overflow-hidden bg-background ${isRestaurant ? 'restaurant-legacy' : ''}`}>
           <div className="flex h-full flex-col overflow-hidden">
             {showHeader && (
               <div className="border-b border-white/10 bg-[#005656] px-6 py-4">
@@ -121,7 +123,7 @@ export function InventoryModulePage({
             </div>
             <div className="flex-1 overflow-y-auto px-6 pb-6 pt-4">
               <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-slate-500">Loading inventory...</div>}>
-                {isRestaurant ? renderRestaurantPage(currentPage) : renderRetailPage(currentPage, inventoryUser, onNavigate)}
+                {isRestaurant ? renderRestaurantPage(currentPage, currentUser) : renderRetailPage(currentPage, inventoryUser, currentUser, onNavigate)}
               </Suspense>
             </div>
           </div>
@@ -154,12 +156,14 @@ const DASHBOARD_TARGET_TO_PAGE: Record<string, Page> = {
   reports: 'inventory-reports',
 };
 
-function renderRetailPage(page: Page, currentUser: InventoryUser | null, onNavigate?: (page: Page) => void): ReactNode {
+function renderRetailPage(page: Page, currentUser: InventoryUser | null, authenticatedUser: AuthenticatedUser | null, onNavigate?: (page: Page) => void): ReactNode {
   const dashboardNavigate = (target: string) => {
     const next = DASHBOARD_TARGET_TO_PAGE[target];
     if (next) onNavigate?.(next);
   };
   switch (page) {
+    case 'inventory-settings':
+      return <InventorySettings currentUser={authenticatedUser} />;
     case 'inventory-stock-alerts':
       return <RetailStockAlerts />;
     case 'inventory-items':
@@ -187,8 +191,10 @@ function renderRetailPage(page: Page, currentUser: InventoryUser | null, onNavig
   }
 }
 
-function renderRestaurantPage(page: Page): ReactNode {
+function renderRestaurantPage(page: Page, authenticatedUser: AuthenticatedUser | null): ReactNode {
   switch (page) {
+    case 'inventory-settings':
+      return <InventorySettings currentUser={authenticatedUser} />;
     case 'inventory-stock-alerts':
       return <RestaurantStockControl />;
     case 'inventory-items':

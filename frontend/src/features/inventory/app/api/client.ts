@@ -193,6 +193,47 @@ export function createStockMovement(data: unknown) {
   });
 }
 
+// ─── Audit Trail ───────────────────────────────────────────────────────────────
+
+export interface ApiAuditLog {
+  id: string;
+  businessId: string;
+  module: BusinessModule;
+  category: string;
+  action: string;
+  entityType: string | null;
+  entityId: string | null;
+  entityName: string | null;
+  summary: string | null;
+  quantity: string | null;
+  status: string | null;
+  metadata: unknown;
+  performedById: string | null;
+  performedByName: string | null;
+  performedByEmail: string | null;
+  performedByRole: string | null;
+  createdAt: string;
+}
+
+export function getAuditLogs(params?: {
+  module?: BusinessModule;
+  category?: string;
+  performedByEmail?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+}) {
+  const query = new URLSearchParams();
+  if (params?.module) query.set('module', params.module);
+  if (params?.category) query.set('category', params.category);
+  if (params?.performedByEmail) query.set('performedByEmail', params.performedByEmail);
+  if (params?.from) query.set('from', params.from);
+  if (params?.to) query.set('to', params.to);
+  if (params?.limit) query.set('limit', String(params.limit));
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  return request<PagedResponse<ApiAuditLog>>(`/api/audit-logs${suffix}`).then((r) => r.data);
+}
+
 export interface IngredientConsumptionRow {
   itemId: string;
   name: string;
@@ -599,9 +640,10 @@ export function rejectAdjustment(id: string, reason: string, module?: BusinessMo
 
 // ─── Bundles ─────────────────────────────────────────────────────────────────
 
-export function getBundles(params?: { status?: string }) {
+export function getBundles(params?: { status?: string; archived?: boolean }) {
   const query = new URLSearchParams();
   if (params?.status) query.set('status', params.status);
+  if (params?.archived !== undefined) query.set('archived', String(params.archived));
   const suffix = query.toString() ? `?${query.toString()}` : '';
   return request<PagedResponse<ApiBundle>>(`/api/bundles${suffix}`).then((r) => r.data);
 }
@@ -632,6 +674,14 @@ export function activateBundle(id: string) {
 
 export function deactivateBundle(id: string) {
   return request<ApiBundle>(`/api/bundles/${id}/deactivate`, { method: 'PATCH' });
+}
+
+export function archiveBundle(id: string) {
+  return request<ApiBundle>(`/api/bundles/${id}/archive`, { method: 'PATCH' });
+}
+
+export function restoreBundle(id: string) {
+  return request<ApiBundle>(`/api/bundles/${id}/restore`, { method: 'POST' });
 }
 
 export function deleteBundle(id: string) {

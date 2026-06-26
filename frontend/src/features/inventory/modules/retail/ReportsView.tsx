@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { getItemsSoldReport } from '../../app/api/client';
-import { Plus, Edit2, Trash2, Search, ChevronRight, ChevronDown, Folder, FolderOpen, AlertTriangle, Package, PackagePlus, ShoppingCart, PackageCheck, Layers, X, Eye, TrendingUp, TrendingDown, RefreshCw, CheckCircle, Users, ClipboardList } from 'lucide-react';
+import { Plus, Edit2, Trash2, Search, ChevronRight, ChevronDown, Folder, FolderOpen, AlertTriangle, Package, PackagePlus, ShoppingCart, PackageCheck, Layers, X, Eye, TrendingUp, TrendingDown, RefreshCw, CheckCircle, Users, ClipboardList, Activity } from 'lucide-react';
 import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
 import type {
   Adjustment,
@@ -17,16 +17,13 @@ import type {
 import { categorySubcategories, CHART_COLORS } from '../../app/utils/constants';
 import { autoSortItem } from '../../app/utils/autoSortingRules';
 import { useSession } from '../../app/hooks/useSession';
-import { useRetailWorkspace } from '../lib/retail';
+import { useRetailWorkspace, useRetailAuditLogsQuery } from '../lib/retail';
+import { formatManilaFullDateTime, getLocalDateKey } from '../../../../shared/utils/date';
 
 const formatAuditDate = (value?: string) => {
   if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString('en-PH', {
-    year: 'numeric', month: 'short', day: '2-digit',
-    hour: '2-digit', minute: '2-digit',
-  });
+  const formatted = formatManilaFullDateTime(value);
+  return formatted === '-' ? value : formatted;
 };
 
 export function ReportsView() {
@@ -44,8 +41,14 @@ export function ReportsView() {
     loadSharedData: true,
     loadUsers: currentUser?.role === 'Admin',
   });
-  const [activeTab, setActiveTab] = useState<'overview' | 'inventory' | 'sold' | 'transfers' | 'financial' | 'operations' | 'audit' | 'confidential'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'inventory' | 'sold' | 'transfers' | 'operations' | 'audit' | 'admin'>('overview');
   const [auditModuleFilter, setAuditModuleFilter] = useState('all');
+  const [activityQuery, setActivityQuery] = useState('');
+  const [activityDateFrom, setActivityDateFrom] = useState('');
+  const [activityDateTo, setActivityDateTo] = useState('');
+  const [activityUserFilter, setActivityUserFilter] = useState('All');
+  const [activityModuleFilter, setActivityModuleFilter] = useState('All');
+  const [activityActionFilter, setActivityActionFilter] = useState('All');
   const [soldFrom, setSoldFrom] = useState('');
   const [soldTo, setSoldTo] = useState('');
   const soldQuery = useQuery({
@@ -202,7 +205,10 @@ export function ReportsView() {
       activeUsers: users.filter(u => u.status === 'Active').length,
       inactiveUsers: users.filter(u => u.status === 'Inactive').length,
       adminUsers: users.filter(u => u.role === 'Admin').length,
-      staffUsers: users.filter(u => u.role === 'Staff').length
+      staffUsers: users.filter(u => u.role === 'Staff').length,
+      // Retail has no distinct Manager role; kept for the confidential summary card
+      // so it adds 0 instead of rendering NaN.
+      managerUsers: 0
     };
 
     const financialSummary = {
@@ -250,62 +256,52 @@ export function ReportsView() {
     };
   }, [isAdmin, users, inventory, purchaseOrders, adjustments, transfers]);
 
-  const auditTrail = useMemo(() => {
-    const entries = [
-      ...purchaseOrders.map(po => ({
-        id: `po-${po.id}`,
-        date: po.date || '',
-        module: 'Purchase Order',
-        action: `PO ${po.status || 'created'}`,
-        item: po.supplier || 'Supplier',
-        quantity: `${po.items.length} item(s)`,
-        performedBy: po.createdBy || '',
-        reference: po.id,
-        details: `Total: ₱${po.totalAmount.toLocaleString()}`,
-      })),
-      ...transfers.map(transfer => ({
-        id: `transfer-${transfer.id}`,
-        date: transfer.date || '',
-        module: 'Transfer',
-        action: `Transfer ${transfer.status || 'requested'}`,
-        item: `${transfer.fromLocation} → ${transfer.toLocation}`,
-        quantity: `${transfer.items.reduce((s: number, i: any) => s + i.quantity, 0)} item(s)`,
-        performedBy: transfer.createdBy || '',
-        reference: transfer.transferNumber || transfer.id,
-        details: `${transfer.fromLocation} to ${transfer.toLocation}`,
-      })),
-      ...adjustments.map(adj => ({
-        id: `adjustment-${adj.id}`,
-        date: adj.date || '',
-        module: 'Adjustment',
-        action: adj.type || 'Correction',
-        item: adj.reason || 'Adjustment',
-        quantity: `${adj.items.reduce((s: number, i: any) => s + Math.abs(i.quantityChange), 0)} unit(s)`,
-        performedBy: adj.createdBy || '',
-        reference: adj.id,
-        details: adj.reason || '',
-      })),
-      ...productsReceived.map(pr => ({
-        id: `receipt-${pr.id}`,
-        date: pr.dateReceived || '',
-        module: 'Goods Received',
-        action: 'Receipt Verified',
-        item: `${pr.items.length} item(s)`,
-        quantity: `${pr.items.reduce((s: number, i: any) => s + i.receivedQty, 0)} received`,
-        performedBy: pr.receivedBy || '',
-        reference: pr.id,
-        details: `PO: ${pr.poNumber || 'N/A'} | ${pr.status}`,
-      })),
-    ];
+  // Real audit trail — one row per recorded activity (create / update / delete /
+  // status change / receive / adjust) written by the backend audit log.
+  const { data: auditTrail = [] } = useRetailAuditLogsQuery();
 
-    return entries
-      .filter(entry => entry.date || entry.reference)
-      .sort((a, b) => {
-        const aTime = new Date(a.date).getTime();
-        const bTime = new Date(b.date).getTime();
-        return (Number.isNaN(bTime) ? 0 : bTime) - (Number.isNaN(aTime) ? 0 : aTime);
-      });
-  }, [purchaseOrders, transfers, adjustments, productsReceived]);
+  // Activity Log — a POS-style event feed over the real audit trail, with the same
+  // filter set as the POS Activity Log page (date range, user, module, action,
+  // free-text search).
+  const activityUsers = useMemo(() => {
+    const map = new Map<string, string>();
+    auditTrail.forEach((entry) => {
+      const value = (entry.performedBy || '').trim();
+      if (value && !map.has(value)) map.set(value, entry.performedByName || value);
+    });
+    return Array.from(map.entries())
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [auditTrail]);
+
+  const activityModules = useMemo(
+    () => ['All', ...Array.from(new Set(auditTrail.map((e) => e.module).filter(Boolean))).sort()],
+    [auditTrail],
+  );
+  const activityActions = useMemo(
+    () => ['All', ...Array.from(new Set(auditTrail.map((e) => e.action).filter(Boolean))).sort()],
+    [auditTrail],
+  );
+
+  const activityLog = useMemo(() => {
+    const query = activityQuery.trim().toLowerCase();
+    return auditTrail.filter((entry) => {
+      if (activityUserFilter !== 'All' && (entry.performedBy || '').toLowerCase() !== activityUserFilter.toLowerCase()) return false;
+      if (activityModuleFilter !== 'All' && entry.module !== activityModuleFilter) return false;
+      if (activityActionFilter !== 'All' && entry.action !== activityActionFilter) return false;
+      const day = (entry.date || '').slice(0, 10);
+      if (activityDateFrom && (!day || day < activityDateFrom)) return false;
+      if (activityDateTo && (!day || day > activityDateTo)) return false;
+      if (query) {
+        const haystack = [
+          entry.performedByName, entry.performedBy, entry.module, entry.action,
+          entry.item, entry.quantity, entry.details,
+        ].join(' ').toLowerCase();
+        if (!haystack.includes(query)) return false;
+      }
+      return true;
+    });
+  }, [auditTrail, activityUserFilter, activityModuleFilter, activityActionFilter, activityDateFrom, activityDateTo, activityQuery]);
 
   const visibleAuditTrail = useMemo(() => {
     if (hasFullAuditTrailAccess) return auditTrail;
@@ -344,7 +340,7 @@ export function ReportsView() {
 
   const handleExportReport = (reportType: string) => {
     let csvContent = '';
-    const timestamp = new Date().toISOString().split('T')[0];
+    const timestamp = getLocalDateKey();
     let filename = `${reportType}_Report_${timestamp}.csv`;
 
     switch (reportType) {
@@ -489,24 +485,24 @@ export function ReportsView() {
           <p className="text-[14px] text-muted-foreground mt-1">Comprehensive system reports and insights</p>
         </div>
         <div className="flex gap-3">
-          <label className="text-[12px] text-muted-foreground">
-            From
-            <input type="date" value={soldFrom} onChange={e => setSoldFrom(e.target.value)}
-              className="block mt-1 bg-white border border-border rounded-[8px] px-3 py-2 text-[14px] text-foreground cursor-pointer hover:border-secondary/60 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-secondary/40 focus:border-secondary transition-all duration-200" />
-          </label>
-          <label className="text-[12px] text-muted-foreground">
-            To
-            <input type="date" value={soldTo} onChange={e => setSoldTo(e.target.value)}
-              className="block mt-1 bg-white border border-border rounded-[8px] px-3 py-2 text-[14px] text-foreground cursor-pointer hover:border-secondary/60 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-secondary/40 focus:border-secondary transition-all duration-200" />
-          </label>
+            <label className="text-[12px] text-muted-foreground">
+              From
+              <input type="date" value={soldFrom} onChange={e => setSoldFrom(e.target.value)}
+              className="block mt-1 bg-card border border-border rounded-[8px] px-3 py-2 text-[14px] text-foreground cursor-pointer hover:border-secondary/60 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-secondary/40 focus:border-secondary transition-all duration-200" />
+            </label>
+            <label className="text-[12px] text-muted-foreground">
+              To
+              <input type="date" value={soldTo} onChange={e => setSoldTo(e.target.value)}
+              className="block mt-1 bg-card border border-border rounded-[8px] px-3 py-2 text-[14px] text-foreground cursor-pointer hover:border-secondary/60 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-secondary/40 focus:border-secondary transition-all duration-200" />
+            </label>
           {(soldFrom || soldTo) && (
             <button onClick={() => { setSoldFrom(''); setSoldTo(''); }}
               className="self-end px-3 py-2 text-[14px] text-muted-foreground hover:text-foreground">Clear</button>
           )}
-          <select
-            value={selectedLocation}
-            onChange={(e) => setSelectedLocation(e.target.value)}
-            className="bg-white border border-border rounded-[8px] px-4 py-2 text-[14px] text-foreground cursor-pointer hover:border-secondary/60 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-secondary/40 focus:border-secondary transition-all duration-200"
+            <select
+              value={selectedLocation}
+              onChange={(e) => setSelectedLocation(e.target.value)}
+            className="bg-card border border-border rounded-[8px] px-4 py-2 text-[14px] text-foreground cursor-pointer hover:border-secondary/60 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-secondary/40 focus:border-secondary transition-all duration-200"
           >
             <option value="all">All Locations</option>
             {locations.map(loc => (
@@ -558,18 +554,6 @@ export function ReportsView() {
         >
           Transfer Report
         </button>
-        {isAdmin && (
-          <button
-            onClick={() => setActiveTab('financial')}
-            className={`px-6 py-3 text-[14px] font-medium border-b-2 rounded-t-lg transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 ${
-              activeTab === 'financial'
-                ? 'text-secondary border-secondary'
-                : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/40 hover:border-border'
-            }`}
-          >
-            Financial Report
-          </button>
-        )}
         <button
           onClick={() => setActiveTab('operations')}
           className={`px-6 py-3 text-[14px] font-medium border-b-2 rounded-t-lg transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 ${
@@ -593,15 +577,15 @@ export function ReportsView() {
         </button>
         {isAdmin && (
           <button
-            onClick={() => setActiveTab('confidential')}
+            onClick={() => setActiveTab('admin')}
             className={`px-6 py-3 text-[14px] font-medium border-b-2 rounded-t-lg transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 flex items-center gap-2 ${
-              activeTab === 'confidential'
-                ? 'text-destructive border-destructive'
+              activeTab === 'admin'
+                ? 'text-secondary border-secondary'
                 : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/40 hover:border-border'
             }`}
           >
             <Eye className="size-4" />
-            Confidential
+            Admin Report
           </button>
         )}
       </div>
@@ -621,35 +605,35 @@ export function ReportsView() {
 
           {/* Overview Stats */}
           <div className="grid grid-cols-4 gap-4 mb-6">
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Total Inventory Value</p>
               <p className="text-foreground text-[24px] font-bold">₱{overviewStats.totalValue.toLocaleString()}</p>
             </div>
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Total Items</p>
               <p className="text-foreground text-[24px] font-bold">{overviewStats.totalItems.toLocaleString()}</p>
             </div>
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Unique Items</p>
               <p className="text-foreground text-[24px] font-bold">{overviewStats.uniqueItems}</p>
             </div>
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Active Locations</p>
               <p className="text-foreground text-[24px] font-bold">{overviewStats.totalLocations}</p>
             </div>
           </div>
 
           <div className="grid grid-cols-3 gap-4 mb-6">
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Total Transfers</p>
               <p className="text-foreground text-[24px] font-bold">{overviewStats.totalTransfers}</p>
               <p className="text-success text-[12px] mt-1">{overviewStats.completedTransfers} completed</p>
             </div>
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Total Adjustments</p>
               <p className="text-foreground text-[24px] font-bold">{overviewStats.totalAdjustments}</p>
             </div>
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Average Item Price</p>
               <p className="text-foreground text-[24px] font-bold">₱{Math.round(overviewStats.avgPrice)}</p>
             </div>
@@ -657,7 +641,7 @@ export function ReportsView() {
 
           {/* Charts */}
           <div className="grid grid-cols-2 gap-4">
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <h4 className="text-[16px] font-semibold text-foreground mb-4">Inventory by Category</h4>
               {Object.keys(inventoryReportData.categoryStats).length > 0 ? (
                 <div className="flex items-center gap-4">
@@ -705,7 +689,7 @@ export function ReportsView() {
               )}
             </div>
 
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <h4 className="text-[16px] font-semibold text-foreground mb-4">Items by Condition</h4>
               <BarChart width={400} height={250} data={Object.entries(inventoryReportData.conditionStats).map(([name, value]) => ({ condition: name, count: value }))}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" key="inventory-condition-grid" />
@@ -732,7 +716,7 @@ export function ReportsView() {
           </div>
 
           {/* Category Breakdown */}
-          <div className="bg-white border border-border rounded-[14px] p-6 mb-4">
+          <div className="bg-card border border-border rounded-[14px] p-6 mb-4">
             <h4 className="text-[16px] font-semibold text-foreground mb-4">Inventory by Category</h4>
             <div className="space-y-3">
               {Object.entries(inventoryReportData.categoryStats)
@@ -759,7 +743,7 @@ export function ReportsView() {
           </div>
 
           {/* Location Breakdown */}
-          <div className="bg-white border border-border rounded-[14px] p-6 mb-4">
+          <div className="bg-card border border-border rounded-[14px] p-6 mb-4">
             <h4 className="text-[16px] font-semibold text-foreground mb-4">Inventory by Location</h4>
             <div className="space-y-3">
               {Object.entries(inventoryReportData.locationStats)
@@ -786,7 +770,7 @@ export function ReportsView() {
           </div>
 
           {/* Condition Analysis */}
-          <div className="bg-white border border-border rounded-[14px] p-6">
+          <div className="bg-card border border-border rounded-[14px] p-6">
             <h4 className="text-[16px] font-semibold text-foreground mb-4">Stock Condition Analysis</h4>
             <div className="grid grid-cols-4 gap-4">
               {Object.entries(inventoryReportData.conditionStats).map(([condition, count]) => (
@@ -897,7 +881,7 @@ export function ReportsView() {
           {/* Transfer Stats */}
           <div className="grid grid-cols-4 gap-4 mb-4">
             {Object.entries(transferReportData.statusBreakdown).map(([status, count]) => (
-              <div key={status} className="bg-white border border-border rounded-[14px] p-6">
+              <div key={status} className="bg-card border border-border rounded-[14px] p-6">
                 <p className="text-muted-foreground text-[12px] mb-2">{status}</p>
                 <p className="text-foreground text-[24px] font-bold">{count}</p>
                 <p className="text-muted-foreground text-[12px] mt-1">
@@ -908,7 +892,7 @@ export function ReportsView() {
           </div>
 
           {/* Route Analysis */}
-          <div className="bg-white border border-border rounded-[14px] p-6 mb-4">
+          <div className="bg-card border border-border rounded-[14px] p-6 mb-4">
             <h4 className="text-[16px] font-semibold text-foreground mb-4">Transfer Routes Analysis</h4>
             <div className="space-y-3">
               {Object.entries(transferReportData.routeStats)
@@ -925,7 +909,7 @@ export function ReportsView() {
           </div>
 
           {/* Transfer Summary */}
-          <div className="bg-white border border-border rounded-[14px] p-6">
+          <div className="bg-card border border-border rounded-[14px] p-6">
             <h4 className="text-[16px] font-semibold text-foreground mb-4">Transfer Summary</h4>
             <div className="grid grid-cols-3 gap-4">
               <div className="p-4 bg-secondary/10 rounded-[8px]">
@@ -949,20 +933,7 @@ export function ReportsView() {
         </div>
       )}
 
-      {activeTab === 'financial' && !isAdmin && (
-        <div className="bg-white border border-border rounded-[14px] p-12 text-center">
-          <div className="bg-destructive/10 size-20 rounded-full flex items-center justify-center mx-auto mb-4">
-            <Eye className="size-10 text-destructive" />
-          </div>
-          <h3 className="text-[20px] font-bold text-foreground mb-2">Access Denied</h3>
-          <p className="text-[14px] text-muted-foreground">
-            You do not have permission to view financial reports.<br />
-            This section is restricted to administrators only.
-          </p>
-        </div>
-      )}
-
-      {activeTab === 'financial' && isAdmin && (
+      {activeTab === 'admin' && isAdmin && (
         <div>
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-[20px] font-semibold text-foreground">Financial Report</h3>
@@ -976,26 +947,26 @@ export function ReportsView() {
 
           {/* Financial Overview */}
           <div className="grid grid-cols-4 gap-4 mb-4">
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Total Asset Value</p>
               <p className="text-foreground text-[24px] font-bold">₱{financialReportData.totalInventoryValue.toLocaleString()}</p>
             </div>
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Purchase Orders Value</p>
               <p className="text-foreground text-[24px] font-bold">₱{financialReportData.poValue.toLocaleString()}</p>
             </div>
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Pending PO Value</p>
               <p className="text-warning text-[24px] font-bold">₱{financialReportData.pendingPOValue.toLocaleString()}</p>
             </div>
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Damaged Stock Value</p>
               <p className="text-destructive text-[24px] font-bold">₱{financialReportData.damagedValue.toLocaleString()}</p>
             </div>
           </div>
 
           {/* Value by Category */}
-          <div className="bg-white border border-border rounded-[14px] p-6 mb-4">
+          <div className="bg-card border border-border rounded-[14px] p-6 mb-4">
             <h4 className="text-[16px] font-semibold text-foreground mb-4">Value by Category</h4>
             <div className="space-y-3">
               {Object.entries(financialReportData.categoryValue)
@@ -1019,7 +990,7 @@ export function ReportsView() {
 
           {/* Financial Charts */}
           <div className="grid grid-cols-2 gap-4">
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <h4 className="text-[16px] font-semibold text-foreground mb-4">Value Distribution</h4>
               {Object.keys(financialReportData.categoryValue).length > 0 ? (
                 <PieChart width={400} height={250}>
@@ -1044,7 +1015,7 @@ export function ReportsView() {
               )}
             </div>
 
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <h4 className="text-[16px] font-semibold text-foreground mb-4">Financial Health Indicators</h4>
               <div className="space-y-4">
                 <div className="p-4 bg-secondary/10 rounded-[8px]">
@@ -1089,26 +1060,26 @@ export function ReportsView() {
 
           {/* Operations Overview */}
           <div className="grid grid-cols-4 gap-4 mb-4">
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Total Receipts</p>
               <p className="text-foreground text-[24px] font-bold">{operationsReportData.totalReceipts}</p>
             </div>
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Items Received</p>
               <p className="text-foreground text-[24px] font-bold">{operationsReportData.receivedItems}</p>
             </div>
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Approved Adjustments</p>
               <p className="text-success text-[24px] font-bold">{operationsReportData.approvedAdjustments}</p>
             </div>
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Low Stock Alerts</p>
               <p className="text-destructive text-[24px] font-bold">{operationsReportData.lowStockItems}</p>
             </div>
           </div>
 
           {/* Adjustment Analysis */}
-          <div className="bg-white border border-border rounded-[14px] p-6 mb-4">
+          <div className="bg-card border border-border rounded-[14px] p-6 mb-4">
             <h4 className="text-[16px] font-semibold text-foreground mb-4">Adjustments by Type</h4>
             <div className="space-y-3">
               {Object.entries(operationsReportData.adjustmentsByType)
@@ -1131,7 +1102,7 @@ export function ReportsView() {
 
           {/* Operational Metrics */}
           <div className="grid grid-cols-2 gap-4">
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <h4 className="text-[16px] font-semibold text-foreground mb-4">Adjustment Status</h4>
               <BarChart
                 width={400}
@@ -1150,7 +1121,7 @@ export function ReportsView() {
               </BarChart>
             </div>
 
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <h4 className="text-[16px] font-semibold text-foreground mb-4">Stock Health</h4>
               <div className="space-y-4 mt-6">
                 <div className="p-4 bg-secondary/10 rounded-[8px]">
@@ -1188,9 +1159,9 @@ export function ReportsView() {
                 Export Report
               </button>
             </div>
-          </div>
+            </div>
 
-          <div className="grid grid-cols-4 gap-4 mb-4">
+            <div className="grid grid-cols-4 gap-4 mb-4">
             <button type="button" onClick={() => toggleAuditModule('all')} aria-pressed={auditModuleFilter === 'all'} aria-label="Show all audit events" className={auditCardClass(auditModuleFilter === 'all')}>
               <p className="text-muted-foreground text-[12px] mb-2">Total Events</p>
               <p className="text-foreground text-[24px] font-bold">{visibleAuditTrail.length}</p>
@@ -1203,13 +1174,13 @@ export function ReportsView() {
               <p className="text-muted-foreground text-[12px] mb-2">Goods Received</p>
               <p className="text-success text-[24px] font-bold">{auditSummary.byModule['Goods Received'] || 0}</p>
             </button>
-            <div className="bg-white border border-border rounded-[14px] p-6">
+            <div className="bg-card border border-border rounded-[14px] p-6">
               <p className="text-muted-foreground text-[12px] mb-2">Latest Activity</p>
               <p className="text-[12px] font-semibold text-foreground break-words">{auditSummary.latest}</p>
             </div>
           </div>
 
-          <div className="bg-white border border-border rounded-[14px] p-6">
+          <div className="bg-card border border-border rounded-[14px] p-6">
             <div className="flex items-center justify-between mb-4">
               <h4 className="text-[16px] font-semibold text-foreground">Recent Activity</h4>
               <p className="text-[12px] text-muted-foreground">
@@ -1268,8 +1239,8 @@ export function ReportsView() {
         </div>
       )}
 
-      {activeTab === 'confidential' && isAdmin && confidentialReportData && (
-        <div>
+      {activeTab === 'admin' && isAdmin && confidentialReportData && (
+        <div className="mt-6 pt-6 border-t border-border">
           <div className="flex items-center gap-2 mb-4">
             <div className="bg-destructive text-white px-3 py-1 rounded-[6px] text-[12px] font-bold flex items-center gap-2">
               <Eye className="size-4" />
@@ -1284,16 +1255,19 @@ export function ReportsView() {
             </button>
           </div>
 
-          <div className="bg-destructive/10 border-2 border-destructive rounded-[14px] p-4 mb-6">
-            <p className="text-[14px] text-destructive font-semibold">âš ï¸ Warning</p>
-            <p className="text-[12px] text-foreground mt-1">
+          <div className="rounded-[14px] border-2 border-red-300 bg-red-50 p-4 mb-6 dark:border-red-700 dark:bg-red-950/40">
+            <p className="flex items-center gap-2 text-[14px] font-semibold text-red-800 dark:text-red-200">
+              <AlertTriangle className="size-4" />
+              Warning
+            </p>
+            <p className="text-[12px] text-red-900 mt-1 dark:text-red-100">
               This report contains sensitive financial and operational data. Access is restricted to administrators only.
               Do not share this information with unauthorized personnel.
             </p>
           </div>
 
           {/* System Audit */}
-          <div className="bg-white border border-border rounded-[14px] p-6 mb-4">
+          <div className="bg-card border border-border rounded-[14px] p-6 mb-4">
             <h4 className="text-[16px] font-semibold text-foreground mb-4">System Audit Summary</h4>
             <div className="grid grid-cols-3 gap-4">
               <div className="p-4 bg-muted rounded-[8px]">
@@ -1321,100 +1295,91 @@ export function ReportsView() {
             </div>
           </div>
 
-          {/* Financial Summary */}
+          {/* Activity Log */}
           <div className="bg-white border border-border rounded-[14px] p-6 mb-4">
-            <h4 className="text-[16px] font-semibold text-foreground mb-4">Confidential Financial Summary</h4>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="p-4 bg-secondary/10 rounded-[8px]">
-                <p className="text-[12px] text-secondary mb-1">Total Asset Value</p>
-                <p className="text-[28px] font-bold text-secondary">
-                  ₱{confidentialReportData.financialSummary.totalAssetValue.toLocaleString()}
-                </p>
-                <p className="text-[11px] text-muted-foreground mt-1">Current inventory valuation</p>
-              </div>
-              <div className="p-4 bg-warning/10 rounded-[8px]">
-                <p className="text-[12px] text-warning mb-1">Total Purchase Investment</p>
-                <p className="text-[28px] font-bold text-warning">
-                  ₱{confidentialReportData.financialSummary.totalPurchaseValue.toLocaleString()}
-                </p>
-                <p className="text-[11px] text-muted-foreground mt-1">All purchase orders</p>
-              </div>
-              <div className="p-4 bg-destructive/10 rounded-[8px]">
-                <p className="text-[12px] text-destructive mb-1">Loss from Damaged Stock</p>
-                <p className="text-[28px] font-bold text-destructive">
-                  ₱{confidentialReportData.financialSummary.damagedLoss.toLocaleString()}
-                </p>
-                <p className="text-[11px] text-muted-foreground mt-1">Non-recoverable items</p>
-              </div>
-              <div className="p-4 bg-secondary/10 rounded-[8px]">
-                <p className="text-[12px] text-secondary mb-1">Adjustment Impact Value</p>
-                <p className="text-[28px] font-bold text-secondary">
-                  ₱{confidentialReportData.financialSummary.adjustmentImpact.toLocaleString()}
-                </p>
-                <p className="text-[11px] text-muted-foreground mt-1">Approved adjustments</p>
+            <div className="flex items-center gap-2 mb-1">
+              <Activity className="size-4 text-secondary" />
+              <h4 className="text-[16px] font-semibold text-foreground">Activity Log</h4>
+            </div>
+            <p className="text-[12px] text-muted-foreground mb-4">
+              Review recorded inventory actions and staff activity. {activityLog.length} of {auditTrail.length} entr{auditTrail.length === 1 ? 'y' : 'ies'}.
+            </p>
+
+            <div className="mb-4 grid gap-3 md:grid-cols-5">
+              <input type="date" value={activityDateFrom} onChange={(e) => setActivityDateFrom(e.target.value)} className="rounded-[8px] border border-border px-3 py-2 text-[13px]" />
+              <input type="date" value={activityDateTo} onChange={(e) => setActivityDateTo(e.target.value)} className="rounded-[8px] border border-border px-3 py-2 text-[13px]" />
+              <select value={activityUserFilter} onChange={(e) => setActivityUserFilter(e.target.value)} className="rounded-[8px] border border-border px-3 py-2 text-[13px] bg-white">
+                <option value="All">All Users</option>
+                {activityUsers.map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}
+              </select>
+              <select value={activityModuleFilter} onChange={(e) => setActivityModuleFilter(e.target.value)} className="rounded-[8px] border border-border px-3 py-2 text-[13px] bg-white">
+                {activityModules.map((m) => <option key={m} value={m}>{m === 'All' ? 'All Modules' : m}</option>)}
+              </select>
+              <select value={activityActionFilter} onChange={(e) => setActivityActionFilter(e.target.value)} className="rounded-[8px] border border-border px-3 py-2 text-[13px] bg-white">
+                {activityActions.map((a) => <option key={a} value={a}>{a === 'All' ? 'All Actions' : a}</option>)}
+              </select>
+              <div className="relative md:col-span-5">
+                <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <input value={activityQuery} onChange={(e) => setActivityQuery(e.target.value)} placeholder="Search activity details..." className="w-full rounded-[8px] border border-border py-2 pl-9 pr-3 text-[13px]" />
               </div>
             </div>
-          </div>
 
-          {/* User Activity Log */}
-          <div className="bg-white border border-border rounded-[14px] p-6 mb-4">
-            <h4 className="text-[16px] font-semibold text-foreground mb-4">User Activity Log</h4>
-            <div className="space-y-2">
-              {confidentialReportData.userActivityLog.map(user => (
-                <div key={user.email} className="flex items-center justify-between p-3 bg-muted rounded-[8px]">
-                  <div className="flex items-center gap-4">
-                    <div className={`size-8 rounded-full flex items-center justify-center text-white text-[14px] font-bold ${
-                      user.role === 'Admin' ? 'bg-destructive' : 'bg-secondary'
-                    }`}>
-                      {user.name.charAt(0)}
-                    </div>
-                    <div>
-                      <p className="text-[14px] font-medium text-foreground">{user.name}</p>
-                      <p className="text-[12px] text-muted-foreground">{user.email}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-4">
-                    <span className={`px-3 py-1 rounded-[6px] text-[12px] font-medium ${
-                      user.role === 'Admin' ? 'bg-destructive/10 text-destructive' : 'bg-secondary/10 text-secondary'
-                    }`}>
-                      {user.role}
-                    </span>
-                    <span className={`px-3 py-1 rounded-[6px] text-[12px] font-medium ${
-                      user.status === 'Active' ? 'bg-secondary/10 text-success' : 'bg-muted text-muted-foreground'
-                    }`}>
-                      {user.status}
-                    </span>
-                    <p className="text-[12px] text-muted-foreground w-32 text-right">{user.lastLogin}</p>
-                  </div>
-                </div>
-              ))}
+            <div className="overflow-x-auto rounded-[8px] border border-border">
+              <table className="w-full text-[13px] min-w-[760px]">
+                <thead className="bg-muted">
+                  <tr>
+                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Date &amp; Time</th>
+                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">User</th>
+                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Role</th>
+                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Module</th>
+                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Action</th>
+                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Details</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {activityLog.length === 0 ? (
+                    <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">No activity found.</td></tr>
+                  ) : activityLog.slice(0, 200).map((entry) => (
+                    <tr key={entry.id} className="align-top hover:bg-muted transition-colors">
+                      <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">{formatAuditDate(entry.date)}</td>
+                      <td className="px-4 py-3 text-foreground">{entry.performedByName || 'System'}</td>
+                      <td className="px-4 py-3 capitalize">{entry.performedByRole || '—'}</td>
+                      <td className="px-4 py-3"><span className="inline-flex rounded-full bg-secondary/10 px-2 py-1 text-[11px] font-medium text-secondary">{entry.module}</span></td>
+                      <td className="px-4 py-3 capitalize text-foreground">{entry.action.toLowerCase()}</td>
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {[entry.item && `${entry.item}${entry.quantity ? ` (${entry.quantity})` : ''}`, entry.details].filter(Boolean).join(' — ') || '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
 
           {/* Critical Events */}
-          <div className="bg-white border border-border rounded-[14px] p-6 mb-4">
+          <div className="bg-card border border-border rounded-[14px] p-6 mb-4">
             <h4 className="text-[16px] font-semibold text-foreground mb-4">Critical Events & Incidents</h4>
             <div className="space-y-2">
               {confidentialReportData.criticalEvents.length === 0 ? (
                 <p className="text-[14px] text-muted-foreground text-center py-4">No critical events recorded</p>
               ) : (
                 confidentialReportData.criticalEvents.slice(0, 10).map((event, index) => (
-                  <div key={index} className="flex items-start justify-between p-3 bg-destructive/10 rounded-[8px] border border-destructive">
+                  <div key={index} className="flex items-start justify-between p-3 rounded-[8px] border border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-950/30">
                     <div>
                       <div className="flex items-center gap-2 mb-1">
-                        <span className="bg-destructive text-white px-2 py-1 rounded text-[11px] font-bold">
+                        <span className="rounded bg-red-700 px-2 py-1 text-[11px] font-bold text-white dark:bg-red-300 dark:text-red-950">
                           {event.type}
                         </span>
-                        <p className="text-[14px] font-medium text-foreground">{event.description}</p>
+                        <p className="text-[14px] font-medium text-red-950 dark:text-red-100">{event.description}</p>
                       </div>
-                      <p className="text-[12px] text-muted-foreground">Created by: {event.createdBy}</p>
+                      <p className="text-[12px] text-red-800 dark:text-red-200">Created by: {event.createdBy}</p>
                     </div>
                     <div className="text-right">
-                      <p className="text-[12px] text-foreground">{event.date}</p>
+                      <p className="text-[12px] text-red-900 dark:text-red-100">{event.date}</p>
                       <span className={`text-[11px] font-medium ${
                         event.status === 'Approved' ? 'text-success' :
-                        event.status === 'Pending' ? 'text-warning' :
-                        'text-destructive'
+                        event.status === 'Pending' ? 'text-amber-700 dark:text-amber-200' :
+                        'text-red-700 dark:text-red-200'
                       }`}>
                         {event.status}
                       </span>
@@ -1425,124 +1390,6 @@ export function ReportsView() {
             </div>
           </div>
 
-          {/* Purchase Orders History */}
-          <div className="bg-white border border-border rounded-[14px] p-6 mb-4">
-            <h4 className="text-[16px] font-semibold text-foreground mb-4">Purchase Orders History</h4>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-muted">
-                  <tr>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">PO ID</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Supplier</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Created By</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Date</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Total Amount</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Status</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Items</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {purchaseOrders.length === 0 ? (
-                    <tr>
-                      <td colSpan={7} className="px-4 py-8 text-center">
-                        <p className="text-[14px] text-muted-foreground">No purchase orders found</p>
-                      </td>
-                    </tr>
-                  ) : (
-                    purchaseOrders.map(po => (
-                      <tr key={po.id} className="hover:bg-muted transition-colors">
-                        <td className="px-4 py-3 text-[13px] text-foreground font-medium">{po.id}</td>
-                        <td className="px-4 py-3 text-[13px] text-foreground">{po.supplier}</td>
-                        <td className="px-4 py-3 text-[13px] text-muted-foreground">{po.createdBy || 'Admin User'}</td>
-                        <td className="px-4 py-3 text-[13px] text-muted-foreground">{po.date}</td>
-                        <td className="px-4 py-3 text-[13px] text-foreground font-medium">₱{po.totalAmount.toFixed(2)}</td>
-                        <td className="px-4 py-3">
-                          <span className={`inline-flex px-2 py-1 text-[11px] font-medium rounded-full ${
-                            po.status === 'Approved' ? 'bg-success/15 text-success' :
-                            po.status === 'Pending' ? 'bg-warning/15 text-warning' :
-                            po.status === 'Rejected' ? 'bg-destructive/10 text-destructive' :
-                            'bg-muted text-muted-foreground'
-                          }`}>
-                            {po.status}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-[13px] text-muted-foreground">{po.items.length} items</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* Products Received History */}
-          <div className="bg-white border border-border rounded-[14px] p-6">
-            <h4 className="text-[16px] font-semibold text-foreground mb-4">Products Received History</h4>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-muted">
-                  <tr>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Receipt ID</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">PO ID</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Received Date</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Received By</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Total Items</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Accepted</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Rejected</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {productsReceived.length === 0 ? (
-                    <tr>
-                      <td colSpan={8} className="px-4 py-8 text-center">
-                        <p className="text-[14px] text-muted-foreground">No products received found</p>
-                      </td>
-                    </tr>
-                  ) : (
-                    productsReceived.map(pr => (
-                      <tr key={pr.id} className="hover:bg-muted transition-colors">
-                        <td className="px-4 py-3 text-[13px] text-foreground font-medium">{pr.id}</td>
-                        <td className="px-4 py-3 text-[13px] text-secondary font-medium">{pr.poNumber}</td>
-                        <td className="px-4 py-3 text-[13px] text-muted-foreground">{pr.dateReceived}</td>
-                        <td className="px-4 py-3 text-[13px] text-foreground">{pr.receivedBy}</td>
-                        <td className="px-4 py-3 text-[13px] text-muted-foreground">
-                          {pr.items.reduce((sum, item) => sum + item.receivedQty, 0)}
-                        </td>
-                        <td className="px-4 py-3 text-[13px] text-success font-medium">
-                          {pr.items.reduce((sum, item) => sum + (item.acceptedQty || item.receivedQty), 0)}
-                        </td>
-                        <td className="px-4 py-3 text-[13px] text-destructive font-medium">
-                          {pr.items.reduce((sum, item) => sum + (item.rejectedQty || 0), 0)}
-                        </td>
-                        <td className="px-4 py-3">
-                          <span className={`inline-flex px-2 py-1 text-[11px] font-medium rounded-full ${
-                            pr.status === 'Fully Accepted' ? 'bg-success/15 text-success' :
-                            'bg-warning/15 text-warning'
-                          }`}>
-                            {pr.status}
-                          </span>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {activeTab === 'confidential' && !isAdmin && (
-        <div className="bg-white border border-border rounded-[14px] p-12 text-center">
-          <div className="bg-destructive/10 size-20 rounded-full flex items-center justify-center mx-auto mb-4">
-            <Eye className="size-10 text-destructive" />
-          </div>
-          <h3 className="text-[20px] font-bold text-foreground mb-2">Access Denied</h3>
-          <p className="text-[14px] text-muted-foreground">
-            You do not have permission to view confidential reports.<br />
-            This section is restricted to administrators only.
-          </p>
         </div>
       )}
     </div>

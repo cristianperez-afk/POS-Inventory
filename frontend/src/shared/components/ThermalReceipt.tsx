@@ -1,6 +1,6 @@
 import { forwardRef } from 'react';
 import type { StoreBrand } from '../App';
-import { formatManilaTime, getLocalDateKey } from '../utils/date';
+import { formatManilaTime, getLocalDateKey, getManilaTime } from '../utils/date';
 import { getStoreLogoForWhiteBackground } from '../utils/defaultStoreLogo';
 import { calculateVatBreakdown, VAT_RATE } from '../utils/vat';
 
@@ -62,7 +62,7 @@ export const ThermalReceipt = forwardRef<HTMLDivElement, ThermalReceiptProps>(
     ref
   ) => {
     const currentDate = date || getLocalDateKey();
-    const currentTime = time || new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    const currentTime = time || getManilaTime();
     const vatBreakdown = calculateVatBreakdown(total);
     const receiptLogo = getStoreLogoForWhiteBackground(storeBrand?.logo, 'RESTAURANT');
 

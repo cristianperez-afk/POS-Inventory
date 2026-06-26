@@ -10,6 +10,7 @@ import {
   Eye,
   Upload,
 } from 'lucide-react';
+import { formatManilaDateTime, parseDatabaseTimestamp } from '../../../../../shared/utils/date';
 
 const preventNumberWheel = (event: WheelEvent<HTMLInputElement>) => {
   event.currentTarget.blur();
@@ -184,16 +185,9 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
   const formatReceivedDateTime = (record: ReceiptRecord) => {
     const value = record.receivedAt || record.receivedDate;
     if (!value) return 'N/A';
-    const date = new Date(value);
+    const date = parseDatabaseTimestamp(value);
     if (Number.isNaN(date.getTime())) return record.receivedDate || value;
-    return date.toLocaleString('en-PH', {
-      timeZone: 'Asia/Manila',
-      year: 'numeric',
-      month: 'short',
-      day: '2-digit',
-      hour: 'numeric',
-      minute: '2-digit',
-    });
+    return formatManilaDateTime(value);
   };
 
   const stats = useMemo(
@@ -222,7 +216,7 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
 
     let matchesMonths = true;
     if (monthsFilter !== 'all' && r.receivedAt) {
-      const received = new Date(r.receivedAt);
+      const received = parseDatabaseTimestamp(r.receivedAt);
       if (!Number.isNaN(received.getTime())) {
         const cutoff = new Date();
         cutoff.setMonth(cutoff.getMonth() - Number(monthsFilter));
@@ -368,10 +362,10 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
     const value = draft.fields[field.key] ?? '';
     const onChange = (v: string) => patchDraft(line.id, line, { fields: { [field.key]: v } });
     const base =
-      'w-full px-3 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]';
+      'w-full px-3 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary';
     return (
       <div key={field.key}>
-        <label className="block text-[12px] font-medium text-[#323B42] mb-2">{field.label}</label>
+        <label className="block text-[12px] font-medium text-foreground mb-2">{field.label}</label>
         {field.type === 'select' ? (
           <select value={value} onChange={(e) => onChange(e.target.value)} className={base}>
             {field.options.map((o) => (
@@ -403,19 +397,19 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
     <div>
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h2 className="text-[30px] font-bold text-[#323B42]">{labels.title}</h2>
-          <p className="text-[#323B42] text-[14px] mt-1">{labels.subtitle}</p>
+          <h2 className="text-[30px] font-bold text-foreground">{labels.title}</h2>
+          <p className="text-foreground text-[14px] mt-1">{labels.subtitle}</p>
         </div>
         <div className="flex items-center gap-3">
           {headerActions}
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[#323B42] size-4" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-foreground size-4" />
             <input
               type="text"
               placeholder="Search receipts..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-9 pr-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] w-[260px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+              className="pl-9 pr-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] w-[260px] text-[14px] focus:outline-none focus:border-primary"
             />
           </div>
         </div>
@@ -471,16 +465,16 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
       </div>
 
       {/* Pending Quality Check queue */}
-      {pending.length > 0 && (
-        <div ref={pendingRef} className="bg-white border border-[rgba(0,0,0,0.1)] rounded-[14px] p-5 mb-6">
+        {pending.length > 0 && (
+        <div ref={pendingRef} className="bg-card border border-[rgba(0,0,0,0.1)] rounded-[14px] p-5 mb-6">
           <div className="flex items-center gap-2 mb-1">
             <PackageCheck className="size-5 text-[#FFA500]" />
-            <h3 className="text-[16px] font-semibold text-[#323B42]">Pending Quality Check</h3>
+            <h3 className="text-[16px] font-semibold text-foreground">Pending Quality Check</h3>
             <span className="ml-1 text-[12px] bg-[#fff4e6] text-[#d08700] px-2 py-0.5 rounded-full font-medium">
               {pending.length}
             </span>
           </div>
-          <p className="text-[13px] text-[#6b7280] mb-4">
+          <p className="text-[13px] text-muted-foreground mb-4">
             Approved deliveries awaiting inspection. Stock is only added after the quality check.
           </p>
           <div className="space-y-3">
@@ -491,25 +485,25 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
               >
                 <div className="flex-1">
                   <div className="flex items-center gap-3 mb-1">
-                    <h4 className="text-[15px] font-semibold text-[#323B42]">{po.orderNumber}</h4>
+                    <h4 className="text-[15px] font-semibold text-foreground">{po.orderNumber}</h4>
                     <span
                       className={`px-2 py-0.5 rounded text-[11px] font-semibold ${
                         po.status === 'PARTIALLY_RECEIVED'
                           ? 'bg-[#fff4e6] text-[#d08700]'
-                          : 'bg-[#E0F2F2] text-[#007A5E]'
+                          : 'bg-primary/10 text-primary'
                       }`}
                     >
                       {po.status === 'PARTIALLY_RECEIVED' ? 'Partially Received' : 'Approved'}
                     </span>
                   </div>
-                  <p className="text-[13px] text-[#323B42]">Supplier: {po.supplier || 'N/A'}</p>
-                  <p className="text-[12px] text-[#6b7280]">
+                  <p className="text-[13px] text-foreground">Supplier: {po.supplier || 'N/A'}</p>
+                  <p className="text-[12px] text-muted-foreground">
                     {po.items.length} item(s) • ₱{po.total.toLocaleString()}
                   </p>
                 </div>
                 <button
                   onClick={() => openInspection(po)}
-                  className="px-4 py-2 bg-[#007A5E] text-white rounded-[8px] text-[13px] font-medium hover:bg-[#008967] transition-colors flex items-center gap-2 flex-shrink-0"
+                  className="px-4 py-2 bg-primary text-white rounded-[8px] text-[13px] font-medium hover:bg-primary/90 transition-colors flex items-center gap-2 flex-shrink-0"
                 >
                   <ClipboardCheck className="size-4" />
                   Quality Check
@@ -525,7 +519,7 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
                     </button>
                     <button
                       onClick={() => openQuickAction(po, 'cancel')}
-                      className="px-3 py-2 bg-[#f3f4f6] text-[#374151] border border-[#d1d5db] rounded-[8px] text-[12px] font-semibold hover:bg-[#e5e7eb] transition-colors"
+                      className="px-3 py-2 bg-muted text-foreground border border-border rounded-[8px] text-[12px] font-semibold hover:bg-muted transition-colors"
                     >
                       Cancel
                     </button>
@@ -539,23 +533,23 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
 
       {/* Receiving history + filters */}
       <div ref={historyRef} className="flex flex-col gap-3 mb-4 sm:flex-row sm:items-center sm:justify-between">
-        <h3 className="text-[16px] font-semibold text-[#323B42]">Receiving History</h3>
+        <h3 className="text-[16px] font-semibold text-foreground">Receiving History</h3>
         <div className="flex flex-wrap items-center gap-2">
-          <label className="text-[13px] text-[#6b7280]">Outcome</label>
+          <label className="text-[13px] text-muted-foreground">Outcome</label>
           <select
             value={outcomeFilter}
             onChange={(e) => setOutcomeFilter(e.target.value as typeof outcomeFilter)}
-            className="px-3 py-1.5 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[13px] bg-white focus:outline-none focus:border-[#007A5E]"
+            className="px-3 py-1.5 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[13px] bg-card focus:outline-none focus:border-primary"
           >
             <option value="all">All</option>
             <option value="accepted">Fully Accepted</option>
             <option value="rejected">With Rejections</option>
           </select>
-          <label className="text-[13px] text-[#6b7280] ml-1">Period</label>
+          <label className="text-[13px] text-muted-foreground ml-1">Period</label>
           <select
             value={monthsFilter}
             onChange={(e) => setMonthsFilter(e.target.value as typeof monthsFilter)}
-            className="px-3 py-1.5 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[13px] bg-white focus:outline-none focus:border-[#007A5E]"
+            className="px-3 py-1.5 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[13px] bg-card focus:outline-none focus:border-primary"
           >
             <option value="all">All time</option>
             <option value="1">Last month</option>
@@ -569,14 +563,14 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
       {/* History */}
       <div className="space-y-4">
         {loading ? (
-          <div className="bg-white border border-[rgba(0,0,0,0.1)] rounded-[14px] p-12 text-center">
-            <p className="text-[14px] text-[#6b7280]">Loading...</p>
+          <div className="bg-card border border-[rgba(0,0,0,0.1)] rounded-[14px] p-12 text-center">
+            <p className="text-[14px] text-muted-foreground">Loading...</p>
           </div>
         ) : filteredHistory.length === 0 ? (
-          <div className="bg-white border border-[rgba(0,0,0,0.1)] rounded-[14px] p-12 text-center">
-            <PackageCheck className="size-16 text-[#d1d5dc] mx-auto mb-4" />
-            <p className="text-[16px] text-[#323B42] font-medium">No receipts found</p>
-            <p className="text-[14px] text-[#6b7280] mt-1">
+          <div className="bg-card border border-[rgba(0,0,0,0.1)] rounded-[14px] p-12 text-center">
+            <PackageCheck className="size-16 text-muted-foreground mx-auto mb-4" />
+            <p className="text-[16px] text-foreground font-medium">No receipts found</p>
+            <p className="text-[14px] text-muted-foreground mt-1">
               {history.length > 0
                 ? 'No receipts match the current filters — try a different outcome or period.'
                 : 'Complete a quality check to see received goods here'}
@@ -584,26 +578,26 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
           </div>
         ) : (
           filteredHistory.map((r) => (
-            <div key={r.id} className="bg-white border border-[rgba(0,0,0,0.1)] rounded-[14px] p-6">
+            <div key={r.id} className="bg-card border border-[rgba(0,0,0,0.1)] rounded-[14px] p-6">
               <div className="flex items-start justify-between mb-4">
                 <div>
                   <div className="flex items-center gap-3 mb-2">
-                    <h3 className="text-[18px] font-semibold text-[#323B42]">{r.orderNumber}</h3>
+                    <h3 className="text-[18px] font-semibold text-foreground">{r.orderNumber}</h3>
                     <span
                       className={`px-3 py-1 rounded text-[12px] font-semibold ${
-                        historyStatusClass?.(r.status) ?? 'bg-[#E0F5F1] text-[#008967]'
+                        historyStatusClass?.(r.status) ?? 'bg-primary/10 text-primary'
                       }`}
                     >
                       {r.status}
                     </span>
                   </div>
-                  <p className="text-[14px] text-[#323B42]">
+                  <p className="text-[14px] text-foreground">
                     Supplier: <span className="font-medium">{r.supplier || 'N/A'}</span>
                   </p>
-                  <p className="text-[14px] text-[#323B42]">Date Received: {formatReceivedDateTime(r)}</p>
-                  <p className="text-[14px] text-[#323B42]">Received By: {r.receivedBy || 'N/A'}</p>
+                  <p className="text-[14px] text-foreground">Date Received: {formatReceivedDateTime(r)}</p>
+                  <p className="text-[14px] text-foreground">Received By: {r.receivedBy || 'N/A'}</p>
                   {r.actionReason && (
-                    <p className="text-[14px] text-[#323B42]">
+                    <p className="text-[14px] text-foreground">
                       Reason: <span className="font-medium">{r.actionReason}</span>
                     </p>
                   )}
@@ -615,7 +609,7 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
                           href={src}
                           target="_blank"
                           rel="noreferrer"
-                          className="block h-14 w-14 overflow-hidden rounded-[8px] border border-[rgba(0,0,0,0.1)] bg-[#F8FAFB]"
+                          className="block h-14 w-14 overflow-hidden rounded-[8px] border border-[rgba(0,0,0,0.1)] bg-background"
                           title={`Open proof image ${index + 1}`}
                         >
                           <img src={src} alt={`Proof ${index + 1}`} className="h-full w-full object-cover" />
@@ -626,13 +620,13 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
                 </div>
                 <div className="flex items-start gap-2">
                   <div className="text-right">
-                    <div className="bg-[#E0F5F1] rounded-[8px] px-4 py-2 mb-2">
-                      <p className="text-[11px] text-[#323B42]">Accepted</p>
-                      <p className="text-[20px] font-bold text-[#008967]">{r.totalAccepted}</p>
+                    <div className="bg-primary/10 rounded-[8px] px-4 py-2 mb-2">
+                      <p className="text-[11px] text-foreground">Accepted</p>
+                      <p className="text-[20px] font-bold text-primary">{r.totalAccepted}</p>
                     </div>
                     {r.totalRejected > 0 && (
                       <div className="bg-[#ffe2e2] rounded-[8px] px-4 py-2">
-                        <p className="text-[11px] text-[#323B42]">Rejected</p>
+                        <p className="text-[11px] text-foreground">Rejected</p>
                         <p className="text-[20px] font-bold text-[#E7000B]">{r.totalRejected}</p>
                       </div>
                     )}
@@ -640,7 +634,7 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
                   {renderHistoryDetails && (
                     <button
                       onClick={() => setViewRecord(r)}
-                      className="p-2 hover:bg-[#E0F2F2] rounded-[8px] text-[#007A5E] transition-colors"
+                      className="p-2 hover:bg-primary/15 rounded-[8px] text-primary transition-colors"
                       title="View details"
                     >
                       <Eye className="size-4" />
@@ -650,21 +644,21 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
               </div>
 
               <div className="border-t border-[rgba(0,0,0,0.1)] pt-4">
-                <p className="text-[14px] font-medium text-[#323B42] mb-3">Items Inspection Results:</p>
+                <p className="text-[14px] font-medium text-foreground mb-3">Items Inspection Results:</p>
                 <div className="space-y-2">
                   {r.lines.map((line, idx) => (
-                    <div key={idx} className="bg-[#F8FAFB] rounded-[8px] p-4 flex items-start justify-between">
-                      <p className="text-[14px] font-medium text-[#323B42] flex-1">{line.name}</p>
+                    <div key={idx} className="bg-background rounded-[8px] p-4 flex items-start justify-between">
+                      <p className="text-[14px] font-medium text-foreground flex-1">{line.name}</p>
                       <div className="text-right">
-                        <p className="text-[13px] text-[#323B42]">
-                          <span className="font-semibold text-[#008967]">{line.acceptedQty}</span> accepted
+                        <p className="text-[13px] text-foreground">
+                          <span className="font-semibold text-primary">{line.acceptedQty}</span> accepted
                           {line.rejectedQty > 0 && (
                             <>
                               {' '}• <span className="font-semibold text-[#E7000B]">{line.rejectedQty}</span> rejected
                             </>
                           )}
                         </p>
-                        <p className="text-[12px] text-[#6b7280]">Ordered: {line.orderedQty}</p>
+                        <p className="text-[12px] text-muted-foreground">Ordered: {line.orderedQty}</p>
                       </div>
                     </div>
                   ))}
@@ -678,22 +672,22 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
       {/* Inspection Modal */}
       {selected && (
         <div className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white rounded-[14px] p-6 max-w-5xl w-full max-h-[90vh] overflow-y-auto">
+          <div className="bg-card rounded-[14px] p-6 max-w-5xl w-full max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
               <div>
-                <h3 className="text-[24px] font-bold text-[#323B42] flex items-center gap-2">
-                  <ClipboardCheck className="size-6 text-[#007A5E]" />
+                <h3 className="text-[24px] font-bold text-foreground flex items-center gap-2">
+                  <ClipboardCheck className="size-6 text-primary" />
                   Quality Check — {selected.orderNumber}
                 </h3>
-                <p className="text-[14px] text-[#323B42] mt-1">Supplier: {selected.supplier || 'N/A'}</p>
+                <p className="text-[14px] text-foreground mt-1">Supplier: {selected.supplier || 'N/A'}</p>
               </div>
-              <button onClick={closeInspection} className="p-2 hover:bg-[#F8FAFB] rounded">
-                <X className="size-5 text-[#323B42]" />
+              <button onClick={closeInspection} className="p-2 hover:bg-background rounded">
+                <X className="size-5 text-foreground" />
               </button>
             </div>
 
-            <div className="mb-6 bg-[#E0F5F1] border border-[#007A5E] rounded-[12px] p-4">
-              <p className="text-[13px] text-[#323B42]">
+            <div className="mb-6 bg-primary/10 border border-primary rounded-[12px] p-4">
+              <p className="text-[13px] text-foreground">
                 Only the <span className="font-semibold">accepted</span> quantity is added to inventory.
                 Rejected units are held back for return/refund; any remainder stays on the order.
               </p>
@@ -712,18 +706,18 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
                 return (
                   <div
                     key={line.id}
-                    className="bg-[#F8FAFB] border border-[rgba(0,0,0,0.1)] rounded-[12px] p-5"
+                    className="bg-background border border-[rgba(0,0,0,0.1)] rounded-[12px] p-5"
                   >
                     <div className="mb-4">
-                      <h4 className="text-[16px] font-semibold text-[#323B42]">{line.name}</h4>
-                      <p className="text-[13px] text-[#323B42]">
+                      <h4 className="text-[16px] font-semibold text-foreground">{line.name}</h4>
+                      <p className="text-[13px] text-foreground">
                         To receive: {line.orderedQty} units @ ₱{line.unitPrice} each
                       </p>
                     </div>
 
                     <div className="grid grid-cols-3 gap-4 mb-4">
                       <div>
-                        <label className="block text-[12px] font-medium text-[#323B42] mb-2">Accepted Qty *</label>
+                        <label className="block text-[12px] font-medium text-foreground mb-2">Accepted Qty *</label>
                         <input
                           type="number"
                           step="any"
@@ -735,11 +729,11 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
                           onChange={(e) =>
                             patchDraft(line.id, line, { acceptedQty: parseDecimalInput(e.target.value) })
                           }
-                          className="w-full px-3 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E] [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                          className="w-full px-3 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                         />
                       </div>
                       <div>
-                        <label className="block text-[12px] font-medium text-[#323B42] mb-2">Rejected Qty</label>
+                        <label className="block text-[12px] font-medium text-foreground mb-2">Rejected Qty</label>
                         <input
                           type="number"
                           step="any"
@@ -752,8 +746,8 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
                           onChange={(e) =>
                             patchDraft(line.id, line, { rejectedQty: parseDecimalInput(e.target.value) })
                           }
-                          className={`w-full px-3 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E] [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none ${
-                            rejectedMode === 'auto-remainder' ? 'bg-[#e9ecef] cursor-not-allowed' : ''
+                          className={`w-full px-3 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none ${
+                            rejectedMode === 'auto-remainder' ? 'bg-muted cursor-not-allowed' : ''
                           }`}
                         />
                       </div>
@@ -784,14 +778,14 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
               <button
                 onClick={closeInspection}
                 disabled={saving}
-                className="flex-1 px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] font-medium text-[#323B42] hover:bg-[#F8FAFB] transition-colors disabled:opacity-50"
+                className="flex-1 px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] font-medium text-foreground hover:bg-background transition-colors disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 onClick={handleSubmit}
                 disabled={saving}
-                className="flex-1 px-4 py-2 bg-[#007A5E] text-white rounded-[8px] text-[14px] font-medium hover:bg-[#008967] transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                className="flex-1 px-4 py-2 bg-primary text-white rounded-[8px] text-[14px] font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 <CheckCircle className="size-4" />
                 {saving ? 'Saving...' : 'Complete QC & Add Accepted Stock'}
@@ -804,18 +798,18 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
       {/* Quick reject/cancel modal */}
       {quickActionTarget && (
         <div className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white rounded-[14px] p-6 max-w-xl w-full">
+          <div className="bg-card rounded-[14px] p-6 max-w-xl w-full">
             <div className="flex items-center justify-between mb-5">
               <div>
-                <h3 className="text-[22px] font-bold text-[#323B42]">
+                <h3 className="text-[22px] font-bold text-foreground">
                   {quickActionTarget.action === 'reject' ? 'Reject Goods Received' : 'Cancel Goods Received'}
                 </h3>
-                <p className="text-[14px] text-[#6b7280] mt-1">
+                <p className="text-[14px] text-muted-foreground mt-1">
                   {quickActionTarget.po.orderNumber} • {quickActionTarget.po.supplier || 'N/A'}
                 </p>
               </div>
-              <button onClick={closeQuickAction} disabled={saving} className="p-2 hover:bg-[#F8FAFB] rounded">
-                <X className="size-5 text-[#323B42]" />
+              <button onClick={closeQuickAction} disabled={saving} className="p-2 hover:bg-background rounded">
+                <X className="size-5 text-foreground" />
               </button>
             </div>
 
@@ -829,7 +823,7 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
               </div>
             )}
 
-            <label className="block text-[12px] font-medium text-[#323B42] mb-2">
+            <label className="block text-[12px] font-medium text-foreground mb-2">
               Reason / note *
             </label>
             <textarea
@@ -841,13 +835,13 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
                   ? 'Example: damaged items, incorrect delivery, quality issue...'
                   : 'Example: supplier cancelled delivery, duplicate transaction...'
               }
-              className="w-full resize-none rounded-[8px] border border-[rgba(0,0,0,0.1)] px-3 py-2 text-[14px] focus:outline-none focus:border-[#007A5E]"
+              className="w-full resize-none rounded-[8px] border border-[rgba(0,0,0,0.1)] px-3 py-2 text-[14px] focus:outline-none focus:border-primary"
             />
 
-            <label className="block text-[12px] font-medium text-[#323B42] mt-4 mb-2">
+            <label className="block text-[12px] font-medium text-foreground mt-4 mb-2">
               Proof images
             </label>
-            <label className="flex cursor-pointer items-center justify-center gap-2 rounded-[8px] border border-dashed border-[#9ca3af] px-4 py-4 text-[13px] text-[#374151] hover:bg-[#F8FAFB]">
+            <label className="flex cursor-pointer items-center justify-center gap-2 rounded-[8px] border border-dashed border-border px-4 py-4 text-[13px] text-foreground hover:bg-background">
               <Upload className="size-4" />
               Upload image proof
               <input
@@ -861,7 +855,7 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
             {proofImageNames.length > 0 && (
               <div className="mt-3 flex flex-wrap gap-2">
                 {proofImageNames.map((name) => (
-                  <span key={name} className="rounded-full bg-[#E0F2F2] px-3 py-1 text-[12px] text-[#007A5E]">
+                  <span key={name} className="rounded-full bg-primary/10 px-3 py-1 text-[12px] text-primary">
                     {name}
                   </span>
                 ))}
@@ -872,7 +866,7 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
               <button
                 onClick={closeQuickAction}
                 disabled={saving}
-                className="flex-1 rounded-[8px] border border-[rgba(0,0,0,0.1)] px-4 py-2 text-[14px] font-medium text-[#323B42] hover:bg-[#F8FAFB] disabled:opacity-50"
+                className="flex-1 rounded-[8px] border border-[rgba(0,0,0,0.1)] px-4 py-2 text-[14px] font-medium text-foreground hover:bg-background disabled:opacity-50"
               >
                 Back
               </button>
@@ -899,18 +893,18 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
       {/* History details modal (module-provided) */}
       {viewRecord && renderHistoryDetails && (
         <div className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white rounded-[14px] p-6 max-w-7xl w-[94vw] max-h-[90vh] overflow-y-auto">
+          <div className="bg-card rounded-[14px] p-6 max-w-7xl w-[94vw] max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
               <div>
-                <h3 className="text-[24px] font-bold text-[#323B42]">
+                <h3 className="text-[24px] font-bold text-foreground">
                   Goods Received — {viewRecord.orderNumber}
                 </h3>
-                <p className="mt-1 text-[14px] text-[#323B42]">
+                <p className="mt-1 text-[14px] text-foreground">
                   PO Number: <span className="font-semibold">{viewRecord.purchaseOrderNumber || 'N/A'}</span>
                 </p>
               </div>
-              <button onClick={() => setViewRecord(null)} className="p-2 hover:bg-[#F8FAFB] rounded">
-                <X className="size-5 text-[#323B42]" />
+              <button onClick={() => setViewRecord(null)} className="p-2 hover:bg-background rounded">
+                <X className="size-5 text-foreground" />
               </button>
             </div>
             {renderHistoryDetails(viewRecord)}

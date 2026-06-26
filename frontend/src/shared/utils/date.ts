@@ -1,8 +1,5 @@
 export function getLocalDateKey(date: Date = new Date()) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return getManilaDateKey(date);
 }
 
 export function parseLocalDateKey(dateKey: string) {
@@ -12,18 +9,26 @@ export function parseLocalDateKey(dateKey: string) {
 
 export const MANILA_TIME_ZONE = 'Asia/Manila';
 
-/**
- * PostgreSQL's legacy `TIMESTAMP` columns have no offset. The POS database
- * writes those values in UTC, so attach UTC before the browser converts them
- * to the signed-in user's local date and time.
- */
 export function parseDatabaseTimestamp(value: unknown) {
   if (value instanceof Date) return value;
   const raw = String(value ?? '').trim();
   if (!raw) return new Date(NaN);
   const isoLike = raw.replace(' ', 'T');
   const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(isoLike);
-  return new Date(hasTimezone ? isoLike : `${isoLike}Z`);
+  if (hasTimezone) return new Date(isoLike);
+
+  const match = isoLike.match(/^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?)?$/);
+  if (!match) return new Date(isoLike);
+  const [, year, month, day, hour = '0', minute = '0', second = '0', millisecond = '0'] = match;
+  return new Date(Date.UTC(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour) - 8,
+    Number(minute),
+    Number(second),
+    Number(millisecond.padEnd(3, '0')),
+  ));
 }
 
 export function getManilaDateKey(value: unknown = new Date()) {
@@ -49,6 +54,10 @@ export function formatManilaTime(value: unknown) {
   }).format(timestamp);
 }
 
+export function getManilaTime(date: Date = new Date()) {
+  return formatManilaTime(date);
+}
+
 export function formatManilaDateTime(value: unknown) {
   const timestamp = parseDatabaseTimestamp(value);
   if (Number.isNaN(timestamp.getTime())) return '-';
@@ -57,6 +66,19 @@ export function formatManilaDateTime(value: unknown) {
     month: 'short',
     day: '2-digit',
     hour: 'numeric',
+    minute: '2-digit',
+  }).format(timestamp);
+}
+
+export function formatManilaFullDateTime(value: unknown) {
+  const timestamp = parseDatabaseTimestamp(value);
+  if (Number.isNaN(timestamp.getTime())) return '-';
+  return new Intl.DateTimeFormat('en-PH', {
+    timeZone: MANILA_TIME_ZONE,
+    month: '2-digit',
+    day: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
     minute: '2-digit',
   }).format(timestamp);
 }

@@ -49,8 +49,8 @@ export class InventoryApiController {
   }
 
   @Delete('inventory/:id')
-  deleteInventoryItem(@Param('id') id: string) {
-    return this.inventoryApiService.deleteById('InventoryItem', id);
+  deleteInventoryItem(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.deleteInventoryItem(request.headers, id);
   }
 
   @Get('locations')
@@ -210,6 +210,31 @@ export class InventoryApiController {
     return this.inventoryApiService.listTransfers(request.headers, query);
   }
 
+  @Post('transfers')
+  createTransfer(@Req() request: RequestLike, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.createTransfer(request.headers, body);
+  }
+
+  @Get('transfers/:id')
+  getTransfer(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.getTransfer(request.headers, id);
+  }
+
+  @Patch('transfers/:id/dispatch')
+  dispatchTransfer(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.dispatchTransfer(request.headers, id);
+  }
+
+  @Patch('transfers/:id/complete')
+  completeTransfer(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.completeTransfer(request.headers, id);
+  }
+
+  @Patch('transfers/:id/cancel')
+  cancelTransfer(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.cancelTransfer(request.headers, id);
+  }
+
   @Get('sales')
   listSales(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
     return this.inventoryApiService.listSales(request.headers, query);
@@ -218,6 +243,11 @@ export class InventoryApiController {
   @Get('stock-movements')
   listStockMovements(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
     return this.inventoryApiService.listStockMovements(request.headers, query);
+  }
+
+  @Get('audit-logs')
+  listAuditLogs(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
+    return this.inventoryApiService.listAuditLogs(request.headers, query);
   }
 
   @Get('reports/ingredient-consumption')
@@ -238,6 +268,60 @@ export class InventoryApiController {
   @Get('bundles')
   listBundles(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
     return this.inventoryApiService.listBundles(request.headers, query);
+  }
+
+  @Post('bundles')
+  createBundle(@Req() request: RequestLike, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.createBundle(request.headers, body);
+  }
+
+  @Get('bundles/:id')
+  getBundle(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.getBundle(request.headers, id);
+  }
+
+  @Patch('bundles/:id')
+  updateBundle(@Req() request: RequestLike, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.updateBundle(request.headers, id, body);
+  }
+
+  @Patch('bundles/:id/approve')
+  approveBundle(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.approveBundle(request.headers, id);
+  }
+
+  @Patch('bundles/:id/reject')
+  rejectBundle(
+    @Req() request: RequestLike,
+    @Param('id') id: string,
+    @Body() body: { rejectionReason?: string; reason?: string },
+  ) {
+    return this.inventoryApiService.rejectBundle(request.headers, id, body);
+  }
+
+  @Patch('bundles/:id/activate')
+  activateBundle(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.activateBundle(request.headers, id);
+  }
+
+  @Patch('bundles/:id/deactivate')
+  deactivateBundle(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.deactivateBundle(request.headers, id);
+  }
+
+  @Patch('bundles/:id/archive')
+  archiveBundle(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.archiveBundle(request.headers, id);
+  }
+
+  @Post('bundles/:id/restore')
+  restoreBundle(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.restoreBundle(request.headers, id);
+  }
+
+  @Delete('bundles/:id')
+  deleteBundle(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.deleteBundle(request.headers, id);
   }
 
   @Get('adjustments')

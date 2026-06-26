@@ -108,6 +108,14 @@ export class AdminService {
     enableReceiptPrinting?: boolean;
     enabledPaymentMethods?: string[];
     paymentMethodAccounts?: Record<string, unknown>;
+    autoDeductInventoryOnSale?: boolean;
+    allowNegativeStock?: boolean;
+    defaultLowStockThreshold?: number;
+    defaultInventoryUnit?: string;
+    cycleCountIntervalDays?: number;
+    autoReorderThresholdPercent?: number;
+    enableExpiryTracking?: boolean;
+    defaultMarkupPercent?: number;
   }) {
     return this.databaseService.updateStoreSettingsForAdmin(input);
   }

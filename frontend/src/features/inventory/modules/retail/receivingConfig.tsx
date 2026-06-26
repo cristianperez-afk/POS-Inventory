@@ -12,6 +12,7 @@ import type {
   ReceiptRecord,
   ResolvedReceivingConfig,
 } from '../shared/receiving/GoodsReceived';
+import { getManilaDateKey } from '../../../../shared/utils/date';
 
 // Maps the retail purchase-order data onto the shared Goods Received contract.
 export function useRetailReceivingConfig(): ResolvedReceivingConfig {
@@ -66,7 +67,7 @@ export function useRetailReceivingConfig(): ResolvedReceivingConfig {
       orderNumber: receipt.receiptNumber,
       purchaseOrderNumber: receipt.purchaseOrder?.orderNumber ?? receipt.purchaseOrderId,
       supplier: receipt.purchaseOrder?.supplier?.name ?? '',
-      receivedDate: receipt.createdAt ? new Date(receipt.createdAt).toLocaleDateString() : '',
+      receivedDate: receipt.createdAt ? getManilaDateKey(receipt.createdAt) : '',
       receivedAt: receipt.createdAt ?? undefined,
       receivedBy: receipt.receivedBy?.name ?? receipt.receivedBy?.email ?? '',
       status,
@@ -100,24 +101,24 @@ export function useRetailReceivingConfig(): ResolvedReceivingConfig {
       const autoSort = autoSortItem(line.name, draft.fields.inspectionNotes ?? '');
       return (
         <div className="mt-1 mb-1 flex items-center gap-2 flex-wrap">
-          <span className="text-[11px] text-[#6b7280]">Auto-Sort:</span>
+          <span className="text-[11px] text-muted-foreground">Auto-Sort:</span>
           <span
             className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${
               autoSort.confidence === 'high'
-                ? 'bg-[#E0F5F1] text-[#008967]'
+                ? 'bg-primary/10 text-primary'
                 : autoSort.confidence === 'medium'
                   ? 'bg-[#fef3c6] text-[#92400e]'
-                  : 'bg-[#e9ecef] text-[#6b7280]'
+                  : 'bg-muted text-muted-foreground'
             }`}
           >
             {autoSort.category}
           </span>
-          <span className="text-[11px] text-[#6b7280]">→</span>
-          <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-[#e9ecef] text-[#323B42]">
+          <span className="text-[11px] text-muted-foreground">→</span>
+          <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-muted text-foreground">
             {autoSort.targetCustomer}
           </span>
-          <span className="text-[11px] text-[#6b7280]">→</span>
-          <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-[#e9ecef] text-[#323B42]">
+          <span className="text-[11px] text-muted-foreground">→</span>
+          <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-muted text-foreground">
             {autoSort.subcategory}
           </span>
           {autoSort.confidence === 'low' && (
@@ -149,11 +150,11 @@ export function useRetailReceivingConfig(): ResolvedReceivingConfig {
 
     historyStatusClass: (status) =>
       status === 'Fully Accepted'
-        ? 'bg-[#E0F5F1] text-[#008967]'
+        ? 'bg-primary/10 text-primary'
         : status === 'Rejected'
           ? 'bg-[#ffe2e2] text-[#991B1B]'
           : status === 'Cancelled'
-            ? 'bg-[#f3f4f6] text-[#374151]'
-            : 'bg-[#E0F2F2] text-[#007A5E]',
+            ? 'bg-muted text-foreground'
+            : 'bg-primary/10 text-primary',
   };
 }

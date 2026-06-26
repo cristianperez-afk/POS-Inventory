@@ -267,6 +267,7 @@ export interface ApiBundle {
   createdBy?: ApiActor | null;
   approvedBy?: ApiActor | null;
   approvedAt?: string | null;
+  archivedAt?: string | null;
   items: ApiBundleItem[];
   createdAt: string;
   updatedAt?: string;

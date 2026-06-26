@@ -2,10 +2,12 @@ import type { ApiBundle } from '../../../app/api/domainTypes';
 import {
   activateBundle,
   approveBundle,
+  archiveBundle,
   createBundle,
   deactivateBundle,
   deleteBundle,
   rejectBundle,
+  restoreBundle,
   updateBundle,
 } from '../../../app/api/client';
 import { useBundlesQuery } from '../domainQueries';
@@ -19,7 +21,7 @@ export const mapRetailBundleRecord = (bundle: ApiBundle): ApiBundle => ({
 });
 
 export function useRetailBundlesQuery<TData = ApiBundle[]>(
-  params?: { status?: string },
+  params?: { status?: string; archived?: boolean },
   select?: (items: ApiBundle[]) => TData,
 ) {
   return useBundlesQuery(params, {
@@ -56,6 +58,14 @@ export function useActivateRetailBundleMutation() {
 
 export function useDeactivateRetailBundleMutation() {
   return useRetailMutation(deactivateBundle, [retailQueryKeys.bundles]);
+}
+
+export function useArchiveRetailBundleMutation() {
+  return useRetailMutation(archiveBundle, [retailQueryKeys.bundles]);
+}
+
+export function useRestoreRetailBundleMutation() {
+  return useRetailMutation(restoreBundle, [retailQueryKeys.bundles]);
 }
 
 export function useDeleteRetailBundleMutation() {
