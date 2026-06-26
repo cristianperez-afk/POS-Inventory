@@ -9,18 +9,26 @@ export function parseLocalDateKey(dateKey: string) {
 
 export const MANILA_TIME_ZONE = 'Asia/Manila';
 
-/**
- * PostgreSQL's legacy `TIMESTAMP` columns have no offset. The POS database
- * writes those values in UTC, so attach UTC before the browser converts them
- * to the signed-in user's local date and time.
- */
 export function parseDatabaseTimestamp(value: unknown) {
   if (value instanceof Date) return value;
   const raw = String(value ?? '').trim();
   if (!raw) return new Date(NaN);
   const isoLike = raw.replace(' ', 'T');
   const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(isoLike);
-  return new Date(hasTimezone ? isoLike : `${isoLike}Z`);
+  if (hasTimezone) return new Date(isoLike);
+
+  const match = isoLike.match(/^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?)?$/);
+  if (!match) return new Date(isoLike);
+  const [, year, month, day, hour = '0', minute = '0', second = '0', millisecond = '0'] = match;
+  return new Date(Date.UTC(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour) - 8,
+    Number(minute),
+    Number(second),
+    Number(millisecond.padEnd(3, '0')),
+  ));
 }
 
 export function getManilaDateKey(value: unknown = new Date()) {
