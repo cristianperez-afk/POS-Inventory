@@ -5696,7 +5696,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const whereSql = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     return this.query(
       `
-        SELECT id, store_id, user_id, user_name, user_role, module, action, details, to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS created_at
+        SELECT id, store_id, user_id, user_name, user_role, module, action, details, to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at
         FROM activity_logs
         ${whereSql}
         ORDER BY created_at DESC, id DESC
