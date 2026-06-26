@@ -15,6 +15,8 @@ export interface AuditTrailEntry {
   item: string;
   quantity: string;
   performedBy: string;
+  performedByName: string;
+  performedByRole: string;
   reference: string;
   details: string;
   status: string;
@@ -29,6 +31,8 @@ export function mapAuditLogs(logs: ApiAuditLog[]): AuditTrailEntry[] {
     item: log.entityName ?? '',
     quantity: log.quantity ?? '',
     performedBy: log.performedByEmail || log.performedByName || '',
+    performedByName: log.performedByName || log.performedByEmail || '',
+    performedByRole: log.performedByRole || '',
     reference: log.entityId ?? log.id,
     details: log.summary ?? '',
     status: log.status ?? 'recorded',

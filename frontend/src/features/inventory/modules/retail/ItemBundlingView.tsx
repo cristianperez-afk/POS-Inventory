@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Plus, Edit2, Trash2, Search, ChevronRight, ChevronDown, Folder, FolderOpen, AlertTriangle, Package, PackagePlus, ShoppingCart, PackageCheck, Layers, X, Eye, TrendingUp, TrendingDown, RefreshCw, CheckCircle, Users } from 'lucide-react';
+import { Plus, Edit2, Trash2, Search, ChevronRight, ChevronDown, Folder, FolderOpen, AlertTriangle, Package, PackagePlus, ShoppingCart, PackageCheck, Layers, X, Eye, TrendingUp, TrendingDown, RefreshCw, CheckCircle, Users, Archive, RotateCcw } from 'lucide-react';
 import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
 import type {
   InventoryItem,
@@ -16,10 +16,12 @@ import { autoSortItem } from '../../app/utils/autoSortingRules';
 import {
   useActivateRetailBundleMutation,
   useApproveRetailBundleMutation,
+  useArchiveRetailBundleMutation,
   useCreateRetailBundleMutation,
   useDeactivateRetailBundleMutation,
   useDeleteRetailBundleMutation,
   useRejectRetailBundleMutation,
+  useRestoreRetailBundleMutation,
   useRetailBundlesQuery,
   useRetailInventoryRecordsQuery,
   useUpdateRetailBundleMutation,
@@ -30,7 +32,8 @@ export function ItemBundlingView({
 }: {
   currentUser: { email: string; role: string } | null;
 }) {
-  const bundlesQuery = useRetailBundlesQuery();
+  const [viewArchived, setViewArchived] = useState(false);
+  const bundlesQuery = useRetailBundlesQuery({ archived: viewArchived });
   const inventoryQuery = useRetailInventoryRecordsQuery();
   const createBundleMutation = useCreateRetailBundleMutation();
   const updateBundleMutation = useUpdateRetailBundleMutation();
@@ -38,6 +41,8 @@ export function ItemBundlingView({
   const rejectBundleMutation = useRejectRetailBundleMutation();
   const activateBundleMutation = useActivateRetailBundleMutation();
   const deactivateBundleMutation = useDeactivateRetailBundleMutation();
+  const archiveBundleMutation = useArchiveRetailBundleMutation();
+  const restoreBundleMutation = useRestoreRetailBundleMutation();
   const deleteBundleMutation = useDeleteRetailBundleMutation();
   const bundles = bundlesQuery.data ?? [];
   const inventory = inventoryQuery.data ?? [];
@@ -94,8 +99,8 @@ export function ItemBundlingView({
     setFilterStatus((current) => (current === status ? 'all' : status));
   };
   const statCardClass = (active: boolean) =>
-    `text-left w-full bg-white rounded-[14px] p-4 border shadow-sm cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-lg hover:border-secondary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/40 active:translate-y-0 active:shadow-md ${
-      active ? 'border-secondary bg-secondary/5 shadow-md' : 'border-border'
+    `group text-left w-full bg-card rounded-2xl p-6 shadow-sm border cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-xl hover:shadow-secondary/25 hover:border-secondary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 active:translate-y-0 active:shadow-lg active:shadow-secondary/30 ${
+      active ? 'border-secondary bg-secondary/5 shadow-md shadow-secondary/20' : 'border-border'
     }`;
 
   // ─── Bundle price calculation (uses local form state + fetched inventory) ────
@@ -218,8 +223,20 @@ export function ItemBundlingView({
     finally { setSaving(false); }
   };
 
+  const handleArchiveBundle = async (id: string) => {
+    try { setSaving(true); setError(null); await archiveBundleMutation.mutateAsync(id); }
+    catch (e: any) { setError(e.message); }
+    finally { setSaving(false); }
+  };
+
+  const handleRestoreBundle = async (id: string) => {
+    try { setSaving(true); setError(null); await restoreBundleMutation.mutateAsync(id); }
+    catch (e: any) { setError(e.message); }
+    finally { setSaving(false); }
+  };
+
   const handleDeleteBundle = async (id: string) => {
-    if (!confirm('Delete this bundle? This cannot be undone.')) return;
+    if (!confirm('Permanently delete this bundle? This cannot be undone.')) return;
     try { setSaving(true); await deleteBundleMutation.mutateAsync(id); }
     catch (e: any) { setError(e.message); }
     finally { setSaving(false); }
@@ -258,16 +275,36 @@ export function ItemBundlingView({
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-[30px] font-bold text-foreground">Item Bundling</h2>
-          <p className="text-foreground text-[14px] mt-1">Create combo deals and package offers</p>
+          <p className="text-foreground text-[14px] mt-1">
+            {viewArchived ? 'Archived bundles — restore or remove permanently' : 'Create combo deals and package offers'}
+          </p>
         </div>
-        <button
-          onClick={() => setShowCreateModal(true)}
-          disabled={loading}
-          className="bg-secondary text-white px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-secondary/90 hover:-translate-y-0.5 hover:shadow-md hover:shadow-secondary/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 active:translate-y-0 active:shadow-sm transition-all duration-200 disabled:opacity-50 disabled:translate-y-0 disabled:shadow-none"
-        >
-          <Plus className="size-4" />
-          Create Bundle
-        </button>
+        <div className="flex items-center gap-3">
+          {isAdmin && (
+            <button
+              onClick={() => { setViewArchived((v) => !v); setFilterStatus('all'); }}
+              aria-pressed={viewArchived}
+              className={`px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 border transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 ${
+                viewArchived
+                  ? 'bg-secondary/10 text-secondary border-secondary/60'
+                  : 'bg-white text-foreground border-border hover:border-secondary/60'
+              }`}
+            >
+              <Archive className="size-4" />
+              {viewArchived ? 'Back to Active' : 'Archived'}
+            </button>
+          )}
+          {!viewArchived && (
+            <button
+              onClick={() => setShowCreateModal(true)}
+              disabled={loading}
+              className="bg-secondary text-white px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-secondary/90 hover:-translate-y-0.5 hover:shadow-md hover:shadow-secondary/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 active:translate-y-0 active:shadow-sm transition-all duration-200 disabled:opacity-50 disabled:translate-y-0 disabled:shadow-none"
+            >
+              <Plus className="size-4" />
+              Create Bundle
+            </button>
+          )}
+        </div>
       </div>
 
       {error && (
@@ -491,27 +528,27 @@ export function ItemBundlingView({
       )}
 
       {/* Stats */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
         <button type="button" onClick={() => toggleFilterStatus('all')} aria-pressed={filterStatus === 'all'} aria-label="Show all bundles" className={statCardClass(filterStatus === 'all')}>
-          <p className="text-foreground text-[12px] mb-1">Total Bundles</p>
-          <p className="text-foreground text-[24px] font-bold">{loading ? '—' : stats.total}</p>
+          <p className="text-muted-foreground text-sm mb-2">Total Bundles</p>
+          <p className="text-2xl font-bold text-foreground">{loading ? '—' : stats.total}</p>
         </button>
         <button type="button" onClick={() => toggleFilterStatus('PENDING')} aria-pressed={filterStatus === 'PENDING'} aria-label="Filter by pending approval" className={statCardClass(filterStatus === 'PENDING')}>
-          <p className="text-warning text-[12px] mb-1">Pending Approval</p>
-          <p className="text-warning text-[24px] font-bold">{loading ? '—' : stats.pending}</p>
+          <p className="text-muted-foreground text-sm mb-2">Pending Approval</p>
+          <p className="text-2xl font-bold text-warning">{loading ? '—' : stats.pending}</p>
         </button>
         <button type="button" onClick={() => toggleFilterStatus('ACTIVE')} aria-pressed={filterStatus === 'ACTIVE'} aria-label="Filter by active bundles" className={statCardClass(filterStatus === 'ACTIVE')}>
-          <p className="text-success text-[12px] mb-1">Active Bundles</p>
-          <p className="text-success text-[24px] font-bold">{loading ? '—' : stats.active}</p>
+          <p className="text-muted-foreground text-sm mb-2">Active Bundles</p>
+          <p className="text-2xl font-bold text-success">{loading ? '—' : stats.active}</p>
         </button>
-        <div className="bg-white border border-border rounded-[14px] p-4">
-          <p className="text-foreground text-[12px] mb-1">Active Value</p>
-          <p className="text-secondary text-[24px] font-bold">₱{loading ? '—' : stats.totalValue.toLocaleString()}</p>
+        <div className="bg-card rounded-2xl p-6 shadow-sm border border-border">
+          <p className="text-muted-foreground text-sm mb-2">Active Value</p>
+          <p className="text-2xl font-bold text-secondary">₱{loading ? '—' : stats.totalValue.toLocaleString()}</p>
         </div>
       </div>
 
       {/* Search and Filters */}
-      <div className="bg-white border border-border rounded-[14px] mb-4 p-4">
+      <div className="bg-card border border-border rounded-2xl shadow-sm mb-8 p-6">
         <div className="flex items-center gap-4">
           <div className="flex-1 flex items-center gap-2">
             <Search className="size-5 text-muted-foreground" />
@@ -533,17 +570,19 @@ export function ItemBundlingView({
 
       {/* Bundles Grid */}
       {loading ? (
-        <div className="bg-white border border-border rounded-[14px] p-12 text-center">
-          <p className="text-[14px] text-muted-foreground">Loading...</p>
+        <div className="bg-card border border-border rounded-2xl shadow-sm p-12 text-center">
+          <p className="text-sm text-muted-foreground">Loading...</p>
         </div>
       ) : filteredBundles.length === 0 ? (
-        <div className="bg-white border border-border rounded-[14px] p-12 text-center">
-          <Layers className="size-16 text-muted mx-auto mb-4" />
-          <p className="text-[16px] text-foreground font-medium">No bundles found</p>
-          <p className="text-[14px] text-muted-foreground mt-1">Create your first bundle to get started</p>
+        <div className="bg-card rounded-2xl p-12 shadow-sm border border-dashed border-border flex flex-col items-center justify-center text-center">
+          {viewArchived ? <Archive className="w-10 h-10 text-muted-foreground mb-3" /> : <Layers className="w-10 h-10 text-muted-foreground mb-3" />}
+          <p className="text-foreground font-medium">{viewArchived ? 'No archived bundles' : 'No bundles found'}</p>
+          <p className="text-sm text-muted-foreground mt-1">
+            {viewArchived ? 'Bundles you archive will appear here and can be restored anytime.' : 'Create your first bundle to get started'}
+          </p>
         </div>
       ) : (
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {filteredBundles.map((bundle: any) => {
             const originalPrice = (bundle.items ?? []).reduce((sum: number, bi: any) => sum + (bi.inventoryItem?.price ?? 0) * bi.quantity, 0);
             const savings = originalPrice - bundle.price;
@@ -551,93 +590,125 @@ export function ItemBundlingView({
             const canApprove = isAdmin && bundle.status === 'PENDING';
             const canActivate = isAdmin && (bundle.status === 'APPROVED' || bundle.status === 'INACTIVE');
             const canDeactivate = isAdmin && bundle.status === 'ACTIVE';
-            const canDelete = isAdmin && (bundle.status === 'PENDING' || bundle.status === 'REJECTED');
             const statusStyle = STATUS_COLORS[bundle.status] ?? STATUS_COLORS.PENDING;
 
             return (
-              <div key={bundle.id} className="bg-white border border-border rounded-[14px] p-5 hover:shadow-md transition-shadow flex flex-col">
-                <div className="mb-3">
-                  <div className="flex items-start justify-between gap-2 mb-2">
-                    <h3 className="text-[16px] font-semibold text-foreground line-clamp-2 flex-1">{bundle.name}</h3>
-                    <span className={`px-2.5 py-1 rounded-[6px] text-[11px] font-semibold shrink-0 ${statusStyle.bg} ${statusStyle.text}`}>
-                      {STATUS_LABEL[bundle.status] ?? bundle.status}
-                    </span>
+              <div key={bundle.id} className="bg-card rounded-2xl p-6 shadow-sm border border-border hover:shadow-md transition-all duration-200 flex flex-col">
+                <div className="flex items-start justify-between gap-3 mb-4">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-14 h-14 overflow-hidden rounded-xl border border-border bg-muted flex items-center justify-center flex-shrink-0">
+                      {bundle.imageUrl ? (
+                        <img src={bundle.imageUrl} alt="" className="h-full w-full object-cover" />
+                      ) : (
+                        <Layers className="w-6 h-6 text-muted-foreground" />
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <h3 className="font-bold text-foreground line-clamp-2">{bundle.name}</h3>
+                      <p className="text-xs text-muted-foreground">
+                        {(bundle.items ?? []).length} {(bundle.items ?? []).length === 1 ? 'item' : 'items'} • {bundle.discount}% OFF
+                      </p>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-warning/10 text-warning">{bundle.discount}% OFF</span>
-                    <span className="text-[11px] text-muted-foreground">{(bundle.items ?? []).length} {(bundle.items ?? []).length === 1 ? 'item' : 'items'}</span>
-                  </div>
+                  <span className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold shrink-0 ${statusStyle.bg} ${statusStyle.text}`}>
+                    {STATUS_LABEL[bundle.status] ?? bundle.status}
+                  </span>
                 </div>
 
-                <div className="border-t border-border pt-3 mb-3 flex-1">
-                  <div className="space-y-1.5 max-h-[120px] overflow-y-auto pr-1">
+                <div className="space-y-1.5 mb-4 flex-1">
+                  <div className="max-h-[120px] overflow-y-auto pr-1 space-y-1.5">
                     {(bundle.items ?? []).map((bi: any) => (
-                      <div key={bi.id} className="flex justify-between text-[12px] gap-2">
-                        <span className="text-foreground line-clamp-1 flex-1">{bi.inventoryItem?.name ?? 'Unknown'} × {bi.quantity}</span>
-                        <span className="text-muted-foreground shrink-0">₱{((bi.inventoryItem?.price ?? 0) * bi.quantity).toLocaleString()}</span>
+                      <div key={bi.id} className="flex items-center justify-between text-sm gap-2">
+                        <span className="text-muted-foreground line-clamp-1 flex-1">{bi.inventoryItem?.name ?? 'Unknown'} × {bi.quantity}</span>
+                        <span className="font-medium text-foreground shrink-0">₱{((bi.inventoryItem?.price ?? 0) * bi.quantity).toLocaleString()}</span>
                       </div>
                     ))}
                   </div>
                 </div>
 
-                <div className="border-t border-border pt-3 mb-3">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-[11px] text-muted-foreground">Original Price:</span>
-                    <span className="text-[13px] text-muted-foreground line-through">₱{originalPrice.toLocaleString()}</span>
+                <div className="pt-4 border-t border-border mb-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <p className="text-xs text-muted-foreground">Original Price</p>
+                      <p className="text-sm font-semibold text-muted-foreground line-through">₱{originalPrice.toLocaleString()}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs text-muted-foreground">Bundle Price</p>
+                      <p className="text-lg font-bold text-secondary">₱{bundle.price.toLocaleString()}</p>
+                    </div>
+                    <div className="col-span-2 flex items-center justify-between border-t border-border/60 pt-2">
+                      <span className="text-xs text-muted-foreground">You save</span>
+                      <span className="text-sm font-semibold text-success">₱{savings.toLocaleString()}</span>
+                    </div>
                   </div>
-                  <div className="flex items-baseline justify-between">
-                    <span className="text-[13px] font-semibold text-foreground">Bundle Price:</span>
-                    <span className="text-[22px] font-bold text-secondary">₱{bundle.price.toLocaleString()}</span>
-                  </div>
-                  <p className="text-[11px] text-success font-medium text-right">You save ₱{savings.toLocaleString()}</p>
                 </div>
 
-                <div className="border-t border-border/50 pt-3 mb-3">
-                  <p className="text-[11px] text-muted-foreground truncate">
-                    Created: {new Date(bundle.createdAt).toLocaleDateString()} by {bundle.createdBy?.name ?? 'N/A'}
+                <div className="mb-4">
+                  <p className="text-xs text-muted-foreground truncate">
+                    Created {new Date(bundle.createdAt).toLocaleDateString()} by {bundle.createdBy?.name ?? 'N/A'}
                   </p>
                   {bundle.approvedBy && bundle.approvedAt && (
-                    <p className="text-[10px] text-success truncate">
+                    <p className="text-[11px] text-success truncate">
                       Approved by {bundle.approvedBy.name} on {new Date(bundle.approvedAt).toLocaleDateString()}
                     </p>
                   )}
                   {bundle.rejectionReason && (
-                    <p className="text-[10px] text-destructive mt-1 line-clamp-2">Rejected: {bundle.rejectionReason}</p>
+                    <p className="text-[11px] text-destructive mt-1 line-clamp-2">Rejected: {bundle.rejectionReason}</p>
                   )}
                 </div>
 
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => canEdit && openEditModal(bundle)}
-                    disabled={!canEdit || saving}
-                    className={`px-3 py-2 border rounded-[6px] text-[12px] font-medium flex items-center justify-center gap-1 transition-colors ${canEdit ? 'border-border text-foreground hover:bg-muted cursor-pointer' : 'border-border/50 text-muted-foreground bg-muted cursor-not-allowed'}`}
-                  >
-                    <Edit2 className="size-3.5" />
-                    Edit
-                  </button>
-                  <button
-                    onClick={() => canDelete && handleDeleteBundle(bundle.id)}
-                    disabled={!canDelete || saving}
-                    className={`px-3 py-2 border rounded-[6px] text-[12px] font-medium flex items-center justify-center gap-1 transition-colors ${canDelete ? 'border-destructive text-destructive hover:bg-destructive/10 cursor-pointer' : 'border-border/50 text-muted-foreground bg-muted cursor-not-allowed'}`}
-                  >
-                    <Trash2 className="size-3.5" />
-                    Delete
-                  </button>
-                  {isAdmin && (
+                <div className="flex flex-wrap gap-2">
+                  {viewArchived ? (
                     <>
-                      {canApprove && (
-                        <button onClick={() => { setSelectedBundle(bundle); setShowApprovalModal(true); }} disabled={saving} className="col-span-2 px-3 py-2 bg-accent text-white rounded-[6px] text-[12px] font-medium hover:bg-accent transition-colors flex items-center justify-center gap-1 disabled:opacity-50">
-                          <CheckCircle className="size-3.5" />
+                      <button
+                        onClick={() => handleRestoreBundle(bundle.id)}
+                        disabled={!isAdmin || saving}
+                        className={`flex-1 px-4 py-2 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-colors ${isAdmin ? 'bg-green-50 text-green-600 hover:bg-green-100 cursor-pointer' : 'bg-muted text-muted-foreground cursor-not-allowed'}`}
+                        title="Restore this bundle to the active list"
+                      >
+                        <RotateCcw className="w-4 h-4" />
+                        Restore
+                      </button>
+                      <button
+                        onClick={() => isAdmin && handleDeleteBundle(bundle.id)}
+                        disabled={!isAdmin || saving}
+                        className={`px-4 py-2 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-colors ${isAdmin ? 'bg-red-50 text-red-600 hover:bg-red-100 cursor-pointer' : 'bg-muted text-muted-foreground cursor-not-allowed'}`}
+                        title="Delete permanently"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => canEdit && openEditModal(bundle)}
+                        disabled={!canEdit || saving}
+                        className={`flex-1 px-4 py-2 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-colors ${canEdit ? 'bg-secondary/10 text-secondary hover:bg-secondary/20 cursor-pointer' : 'bg-muted text-muted-foreground cursor-not-allowed'}`}
+                      >
+                        <Edit2 className="w-4 h-4" />
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => isAdmin && handleArchiveBundle(bundle.id)}
+                        disabled={!isAdmin || saving}
+                        className={`px-4 py-2 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-colors ${isAdmin ? 'bg-amber-50 text-amber-600 hover:bg-amber-100 cursor-pointer' : 'bg-muted text-muted-foreground cursor-not-allowed'}`}
+                        title="Archive bundle (can be restored later)"
+                      >
+                        <Archive className="w-4 h-4" />
+                      </button>
+                      {isAdmin && canApprove && (
+                        <button onClick={() => { setSelectedBundle(bundle); setShowApprovalModal(true); }} disabled={saving} className="w-full px-4 py-2 bg-accent/10 text-accent rounded-xl text-sm font-medium hover:bg-accent/20 transition-colors flex items-center justify-center gap-2 disabled:opacity-50">
+                          <CheckCircle className="w-4 h-4" />
                           Review Bundle
                         </button>
                       )}
-                      {canActivate && (
-                        <button onClick={() => handleActivateBundle(bundle.id)} disabled={saving} className="col-span-2 px-3 py-2 bg-success text-white rounded-[6px] text-[12px] font-medium hover:bg-success transition-colors disabled:opacity-50">
+                      {isAdmin && canActivate && (
+                        <button onClick={() => handleActivateBundle(bundle.id)} disabled={saving} className="w-full px-4 py-2 bg-success/10 text-success rounded-xl text-sm font-medium hover:bg-success/20 transition-colors disabled:opacity-50">
                           Activate Bundle
                         </button>
                       )}
-                      {canDeactivate && (
-                        <button onClick={() => handleDeactivateBundle(bundle.id)} disabled={saving} className="col-span-2 px-3 py-2 bg-muted-foreground text-white rounded-[6px] text-[12px] font-medium hover:bg-muted-foreground transition-colors disabled:opacity-50">
+                      {isAdmin && canDeactivate && (
+                        <button onClick={() => handleDeactivateBundle(bundle.id)} disabled={saving} className="w-full px-4 py-2 bg-muted text-muted-foreground rounded-xl text-sm font-medium hover:bg-muted/80 transition-colors disabled:opacity-50">
                           Deactivate Bundle
                         </button>
                       )}

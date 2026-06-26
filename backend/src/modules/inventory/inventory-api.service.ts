@@ -2395,24 +2395,445 @@ export class InventoryApiService {
     return rows[0];
   }
 
+  // Shared SELECT/FROM/JOIN for bundle reads. Each bundle row carries its line
+  // items (with the linked inventory item's name/price/stock), the creator and
+  // approver actors, and its location, matching the ApiBundle shape the retail
+  // Item Bundling screen renders.
+  // Soft-delete/archive support for bundles is added on demand (same runtime-DDL
+  // pattern as the other ensure helpers) so the feature works without a migration.
+  private bundleArchiveColumnReady = false;
+
+  private async ensureBundleArchiveColumn() {
+    if (this.bundleArchiveColumnReady) return;
+    await this.safeQuery(
+      `ALTER TABLE "BundlePackage" ADD COLUMN IF NOT EXISTS "archivedAt" TIMESTAMP`,
+    );
+    this.bundleArchiveColumnReady = true;
+  }
+
+  private bundleSelectSql() {
+    return `
+      SELECT
+        bp.id, bp.name, bp.description, bp."imageUrl", bp.discount, bp.price, bp.status,
+        bp."rejectionReason", bp."locationId", bp."createdById", bp."approvedById",
+        bp."approvedAt", bp."archivedAt", bp."createdAt", bp."updatedAt",
+        CASE WHEN cu.id IS NULL THEN NULL
+          ELSE json_build_object('id', cu.id, 'name', cu.name, 'email', cu.email) END AS "createdBy",
+        CASE WHEN au.id IS NULL THEN NULL
+          ELSE json_build_object('id', au.id, 'name', au.name, 'email', au.email) END AS "approvedBy",
+        CASE WHEN l.id IS NULL THEN NULL
+          ELSE json_build_object('id', l.id, 'name', l.name) END AS location,
+        COALESCE(items.items, '[]'::json) AS items
+      FROM "BundlePackage" bp
+      LEFT JOIN "User" cu ON cu.id = bp."createdById"
+      LEFT JOIN "User" au ON au.id = bp."approvedById"
+      LEFT JOIN "Location" l ON l.id = bp."locationId"
+      LEFT JOIN LATERAL (
+        SELECT json_agg(
+          json_build_object(
+            'id', bi.id,
+            'inventoryItemId', bi."inventoryItemId",
+            'quantity', bi.quantity,
+            'inventoryItem', CASE WHEN ii.id IS NULL THEN NULL
+              ELSE json_build_object(
+                'id', ii.id, 'name', ii.name, 'price', ii.price,
+                'quantity', ii.quantity, 'category', ii.category
+              ) END
+          ) ORDER BY bi."createdAt"
+        ) AS items
+        FROM "BundleItem" bi
+        LEFT JOIN "InventoryItem" ii ON ii.id = bi."inventoryItemId"
+        WHERE bi."bundleId" = bp.id
+      ) items ON TRUE
+    `;
+  }
+
+  private async getBundleRow(scope: Scope, id: string) {
+    await this.ensureBundleArchiveColumn();
+    const rows = await this.safeQuery<Record<string, unknown>>(
+      `${this.bundleSelectSql()} WHERE bp.id = $1 AND bp."businessId" = $2 LIMIT 1`,
+      [id, scope.businessId],
+    );
+    if (!rows[0]) throw new NotFoundException(`Bundle #${id} not found`);
+    return rows[0];
+  }
+
+  // Recomputes a bundle's price from current inventory prices: the sum of each
+  // line item's (item price × quantity), discounted by the bundle discount %.
+  private async computeBundlePrice(
+    businessId: string,
+    items: { inventoryItemId: string; quantity: number }[],
+    discount: number,
+  ) {
+    const itemIds = [...new Set(items.map((i) => i.inventoryItemId))];
+    if (itemIds.length === 0) return 0;
+    const invRows = await this.safeQuery<{ id: string; price: number }>(
+      `SELECT id, price FROM "InventoryItem" WHERE id = ANY($1::text[]) AND "businessId" = $2`,
+      [itemIds, businessId],
+    );
+    const priceMap = new Map(invRows.map((r) => [r.id, Number(r.price)]));
+    const original = items.reduce(
+      (sum, i) => sum + (priceMap.get(i.inventoryItemId) ?? 0) * i.quantity,
+      0,
+    );
+    return original * (1 - discount / 100);
+  }
+
   async listBundles(headers: HeadersLike, query: Record<string, string | undefined>) {
+    await this.ensureBundleArchiveColumn();
     const scope = await this.resolveScope(headers);
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
-        SELECT bp.*, COALESCE(items.items, '[]'::json) AS items
-        FROM "BundlePackage" bp
-        LEFT JOIN LATERAL (
-          SELECT json_agg(bi.* ORDER BY bi."createdAt") AS items
-          FROM "BundleItem" bi
-          WHERE bi."bundleId" = bp.id
-        ) items ON TRUE
+        ${this.bundleSelectSql()}
         WHERE bp."businessId" = $1
           AND ($2::text IS NULL OR bp.status = $2::"BundleStatus")
+          AND (
+            CASE
+              WHEN $3::text = 'true' THEN bp."archivedAt" IS NOT NULL
+              ELSE bp."archivedAt" IS NULL
+            END
+          )
         ORDER BY bp."createdAt" DESC
       `,
-      [scope.businessId, query.status ?? null],
+      [scope.businessId, query.status ?? null, query.archived ?? null],
     );
     return this.paged(rows);
+  }
+
+  async getBundle(headers: HeadersLike, id: string) {
+    await this.ensureBundleArchiveColumn();
+    const scope = await this.resolveScope(headers);
+    return this.getBundleRow(scope, id);
+  }
+
+  private normalizeBundleItems(value: unknown): { inventoryItemId: string; quantity: number }[] {
+    if (!Array.isArray(value)) return [];
+    return value
+      .map((raw) => {
+        const item = raw as Record<string, unknown>;
+        return {
+          inventoryItemId: String(item.inventoryItemId ?? ''),
+          quantity: Number(item.quantity ?? 0),
+        };
+      })
+      .filter((item) => item.inventoryItemId && item.quantity > 0);
+  }
+
+  async createBundle(headers: HeadersLike, body: Record<string, unknown>) {
+    const scope = await this.resolveScope(headers);
+    const name = String(body.name ?? '').trim();
+    if (!name) throw new BadRequestException('Bundle name is required.');
+
+    const items = this.normalizeBundleItems(body.items);
+    if (items.length === 0) {
+      throw new BadRequestException('A bundle must include at least one item.');
+    }
+    const discount = Math.min(Math.max(Number(body.discount ?? 0), 0), 100);
+
+    const itemIds = [...new Set(items.map((i) => i.inventoryItemId))];
+    const countRows = await this.safeQuery<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM "InventoryItem" WHERE id = ANY($1::text[]) AND "businessId" = $2`,
+      [itemIds, scope.businessId],
+    );
+    if (Number(countRows[0]?.count ?? 0) !== itemIds.length) {
+      throw new BadRequestException('One or more items are unavailable for this business.');
+    }
+
+    const price = await this.computeBundlePrice(scope.businessId, items, discount);
+    const bundleId = randomUUID();
+    const createdById = scope.user.id === 'pos-bridge' ? null : scope.user.id;
+    const locationId = body.locationId
+      ? String(body.locationId)
+      : await this.getDefaultLocationId(scope.businessId).catch(() => null);
+
+    await this.databaseService.withTransaction(async (client) => {
+      await client.query(
+        `
+          INSERT INTO "BundlePackage" (
+            id, name, description, "imageUrl", discount, price, status,
+            "locationId", "businessId", "createdById", "updatedAt"
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', $7, $8, $9, CURRENT_TIMESTAMP)
+        `,
+        [bundleId, name, body.description ?? null, body.imageUrl ?? null, discount, price, locationId, scope.businessId, createdById],
+      );
+      for (const item of items) {
+        await client.query(
+          `INSERT INTO "BundleItem" (id, "bundleId", "inventoryItemId", quantity) VALUES ($1, $2, $3, $4)`,
+          [randomUUID(), bundleId, item.inventoryItemId, item.quantity],
+        );
+      }
+    });
+
+    await this.recordAudit(scope, {
+      category: 'Bundle',
+      action: 'Bundle Created',
+      entityType: 'BundlePackage',
+      entityId: bundleId,
+      entityName: name,
+      quantity: `${items.length} item(s)`,
+      status: 'pending',
+      summary: `${discount}% off • ₱${price.toFixed(2)}`,
+    });
+    return this.getBundleRow(scope, bundleId);
+  }
+
+  async updateBundle(headers: HeadersLike, id: string, body: Record<string, unknown>) {
+    const scope = await this.resolveScope(headers);
+    const existing = await this.safeQuery<{ status: string; discount: number }>(
+      `SELECT status, discount FROM "BundlePackage" WHERE id = $1 AND "businessId" = $2 LIMIT 1`,
+      [id, scope.businessId],
+    );
+    if (!existing[0]) throw new NotFoundException(`Bundle #${id} not found`);
+    if (existing[0].status === 'ACTIVE' && scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can edit an active bundle.');
+    }
+
+    const nextItems = body.items === undefined ? null : this.normalizeBundleItems(body.items);
+    if (nextItems && nextItems.length === 0) {
+      throw new BadRequestException('A bundle must include at least one item.');
+    }
+    const discount =
+      body.discount === undefined
+        ? Number(existing[0].discount)
+        : Math.min(Math.max(Number(body.discount), 0), 100);
+
+    await this.databaseService.withTransaction(async (client) => {
+      if (nextItems) {
+        await client.query(`DELETE FROM "BundleItem" WHERE "bundleId" = $1`, [id]);
+        for (const item of nextItems) {
+          await client.query(
+            `INSERT INTO "BundleItem" (id, "bundleId", "inventoryItemId", quantity) VALUES ($1, $2, $3, $4)`,
+            [randomUUID(), id, item.inventoryItemId, item.quantity],
+          );
+        }
+      }
+
+      // Recompute price from whatever the bundle now contains.
+      const lineRows = await client.query<{ inventoryItemId: string; quantity: number }>(
+        `SELECT "inventoryItemId", quantity FROM "BundleItem" WHERE "bundleId" = $1`,
+        [id],
+      );
+      const price = await this.computeBundlePrice(
+        scope.businessId,
+        lineRows.rows.map((r) => ({ inventoryItemId: r.inventoryItemId, quantity: Number(r.quantity) })),
+        discount,
+      );
+
+      // Editing a rejected bundle resubmits it for approval.
+      const resubmit = existing[0].status === 'REJECTED';
+      await client.query(
+        `
+          UPDATE "BundlePackage"
+          SET name = COALESCE($2, name),
+              description = $3,
+              "imageUrl" = COALESCE($4, "imageUrl"),
+              discount = $5,
+              price = $6,
+              status = CASE WHEN $7 THEN 'PENDING'::"BundleStatus" ELSE status END,
+              "rejectionReason" = CASE WHEN $7 THEN NULL ELSE "rejectionReason" END,
+              "updatedAt" = CURRENT_TIMESTAMP
+          WHERE id = $1
+        `,
+        [
+          id,
+          body.name === undefined ? null : String(body.name).trim(),
+          body.description ?? null,
+          body.imageUrl ?? null,
+          discount,
+          price,
+          resubmit,
+        ],
+      );
+    });
+
+    await this.recordAudit(scope, {
+      category: 'Bundle',
+      action: 'Bundle Updated',
+      entityType: 'BundlePackage',
+      entityId: id,
+      entityName: body.name ? String(body.name).trim() : undefined,
+      summary: `Updated ${Object.keys(body).join(', ')}`,
+    });
+    return this.getBundleRow(scope, id);
+  }
+
+  async approveBundle(headers: HeadersLike, id: string) {
+    const scope = await this.resolveScope(headers);
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can approve bundles.');
+    }
+    const approvedById = scope.user.id === 'pos-bridge' ? null : scope.user.id;
+    const rows = await this.safeQuery<{ id: string; name: string }>(
+      `UPDATE "BundlePackage"
+         SET status = 'APPROVED', "approvedById" = $1, "approvedAt" = CURRENT_TIMESTAMP,
+             "rejectionReason" = NULL, "updatedAt" = CURRENT_TIMESTAMP
+       WHERE id = $2 AND "businessId" = $3 AND status = 'PENDING'
+       RETURNING id, name`,
+      [approvedById, id, scope.businessId],
+    );
+    if (!rows[0]) throw new BadRequestException('Only pending bundles can be approved.');
+    await this.recordAudit(scope, {
+      category: 'Bundle',
+      action: 'Bundle Approved',
+      entityType: 'BundlePackage',
+      entityId: id,
+      entityName: rows[0].name,
+      status: 'approved',
+    });
+    return this.getBundleRow(scope, id);
+  }
+
+  async rejectBundle(headers: HeadersLike, id: string, body: { rejectionReason?: string; reason?: string }) {
+    const scope = await this.resolveScope(headers);
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can reject bundles.');
+    }
+    const reason = String(body?.rejectionReason ?? body?.reason ?? '').trim();
+    if (!reason) throw new BadRequestException('A rejection reason is required.');
+    const rows = await this.safeQuery<{ id: string; name: string }>(
+      `UPDATE "BundlePackage"
+         SET status = 'REJECTED', "rejectionReason" = $1, "updatedAt" = CURRENT_TIMESTAMP
+       WHERE id = $2 AND "businessId" = $3 AND status = 'PENDING'
+       RETURNING id, name`,
+      [reason, id, scope.businessId],
+    );
+    if (!rows[0]) throw new BadRequestException('Only pending bundles can be rejected.');
+    await this.recordAudit(scope, {
+      category: 'Bundle',
+      action: 'Bundle Rejected',
+      entityType: 'BundlePackage',
+      entityId: id,
+      entityName: rows[0].name,
+      status: 'rejected',
+      summary: `Reason: ${reason}`,
+    });
+    return this.getBundleRow(scope, id);
+  }
+
+  async activateBundle(headers: HeadersLike, id: string) {
+    const scope = await this.resolveScope(headers);
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can activate bundles.');
+    }
+    const rows = await this.safeQuery<{ id: string; name: string }>(
+      `UPDATE "BundlePackage"
+         SET status = 'ACTIVE', "updatedAt" = CURRENT_TIMESTAMP
+       WHERE id = $1 AND "businessId" = $2 AND status IN ('APPROVED', 'INACTIVE')
+       RETURNING id, name`,
+      [id, scope.businessId],
+    );
+    if (!rows[0]) throw new BadRequestException('Only approved or inactive bundles can be activated.');
+    await this.recordAudit(scope, {
+      category: 'Bundle',
+      action: 'Bundle Activated',
+      entityType: 'BundlePackage',
+      entityId: id,
+      entityName: rows[0].name,
+      status: 'active',
+    });
+    return this.getBundleRow(scope, id);
+  }
+
+  async deactivateBundle(headers: HeadersLike, id: string) {
+    const scope = await this.resolveScope(headers);
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can deactivate bundles.');
+    }
+    const rows = await this.safeQuery<{ id: string; name: string }>(
+      `UPDATE "BundlePackage"
+         SET status = 'INACTIVE', "updatedAt" = CURRENT_TIMESTAMP
+       WHERE id = $1 AND "businessId" = $2 AND status = 'ACTIVE'
+       RETURNING id, name`,
+      [id, scope.businessId],
+    );
+    if (!rows[0]) throw new BadRequestException('Only active bundles can be deactivated.');
+    await this.recordAudit(scope, {
+      category: 'Bundle',
+      action: 'Bundle Deactivated',
+      entityType: 'BundlePackage',
+      entityId: id,
+      entityName: rows[0].name,
+      status: 'inactive',
+    });
+    return this.getBundleRow(scope, id);
+  }
+
+  // Soft-delete: hides the bundle from the active list but keeps the row (and its
+  // items) so it can be restored later. Any non-archived bundle can be archived.
+  async archiveBundle(headers: HeadersLike, id: string) {
+    await this.ensureBundleArchiveColumn();
+    const scope = await this.resolveScope(headers);
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can archive bundles.');
+    }
+    const rows = await this.safeQuery<{ id: string; name: string }>(
+      `UPDATE "BundlePackage"
+         SET "archivedAt" = CURRENT_TIMESTAMP, "updatedAt" = CURRENT_TIMESTAMP
+       WHERE id = $1 AND "businessId" = $2 AND "archivedAt" IS NULL
+       RETURNING id, name`,
+      [id, scope.businessId],
+    );
+    if (!rows[0]) throw new BadRequestException('Bundle not found or already archived.');
+    await this.recordAudit(scope, {
+      category: 'Bundle',
+      action: 'Bundle Archived',
+      entityType: 'BundlePackage',
+      entityId: id,
+      entityName: rows[0].name,
+      status: 'archived',
+    });
+    return this.getBundleRow(scope, id);
+  }
+
+  async restoreBundle(headers: HeadersLike, id: string) {
+    await this.ensureBundleArchiveColumn();
+    const scope = await this.resolveScope(headers);
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can restore bundles.');
+    }
+    const rows = await this.safeQuery<{ id: string; name: string }>(
+      `UPDATE "BundlePackage"
+         SET "archivedAt" = NULL, "updatedAt" = CURRENT_TIMESTAMP
+       WHERE id = $1 AND "businessId" = $2 AND "archivedAt" IS NOT NULL
+       RETURNING id, name`,
+      [id, scope.businessId],
+    );
+    if (!rows[0]) throw new BadRequestException('Bundle not found or is not archived.');
+    await this.recordAudit(scope, {
+      category: 'Bundle',
+      action: 'Bundle Restored',
+      entityType: 'BundlePackage',
+      entityId: id,
+      entityName: rows[0].name,
+      status: 'restored',
+    });
+    return this.getBundleRow(scope, id);
+  }
+
+  async deleteBundle(headers: HeadersLike, id: string) {
+    const scope = await this.resolveScope(headers);
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can delete bundles.');
+    }
+    const rows = await this.databaseService.withTransaction(async (client) => {
+      await client.query(`DELETE FROM "BundleItem" WHERE "bundleId" = $1`, [id]);
+      const result = await client.query<{ id: string; name: string }>(
+        `DELETE FROM "BundlePackage" WHERE id = $1 AND "businessId" = $2 RETURNING id, name`,
+        [id, scope.businessId],
+      );
+      return result.rows;
+    });
+    if (!rows[0]) throw new NotFoundException(`Bundle #${id} not found`);
+    await this.recordAudit(scope, {
+      category: 'Bundle',
+      action: 'Bundle Deleted',
+      entityType: 'BundlePackage',
+      entityId: id,
+      entityName: rows[0].name,
+      status: 'deleted',
+    });
+    return rows[0];
   }
 
   async listAdjustments(headers: HeadersLike, query: Record<string, string | undefined>) {
