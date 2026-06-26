@@ -263,6 +263,48 @@ class UpdateStoreSettingsDto {
   default_markup_percent?: number;
 }
 
+class ThemePreferencesDto {
+  @Type(() => Number)
+  @IsNumber()
+  user_id!: number;
+
+  @IsOptional()
+  @IsBoolean()
+  compact_mode?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  low_stock_alerts?: boolean;
+
+  @IsOptional()
+  @IsString()
+  default_workspace?: string;
+
+  @IsOptional()
+  @IsString()
+  theme_mode?: string;
+
+  @IsOptional()
+  @IsString()
+  theme_preset?: string | null;
+
+  @IsOptional()
+  @IsString()
+  appearance?: string;
+
+  @IsOptional()
+  @IsString()
+  primary_color?: string;
+
+  @IsOptional()
+  @IsString()
+  secondary_color?: string;
+
+  @IsOptional()
+  @IsString()
+  sidebar_color?: string;
+}
+
 class DiscountSettingDto {
   @Type(() => Number)
   @IsNumber()
@@ -419,6 +461,39 @@ export class AdminController {
       enableExpiryTracking: body.enable_expiry_tracking,
       defaultMarkupPercent: body.default_markup_percent,
     });
+  }
+
+  @Get('theme-preferences')
+  getThemePreferences(@Query('user_id') userId: string) {
+    return this.adminService.getThemePreferences(Number(userId));
+  }
+
+  @Post('theme-preferences/personal')
+  updatePersonalThemePreferences(@Body() body: ThemePreferencesDto) {
+    const { user_id, ...preferences } = body;
+    return this.adminService.updatePersonalThemePreferences({
+      userId: Number(user_id),
+      preferences,
+    });
+  }
+
+  @Delete('theme-preferences/personal')
+  clearPersonalThemePreferences(@Query('user_id') userId: string) {
+    return this.adminService.clearPersonalThemePreferences(Number(userId));
+  }
+
+  @Post('theme-preferences/store')
+  updateStoreThemePreferences(@Body() body: ThemePreferencesDto) {
+    const { user_id, ...preferences } = body;
+    return this.adminService.updateStoreThemePreferences({
+      userId: Number(user_id),
+      preferences,
+    });
+  }
+
+  @Delete('theme-preferences/store')
+  clearStoreThemePreferences(@Query('user_id') userId: string) {
+    return this.adminService.clearStoreThemePreferences(Number(userId));
   }
 
   @Get('discount-settings')

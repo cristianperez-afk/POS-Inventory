@@ -120,6 +120,26 @@ export class AdminService {
     return this.databaseService.updateStoreSettingsForAdmin(input);
   }
 
+  getThemePreferences(userId: number) {
+    return this.databaseService.getThemePreferencesForUser(userId);
+  }
+
+  updatePersonalThemePreferences(input: { userId: number; preferences: Record<string, unknown> }) {
+    return this.databaseService.updatePersonalThemePreferences(input);
+  }
+
+  clearPersonalThemePreferences(userId: number) {
+    return this.databaseService.clearPersonalThemePreferences(userId);
+  }
+
+  updateStoreThemePreferences(input: { userId: number; preferences: Record<string, unknown> }) {
+    return this.databaseService.updateStoreThemePreferences(input);
+  }
+
+  clearStoreThemePreferences(userId: number) {
+    return this.databaseService.clearStoreThemePreferences(userId);
+  }
+
   listDiscountSettings(adminUserId: number) {
     return this.databaseService.listDiscountSettingsForAdmin(adminUserId);
   }
