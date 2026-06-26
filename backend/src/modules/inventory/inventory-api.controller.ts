@@ -210,6 +210,31 @@ export class InventoryApiController {
     return this.inventoryApiService.listTransfers(request.headers, query);
   }
 
+  @Post('transfers')
+  createTransfer(@Req() request: RequestLike, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.createTransfer(request.headers, body);
+  }
+
+  @Get('transfers/:id')
+  getTransfer(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.getTransfer(request.headers, id);
+  }
+
+  @Patch('transfers/:id/dispatch')
+  dispatchTransfer(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.dispatchTransfer(request.headers, id);
+  }
+
+  @Patch('transfers/:id/complete')
+  completeTransfer(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.completeTransfer(request.headers, id);
+  }
+
+  @Patch('transfers/:id/cancel')
+  cancelTransfer(@Req() request: RequestLike, @Param('id') id: string) {
+    return this.inventoryApiService.cancelTransfer(request.headers, id);
+  }
+
   @Get('sales')
   listSales(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
     return this.inventoryApiService.listSales(request.headers, query);
