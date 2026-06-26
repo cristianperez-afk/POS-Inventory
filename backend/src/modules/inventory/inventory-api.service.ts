@@ -244,8 +244,8 @@ export class InventoryApiService {
           size = COALESCE($17, size),
           condition = COALESCE($18, condition),
           "locationId" = COALESCE($19, "locationId"),
-          "expiryDate" = COALESCE($20, "expiryDate"),
-          "expiryPeriod" = COALESCE($21, "expiryPeriod"),
+          "expiryDate" = CASE WHEN $24 THEN NULL ELSE COALESCE($20, "expiryDate") END,
+          "expiryPeriod" = CASE WHEN $24 THEN NULL ELSE COALESCE($21, "expiryPeriod") END,
           "storageTemperature" = COALESCE($22, "storageTemperature"),
           "isActive" = COALESCE($23, "isActive"),
           "updatedAt" = CURRENT_TIMESTAMP
@@ -276,6 +276,7 @@ export class InventoryApiService {
         body.expiryPeriod ?? null,
         body.storageTemperature ?? null,
         body.isActive === undefined ? null : Boolean(body.isActive),
+        Boolean(body.noExpiry),
       ],
     );
 
