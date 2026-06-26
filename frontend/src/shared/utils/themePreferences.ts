@@ -5,6 +5,7 @@ export type UserPreferenceValues = {
   appearance: 'system' | 'light' | 'dark';
   primaryColor: string;
   secondaryColor: string;
+  sidebarColor: string;
 };
 
 export const defaultUserPreferences: UserPreferenceValues = {
@@ -14,6 +15,7 @@ export const defaultUserPreferences: UserPreferenceValues = {
   appearance: 'light',
   primaryColor: '#008967',
   secondaryColor: '#005656',
+  sidebarColor: '#0f172a',
 };
 
 export function getUserPreferenceStorageKey(userId: number | string | null | undefined) {
@@ -58,7 +60,7 @@ export function applyUserPreferences(preferences: UserPreferenceValues) {
    * unrelated secondary badges/buttons.
    */
   document.documentElement.style.setProperty('--secondary-accent', preferences.secondaryColor);
-  document.documentElement.style.setProperty('--sidebar', preferences.secondaryColor);
+  document.documentElement.style.setProperty('--sidebar', preferences.sidebarColor);
   document.documentElement.style.setProperty('--sidebar-primary', preferences.primaryColor);
   document.documentElement.style.setProperty('--sidebar-ring', preferences.primaryColor);
 

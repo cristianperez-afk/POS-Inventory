@@ -358,6 +358,7 @@ function SettingsContent({
                     appearance: defaultUserPreferences.appearance,
                     primaryColor: defaultUserPreferences.primaryColor,
                     secondaryColor: defaultUserPreferences.secondaryColor,
+                    sidebarColor: defaultUserPreferences.sidebarColor,
                   }))}
                   className="ml-auto inline-flex items-center gap-2 rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
                 >
@@ -396,7 +397,7 @@ function SettingsContent({
                     />
                   </div>
                 </SettingRow>
-                <SettingRow label="Secondary Color" description={isSuperadmin ? "The gradient pairing on primary buttons and the sidebar." : "The gradient pairing on primary buttons and the sidebar across POS and Inventory. Doesn't affect unrelated secondary buttons/badges elsewhere."}>
+                <SettingRow label="Secondary Color" description={isSuperadmin ? "The second color used in primary button and active navigation gradients." : "The second color used in primary button and active navigation gradients. Doesn't affect unrelated secondary buttons/badges elsewhere."}>
                   <div className="flex items-center gap-3">
                     <input
                       type="color"
@@ -407,6 +408,21 @@ function SettingsContent({
                     <input
                       value={userPreferences.secondaryColor}
                       onChange={(event) => setUserPreferences((current) => ({ ...current, secondaryColor: event.target.value }))}
+                      className="w-32 rounded-lg border border-border bg-input-background px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                    />
+                  </div>
+                </SettingRow>
+                <SettingRow label="Sidebar Color" description="The base color at the top of the sidebar gradient. Reset restores the original dark navy.">
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="color"
+                      value={userPreferences.sidebarColor}
+                      onChange={(event) => setUserPreferences((current) => ({ ...current, sidebarColor: event.target.value }))}
+                      className="h-10 w-12 rounded border border-border bg-input-background p-1"
+                    />
+                    <input
+                      value={userPreferences.sidebarColor}
+                      onChange={(event) => setUserPreferences((current) => ({ ...current, sidebarColor: event.target.value }))}
                       className="w-32 rounded-lg border border-border bg-input-background px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                     />
                   </div>
