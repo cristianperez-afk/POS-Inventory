@@ -18,6 +18,7 @@ import type {
   KitchenOrderStatus,
   RestaurantSettingKey,
 } from './domainTypes';
+import { getApiBaseUrl } from '../../../../auth/services/auth';
 
 export type { KitchenOrderStatus, RestaurantSettingKey } from './domainTypes';
 
@@ -33,6 +34,7 @@ declare global {
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const baseUrl = getApiBaseUrl();
   const bridgeHeaders: Record<string, string> = {};
   if (typeof window !== 'undefined' && window.__POS_INVENTORY_USER__) {
     bridgeHeaders['x-pos-user-id'] = window.__POS_INVENTORY_USER__.id;
@@ -40,7 +42,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     bridgeHeaders['x-pos-store-type'] = window.__POS_STORE_TYPE__ ?? '';
   }
 
-  const response = await fetch(path, {
+  const response = await fetch(`${baseUrl}${path}`, {
     ...options,
     credentials: 'include', // sends the HttpOnly cookie automatically
     headers: {
