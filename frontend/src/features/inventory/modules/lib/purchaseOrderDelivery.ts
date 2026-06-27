@@ -1,4 +1,4 @@
-const CLOSED_STATUSES = new Set([
+const CLOSED_DELIVERY_STATUSES = new Set([
   'received',
   'rejected',
   'cancelled',
@@ -57,17 +57,19 @@ export function getDeliveryDelayLabel(
   const expected = new Date(expectedDelivery);
   if (Number.isNaN(expected.getTime()) || now <= expected) return null;
 
-  const totalHours = Math.floor((now.getTime() - expected.getTime()) / 3_600_000);
-  if (totalHours < 1) return 'less than 1 hour late';
+  const totalMinutes = Math.floor((now.getTime() - expected.getTime()) / 60_000);
+  if (totalMinutes < 1) return 'Delayed: less than 1 minute';
 
-  const days = Math.floor(totalHours / 24);
-  const hours = totalHours % 24;
-  const parts = [];
+  const days = Math.floor(totalMinutes / (24 * 60));
+  const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
+  const minutes = totalMinutes % 60;
+  const dayLabel = `${days} ${days === 1 ? 'day' : 'days'}`;
+  const hourLabel = `${hours} ${hours === 1 ? 'hour' : 'hours'}`;
+  const minuteLabel = `${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`;
 
-  if (days > 0) parts.push(`${days} ${days === 1 ? 'day' : 'days'}`);
-  if (hours > 0) parts.push(`${hours} ${hours === 1 ? 'hour' : 'hours'}`);
-
-  return `${parts.join(' and ')} late`;
+  if (days > 0) return `Delayed: ${dayLabel}, ${hourLabel} and ${minuteLabel}`;
+  if (hours > 0) return `Delayed: ${hourLabel} and ${minuteLabel}`;
+  return `Delayed: ${minuteLabel}`;
 }
 
 export function isPurchaseOrderDelayed(
@@ -75,5 +77,5 @@ export function isPurchaseOrderDelayed(
   status: string,
   now = new Date(),
 ) {
-  return !CLOSED_STATUSES.has(status) && Boolean(getDeliveryDelayLabel(expectedDelivery, now));
+  return !CLOSED_DELIVERY_STATUSES.has(status) && Boolean(getDeliveryDelayLabel(expectedDelivery, now));
 }

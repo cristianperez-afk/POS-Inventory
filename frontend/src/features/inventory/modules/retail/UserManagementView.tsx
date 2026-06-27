@@ -20,6 +20,7 @@ import {
   useRetailUsersQuery,
   useUpdateRetailUserMutation,
 } from '../lib/retail';
+import { InlineDataLoading } from '../shared/InlineDataLoading';
 
 
 // Dashboard View
@@ -28,7 +29,8 @@ export function UserManagementView({
 }: {
   currentUser: { id?: string; name?: string; email: string; role: string } | null;
 }) {
-  const { data: users = [] } = useRetailUsersQuery(currentUser?.role === 'Admin') as { data?: User[] };
+  const usersQuery = useRetailUsersQuery(currentUser?.role === 'Admin');
+  const users = (usersQuery.data ?? []) as User[];
   const createUserMutation = useCreateRetailUserMutation();
   const updateUserMutation = useUpdateRetailUserMutation();
   const deleteUserMutation = useDeleteRetailUserMutation();
@@ -369,7 +371,11 @@ export function UserManagementView({
             </tr>
           </thead>
           <tbody>
-            {filteredUsers.length === 0 ? (
+            {usersQuery.isLoading ? (
+              <tr>
+                <td colSpan={6}><InlineDataLoading label="Loading users…" /></td>
+              </tr>
+            ) : filteredUsers.length === 0 ? (
               <tr>
                 <td colSpan={6} className="px-6 py-8 text-center text-muted-foreground">
                   No users found

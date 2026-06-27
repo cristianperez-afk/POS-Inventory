@@ -39,6 +39,8 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   if (typeof window !== 'undefined' && window.__POS_INVENTORY_USER__) {
     bridgeHeaders['x-pos-user-id'] = window.__POS_INVENTORY_USER__.id;
     bridgeHeaders['x-pos-bridge-email'] = window.__POS_INVENTORY_USER__.email;
+    bridgeHeaders['x-pos-bridge-name'] = window.__POS_INVENTORY_USER__.name;
+    bridgeHeaders['x-pos-bridge-role'] = window.__POS_INVENTORY_USER__.role;
     bridgeHeaders['x-pos-store-type'] = window.__POS_STORE_TYPE__ ?? '';
   }
 
@@ -518,6 +520,7 @@ export function receivePurchaseOrder(
     notes?: string;
     expiryDate?: string;
     expiryPeriod?: string;
+    noExpiry?: boolean;
     storageTemperature?: string;
   }[],
   notes?: string,

@@ -17,6 +17,7 @@ import { useRetailWorkspace } from '../lib/retail';
 import { useSession } from '../../app/hooks/useSession';
 import { CostHistoryModal } from '../shared/costing/CostHistoryModal';
 import { History, Sparkles } from 'lucide-react';
+import { InlineDataLoading } from '../shared/InlineDataLoading';
 
 export function InventoryView() {
   const {
@@ -35,6 +36,7 @@ export function InventoryView() {
     setFormData,
     handleAdd,
     locations,
+    loading,
   } = useRetailWorkspace({
     enabled: true,
     loadSharedData: true,
@@ -141,7 +143,11 @@ export function InventoryView() {
         </div>
       </div>
 
-      {categories.length === 0 ? (
+      {loading ? (
+        <div className="bg-card border border-[rgba(0,0,0,0.1)] rounded-[14px] p-6">
+          <InlineDataLoading label="Loading inventory items…" className="min-h-32" />
+        </div>
+      ) : categories.length === 0 ? (
         <div className="bg-card border border-[rgba(0,0,0,0.1)] rounded-[14px] p-6">
           <div className="py-12 text-center text-foreground">No items found</div>
         </div>

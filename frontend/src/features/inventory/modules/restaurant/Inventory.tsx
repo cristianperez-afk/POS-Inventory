@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { useSession } from "../../app/hooks/useSession";
 import { formatQuantity } from "../lib/inventoryLogic";
 import { CostHistoryModal } from "../shared/costing/CostHistoryModal";
+import { InlineDataLoading } from "../shared/InlineDataLoading";
 import {
   useRestaurantCategoryHierarchyQuery,
   useRestaurantInventoryQuery,
@@ -48,6 +49,9 @@ const EXPIRY_PERIOD_OPTIONS = [
   "Midnight",
 ];
 
+const compareFolderNames = (left: string, right: string) =>
+  left.trim().localeCompare(right.trim(), undefined, { sensitivity: "base", numeric: true });
+
 export function Inventory() {
   const { currentUser } = useSession();
   const userRole = currentUser?.role === "Admin" ? "admin" : "staff";
@@ -71,11 +75,12 @@ export function Inventory() {
 
   // Hierarchical category structure — read from persisted backend settings so
   // categories added via Initial Stock Setup appear here immediately.
-  const { data: categoryHierarchy = {} } = useRestaurantCategoryHierarchyQuery();
-  const { data: storageTemperatureOptions = [] } = useRestaurantStorageTemperatureOptionsQuery();
+  const { data: categoryHierarchy = {}, isLoading: categoriesLoading } = useRestaurantCategoryHierarchyQuery();
+  const { data: storageTemperatureOptions = [], isLoading: storageOptionsLoading } = useRestaurantStorageTemperatureOptionsQuery();
 
-  const { data: products = [] } = useRestaurantInventoryQuery<Product[]>();
-  const { data: locations = [] } = useRestaurantLocationsQuery();
+  const { data: products = [], isLoading: productsLoading } = useRestaurantInventoryQuery<Product[]>();
+  const { data: locations = [], isLoading: locationsLoading } = useRestaurantLocationsQuery();
+  const inventoryLoading = categoriesLoading || storageOptionsLoading || productsLoading || locationsLoading;
   const updateProduct = useUpdateRestaurantInventoryMutation();
   const saveCategoryHierarchy = useUpsertRestaurantCategoryHierarchyMutation();
 
@@ -84,7 +89,10 @@ export function Inventory() {
   // inventory category folder.
   const mainCategories = Object.keys(categoryHierarchy).filter(
     (category) => category !== "Menu Items",
-  );
+  ).sort(compareFolderNames);
+
+  const getSortedSubCategories = (category: string) =>
+    [...(categoryHierarchy[category] || [])].sort(compareFolderNames);
 
   const toggleMainCategory = (category: string) => {
     const newExpanded = new Set(expandedMainCategories);
@@ -114,19 +122,23 @@ export function Inventory() {
   };
 
   const getProductsInCategory = (mainCategory: string, subCategory: string) => {
-    return products.filter(p => {
-      const categoryKey = `${mainCategory} > ${subCategory}`;
-      const matchesCategory = p.category === categoryKey;
-      const matchesSearch = searchQuery === "" ||
-        (p.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (p.sku || '').toLowerCase().includes(searchQuery.toLowerCase());
-      const matchesExpiryPeriod = expiryPeriodFilter === "all" || (p.expiryPeriod || "") === expiryPeriodFilter;
-      const matchesStatus = statusFilter === "all" ||
-        getStockStatus(p.stock, p.maxStock, p.minStock, p.reorderPoint).label === statusFilter;
-      // Archived (deactivated) items are hidden unless the user opts to see them.
-      const matchesArchived = showArchived || p.isActive !== false;
-      return matchesCategory && matchesSearch && matchesExpiryPeriod && matchesStatus && matchesArchived;
-    });
+    return products
+      .filter(p => {
+        const categoryKey = `${mainCategory} > ${subCategory}`;
+        const matchesCategory = p.category === categoryKey;
+        const matchesSearch = searchQuery === "" ||
+          (p.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+          (p.sku || '').toLowerCase().includes(searchQuery.toLowerCase());
+        const matchesExpiryPeriod = expiryPeriodFilter === "all" || (p.expiryPeriod || "") === expiryPeriodFilter;
+        const matchesStatus = statusFilter === "all" ||
+          getStockStatus(p.stock, p.maxStock, p.minStock, p.reorderPoint).label === statusFilter;
+        // Archived (deactivated) items are hidden unless the user opts to see them.
+        const matchesArchived = showArchived || p.isActive !== false;
+        return matchesCategory && matchesSearch && matchesExpiryPeriod && matchesStatus && matchesArchived;
+      })
+      .sort((left, right) =>
+        compareFolderNames(left.name, right.name) || compareFolderNames(left.sku, right.sku),
+      );
   };
 
   // Both search and the status tiles narrow the tree; either should auto-expand
@@ -456,7 +468,7 @@ export function Inventory() {
       {/* Folder Tree View */}
       <div className="bg-card rounded-2xl shadow-sm border border-border overflow-hidden p-4">
         <div className="space-y-4">
-          {mainCategories.map((mainCategory) => {
+          {!inventoryLoading && mainCategories.map((mainCategory) => {
             const hasMatchingProducts = isTreeFiltered &&
               (categoryHierarchy[mainCategory]?.some(sub => getProductsInCategory(mainCategory, sub).length > 0) ?? false);
             const isMainExpanded = expandedMainCategories.has(mainCategory) || hasMatchingProducts;
@@ -480,21 +492,6 @@ export function Inventory() {
                     <Folder className="w-7 h-7 text-orange-500 flex-shrink-0" />
                   )}
                   <span className="font-semibold text-foreground flex-1 text-base">{mainCategory}</span>
-                  {userRole === "admin" && (
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        startCategoryRename(mainCategory);
-                        setShowCategoryManager(true);
-                      }}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted"
-                      aria-label={`Rename ${mainCategory}`}
-                    >
-                      <Edit className="w-3.5 h-3.5" />
-                      Rename
-                    </button>
-                  )}
                   <span className="text-sm text-muted-foreground bg-background px-3 py-1 rounded-full">
                     {mainCategoryCount}
                   </span>
@@ -503,7 +500,7 @@ export function Inventory() {
                 {/* Subcategories */}
                 {isMainExpanded && (
                   <div className="bg-background">
-                    {categoryHierarchy[mainCategory].map((subCategory) => {
+                    {getSortedSubCategories(mainCategory).map((subCategory) => {
                       const subKey = `${mainCategory} > ${subCategory}`;
                       const subCategoryProducts = getProductsInCategory(mainCategory, subCategory);
                       const subCount = subCategoryProducts.length;
@@ -529,21 +526,6 @@ export function Inventory() {
                               <Folder className="w-6 h-6 text-yellow-500 flex-shrink-0" />
                             )}
                             <span className="font-medium text-foreground flex-1">{subCategory}</span>
-                            {userRole === "admin" && (
-                              <button
-                                type="button"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  startSubCategoryRename(mainCategory, subCategory);
-                                  setShowCategoryManager(true);
-                                }}
-                                className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-1 text-xs font-medium text-foreground hover:bg-muted"
-                                aria-label={`Rename ${subCategory}`}
-                              >
-                                <Edit className="w-3.5 h-3.5" />
-                                Rename
-                              </button>
-                            )}
                             <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded-full">
                               {subCount}
                             </span>
@@ -661,7 +643,9 @@ export function Inventory() {
             );
           })}
         </div>
-        {mainCategories.length === 0 && (
+        {inventoryLoading ? (
+          <InlineDataLoading label="Loading food inventory…" className="py-10" />
+        ) : mainCategories.length === 0 && (
           <div className="p-8 text-center text-muted-foreground">
             No categories available
           </div>
@@ -749,7 +733,7 @@ export function Inventory() {
                   </div>
 
                   <div className="mt-3 space-y-2 pl-8">
-                    {(categoryHierarchy[category] || []).map((subCategory) => {
+                    {getSortedSubCategories(category).map((subCategory) => {
                       const isEditing = editingSubCategory?.category === category && editingSubCategory.subCategory === subCategory;
                       return (
                         <div key={`${category} > ${subCategory}`} className="flex items-center gap-2 rounded-lg bg-background border border-border px-3 py-2">

@@ -11,6 +11,7 @@ export interface ApiActor {
   id: string;
   name: string;
   email?: string;
+  role?: UserRole;
 }
 
 export interface ApiLocation {

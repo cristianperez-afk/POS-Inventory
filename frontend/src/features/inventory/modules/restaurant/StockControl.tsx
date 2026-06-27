@@ -9,6 +9,7 @@ import {
   useRestaurantWasteQuery,
 } from "../lib/restaurant";
 import { formatQuantity, getDaysUntilExpiry, getStockStatus, splitCategory, StockStatus } from "../lib/inventoryLogic";
+import { InlineDataLoading } from "../shared/InlineDataLoading";
 
 type StockItem = {
   id: string;
@@ -62,6 +63,9 @@ type InventoryMovementSummary = {
 };
 
 const normalizeName = (value: string | undefined) => (value || '').trim().toLowerCase();
+const compareStockItemsByName = (a: StockItem, b: StockItem) =>
+  a.name.trim().localeCompare(b.name.trim(), undefined, { sensitivity: "base", numeric: true }) ||
+  a.id.localeCompare(b.id, undefined, { sensitivity: "base", numeric: true });
 const expiryPeriodOptions = ["Early Morning", "Morning", "Afternoon", "Evening", "Midnight"];
 
 export function StockControl() {
@@ -73,10 +77,11 @@ export function StockControl() {
   const [expiryPeriodFilter, setExpiryPeriodFilter] = useState("all");
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const { data: products = [] } = useRestaurantInventoryQuery();
-  const { data: wasteLogs = [] } = useRestaurantWasteQuery();
-  const { data: adjustments = [] } = useRestaurantAdjustmentsQuery();
-  const { data: inventoryMovements = [] } = useRestaurantInventoryMovementsQuery();
+  const { data: products = [], isLoading: productsLoading } = useRestaurantInventoryQuery();
+  const { data: wasteLogs = [], isLoading: wasteLoading } = useRestaurantWasteQuery();
+  const { data: adjustments = [], isLoading: adjustmentsLoading } = useRestaurantAdjustmentsQuery();
+  const { data: inventoryMovements = [], isLoading: movementsLoading } = useRestaurantInventoryMovementsQuery();
+  const stockDataLoading = productsLoading || wasteLoading || adjustmentsLoading || movementsLoading;
   const queryClient = useQueryClient();
 
   const getRecordedOutflowQuantity = (productName: string) => {
@@ -167,13 +172,15 @@ export function StockControl() {
 
   const lowStockItems = stockItems.filter(item => item.status === "out-of-stock" || item.status === "critical" || item.status === "low");
 
-  const filteredControlItems = stockItems.filter(item => {
-    const matchesSearch = (item.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         (item.id || '').toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesClassification = classificationFilter === "all" || item.classification === classificationFilter;
-    const matchesStatus = statusFilter === "all" || item.status === statusFilter;
-    return matchesSearch && matchesClassification && matchesStatus;
-  });
+  const filteredControlItems = stockItems
+    .filter(item => {
+      const matchesSearch = (item.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+                           (item.id || '').toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesClassification = classificationFilter === "all" || item.classification === classificationFilter;
+      const matchesStatus = statusFilter === "all" || item.status === statusFilter;
+      return matchesSearch && matchesClassification && matchesStatus;
+    })
+    .sort(compareStockItemsByName);
 
   const filteredLowStockItems = lowStockItems.filter(item => {
     const matchesSearch = (item.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -562,7 +569,11 @@ export function StockControl() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {filteredControlItems.map((item) => (
+                {stockDataLoading ? (
+                  <tr><td colSpan={10}><InlineDataLoading label="Loading stock overview…" /></td></tr>
+                ) : filteredControlItems.length === 0 ? (
+                  <tr><td colSpan={10} className="px-6 py-10 text-center text-muted-foreground">No stock items found.</td></tr>
+                ) : filteredControlItems.map((item) => (
                   <tr key={item.id} className="hover:bg-muted/30 transition-colors">
                     <td className="px-6 py-4">
                       <span className="font-medium text-primary">{item.id}</span>
@@ -597,7 +608,9 @@ export function StockControl() {
 
       {viewType === "low-stock" && (
         <div className="space-y-4">
-          {filteredLowStockItems.length === 0 ? (
+          {stockDataLoading ? (
+            <div className="bg-card rounded-2xl border border-border"><InlineDataLoading label="Loading low-stock alerts…" /></div>
+          ) : filteredLowStockItems.length === 0 ? (
             <div className="bg-card rounded-2xl p-12 text-center shadow-sm border border-border">
               <Package className="w-16 h-16 mx-auto text-muted-foreground mb-4" />
               <h3 className="text-xl font-semibold text-foreground mb-2">No Low Stock Items</h3>
@@ -668,7 +681,9 @@ export function StockControl() {
 
       {viewType === "expiring" && (
         <div className="space-y-4">
-          {filteredExpiryItems.length === 0 ? (
+          {stockDataLoading ? (
+            <div className="bg-card rounded-2xl border border-border"><InlineDataLoading label="Loading expiring items…" /></div>
+          ) : filteredExpiryItems.length === 0 ? (
             <div className="bg-card rounded-2xl p-12 text-center shadow-sm border border-border">
               <Calendar className="w-16 h-16 mx-auto text-muted-foreground mb-4" />
               <h3 className="text-xl font-semibold text-foreground mb-2">No Expiring Items</h3>

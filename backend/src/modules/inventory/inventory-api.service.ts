@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
+import { hashSync } from 'bcryptjs';
 import { QueryResultRow } from 'pg';
 import { DatabaseService } from '../../shared/database/database.service';
 
@@ -466,7 +467,7 @@ export class InventoryApiService {
           (gri."receivedQty" * COALESCE(NULLIF(poi."conversionFactor", 0), 1)) AS "quantityReceived",
           (poi."unitPrice" / COALESCE(NULLIF(poi."conversionFactor", 0), 1))   AS "unitCost",
           (gri."receivedQty" * poi."unitPrice")   AS "totalCost",
-          gr."createdAt"                          AS "dateReceived",
+          to_char(gr."createdAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "dateReceived",
           gr."receiptNumber"                      AS "receiptNumber",
           po."orderNumber"                        AS "orderNumber",
           s.name                                  AS "supplierName"
@@ -1585,10 +1586,25 @@ export class InventoryApiService {
       `
         SELECT
           po.*,
+          CASE WHEN po."expectedDelivery" IS NULL THEN NULL
+            ELSE to_char(po."expectedDelivery", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "expectedDelivery",
+          CASE WHEN po."rejectedAt" IS NULL THEN NULL
+            ELSE to_char(po."rejectedAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "rejectedAt",
+          CASE WHEN po."receivedAt" IS NULL THEN NULL
+            ELSE to_char(po."receivedAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "receivedAt",
+          to_char(po."createdAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "createdAt",
+          to_char(po."updatedAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "updatedAt",
           row_to_json(s.*) AS supplier,
+          CASE WHEN cu.id IS NULL THEN NULL ELSE json_build_object(
+            'id', cu.id,
+            'name', cu.name,
+            'email', cu.email,
+            'role', cu.role
+          ) END AS "createdBy",
           COALESCE(items.items, '[]'::json) AS items
         FROM "PurchaseOrder" po
         LEFT JOIN "Supplier" s ON s.id = po."supplierId"
+        LEFT JOIN "User" cu ON cu.id = po."createdById"
         LEFT JOIN LATERAL (
           SELECT json_agg(poi.* ORDER BY poi."createdAt") AS items
           FROM "PurchaseOrderItem" poi
@@ -1671,10 +1687,25 @@ export class InventoryApiService {
       `
         SELECT
           po.*,
+          CASE WHEN po."expectedDelivery" IS NULL THEN NULL
+            ELSE to_char(po."expectedDelivery", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "expectedDelivery",
+          CASE WHEN po."rejectedAt" IS NULL THEN NULL
+            ELSE to_char(po."rejectedAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "rejectedAt",
+          CASE WHEN po."receivedAt" IS NULL THEN NULL
+            ELSE to_char(po."receivedAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "receivedAt",
+          to_char(po."createdAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "createdAt",
+          to_char(po."updatedAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "updatedAt",
           row_to_json(s.*) AS supplier,
+          CASE WHEN cu.id IS NULL THEN NULL ELSE json_build_object(
+            'id', cu.id,
+            'name', cu.name,
+            'email', cu.email,
+            'role', cu.role
+          ) END AS "createdBy",
           COALESCE(items.items, '[]'::json) AS items
         FROM "PurchaseOrder" po
         LEFT JOIN "Supplier" s ON s.id = po."supplierId"
+        LEFT JOIN "User" cu ON cu.id = po."createdById"
         LEFT JOIN LATERAL (
           SELECT json_agg(poi.* ORDER BY poi."createdAt") AS items
           FROM "PurchaseOrderItem" poi
@@ -1778,18 +1809,25 @@ export class InventoryApiService {
   async updatePurchaseOrder(headers: HeadersLike, id: string, body: Record<string, unknown>) {
     await this.ensurePurchaseOrderItemOperationalColumns();
     const scope = await this.resolveScope(headers);
-    const existing = await this.safeQuery<{ status: string }>(
-      `SELECT status FROM "PurchaseOrder" WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule" LIMIT 1`,
-      [id, scope.businessId, scope.module],
-    );
-    if (!existing[0]) throw new NotFoundException(`Purchase order #${id} not found`);
-    if (existing[0].status !== 'DRAFT') {
-      throw new BadRequestException('Only DRAFT purchase orders can be edited.');
-    }
-
     const items = Array.isArray(body.items) ? (body.items as Record<string, unknown>[]) : null;
+    const editableStatuses = new Set(['DRAFT', 'SUBMITTED', 'APPROVED']);
+    let existingStatus = '';
 
     await this.databaseService.withTransaction(async (client) => {
+      const existing = await client.query<{ status: string }>(
+        `SELECT status FROM "PurchaseOrder"
+         WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule"
+         FOR UPDATE`,
+        [id, scope.businessId, scope.module],
+      );
+      if (!existing.rows[0]) throw new NotFoundException(`Purchase order #${id} not found`);
+      existingStatus = existing.rows[0].status;
+      if (!editableStatuses.has(existingStatus)) {
+        throw new BadRequestException(
+          'Only DRAFT, SUBMITTED, or APPROVED purchase orders can be edited. Receiving must not have started.',
+        );
+      }
+
       await client.query(
         `
           UPDATE "PurchaseOrder"
@@ -1853,7 +1891,8 @@ export class InventoryApiService {
       entityType: 'PurchaseOrder',
       entityId: id,
       entityName: String((updatedPo as Record<string, unknown>)?.orderNumber ?? '') || undefined,
-      status: 'draft',
+      status: existingStatus.toLowerCase(),
+      summary: `Updated while ${existingStatus}`,
     });
     return updatedPo;
   }
@@ -2202,8 +2241,8 @@ export class InventoryApiService {
                   "purchaseUnit" = COALESCE($8, "purchaseUnit"),
                   "baseUnit" = COALESCE($7, "baseUnit"),
                   "conversionFactor" = $9,
-                  "expiryDate" = COALESCE($3, "expiryDate"),
-                  "expiryPeriod" = COALESCE($4, "expiryPeriod"),
+                  "expiryDate" = CASE WHEN $10::boolean THEN NULL ELSE COALESCE($3, "expiryDate") END,
+                  "expiryPeriod" = CASE WHEN $10::boolean THEN NULL ELSE COALESCE($4, "expiryPeriod") END,
                   "storageTemperature" = COALESCE($5, "storageTemperature"),
                   "updatedAt" = CURRENT_TIMESTAMP
               WHERE id = $6
@@ -2218,6 +2257,7 @@ export class InventoryApiService {
               baseUnit,
               purchaseUnit,
               conversionFactor,
+              Boolean(ri.noExpiry),
             ],
           );
 
@@ -2266,8 +2306,8 @@ export class InventoryApiService {
       }
 
       await client.query(
-        `INSERT INTO "GoodsReceipt" (id, "receiptNumber", "purchaseOrderId", "receivedById", status, notes, "proofImages", "businessId", module)
-         VALUES ($1, $2, $3, $4, 'RECEIVED', $5, $6, $7, $8::"BusinessModule")`,
+        `INSERT INTO "GoodsReceipt" (id, "receiptNumber", "purchaseOrderId", "receivedById", status, notes, "proofImages", "businessId", module, "createdAt")
+         VALUES ($1, $2, $3, $4, 'RECEIVED', $5, $6, $7, $8::"BusinessModule", clock_timestamp() AT TIME ZONE 'UTC')`,
         [receiptId, receiptNumber, po.id, scope.user.id, body.notes ?? null, this.normalizeProofImages(body.proofImages), scope.businessId, scope.module],
       );
       for (const it of receiptItems) {
@@ -2288,8 +2328,16 @@ export class InventoryApiService {
       auditFinalStatus = isComplete ? 'received' : 'partially_received';
       auditAcceptedQty = receiptItems.reduce((sum, it) => sum + Number(it.receivedQty ?? 0), 0);
       await client.query(
-        `UPDATE "PurchaseOrder" SET status = $1::"PurchaseOrderStatus", "receivedById" = $2, "receivedAt" = $3, "updatedAt" = CURRENT_TIMESTAMP WHERE id = $4`,
-        [isComplete ? 'RECEIVED' : 'PARTIALLY_RECEIVED', scope.user.id, isComplete ? new Date() : null, id],
+        `UPDATE "PurchaseOrder"
+         SET status = $1::"PurchaseOrderStatus",
+             "receivedById" = $2,
+             "receivedAt" = CASE
+               WHEN $3::boolean THEN (SELECT gr."createdAt" FROM "GoodsReceipt" gr WHERE gr.id = $4)
+               ELSE "receivedAt"
+             END,
+             "updatedAt" = clock_timestamp() AT TIME ZONE 'UTC'
+         WHERE id = $5`,
+        [isComplete ? 'RECEIVED' : 'PARTIALLY_RECEIVED', scope.user.id, isComplete, receiptId, id],
       );
     });
 
@@ -4106,7 +4154,8 @@ export class InventoryApiService {
         SELECT
           id, "businessId", module, category, action,
           "entityType", "entityId", "entityName", summary, quantity, status, metadata,
-          "performedById", "performedByName", "performedByEmail", "performedByRole", "createdAt"
+          "performedById", "performedByName", "performedByEmail", "performedByRole",
+          to_char("createdAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "createdAt"
         FROM "AuditLog"
         WHERE ${where.join(' AND ')}
         ORDER BY "createdAt" DESC
@@ -4167,7 +4216,48 @@ export class InventoryApiService {
         `,
         [fallbackEmail],
       );
-      user = fallbackRows[0];
+      const fallbackUser = fallbackRows[0];
+      if (fallbackUser && bridgedEmail) {
+        const bridgedName = this.headerValue(headers['x-pos-bridge-name']) || bridgedEmail.split('@')[0];
+        const bridgedRole = (this.headerValue(headers['x-pos-bridge-role']) || '').toLowerCase();
+        const inventoryRole = ['admin', 'inventory_manager', 'inventory_admin'].includes(bridgedRole)
+          ? 'Admin'
+          : 'Staff';
+        const mirroredRows = await this.safeQuery<typeof userRows[number]>(
+          `
+            WITH mirrored AS (
+              INSERT INTO "User" (
+                id, name, email, "passwordHash", role, status, "businessId", "lastLogin", "updatedAt"
+              )
+              VALUES ($1, $2, $3, $4, $5::"UserRole", 'Active', $6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+              ON CONFLICT (email) DO UPDATE SET
+                name = EXCLUDED.name,
+                role = EXCLUDED.role,
+                status = 'Active',
+                "businessId" = EXCLUDED."businessId",
+                "lastLogin" = CURRENT_TIMESTAMP,
+                "updatedAt" = CURRENT_TIMESTAMP
+              RETURNING id, name, email, role, status, "businessId", "lastLogin"
+            )
+            SELECT
+              mirrored.id, mirrored.name, mirrored.email, mirrored.role, mirrored.status,
+              mirrored."businessId" AS "businessId",
+              b.modules,
+              mirrored."lastLogin" AS "lastLogin"
+            FROM mirrored
+            JOIN "Business" b ON b.id = mirrored."businessId"
+          `,
+          [
+            randomUUID(),
+            bridgedName,
+            bridgedEmail,
+            hashSync(randomUUID(), 10),
+            inventoryRole,
+            fallbackUser.businessId,
+          ],
+        );
+        user = mirroredRows[0];
+      }
     }
 
     if (user) {

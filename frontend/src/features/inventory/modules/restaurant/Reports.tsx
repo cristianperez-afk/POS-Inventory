@@ -16,6 +16,7 @@ import {
 import { useSession } from "../../app/hooks/useSession";
 import { defaultCategoryHierarchy, formatCurrency, getInventoryValue, splitCategory } from "../lib/inventoryLogic";
 import { formatManilaFullDateTime, getLocalDateKey } from "../../../../shared/utils/date";
+import { InlineDataLoading } from "../shared/InlineDataLoading";
 
 type TabType = 'overview' | 'inventory' | 'consumption' | 'orders' | 'operations' | 'audit' | 'admin';
 
@@ -142,7 +143,7 @@ export function Reports() {
   const { data: users = [] } = useRestaurantUsersQuery(isAdmin);
   // Real audit trail — one row per recorded activity (create / update / delete /
   // status change / receive / adjust / setting change) written by the backend.
-  const { data: auditTrail = [] } = useRestaurantAuditLogsQuery();
+  const { data: auditTrail = [], isLoading: auditTrailLoading } = useRestaurantAuditLogsQuery();
 
   const inventoryValue = getInventoryValue(products);
 
@@ -1202,7 +1203,9 @@ export function Reports() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {filteredAuditTrail.length === 0 ? (
+                  {auditTrailLoading ? (
+                    <tr><td colSpan={8}><InlineDataLoading label="Loading audit trail…" /></td></tr>
+                  ) : filteredAuditTrail.length === 0 ? (
                     <tr>
                       <td colSpan={8} className="px-4 py-8 text-center text-sm text-muted-foreground">
                         No audit trail records found
@@ -1428,7 +1431,9 @@ export function Reports() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {activityLog.length === 0 ? (
+                  {auditTrailLoading ? (
+                    <tr><td colSpan={6}><InlineDataLoading label="Loading activity…" /></td></tr>
+                  ) : activityLog.length === 0 ? (
                     <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">No activity found.</td></tr>
                   ) : activityLog.slice(0, 200).map((entry) => (
                     <tr key={entry.id} className="align-top hover:bg-muted/30 transition-colors">

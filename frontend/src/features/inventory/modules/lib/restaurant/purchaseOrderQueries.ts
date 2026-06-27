@@ -50,6 +50,7 @@ type RestaurantProductMergeMetadata = {
 
 type ReceiptItemQualityMetadata = {
   remarks?: string;
+  noExpiry?: boolean;
   expiryDate?: string;
   expiryPeriod?: string;
   storageTemperature?: string;
@@ -76,6 +77,9 @@ const toDateInput = (value?: string | null) => {
 const formatActorName = (actor: any) =>
   actor?.name ?? actor?.full_name ?? actor?.fullName ?? actor?.email ?? '';
 
+const compareItemNames = (left: string, right: string) =>
+  left.trim().localeCompare(right.trim(), undefined, { sensitivity: 'base', numeric: true });
+
 export function mapRestaurantPurchaseOrders(orders: ApiPurchaseOrder[]) {
   return orders.map((order) => ({
     id: order.id,
@@ -84,20 +88,25 @@ export function mapRestaurantPurchaseOrders(orders: ApiPurchaseOrder[]) {
     supplierId: order.supplierId,
     date: toDateInput(order.createdAt),
     items: order.items?.length ?? 0,
-    orderItems: (order.items ?? []).map((item) => ({
-      backendId: item.id,
-      productId: item.inventoryItemId,
-      backendInventoryId: item.inventoryItemId,
-      productName: item.name,
-      quantity: item.quantity,
-      unitPrice: item.unitPrice,
-      category: item.inventoryItem?.category ?? '',
-      subCategory: item.inventoryItem?.subcategory ?? '',
-      unit: item.purchaseUnit ?? item.inventoryItem?.purchaseUnit ?? item.inventoryItem?.unit ?? 'pcs',
-      purchaseUnit: item.purchaseUnit ?? item.inventoryItem?.purchaseUnit ?? item.inventoryItem?.unit ?? 'pcs',
-      baseUnit: item.baseUnit ?? item.inventoryItem?.baseUnit ?? item.inventoryItem?.unit ?? 'pcs',
-      conversionFactor: item.conversionFactor ?? item.inventoryItem?.conversionFactor ?? 1,
-    })),
+    orderItems: (order.items ?? [])
+      .map((item) => ({
+        backendId: item.id,
+        productId: item.inventoryItemId,
+        backendInventoryId: item.inventoryItemId,
+        productName: item.name,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        category: item.inventoryItem?.category ?? '',
+        subCategory: item.inventoryItem?.subcategory ?? '',
+        unit: item.purchaseUnit ?? item.inventoryItem?.purchaseUnit ?? item.inventoryItem?.unit ?? 'pcs',
+        purchaseUnit: item.purchaseUnit ?? item.inventoryItem?.purchaseUnit ?? item.inventoryItem?.unit ?? 'pcs',
+        baseUnit: item.baseUnit ?? item.inventoryItem?.baseUnit ?? item.inventoryItem?.unit ?? 'pcs',
+        conversionFactor: item.conversionFactor ?? item.inventoryItem?.conversionFactor ?? 1,
+      }))
+      .sort((left, right) =>
+        compareItemNames(left.productName, right.productName) ||
+        String(left.backendId ?? '').localeCompare(String(right.backendId ?? '')),
+      ),
     total: order.totalAmount,
     status:
       ({
@@ -110,7 +119,8 @@ export function mapRestaurantPurchaseOrders(orders: ApiPurchaseOrder[]) {
         CANCELLED: 'cancelled',
       } as Record<string, string>)[order.status] ?? order.status.toLowerCase(),
     expectedDelivery: toDateTimeLocalInput(order.expectedDelivery),
-    createdBy: order.createdBy?.email ?? order.createdBy?.name ?? '',
+    createdBy: order.createdBy?.name ?? order.createdBy?.email ?? '',
+    createdByRole: order.createdBy?.role?.toLowerCase(),
     createdAt: order.createdAt,
     rejectionNote: order.rejectionReason,
     backendStatus: order.status,
@@ -273,6 +283,7 @@ export function useRestaurantGoodsRecordsQuery() {
           '',
         receivedDate: toDateInput(receipt.createdAt),
         receivedAt: receipt.createdAt,
+        expectedDelivery: purchaseOrderById.get(receipt.purchaseOrderId)?.expectedDelivery ?? null,
         items: receipt.items?.length ?? 0,
         receivedItems: (receipt.items ?? []).map((line) => {
           const quality = parseReceiptItemNotes(line.notes);
@@ -296,6 +307,7 @@ export function useRestaurantGoodsRecordsQuery() {
             baseUnit: line.purchaseOrderItem?.baseUnit ?? line.inventoryItem?.baseUnit ?? line.inventoryItem?.unit ?? 'pcs',
             conversionFactor: line.purchaseOrderItem?.conversionFactor ?? line.inventoryItem?.conversionFactor ?? 1,
             unitPrice: line.purchaseOrderItem?.unitPrice ?? 0,
+            noExpiry: quality.noExpiry === true,
             expiryDate: toDateInput(quality.expiryDate ?? line.inventoryItem?.expiryDate),
             expiryPeriod: quality.expiryPeriod ?? '',
             storageTemperature: quality.storageTemperature ?? line.inventoryItem?.storageTemperature ?? '',
@@ -347,6 +359,7 @@ export function useRestaurantGoodsRecordsQuery() {
           receivedDate: toDateInput(
             order.expectedDelivery ?? order.createdAt,
           ),
+          expectedDelivery: order.expectedDelivery ?? null,
           items: order.items?.length ?? 0,
           receivedItems: (order.items ?? []).map((item) => ({
             backendItemId: item.id,

@@ -23,6 +23,9 @@ type QualityCriterion = { key: string; label: string };
 
 const QUALITY_CRITERIA_STORAGE_KEY = 'restaurant-goods-received-quality-criteria';
 
+const compareItemNames = (left: string, right: string) =>
+  left.trim().localeCompare(right.trim(), undefined, { sensitivity: 'base', numeric: true });
+
 const preventNumberWheel = (event: WheelEvent<HTMLInputElement>) => {
   event.currentTarget.blur();
 };
@@ -267,6 +270,7 @@ export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
     orderNumber: g.id,
     supplier: g.supplier ?? '',
     status: 'APPROVED',
+    expectedDelivery: g.expectedDelivery ?? null,
     total: g.totalValue ?? 0,
     items: (g.receivedItems ?? [])
       .filter((ri: any) => ri.backendItemId)
@@ -276,19 +280,22 @@ export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
         orderedQty: ri.quantity,
         unitPrice: ri.unitPrice ?? 0,
         meta: { unit: ri.unit },
-      })),
+      }))
+      .sort((left, right) => compareItemNames(left.name, right.name) || left.id.localeCompare(right.id)),
   }));
 
   // Keep the original record around so the details modal can show rich QC data.
   const receivedById = new Map<string, any>();
   const history: ReceiptRecord[] = receivedRecords.map((g) => {
     receivedById.set(g.id, g);
-    const lines = (g.receivedItems ?? []).map((ri: any) => ({
-      name: ri.productName,
-      orderedQty: ri.quantity,
-      acceptedQty: ri.acceptedQuantity ?? ri.quantity,
-      rejectedQty: ri.rejectedQuantity ?? 0,
-    }));
+    const lines = (g.receivedItems ?? [])
+      .map((ri: any) => ({
+        name: ri.productName,
+        orderedQty: ri.quantity,
+        acceptedQty: ri.acceptedQuantity ?? ri.quantity,
+        rejectedQty: ri.rejectedQuantity ?? 0,
+      }))
+      .sort((left: { name: string }, right: { name: string }) => compareItemNames(left.name, right.name));
     return {
       id: g.id,
       orderNumber: g.id,
@@ -296,6 +303,7 @@ export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
       supplier: g.supplier ?? '',
       receivedDate: g.receivedDate ?? '',
       receivedAt: g.receivedAt ?? g.receivedDate ?? undefined,
+      expectedDelivery: g.expectedDelivery ?? null,
       receivedBy: g.receivedBy ?? '',
       status: g.status,
       actionReason: g.actionReason ?? null,
@@ -345,7 +353,11 @@ export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
           },
         });
       return (
-        <div className="rounded-[8px] border border-[rgba(0,0,0,0.1)] bg-card p-3 mt-1">
+        <div
+          className="rounded-[8px] border border-[rgba(0,0,0,0.1)] bg-card p-3 mt-1 outline-none"
+          data-receiving-field="scores"
+          tabIndex={-1}
+        >
           <p className="mb-3 text-[12px] font-semibold text-foreground">Inspection criteria score</p>
           {qualityCriteria.length === 0 ? (
             <div className="rounded-[8px] border border-dashed border-[rgba(0,0,0,0.16)] p-3 text-[12px] text-muted-foreground">
@@ -399,17 +411,21 @@ export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
 
     validateLine: (line: NormalizedLine, draft: LineDraft) => {
       if (draft.acceptedQty <= 0) return null;
-      if (!draft.fields.expiryDate) return `Please set an expiry date for ${line.name}`;
-      if (!draft.fields.expiryPeriod?.trim()) return `Please set an expiry period for ${line.name}`;
+      if (!draft.noExpiry && !draft.fields.expiryDate) {
+        return { message: `Please set an expiry date for ${line.name}`, fieldKey: 'expiryDate' };
+      }
+      if (!draft.noExpiry && !draft.fields.expiryPeriod?.trim()) {
+        return { message: `Please set an expiry period for ${line.name}`, fieldKey: 'expiryPeriod' };
+      }
       if (!draft.fields.storageTemperature?.trim())
-        return `Please set a storage temperature for ${line.name}`;
+        return { message: `Please set a storage temperature for ${line.name}`, fieldKey: 'storageTemperature' };
       const scores: Record<string, ScoreEntry> = draft.fields.scores ?? {};
       for (const c of qualityCriteria) {
         const s = scores[c.key];
         const passed = Number(s?.passed);
         const total = Number(s?.total);
         if (!s || !Number.isFinite(passed) || !Number.isFinite(total) || total <= 0 || passed < 0 || passed > total) {
-          return `Please complete valid inspection scores for ${line.name}`;
+          return { message: `Please complete valid inspection scores for ${line.name}`, fieldKey: 'scores' };
         }
       }
       return null;
@@ -438,6 +454,7 @@ export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
         condition: qualityStatus,
         notes: JSON.stringify({
           remarks: draft.fields.remarks || undefined,
+          noExpiry: draft.noExpiry,
           expiryDate: draft.fields.expiryDate || undefined,
           expiryPeriod: draft.fields.expiryPeriod || undefined,
           storageTemperature: draft.fields.storageTemperature || undefined,
@@ -445,10 +462,11 @@ export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
           qualityScores,
         }),
         expiryDate:
-          accepted > 0 && draft.fields.expiryDate
+          accepted > 0 && !draft.noExpiry && draft.fields.expiryDate
             ? new Date(`${draft.fields.expiryDate}T00:00:00`).toISOString()
             : undefined,
-        expiryPeriod: accepted > 0 ? draft.fields.expiryPeriod || undefined : undefined,
+        expiryPeriod: accepted > 0 && !draft.noExpiry ? draft.fields.expiryPeriod || undefined : undefined,
+        noExpiry: accepted > 0 && draft.noExpiry,
         storageTemperature: accepted > 0 ? draft.fields.storageTemperature || undefined : undefined,
       };
     },
@@ -478,7 +496,11 @@ export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
 
     renderHistoryDetails: (record) => {
       const g = receivedById.get(record.id);
-      const items: any[] = g?.receivedItems ?? [];
+      const items: any[] = [...(g?.receivedItems ?? [])].sort(
+        (left: any, right: any) =>
+          compareItemNames(left.productName ?? '', right.productName ?? '') ||
+          String(left.backendItemId ?? left.id ?? '').localeCompare(String(right.backendItemId ?? right.id ?? '')),
+      );
       return (
         <div className="overflow-x-auto rounded-[10px] border border-[rgba(0,0,0,0.1)]">
           <table className="min-w-[1120px] table-fixed text-[13px]">
@@ -513,8 +535,8 @@ export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
                   <td className="px-3 py-2 text-foreground break-words">{it.category || '—'}</td>
                   <td className="px-3 py-2 text-right text-primary font-medium">{it.acceptedQuantity ?? it.quantity}</td>
                   <td className="px-3 py-2 text-right text-[#E7000B]">{it.rejectedQuantity ?? 0}</td>
-                  <td className="px-3 py-2 text-foreground">{it.expiryDate || '—'}</td>
-                  <td className="px-3 py-2 text-foreground">{it.expiryPeriod || '—'}</td>
+                  <td className="px-3 py-2 text-foreground">{it.noExpiry ? 'No expiry' : it.expiryDate || '—'}</td>
+                  <td className="px-3 py-2 text-foreground">{it.noExpiry ? 'Not applicable' : it.expiryPeriod || '—'}</td>
                   <td className="px-3 py-2 text-foreground break-words">{it.storageTemperature || '—'}</td>
                   <td className="px-3 py-2 text-foreground align-top">
                     {it.qualityScores ? (

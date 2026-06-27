@@ -53,6 +53,13 @@ export function useRetailWorkspace({
   const productsReceived = goodsReceiptsQuery.data ?? [];
   const transfers = transfersQuery.data ?? [];
   const adjustments = adjustmentsQuery.data ?? [];
+  const loading = inventoryQuery.isLoading
+    || (loadSharedData && locationsQuery.isLoading)
+    || (loadUsers && usersQuery.isLoading)
+    || purchaseOrdersQuery.isLoading
+    || goodsReceiptsQuery.isLoading
+    || transfersQuery.isLoading
+    || adjustmentsQuery.isLoading;
 
   const [formData, setFormData] = useState(emptyForm);
   const [searchTerm, setSearchTerm] = useState('');
@@ -199,6 +206,7 @@ export function useRetailWorkspace({
     productsReceived,
     transfers,
     adjustments,
+    loading,
     stats,
     stockAlerts,
     filteredInventory: inventory.filter(
