@@ -56,6 +56,30 @@ type KitchenOrder = {
   items: KitchenOrderItem[];
 };
 
+const ACTIVE_QUEUE_STATUSES = new Set<KitchenStatus>(["pending", "preparing", "ready"]);
+
+const getQueueTimestamp = (order: KitchenOrder) => {
+  const parsed = parseDatabaseTimestamp(order.orderedAt || order.createdAt || "").getTime();
+  return Number.isNaN(parsed) ? 0 : parsed;
+};
+
+const compareKitchenOrders = (left: KitchenOrder, right: KitchenOrder) => {
+  const leftActive = ACTIVE_QUEUE_STATUSES.has(left.status);
+  const rightActive = ACTIVE_QUEUE_STATUSES.has(right.status);
+  if (leftActive !== rightActive) return leftActive ? -1 : 1;
+
+  const timeDifference = leftActive
+    ? getQueueTimestamp(left) - getQueueTimestamp(right)
+    : getQueueTimestamp(right) - getQueueTimestamp(left);
+  if (timeDifference !== 0) return timeDifference;
+
+  return String(left.orderNumber || left.id).localeCompare(
+    String(right.orderNumber || right.id),
+    undefined,
+    { numeric: true, sensitivity: "base" },
+  );
+};
+
 const STATUS_STYLES: Record<KitchenStatus, string> = {
   pending: "border-border bg-muted text-foreground",
   preparing: "border-amber-300 bg-amber-50 text-amber-700",
@@ -314,7 +338,18 @@ export function POSKitchenOrders() {
   const [expandedOrders, setExpandedOrders] = useState<Record<string, boolean>>({});
   const { data: orderRecords = [], isLoading } = useRestaurantKitchenOrdersQuery();
   const updateStatus = useUpdateRestaurantKitchenOrderStatusMutation();
-  const orders = orderRecords as KitchenOrder[];
+  const orders = useMemo(
+    () => [...(orderRecords as KitchenOrder[])].sort(compareKitchenOrders),
+    [orderRecords],
+  );
+  const pendingQueuePositions = useMemo(
+    () => new Map(
+      orders
+        .filter((order) => order.status === "pending")
+        .map((order, index) => [order.id, index + 1] as const),
+    ),
+    [orders],
+  );
 
   useEffect(() => {
     setSelectedOrder((current) => {
@@ -507,6 +542,8 @@ export function POSKitchenOrders() {
                       const showCancelAction = canCancel(order.status);
                       const isExpanded = expandedOrders[order.id] ?? false;
                       const hasAnyModification = order.items.some(hasModifications);
+                      const queuePosition = pendingQueuePositions.get(order.id);
+                      const fifoBlocked = order.status === "pending" && queuePosition !== undefined && queuePosition > 1;
 
                       return (
                         <article key={order.id} className="rounded-xl border border-border bg-card p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md">
@@ -519,6 +556,11 @@ export function POSKitchenOrders() {
                               <div className="flex items-center gap-2">
                                 {isExpanded ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
                                 <h4 className="truncate text-base font-bold text-primary">Order #{order.orderNumber}</h4>
+                                {queuePosition !== undefined && (
+                                  <span className="shrink-0 rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
+                                    Queue #{queuePosition}
+                                  </span>
+                                )}
                               </div>
                               <p className="mt-1 text-xs text-muted-foreground">Customer: {order.customerName || "Walk-in Customer"}</p>
                             </div>
@@ -571,11 +613,12 @@ export function POSKitchenOrders() {
                               <button
                                 type="button"
                                 onClick={() => handleStatus(order, action.next)}
-                                disabled={updateStatus.isPending}
+                                disabled={updateStatus.isPending || fifoBlocked}
+                                title={fifoBlocked ? "FIFO: Queue #1 must start preparing first" : action.label}
                                 className="inline-flex items-center gap-1 rounded bg-primary px-2.5 py-1.5 text-xs font-medium text-white transition hover:bg-primary/90 disabled:opacity-50"
                               >
                                 <ActionIcon className="h-3.5 w-3.5" />
-                                {action.label}
+                                {fifoBlocked ? "Waiting for Queue #1" : action.label}
                               </button>
                             )}
                             {showCancelAction && (

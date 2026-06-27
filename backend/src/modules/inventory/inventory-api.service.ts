@@ -1031,7 +1031,7 @@ export class InventoryApiService {
         LEFT JOIN "DiningTable" t ON t.id = ko."tableId"
         WHERE ko."businessId" = $1
           AND ($2::text IS NULL OR ko.status = $2::"KitchenOrderStatus")
-        ORDER BY ko."createdAt" DESC
+        ORDER BY ko."createdAt" ASC, ko.id ASC
       `,
       [scope.businessId, query.status ?? null],
     );
@@ -1238,10 +1238,26 @@ export class InventoryApiService {
           )
         : [];
 
+    const activeKitchenStatuses = new Set(['PENDING', 'PREPARING', 'READY']);
     const combined = (scope.module === 'RESTAURANT' ? posRows : rows).sort((a, b) => {
-      const aTime = new Date(String(a.createdAt ?? a.created_at ?? 0)).getTime();
-      const bTime = new Date(String(b.createdAt ?? b.created_at ?? 0)).getTime();
-      return bTime - aTime;
+      const aStatus = String(a.status ?? '').toUpperCase();
+      const bStatus = String(b.status ?? '').toUpperCase();
+      const aActive = activeKitchenStatuses.has(aStatus);
+      const bActive = activeKitchenStatuses.has(bStatus);
+      if (aActive !== bActive) return aActive ? -1 : 1;
+
+      const aTime = new Date(String(a.orderedAt ?? a.createdAt ?? a.created_at ?? 0)).getTime();
+      const bTime = new Date(String(b.orderedAt ?? b.createdAt ?? b.created_at ?? 0)).getTime();
+      const normalizedATime = Number.isNaN(aTime) ? 0 : aTime;
+      const normalizedBTime = Number.isNaN(bTime) ? 0 : bTime;
+      const timeDifference = aActive
+        ? normalizedATime - normalizedBTime
+        : normalizedBTime - normalizedATime;
+      if (timeDifference !== 0) return timeDifference;
+
+      const aKey = String(a.orderNumber ?? a.id ?? '');
+      const bKey = String(b.orderNumber ?? b.id ?? '');
+      return aKey.localeCompare(bKey, undefined, { numeric: true, sensitivity: 'base' });
     });
     return this.paged(combined);
   }
@@ -1269,8 +1285,18 @@ export class InventoryApiService {
             WHERE (u.id::text = $1 OR lower(u.email) = lower($2))
               AND s.store_type = 'RESTAURANT'
             LIMIT 1
+          ),
+          next_pending AS (
+            SELECT queued.id
+            FROM orders queued
+            WHERE queued.store_id = (SELECT store_id FROM scoped_user)
+              AND queued.order_type <> 'RETAIL'
+              AND queued.order_status = 'PENDING'
+            ORDER BY COALESCE(queued.ordered_at, queued.running_time_start, queued.preparing_started_at, queued.created_at) ASC,
+                     queued.id ASC
+            LIMIT 1
           )
-          UPDATE orders
+          UPDATE orders AS target
           SET order_status = CASE
                 WHEN order_type = 'TAKEOUT' AND $3::varchar = 'SERVED' THEN 'COMPLETED'
                 ELSE $3::varchar
@@ -1360,9 +1386,14 @@ export class InventoryApiService {
                 ELSE is_running
               END,
               updated_at = CURRENT_TIMESTAMP
-          WHERE id = $4
-            AND store_id = (SELECT store_id FROM scoped_user)
-            AND order_type <> 'RETAIL'
+          WHERE target.id = $4
+            AND target.store_id = (SELECT store_id FROM scoped_user)
+            AND target.order_type <> 'RETAIL'
+            AND (
+              $3::varchar <> 'PREPARING'
+              OR target.order_status <> 'PENDING'
+              OR target.id = (SELECT id FROM next_pending)
+            )
           RETURNING
             id,
             order_number AS "orderNumber",
@@ -1394,7 +1425,31 @@ export class InventoryApiService {
         `,
         [posUserId ?? '', scope.user.email, requestedStatus, orderId],
       );
-      if (!rows[0]) throw new NotFoundException('POS kitchen order not found.');
+      if (!rows[0]) {
+        const queuedOrder = await this.safeQuery<{ orderNumber: string }>(
+          `
+            WITH scoped_user AS (
+              SELECT u.store_id
+              FROM users u
+              JOIN stores s ON s.id = u.store_id
+              WHERE (u.id::text = $1 OR lower(u.email) = lower($2))
+                AND s.store_type = 'RESTAURANT'
+              LIMIT 1
+            )
+            SELECT order_number AS "orderNumber"
+            FROM orders
+            WHERE id = $3
+              AND store_id = (SELECT store_id FROM scoped_user)
+              AND order_status = 'PENDING'
+            LIMIT 1
+          `,
+          [posUserId ?? '', scope.user.email, orderId],
+        );
+        if (requestedStatus === 'PREPARING' && queuedOrder[0]) {
+          throw new BadRequestException('FIFO queue enforced: start Queue #1 before later kitchen orders.');
+        }
+        throw new NotFoundException('POS kitchen order not found.');
+      }
       await this.recordAudit(scope, {
         category: 'POS / Kitchen',
         action: `Order ${nextStatus.charAt(0) + nextStatus.slice(1).toLowerCase()}`,
@@ -1409,11 +1464,23 @@ export class InventoryApiService {
     const kitchenStatus = nextStatus === 'CANCELLED' ? 'VOIDED' : nextStatus;
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
-        UPDATE "KitchenOrder"
+        UPDATE "KitchenOrder" AS target
         SET status = $1::"KitchenOrderStatus",
             "updatedAt" = CURRENT_TIMESTAMP
-        WHERE id = $2
-          AND "businessId" = $3
+        WHERE target.id = $2
+          AND target."businessId" = $3
+          AND (
+            $1::text <> 'PREPARING'
+            OR target.status <> 'PENDING'
+            OR target.id = (
+              SELECT queued.id
+              FROM "KitchenOrder" queued
+              WHERE queued."businessId" = $3
+                AND queued.status = 'PENDING'
+              ORDER BY queued."createdAt" ASC, queued.id ASC
+              LIMIT 1
+            )
+          )
         RETURNING *
       `,
       [kitchenStatus, id, scope.businessId],
@@ -1732,6 +1799,10 @@ export class InventoryApiService {
     if (items.length === 0) {
       throw new BadRequestException('A purchase order must include at least one item.');
     }
+    const supplierId = String(body.supplierId ?? '').trim();
+    if (!supplierId) {
+      throw new BadRequestException('Select an active supplier before creating the purchase order.');
+    }
     const orderNumber = `PO-${Date.now()}`;
     const totalAmount = items.reduce(
       (sum, i) => sum + Number(i.quantity ?? 0) * Number(i.unitPrice ?? 0),
@@ -1740,6 +1811,19 @@ export class InventoryApiService {
     const poId = randomUUID();
 
     await this.databaseService.withTransaction(async (client) => {
+      const activeSupplier = await client.query<{ id: string }>(
+        `SELECT id FROM "Supplier"
+         WHERE id = $1
+           AND "businessId" = $2
+           AND module = $3::"BusinessModule"
+           AND "isActive" = TRUE
+         LIMIT 1`,
+        [supplierId, scope.businessId, scope.module],
+      );
+      if (!activeSupplier.rows[0]) {
+        throw new BadRequestException('The selected supplier is archived or unavailable. Select an active supplier.');
+      }
+
       await client.query(
         `
           INSERT INTO "PurchaseOrder" (
@@ -1752,7 +1836,7 @@ export class InventoryApiService {
         [
           poId,
           orderNumber,
-          body.supplierId ?? null,
+          supplierId,
           body.notes ?? null,
           body.paymentMethod ?? null,
           body.paymentTerms ?? null,
@@ -1826,6 +1910,22 @@ export class InventoryApiService {
         throw new BadRequestException(
           'Only DRAFT, SUBMITTED, or APPROVED purchase orders can be edited. Receiving must not have started.',
         );
+      }
+
+      if (body.supplierId != null) {
+        const supplierId = String(body.supplierId).trim();
+        const activeSupplier = await client.query<{ id: string }>(
+          `SELECT id FROM "Supplier"
+           WHERE id = $1
+             AND "businessId" = $2
+             AND module = $3::"BusinessModule"
+             AND "isActive" = TRUE
+           LIMIT 1`,
+          [supplierId, scope.businessId, scope.module],
+        );
+        if (!activeSupplier.rows[0]) {
+          throw new BadRequestException('The selected supplier is archived or unavailable. Select an active supplier.');
+        }
       }
 
       await client.query(

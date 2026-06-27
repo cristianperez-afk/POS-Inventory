@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Plus, Search, Filter, Eye, Download, CheckCircle, Clock, XCircle, X, Save, Trash2, Edit, Building2, Users, AlertCircle, Loader2 } from "lucide-react";
+import { Plus, Search, Filter, Eye, Download, CheckCircle, Clock, XCircle, X, Save, Trash2, Edit, Building2, Users, AlertCircle, Loader2, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "../../app/hooks/useSession";
 import { PurchaseOrderItemInput, PurchaseOrderItemInputValue } from "./PurchaseOrderItemInput";
@@ -127,6 +127,91 @@ type Supplier = {
   address: string;
   products: Product[];
 };
+
+function SupplierAutocomplete({
+  id,
+  value,
+  suppliers,
+  onChange,
+}: {
+  id: string;
+  value: string;
+  suppliers: Supplier[];
+  onChange: (value: string) => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const query = value.trim().toLowerCase();
+  const filteredSuppliers = suppliers
+    .filter((supplier) => !query || supplier.name.toLowerCase().includes(query))
+    .sort((left, right) => {
+      const leftStartsWith = query && left.name.toLowerCase().startsWith(query) ? 0 : 1;
+      const rightStartsWith = query && right.name.toLowerCase().startsWith(query) ? 0 : 1;
+      return leftStartsWith - rightStartsWith
+        || left.name.localeCompare(right.name, undefined, { sensitivity: "base", numeric: true });
+    });
+
+  return (
+    <div className="relative">
+      <div className="relative">
+        <input
+          id={id}
+          name="supplier"
+          type="text"
+          value={value}
+          onChange={(event) => {
+            onChange(event.target.value);
+            setIsOpen(true);
+          }}
+          onFocus={() => setIsOpen(true)}
+          onBlur={() => window.setTimeout(() => setIsOpen(false), 150)}
+          placeholder="Search or select supplier"
+          autoComplete="off"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={isOpen}
+          aria-controls={`${id}-options`}
+          className="w-full rounded-xl border border-input bg-input-background px-4 py-3 pr-10 text-sm transition-all focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/50"
+          required
+        />
+        <ChevronDown className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+      </div>
+
+      {isOpen && (
+        <div
+          id={`${id}-options`}
+          role="listbox"
+          className="absolute z-30 mt-1 max-h-60 w-full overflow-y-auto rounded-xl border border-border bg-card py-1 shadow-xl"
+        >
+          {filteredSuppliers.length > 0 ? filteredSuppliers.map((supplier) => (
+            <button
+              key={supplier.backendId ?? supplier.id ?? supplier.name}
+              type="button"
+              role="option"
+              aria-selected={supplier.name === value}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                onChange(supplier.name);
+                setIsOpen(false);
+              }}
+              className={`block w-full px-4 py-2.5 text-left text-sm transition-colors hover:bg-primary/10 ${
+                supplier.name === value ? "bg-primary/10 font-medium text-primary" : "text-foreground"
+              }`}
+            >
+              <span className="block">{supplier.name}</span>
+              {(supplier.contact || supplier.email) && (
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  {[supplier.contact, supplier.email].filter(Boolean).join(" • ")}
+                </span>
+              )}
+            </button>
+          )) : (
+            <div className="px-4 py-3 text-sm text-muted-foreground">No active suppliers found.</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 type GoodsItem = {
   id: string;
@@ -289,7 +374,7 @@ export function PurchaseOrders() {
     setStatusFilter((current) => (current === status ? "all" : status));
   };
 
-  const { data: suppliers = [] } = useRestaurantSuppliersQuery();
+  const { data: suppliers = [] } = useRestaurantSuppliersQuery({ isActive: true });
   const { data: archivedSuppliers = [] } = useRestaurantSuppliersQuery({ isActive: false, enabled: userRole === "admin" });
   const saveOrder = useSaveRestaurantPurchaseOrderMutation();
   const approveOrder = useApproveRestaurantPurchaseOrderMutation();
@@ -520,6 +605,14 @@ if (
     } finally {
       approveOrderLock.current = false;
     }
+  };
+
+  const handleSupplierChange = (value: string) => {
+    if (value !== newOrder.supplier) {
+      setOrderItems([]);
+      setCurrentItem(blankOrderItemInput());
+    }
+    setNewOrder((current) => ({ ...current, supplier: value }));
   };
 
   const handleRejectOrder = async () => {
@@ -838,21 +931,12 @@ if (
                 <label htmlFor="supplier" className="block text-sm mb-2 text-foreground">
                   Supplier *
                 </label>
-                <select
+                <SupplierAutocomplete
                   id="supplier"
-                  name="supplier"
                   value={newOrder.supplier}
-                  onChange={handleInputChange}
-                  className="w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all appearance-none cursor-pointer"
-                  required
-                >
-                  <option value="">Select supplier</option>
-                  {suppliers.map((sup) => (
-                    <option key={sup.name} value={sup.name}>
-                      {sup.name}
-                    </option>
-                  ))}
-                </select>
+                  suppliers={suppliers}
+                  onChange={handleSupplierChange}
+                />
               </div>
 
               <div>
@@ -1176,21 +1260,12 @@ if (
                 <label htmlFor="edit-supplier" className="block text-sm mb-2 text-foreground">
                   Supplier *
                 </label>
-                <select
+                <SupplierAutocomplete
                   id="edit-supplier"
-                  name="supplier"
                   value={newOrder.supplier}
-                  onChange={handleInputChange}
-                  className="w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all appearance-none cursor-pointer"
-                  required
-                >
-                  <option value="">Select supplier</option>
-                  {suppliers.map((sup) => (
-                    <option key={sup.name} value={sup.name}>
-                      {sup.name}
-                    </option>
-                  ))}
-                </select>
+                  suppliers={suppliers}
+                  onChange={handleSupplierChange}
+                />
               </div>
 
               <div>
