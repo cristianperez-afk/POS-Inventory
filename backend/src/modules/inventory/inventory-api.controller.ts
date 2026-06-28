@@ -231,8 +231,8 @@ export class InventoryApiController {
   }
 
   @Patch('transfers/:id/cancel')
-  cancelTransfer(@Req() request: RequestLike, @Param('id') id: string) {
-    return this.inventoryApiService.cancelTransfer(request.headers, id);
+  cancelTransfer(@Req() request: RequestLike, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.cancelTransfer(request.headers, id, body?.reason as string | undefined);
   }
 
   @Get('sales')

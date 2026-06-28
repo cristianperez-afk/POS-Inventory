@@ -579,8 +579,11 @@ export function completeTransfer(id: string, module?: BusinessModule) {
   return request<ApiTransfer>(`/api/transfers/${id}/complete${moduleSuffix(module)}`, { method: 'PATCH' });
 }
 
-export function cancelTransfer(id: string, module?: BusinessModule) {
-  return request<ApiTransfer>(`/api/transfers/${id}/cancel${moduleSuffix(module)}`, { method: 'PATCH' });
+export function cancelTransfer(id: string, module?: BusinessModule, reason?: string) {
+  return request<ApiTransfer>(`/api/transfers/${id}/cancel${moduleSuffix(module)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ reason: reason ?? '' }),
+  });
 }
 
 // ─── Sales ───────────────────────────────────────────────────────────────────

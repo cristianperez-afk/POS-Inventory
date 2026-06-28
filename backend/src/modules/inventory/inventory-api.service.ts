@@ -513,8 +513,18 @@ export class InventoryApiService {
     };
   }
 
+  // Idempotently ensures the location "type" column (warehouse/store/kitchen)
+  // exists. Mirrors the other ensure* runtime-DDL helpers, so no manual migration
+  // is required for the new field.
+  private async ensureLocationTypeColumn() {
+    if (this.locationTypeColumnReady) return;
+    await this.safeQuery(`ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT 'warehouse'`);
+    this.locationTypeColumnReady = true;
+  }
+
   async listLocations(headers: HeadersLike) {
     const scope = await this.resolveScope(headers);
+    await this.ensureLocationTypeColumn();
     const posUserId = this.headerValue(headers['x-pos-user-id']);
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
@@ -537,6 +547,11 @@ export class InventoryApiService {
     const address = String(body.address ?? '').trim();
     const manager = String(body.manager ?? '').trim();
     const phone = String(body.phone ?? '').trim();
+    const allowedTypes = ['warehouse', 'store', 'kitchen'];
+    const typeInput = String(body.type ?? 'warehouse').trim().toLowerCase();
+    const type = allowedTypes.includes(typeInput) ? typeInput : 'warehouse';
+
+    await this.ensureLocationTypeColumn();
 
     const existing = await this.safeQuery<{ id: string }>(
       `SELECT id FROM "Location" WHERE "businessId" = $1 AND lower(name) = lower($2) LIMIT 1`,
@@ -548,11 +563,11 @@ export class InventoryApiService {
 
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
-        INSERT INTO "Location" (id, name, address, manager, phone, "businessId", "updatedAt")
-        VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+        INSERT INTO "Location" (id, name, address, manager, phone, type, "businessId", "updatedAt")
+        VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
         RETURNING *, json_build_object('items', 0) AS "_count"
       `,
-      [randomUUID(), name, address, manager, phone, scope.businessId],
+      [randomUUID(), name, address, manager, phone, type, scope.businessId],
     );
     await this.recordAudit(scope, {
       category: 'Location',
@@ -2809,17 +2824,22 @@ export class InventoryApiService {
 
   // Cancel: allowed while PENDING or IN_TRANSIT. If it was already dispatched, the
   // in-transit stock is returned to the source location.
-  async cancelTransfer(headers: HeadersLike, id: string) {
+  async cancelTransfer(headers: HeadersLike, id: string, reason?: string) {
     const scope = await this.resolveScope(headers);
+    const trimmedReason = (reason ?? '').trim();
+    let transferNumber = '';
+    let createdById: string | null = null;
 
     await this.databaseService.withTransaction(async (client) => {
-      const transferRows = await client.query<{ id: string; status: string; fromLocationId: string; transferNumber: string }>(
-        `SELECT id, status, "fromLocationId", "transferNumber" FROM "Transfer"
+      const transferRows = await client.query<{ id: string; status: string; fromLocationId: string; transferNumber: string; createdById: string | null }>(
+        `SELECT id, status, "fromLocationId", "transferNumber", "createdById" FROM "Transfer"
          WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule" FOR UPDATE`,
         [id, scope.businessId, scope.module],
       );
       const transfer = transferRows.rows[0];
       if (!transfer) throw new NotFoundException(`Transfer #${id} not found`);
+      transferNumber = transfer.transferNumber;
+      createdById = transfer.createdById;
       if (!['PENDING', 'IN_TRANSIT'].includes(transfer.status)) {
         throw new BadRequestException('Only pending or in-transit transfers can be cancelled.');
       }
@@ -2827,6 +2847,16 @@ export class InventoryApiService {
       // transfer returns stock to the source, so that is an Admin-only action.
       if (transfer.status === 'IN_TRANSIT' && scope.user.role !== 'Admin') {
         throw new ForbiddenException('Only an Admin can cancel a transfer that is already in transit.');
+      }
+      // For a pending request, an Admin may reject anyone's, but a non-admin may
+      // only cancel (withdraw) a request they created themselves — they cannot
+      // reject another person's request.
+      if (
+        transfer.status === 'PENDING' &&
+        scope.user.role !== 'Admin' &&
+        transfer.createdById !== scope.user.id
+      ) {
+        throw new ForbiddenException('You can only cancel your own pending transfer requests.');
       }
 
       // Return in-transit stock to the source.
@@ -2867,8 +2897,16 @@ export class InventoryApiService {
       }
 
       await client.query(
-        `UPDATE "Transfer" SET status = 'CANCELLED', "updatedAt" = CURRENT_TIMESTAMP WHERE id = $1`,
-        [id],
+        `UPDATE "Transfer"
+           SET status = 'CANCELLED',
+               notes = CASE
+                 WHEN $2::text = '' THEN notes
+                 WHEN notes IS NULL OR length(trim(notes)) = 0 THEN 'Rejection reason: ' || $2::text
+                 ELSE notes || E'\n\nRejection reason: ' || $2::text
+               END,
+               "updatedAt" = CURRENT_TIMESTAMP
+         WHERE id = $1`,
+        [id, trimmedReason],
       );
     });
 
@@ -2878,7 +2916,16 @@ export class InventoryApiService {
       entityType: 'Transfer',
       entityId: id,
       status: 'cancelled',
+      summary: trimmedReason ? `Rejected: ${trimmedReason}` : undefined,
     });
+
+    await this.notifyTransferRejected(scope, {
+      id,
+      transferNumber,
+      createdById,
+      reason: trimmedReason,
+    });
+
     return this.getTransferRow(scope, id);
   }
 
@@ -4128,6 +4175,8 @@ export class InventoryApiService {
   // operational column helpers above) so deployments without a fresh migration
   // still get a working audit trail.
   private auditTableReady = false;
+  private notificationTypeReady = false;
+  private locationTypeColumnReady = false;
 
   private async ensureAuditLogTable() {
     if (this.auditTableReady) return;
@@ -4159,6 +4208,54 @@ export class InventoryApiService {
       `CREATE INDEX IF NOT EXISTS "AuditLog_business_module_createdAt_idx" ON "AuditLog" ("businessId", "module", "createdAt")`,
     );
     this.auditTableReady = true;
+  }
+
+  // Idempotently ensures the enum value used for transfer-rejection notifications
+  // exists. ADD VALUE runs as its own autocommit statement (never inside the
+  // cancel transaction), so the value is committed before it is first inserted.
+  private async ensureTransferRejectedNotificationType() {
+    if (this.notificationTypeReady) return;
+    await this.safeQuery(`ALTER TYPE "NotificationType" ADD VALUE IF NOT EXISTS 'TRANSFER_REJECTED'`);
+    this.notificationTypeReady = true;
+  }
+
+  // Notifies the staff member who created the request (plus active Admins/managers)
+  // that their transfer was rejected, and why. Skipped when the actor is the
+  // creator (a self-cancel needs no alert). Best-effort — never blocks the cancel.
+  private async notifyTransferRejected(
+    scope: Scope,
+    info: { id: string; transferNumber: string; createdById: string | null; reason: string },
+  ) {
+    try {
+      if (!info.createdById || info.createdById === scope.user.id) return;
+      await this.ensureTransferRejectedNotificationType();
+
+      const admins = await this.safeQuery<{ id: string }>(
+        `SELECT id FROM "User" WHERE "businessId" = $1 AND role = 'Admin' AND status = 'Active'`,
+        [scope.businessId],
+      );
+      const recipientIds = Array.from(
+        new Set([info.createdById, ...admins.map((a) => a.id)]),
+      ).filter((rid) => rid && rid !== scope.user.id);
+      if (recipientIds.length === 0) return;
+
+      const label = info.transferNumber || info.id;
+      const message = info.reason
+        ? `Transfer ${label} was rejected: ${info.reason}`
+        : `Transfer ${label} was rejected.`;
+
+      for (const userId of recipientIds) {
+        await this.safeQuery(
+          `
+            INSERT INTO "Notification" (id, type, title, message, "entityType", "entityId", "userId", "businessId")
+            VALUES ($1, 'TRANSFER_REJECTED', 'Transfer rejected', $2, 'TRANSFER', $3, $4, $5)
+          `,
+          [randomUUID(), message, info.id, userId, scope.businessId],
+        );
+      }
+    } catch {
+      // Best-effort only — never fail the cancel because notifications failed.
+    }
   }
 
   // Record a single audit entry. Audit logging is best-effort: a failure here must

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bell, CheckCheck, PackageX, ShoppingCart } from 'lucide-react';
+import { Bell, CheckCheck, PackageX, ShoppingCart, ArrowLeftRight } from 'lucide-react';
 import {
   useNotificationsQuery,
   useUnreadNotificationCountQuery,
@@ -11,6 +11,7 @@ import type { ApiNotification } from '../api/domainTypes';
 const typeIcon = (type: string) => {
   if (type === 'LOW_STOCK') return <PackageX className="size-4 text-amber-600" />;
   if (type === 'PURCHASE_ORDER_APPROVED') return <ShoppingCart className="size-4 text-emerald-600" />;
+  if (type === 'TRANSFER_REJECTED') return <ArrowLeftRight className="size-4 text-red-600" />;
   return <Bell className="size-4 text-muted-foreground" />;
 };
 

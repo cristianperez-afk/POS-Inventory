@@ -54,6 +54,9 @@ export default function TransfersView({
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
   const [expandedSubcategories, setExpandedSubcategories] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [cancelTarget, setCancelTarget] = useState<any | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
 
   const [transferForm, setTransferForm] = useState({
     fromLocationId: '',
@@ -140,10 +143,29 @@ export default function TransfersView({
     }
   };
 
-  const handleCancel = async (id: string) => {
-    if (!confirm('Cancel this transfer?')) return;
+  const openCancel = (transfer: any) => {
+    setCancelTarget(transfer);
+    setCancelReason('');
+    setShowCancelModal(true);
+  };
+
+  const closeCancel = () => {
+    setShowCancelModal(false);
+    setCancelTarget(null);
+    setCancelReason('');
+  };
+
+  const handleCancel = async () => {
+    if (!cancelTarget) return;
+    const trimmed = cancelReason.trim();
+    if (!trimmed) {
+      toast.error('Please provide a reason for cancelling this request.');
+      return;
+    }
     try {
-      await cancelTransferMutation.mutateAsync(id);
+      await cancelTransferMutation.mutateAsync({ id: cancelTarget.id, reason: trimmed });
+      toast.success('Transfer request cancelled');
+      closeCancel();
     } catch (err: any) {
       toast.error(err.message ?? 'Failed to cancel transfer');
     }
@@ -263,7 +285,7 @@ export default function TransfersView({
                         Start Transit
                       </button>
                     )}
-                    <button onClick={() => handleCancel(transfer.id)} className="flex-1 px-4 py-2 border border-destructive text-destructive rounded-[8px] text-[14px] font-medium hover:bg-destructive/10">
+                    <button onClick={() => openCancel(transfer)} className="flex-1 px-4 py-2 border border-destructive text-destructive rounded-[8px] text-[14px] font-medium hover:bg-destructive/10">
                       Cancel
                     </button>
                   </div>
@@ -275,7 +297,7 @@ export default function TransfersView({
                       <button onClick={() => handleComplete(transfer.id)} className="flex-1 px-4 py-2 bg-secondary text-white rounded-[8px] text-[14px] font-medium hover:bg-secondary">
                         Complete Transfer
                       </button>
-                      <button onClick={() => handleCancel(transfer.id)} className="flex-1 px-4 py-2 border border-destructive text-destructive rounded-[8px] text-[14px] font-medium hover:bg-destructive/10">
+                      <button onClick={() => openCancel(transfer)} className="flex-1 px-4 py-2 border border-destructive text-destructive rounded-[8px] text-[14px] font-medium hover:bg-destructive/10">
                         Cancel
                       </button>
                     </div>
@@ -444,6 +466,66 @@ export default function TransfersView({
             <div className="mt-6 pt-4 border-t border-border flex items-center justify-between">
               <p className="text-[14px] text-muted-foreground">{transferForm.items.length} item(s) selected</p>
               <button onClick={() => { setShowItemSelector(false); setItemSearchTerm(''); setExpandedCategories(new Set()); setExpandedSubcategories(new Set()); }} className="px-4 py-2 bg-secondary text-white rounded-[8px] text-[14px] font-medium hover:bg-secondary">Done</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cancel / Reject Transfer Modal */}
+      {showCancelModal && cancelTarget && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-card rounded-[14px] w-full max-w-md max-h-[90vh] overflow-y-auto border border-border">
+            <div className="flex items-center justify-between p-5 border-b border-border">
+              <h3 className="text-[20px] font-bold text-foreground">Cancel Transfer Request</h3>
+              <button onClick={closeCancel} className="p-2 hover:bg-muted rounded">
+                <X className="size-5 text-foreground" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-3">
+              <div className="flex items-center justify-between rounded-[8px] border border-border bg-muted px-3 py-2.5">
+                <span className="text-[12px] text-muted-foreground">Transfer</span>
+                <span className="text-[14px] font-semibold text-secondary">{cancelTarget.transferNumber}</span>
+              </div>
+              <div className="flex items-center gap-2 text-[14px] text-foreground">
+                <span className="font-medium">{cancelTarget.fromLocation?.name}</span>
+                <ArrowRightLeft className="size-4 text-secondary" />
+                <span className="font-medium">{cancelTarget.toLocation?.name}</span>
+              </div>
+              <div>
+                <label className="mb-1 block text-[14px] font-medium text-foreground">
+                  Reason for cancellation <span className="font-normal text-muted-foreground">(required)</span>
+                </label>
+                <textarea
+                  value={cancelReason}
+                  onChange={(e) => setCancelReason(e.target.value)}
+                  placeholder="e.g. Insufficient stock at source, duplicate request, wrong destination…"
+                  rows={3}
+                  className="w-full rounded-[8px] border border-border px-3 py-2 text-[14px] focus:outline-none focus:border-secondary focus:ring-2 focus:ring-destructive/30"
+                />
+              </div>
+              <div className="rounded-[8px] border border-destructive/30 bg-destructive/5 p-3">
+                <p className="text-[12px] text-destructive">
+                  Cancelling rejects this request{cancelTarget.status === 'IN_TRANSIT' ? ' and returns the in-transit stock to the source' : ''}. The reason is recorded on the transfer and audit trail.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex gap-3 p-5 border-t border-border">
+              <button
+                onClick={closeCancel}
+                className="flex-1 px-4 py-2 border border-border rounded-[8px] text-[14px] font-medium text-foreground hover:bg-muted"
+              >
+                Keep Request
+              </button>
+              <button
+                onClick={handleCancel}
+                disabled={cancelTransferMutation.isPending || cancelReason.trim().length === 0}
+                title={cancelReason.trim().length === 0 ? 'Enter a reason to cancel' : undefined}
+                className="flex-1 px-4 py-2 bg-destructive text-white rounded-[8px] text-[14px] font-medium hover:bg-destructive/90 disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {cancelTransferMutation.isPending ? 'Cancelling…' : 'Cancel Transfer'}
+              </button>
             </div>
           </div>
         </div>

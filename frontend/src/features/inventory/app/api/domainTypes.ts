@@ -20,6 +20,7 @@ export interface ApiLocation {
   address: string;
   manager: string;
   phone: string;
+  type?: string;
   itemCount: number;
   _count?: { items: number };
 }
