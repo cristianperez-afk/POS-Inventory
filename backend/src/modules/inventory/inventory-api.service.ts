@@ -834,6 +834,14 @@ export class InventoryApiService {
     if (ingredients.length === 0) {
       throw new BadRequestException('A recipe must have at least one ingredient.');
     }
+    const recipeIngredientIds = new Set(ingredients.map((ingredient) => String(ingredient.itemId ?? '')).filter(Boolean));
+    const invalidIngredientAdjustment = modifiers.find((modifier) =>
+      ['remove', 'less'].includes(String(modifier.type ?? ''))
+      && !recipeIngredientIds.has(String(modifier.itemId ?? '')),
+    );
+    if (invalidIngredientAdjustment) {
+      throw new BadRequestException(`${String(invalidIngredientAdjustment.name ?? 'Ingredient adjustment')} must link to an ingredient used by this recipe.`);
+    }
     const addOnsWithoutMaximum = modifiers.filter((modifier) => {
       if (String(modifier.type ?? '') !== 'add_on') return false;
       const maximum = Number(modifier.maxQuantity);

@@ -448,6 +448,13 @@ export function RecipeBOM() {
     });
   };
   const selectedModifierStockItem = findInventoryItem(modifierItemId);
+  const recipeIngredientStockItems = Array.from(new Map(
+    ingredients
+      .map((ingredient) => findInventoryItem(ingredient.itemBackendId ?? ingredient.productId))
+      .filter((item): item is InventoryItem => Boolean(item))
+      .map((item) => [String(item.backendId ?? item.id), item]),
+  ).values());
+  const modifierStockLinkItems = modifierType === "remove" ? recipeIngredientStockItems : inventoryItems;
   const suggestedModifierPrice = modifierType === "add_on" && selectedModifierStockItem
     ? Math.round((Number(selectedModifierStockItem.price ?? 0) * Number(modifierQuantity || 0) + Number.EPSILON) * 100) / 100
     : 0;
@@ -1768,6 +1775,9 @@ export function RecipeBOM() {
                         const nextType = event.target.value as RecipeModifier["type"];
                         setModifierType(nextType);
                         if (nextType === "remove" || nextType === "less") setModifierPrice("");
+                        if (nextType === "remove" && modifierItemId && !recipeIngredientStockItems.some((item) => String(item.backendId ?? item.id) === String(modifierItemId))) {
+                          setModifierItemId("");
+                        }
                       }}
                       className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
                     >
@@ -1796,8 +1806,8 @@ export function RecipeBOM() {
                       onChange={(event) => setModifierItemId(event.target.value)}
                       className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
                     >
-                      <option value="">{modifierType === "note" ? "No stock effect" : "Select a stock item"}</option>
-                      {inventoryItems.map((item) => (
+                      <option value="">{modifierType === "note" ? "No stock effect" : modifierType === "remove" ? "Select a recipe ingredient" : "Select a stock item"}</option>
+                      {modifierStockLinkItems.map((item) => (
                         <option key={item.backendId ?? item.id} value={item.backendId ?? item.id}>
                           {item.name} ({item.stock} {item.unit})
                         </option>
@@ -1806,6 +1816,8 @@ export function RecipeBOM() {
                     <p className="mt-1 text-[10px] text-muted-foreground">
                       {modifierType === "note"
                         ? "Optional for instructions because this behavior has no stock effect."
+                        : modifierType === "remove"
+                          ? "Only ingredients used by this specific recipe are listed, preventing unrelated inventory items from being removed."
                         : modifierType === "add_on"
                           ? "Select the inventory item that will be deducted whenever this add-on is ordered."
                           : "Select the basic recipe ingredient affected by Less or Remove."}
