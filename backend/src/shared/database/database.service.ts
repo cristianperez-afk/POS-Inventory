@@ -3230,7 +3230,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           quantityAvailable: stock ? Number(stock.quantity_available ?? 0) : null,
           unit: stock?.unit ?? modifier.unit,
           suggestedPrice: modifier?.type === 'add_on' && stock ? weightedPortionPrice : undefined,
-          priceDelta: modifier?.type === 'remove' || modifier?.type === 'less' ? 0 : modifier?.priceDelta,
+          priceDelta: modifier?.type === 'add_on' ? Number(modifier?.priceDelta ?? 0) : 0,
           stockStatus: modifier.itemId || modifier.requiresStock ? (available ? 'available' : 'unavailable') : 'untracked',
         };
       }),
@@ -4918,6 +4918,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       const ingredientQuantity = Number(ingredient.quantity ?? 0);
       const additionalCost = Number(ingredient.additional_price ?? ingredient.additionalCost ?? 0);
       const customizationType = ingredient.customization_type ?? ingredient.customizationType ?? null;
+      const isAddedIngredient = ['ADD', 'EXTRA'].includes(String(customizationType ?? '').toUpperCase());
+      const persistedOriginalId = isAddedIngredient ? null : originalId;
+      const persistedReplacementId = isAddedIngredient ? (replacementId ?? originalId) : replacementId;
+      const persistedProductIngredientId = isAddedIngredient ? null : productIngredientId;
       const hasCustomization = Boolean(
         customizationType ||
           removed ||
@@ -4944,9 +4948,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         [
           storeId,
           orderItemId,
-          productIngredientId,
-          originalId,
-          replacementId,
+          persistedProductIngredientId,
+          persistedOriginalId,
+          persistedReplacementId,
           customizationType ?? (removed ? 'REMOVE' : replacementId ? 'REPLACE' : 'CHANGE_QUANTITY'),
           ingredient.original_name ?? ingredient.name ?? null,
           ingredient.replacement_name ?? null,
@@ -5060,6 +5064,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       const ingredientQuantity = Number(ingredient.quantity ?? 0);
       const additionalCost = Number(ingredient.additional_price ?? ingredient.additionalCost ?? 0);
       const customizationType = ingredient.customization_type ?? ingredient.customizationType ?? null;
+      const isAddedIngredient = ['ADD', 'EXTRA'].includes(String(customizationType ?? '').toUpperCase());
+      const persistedOriginalId = isAddedIngredient ? null : originalId;
+      const persistedReplacementId = isAddedIngredient ? (replacementId ?? originalId) : replacementId;
+      const persistedProductIngredientId = isAddedIngredient ? null : productIngredientId;
       const hasCustomization = Boolean(
         customizationType ||
           removed ||
@@ -5087,9 +5095,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           [
             storeId,
             orderItemId,
-            productIngredientId,
-            originalId,
-            replacementId,
+            persistedProductIngredientId,
+            persistedOriginalId,
+            persistedReplacementId,
             customizationType ?? (removed ? 'REMOVE' : replacementId ? 'REPLACE' : 'CHANGE_QUANTITY'),
             ingredient.original_name ?? ingredient.name ?? null,
             ingredient.replacement_name ?? null,
@@ -6138,6 +6146,31 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     await this.query(`ALTER TABLE order_item_customizations ALTER COLUMN ingredient_alternative_id DROP NOT NULL`);
     await this.query(`ALTER TABLE order_item_customizations ALTER COLUMN original_ingredient_id DROP NOT NULL`);
     await this.query(`ALTER TABLE order_item_customizations ALTER COLUMN replacement_ingredient_id DROP NOT NULL`);
+    await this.query(
+      `
+        DO $$
+        DECLARE constraint_row RECORD;
+        BEGIN
+          FOR constraint_row IN
+            SELECT conname
+            FROM pg_constraint
+            WHERE conrelid = 'order_item_customizations'::regclass
+              AND contype = 'c'
+              AND pg_get_constraintdef(oid) ILIKE '%customization_type%'
+          LOOP
+            EXECUTE format('ALTER TABLE order_item_customizations DROP CONSTRAINT %I', constraint_row.conname);
+          END LOOP;
+          EXECUTE $constraint$
+            ALTER TABLE order_item_customizations
+            ADD CONSTRAINT order_item_customizations_type_check
+            CHECK (customization_type IN (
+              'REMOVE', 'ADD', 'EXTRA', 'CHANGE_QUANTITY', 'QUANTITY_CHANGE',
+              'REPLACE', 'NOTE', 'SPECIAL_INSTRUCTION'
+            ))
+          $constraint$;
+        END $$
+      `,
+    );
   }
 
   // Optional deterministic link from a POS store to a specific inventory Business.

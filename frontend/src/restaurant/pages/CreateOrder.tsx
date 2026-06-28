@@ -855,7 +855,6 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
           quantity: Math.max(Number(modifier.quantity ?? 1), 0.001) * Math.max(count, 1),
           original_quantity: 0,
           unit: modifier.unit ?? 'pcs',
-          ingredient_id: modifier.ingredientId,
           replacement_ingredient_id: modifier.ingredientId,
           replacement_name: modifier.itemName ?? modifier.name,
           additional_price: Number(modifier.priceDelta ?? 0) * Math.max(count, 1),
@@ -2372,7 +2371,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
 
                   <section>
                     <div className="mb-2">
-                      <h3 className="text-sm font-semibold text-foreground">3. Preferences</h3>
+                      <h3 className="text-sm font-semibold text-foreground">3. Instruction / Preferences</h3>
                       <p className="text-xs text-muted-foreground">Kitchen-approved preparation preferences and a customer note.</p>
                     </div>
                     {preferences.length > 0 && <div className="mb-3 grid gap-2 sm:grid-cols-2">{preferences.map((modifier) => (

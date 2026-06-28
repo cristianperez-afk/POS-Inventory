@@ -827,7 +827,32 @@ export class InventoryApiService {
 
   private async saveRecipe(scope: Scope, recipeId: string | undefined, body: Record<string, unknown>) {
     const ingredients = Array.isArray(body.ingredients) ? body.ingredients as Record<string, unknown>[] : [];
-    const modifiers = Array.isArray(body.modifiers) ? body.modifiers as Record<string, unknown>[] : [];
+    const submittedModifiers = Array.isArray(body.modifiers) ? body.modifiers as Record<string, unknown>[] : [];
+    const modifiers = submittedModifiers.map((modifier) => {
+      const submittedType = String(modifier.type ?? 'note');
+      const type = ['remove', 'less', 'add_on', 'note'].includes(submittedType) ? submittedType : 'note';
+      const isAddOn = type === 'add_on';
+      const isInstruction = type === 'note';
+      const priceDelta = Number(modifier.priceDelta ?? 0);
+      const normalized: Record<string, unknown> = {
+        ...modifier,
+        type,
+        group: isAddOn
+          ? String(modifier.group ?? 'Add-ons').trim() || 'Add-ons'
+          : isInstruction
+            ? 'Instruction / Preferences'
+            : 'Basic Ingredients',
+        itemId: isInstruction ? undefined : modifier.itemId,
+        itemName: isInstruction ? undefined : modifier.itemName,
+        requiresStock: isAddOn,
+        quantity: isAddOn ? modifier.quantity : undefined,
+        unit: isAddOn ? modifier.unit : undefined,
+        maxQuantity: isAddOn ? modifier.maxQuantity : undefined,
+        priceDelta: isAddOn && Number.isFinite(priceDelta) && priceDelta >= 0 ? priceDelta : 0,
+        priceDeltaPercent: 0,
+      };
+      return normalized;
+    });
     if (!String(body.name ?? '').trim() || !String(body.category ?? '').trim()) {
       throw new BadRequestException('Recipe name and category are required.');
     }
@@ -917,7 +942,7 @@ export class InventoryApiService {
           Number(body.yieldPercentage ?? 100), body.prepTimeMinutes == null ? null : Number(body.prepTimeMinutes),
           body.instructions ?? null, body.targetFoodCost == null ? null : Number(body.targetFoodCost),
           body.sellingPrice == null ? null : Number(body.sellingPrice), body.isActive !== false,
-          body.imageUrl ?? null, JSON.stringify(body.modifiers ?? []), menuItemId, scope.businessId,
+          body.imageUrl ?? null, JSON.stringify(modifiers), menuItemId, scope.businessId,
         ],
       );
 

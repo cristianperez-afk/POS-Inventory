@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type WheelEvent } from "react";
-import { ChefHat, Plus, Search, Edit, Trash2, X, Save, Calculator, Scale, Upload, Archive, RotateCcw, Loader2 } from "lucide-react";
+import { ChefHat, Plus, Search, Edit, Trash2, X, Save, Calculator, Scale, Upload, Archive, RotateCcw, Loader2, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "../../app/hooks/useSession";
 import { InventoryProduct } from "../lib/inventoryLogic";
@@ -84,6 +84,95 @@ type Recipe = {
 
 // Use the actual inventory product structure from the restaurant inventory query.
 type InventoryItem = InventoryProduct & { backendId?: string };
+
+function StockLinkAutocomplete({
+  items,
+  value,
+  query,
+  placeholder,
+  onQueryChange,
+  onSelect,
+}: {
+  items: InventoryItem[];
+  value: string;
+  query: string;
+  placeholder: string;
+  onQueryChange: (value: string) => void;
+  onSelect: (item: InventoryItem) => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredItems = [...items]
+    .filter((item) => !normalizedQuery || item.name.toLowerCase().includes(normalizedQuery))
+    .sort((left, right) => {
+      const leftStartsWith = normalizedQuery && left.name.toLowerCase().startsWith(normalizedQuery) ? 0 : 1;
+      const rightStartsWith = normalizedQuery && right.name.toLowerCase().startsWith(normalizedQuery) ? 0 : 1;
+      return leftStartsWith - rightStartsWith
+        || left.name.localeCompare(right.name, undefined, { sensitivity: "base", numeric: true });
+    });
+
+  return (
+    <div className="relative">
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+        <input
+          id="modifierItem"
+          type="text"
+          value={query}
+          onChange={(event) => {
+            onQueryChange(event.target.value);
+            setIsOpen(true);
+          }}
+          onFocus={() => setIsOpen(true)}
+          onBlur={() => window.setTimeout(() => setIsOpen(false), 150)}
+          placeholder={placeholder}
+          autoComplete="off"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={isOpen}
+          aria-controls="modifier-stock-link-options"
+          className="w-full rounded-lg border border-input bg-input-background py-2 pl-9 pr-9 text-sm transition-all focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/50"
+        />
+        <ChevronDown className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+      </div>
+
+      {isOpen && (
+        <div
+          id="modifier-stock-link-options"
+          role="listbox"
+          className="absolute z-40 mt-1 max-h-60 w-full overflow-y-auto rounded-xl border border-border bg-card py-1 shadow-xl"
+        >
+          {filteredItems.length > 0 ? filteredItems.map((item) => {
+            const itemId = String(item.backendId ?? item.id);
+            return (
+              <button
+                key={itemId}
+                type="button"
+                role="option"
+                aria-selected={itemId === value}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  onSelect(item);
+                  setIsOpen(false);
+                }}
+                className={`block w-full px-4 py-2.5 text-left text-sm transition-colors hover:bg-primary/10 ${
+                  itemId === value ? "bg-primary/10 font-medium text-primary" : "text-foreground"
+                }`}
+              >
+                <span className="block">{item.name}</span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  {item.stock} {item.unit} available
+                </span>
+              </button>
+            );
+          }) : (
+            <div className="px-4 py-3 text-sm text-muted-foreground">No accessible stock items found.</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 const UNIT_OPTIONS = [
   "kg",
@@ -235,7 +324,7 @@ const RECIPE_PRESETS: Record<string, { match: RegExp; options: { group: string; 
     options: [
       ...modifierPreset("Patty", ["Single Patty", "Double Patty"]),
       ...modifierPreset("Cheese", ["No Cheese", "Extra Cheese"]),
-      ...modifierPreset("Vegetables", ["No Lettuce", "No Tomato", "Extra Lettuce", "Extra Tomato", "Extra Onion"]),
+      ...modifierPreset("Vegetables", ["No Lettuce", "No Tomato", "No Onion", "Extra Lettuce", "Extra Tomato", "Extra Onion"]),
       ...modifierPreset("Sauce", ["No Mayo", "Extra Mayo", "Extra Ketchup", "Extra Mustard", "BBQ Sauce", "Spicy Sauce"]),
       ...modifierPreset("Doneness", ["Well Done"]),
       ...modifierPreset("Add-ons", ["Bacon", "Egg"]),
@@ -404,6 +493,7 @@ export function RecipeBOM() {
   const [modifiers, setModifiers] = useState<RecipeModifier[]>([]);
   const [modifierGroup, setModifierGroup] = useState(MODIFIER_GROUPS[0]);
   const [modifierItemId, setModifierItemId] = useState("");
+  const [modifierItemSearch, setModifierItemSearch] = useState("");
   const [modifierName, setModifierName] = useState("");
   const [modifierType, setModifierType] = useState<RecipeModifier["type"]>("note");
   const [modifierQuantity, setModifierQuantity] = useState("1");
@@ -442,10 +532,19 @@ export function RecipeBOM() {
   const findModifierInventoryItem = (group: string, name: string) => {
     const cleaned = cleanModifierName(name);
     if (!cleaned) return undefined;
-    return inventoryItems.find((item) => {
+    const directMatch = inventoryItems.find((item) => {
       const itemName = item.name.toLowerCase();
       return itemName === cleaned || itemName.includes(cleaned) || cleaned.includes(itemName);
     });
+    if (directMatch) return directMatch;
+    const aliases: Record<string, string[]> = {
+      caramel: ["white sugar", "brown sugar"],
+      "fresh fruits": ["strawberry"],
+    };
+    const aliasNames = aliases[cleaned] ?? [];
+    return aliasNames
+      .map((alias) => inventoryItems.find((item) => item.name.trim().toLowerCase() === alias))
+      .find((item): item is InventoryItem => Boolean(item));
   };
   const selectedModifierStockItem = findInventoryItem(modifierItemId);
   const recipeIngredientStockItems = Array.from(new Map(
@@ -454,10 +553,34 @@ export function RecipeBOM() {
       .filter((item): item is InventoryItem => Boolean(item))
       .map((item) => [String(item.backendId ?? item.id), item]),
   ).values());
-  const modifierStockLinkItems = modifierType === "remove" ? recipeIngredientStockItems : inventoryItems;
+  const findRecipeModifierInventoryItem = (name: string) => {
+    const cleaned = cleanModifierName(name);
+    if (!cleaned) return undefined;
+    const directMatch = recipeIngredientStockItems.find((item) => {
+      const itemName = item.name.toLowerCase();
+      return itemName === cleaned || itemName.includes(cleaned) || cleaned.includes(itemName);
+    });
+    if (directMatch) return directMatch;
+    const aliases: Record<string, string[]> = { caramel: ["white sugar", "brown sugar"] };
+    return (aliases[cleaned] ?? [])
+      .map((alias) => recipeIngredientStockItems.find((item) => item.name.trim().toLowerCase() === alias))
+      .find((item): item is InventoryItem => Boolean(item));
+  };
+  const modifierStockLinkItems = modifierType === "note"
+    ? []
+    : modifierType === "remove" || modifierType === "less"
+      ? recipeIngredientStockItems
+      : inventoryItems;
   const suggestedModifierPrice = modifierType === "add_on" && selectedModifierStockItem
     ? Math.round((Number(selectedModifierStockItem.price ?? 0) * Number(modifierQuantity || 0) + Number.EPSILON) * 100) / 100
     : 0;
+  const modifierNamePlaceholder = modifierType === "note"
+    ? "e.g., Separate Sauce"
+    : modifierType === "less"
+      ? "e.g., Less Onion"
+      : modifierType === "remove"
+        ? "e.g., No Onion"
+        : "e.g., Extra Cheese";
   const isModifierUnavailable = (modifier: RecipeModifier) => {
     if (!modifier.requiresStock && !modifier.itemId && !modifier.productId) return false;
     const item = findInventoryItem(modifier.productId ?? modifier.itemId);
@@ -607,9 +730,9 @@ export function RecipeBOM() {
       toast.error("Maximum add-on quantity must be a whole number greater than zero");
       return;
     }
-    const finalAdditionalPrice = modifierType === "remove" || modifierType === "less"
+    const finalAdditionalPrice = modifierType !== "add_on"
       ? 0
-      : modifierPrice.trim() === "" && modifierType === "add_on"
+      : modifierPrice.trim() === ""
         ? suggestedModifierPrice
         : Number(modifierPrice || 0);
     if (!Number.isFinite(finalAdditionalPrice) || finalAdditionalPrice < 0) {
@@ -622,7 +745,11 @@ export function RecipeBOM() {
       {
         id: `MOD-${Date.now()}`,
         name: modifierName.trim(),
-        group: modifierGroup.trim() || "Modifiers",
+        group: modifierType === "add_on"
+          ? modifierGroup.trim() || "Add-ons"
+          : modifierType === "note"
+            ? "Instruction / Preferences"
+            : "Basic Ingredients",
         type: modifierType,
         productId: linkedItem?.id,
         itemId: linkedItem?.backendId,
@@ -636,6 +763,7 @@ export function RecipeBOM() {
       },
     ]);
     setModifierItemId("");
+    setModifierItemSearch("");
     setModifierName("");
     setModifierType("note");
     setModifierQuantity("1");
@@ -666,20 +794,22 @@ export function RecipeBOM() {
     }
 
     setModifiers(preset.options.map((option, index) => {
-      const requiresStock = modifierNeedsStock(option.group, option.name);
-      const stockItem = requiresStock ? findModifierInventoryItem(option.group, option.name) : undefined;
       const isRemove = /^(no|less)\b/i.test(option.name);
       const isLess = /^less\b/i.test(option.name);
+      const adjustmentItem = isRemove ? findRecipeModifierInventoryItem(option.name) : undefined;
+      const requiresStock = !isRemove && modifierNeedsStock(option.group, option.name);
+      const stockItem = adjustmentItem ?? (requiresStock ? findRecipeModifierInventoryItem(option.name) ?? findModifierInventoryItem(option.group, option.name) : undefined);
       const isAddOn = !isRemove && (
         /add-?ons?|toppings?|extra options?|beverage add-?ons?/i.test(option.group)
         || /^(extra|add)\b/i.test(option.name)
+        || (/^double\b/i.test(option.name) && /patty/i.test(option.group))
         || /^(bacon|egg|boiled egg|mushroom)$/i.test(option.name)
       );
       return {
         id: `MOD-${Date.now()}-${index}`,
         name: option.name,
         group: option.group,
-        type: isLess && stockItem ? "less" : isRemove && stockItem ? "remove" : isAddOn && stockItem ? "add_on" : "note",
+        type: isLess && adjustmentItem ? "less" : isRemove && adjustmentItem ? "remove" : isAddOn && stockItem ? "add_on" : "note",
         productId: stockItem?.id,
         itemId: stockItem?.backendId,
         itemName: stockItem?.name,
@@ -687,8 +817,8 @@ export function RecipeBOM() {
         quantity: isAddOn && stockItem ? 1 : undefined,
         unit: isAddOn && stockItem ? stockItem.unit : undefined,
         maxQuantity: undefined,
-        priceDelta: option.priceDelta ?? 0,
-        priceDeltaPercent: option.priceDeltaPercent ?? 0,
+        priceDelta: isAddOn && stockItem ? option.priceDelta ?? 0 : 0,
+        priceDeltaPercent: isAddOn && stockItem ? option.priceDeltaPercent ?? 0 : 0,
       };
     }));
   };
@@ -838,8 +968,8 @@ export function RecipeBOM() {
               maxQuantity: modifier.type === "add_on" && Number.isInteger(Number(modifier.maxQuantity)) && Number(modifier.maxQuantity) > 0
                 ? Math.floor(Number(modifier.maxQuantity))
                 : undefined,
-              priceDelta: modifier.type === "remove" || modifier.type === "less" ? 0 : Number(modifier.priceDelta ?? 0),
-              priceDeltaPercent: Number(modifier.priceDeltaPercent ?? 0),
+              priceDelta: modifier.type === "add_on" ? Number(modifier.priceDelta ?? 0) : 0,
+              priceDeltaPercent: modifier.type === "add_on" ? Number(modifier.priceDeltaPercent ?? 0) : 0,
             };
           }),
           ingredients: recipeToAdd.ingredients.map((ingredient) => {
@@ -875,6 +1005,7 @@ export function RecipeBOM() {
       setModifiers([]);
       setModifierGroup(MODIFIER_GROUPS[0]);
       setModifierItemId("");
+      setModifierItemSearch("");
       setModifierName("");
       setModifierType("note");
       setModifierQuantity("1");
@@ -920,6 +1051,7 @@ export function RecipeBOM() {
     setModifiers((recipe.modifiers ?? []).map((modifier) => ({ ...modifier, group: modifier.group ?? "Modifiers" })));
     setModifierGroup(MODIFIER_GROUPS[0]);
     setModifierItemId("");
+    setModifierItemSearch("");
     setModifierName("");
     setModifierType("note");
     setModifierQuantity("1");
@@ -1050,6 +1182,7 @@ export function RecipeBOM() {
     setIngredients([]);
     setModifiers([]);
     setModifierItemId("");
+    setModifierItemSearch("");
     setModifierName("");
     setModifierType("note");
     setModifierQuantity("1");
@@ -1747,7 +1880,7 @@ export function RecipeBOM() {
                 </div>
 
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                  <div>
+                  <div className={modifierType === "add_on" ? "md:order-2" : "hidden"}>
                     <label htmlFor="modifierGroup" className="block text-xs mb-1 text-foreground">
                       Category
                     </label>
@@ -1764,7 +1897,7 @@ export function RecipeBOM() {
                     </datalist>
                     <p className="mt-1 text-[10px] text-muted-foreground">Groups related choices for easier Admin setup, such as Add-ons, Preparation, or Protein Choice.</p>
                   </div>
-                  <div>
+                  <div className="md:order-1">
                     <label htmlFor="modifierType" className="block text-xs mb-1 text-foreground">
                       Behavior
                     </label>
@@ -1774,9 +1907,15 @@ export function RecipeBOM() {
                       onChange={(event) => {
                         const nextType = event.target.value as RecipeModifier["type"];
                         setModifierType(nextType);
-                        if (nextType === "remove" || nextType === "less") setModifierPrice("");
-                        if (nextType === "remove" && modifierItemId && !recipeIngredientStockItems.some((item) => String(item.backendId ?? item.id) === String(modifierItemId))) {
-                          setModifierItemId("");
+                        setModifierPrice("");
+                        setModifierItemId("");
+                        setModifierItemSearch("");
+                        if (nextType === "note") {
+                          setModifierGroup("Instruction / Preferences");
+                        } else if (nextType === "remove" || nextType === "less") {
+                          setModifierGroup("Basic Ingredients");
+                        } else {
+                          setModifierGroup("Add-ons");
                         }
                       }}
                       className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
@@ -1796,34 +1935,37 @@ export function RecipeBOM() {
                             : "Adds a fixed extra portion, price, and inventory deduction for every 1x selected in POS."}
                     </p>
                   </div>
-                  <div>
+                  <div className={modifierType !== "note" ? "md:order-3" : "hidden"}>
                     <label htmlFor="modifierItem" className="block text-xs mb-1 text-foreground">
                       Stock Link
                     </label>
-                    <select
-                      id="modifierItem"
+                    <StockLinkAutocomplete
+                      items={modifierStockLinkItems}
                       value={modifierItemId}
-                      onChange={(event) => setModifierItemId(event.target.value)}
-                      className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
-                    >
-                      <option value="">{modifierType === "note" ? "No stock effect" : modifierType === "remove" ? "Select a recipe ingredient" : "Select a stock item"}</option>
-                      {modifierStockLinkItems.map((item) => (
-                        <option key={item.backendId ?? item.id} value={item.backendId ?? item.id}>
-                          {item.name} ({item.stock} {item.unit})
-                        </option>
-                      ))}
-                    </select>
+                      query={modifierItemSearch}
+                      placeholder={modifierType === "add_on"
+                        ? "Search or select any stock item"
+                        : "Search or select a recipe ingredient"}
+                      onQueryChange={(value) => {
+                        setModifierItemSearch(value);
+                        setModifierItemId("");
+                      }}
+                      onSelect={(item) => {
+                        setModifierItemId(String(item.backendId ?? item.id));
+                        setModifierItemSearch(item.name);
+                      }}
+                    />
                     <p className="mt-1 text-[10px] text-muted-foreground">
                       {modifierType === "note"
                         ? "Optional for instructions because this behavior has no stock effect."
-                        : modifierType === "remove"
-                          ? "Only ingredients used by this specific recipe are listed, preventing unrelated inventory items from being removed."
+                        : modifierType === "remove" || modifierType === "less"
+                          ? "Only ingredients used by this specific recipe are listed, preventing unrelated inventory items from being reduced or removed."
                         : modifierType === "add_on"
                           ? "Select the inventory item that will be deducted whenever this add-on is ordered."
                           : "Select the basic recipe ingredient affected by Less or Remove."}
                     </p>
                   </div>
-                  <div>
+                  <div className="md:order-4">
                     <label htmlFor="modifierName" className="block text-xs mb-1 text-foreground">
                       POS Label
                     </label>
@@ -1831,12 +1973,12 @@ export function RecipeBOM() {
                       id="modifierName"
                       value={modifierName}
                       onChange={(event) => setModifierName(event.target.value)}
-                      placeholder="No cheese"
+                      placeholder={modifierNamePlaceholder}
                       className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
                     />
                     <p className="mt-1 text-[10px] text-muted-foreground">Customer-friendly option name shown in POS, Kitchen Orders, order history, and receipts.</p>
                   </div>
-                  <div>
+                  <div className={modifierType === "add_on" ? "md:order-5" : "hidden"}>
                     <label htmlFor="modifierQuantity" className="block text-xs mb-1 text-foreground">
                       Fixed Portion per 1x Add-on
                     </label>
@@ -1852,7 +1994,7 @@ export function RecipeBOM() {
                     />
                     <p className="mt-1 text-[10px] text-muted-foreground">Available for Add-on behavior only. Kitchen/Admin sets the stock portion; POS staff sees only 1x, 2x, and so on.</p>
                   </div>
-                  <div>
+                  <div className={modifierType === "add_on" ? "md:order-6" : "hidden"}>
                     <label htmlFor="modifierPrice" className="block text-xs mb-1 text-foreground">
                       Additional Price (₱) — Optional Override
                     </label>
@@ -1863,7 +2005,7 @@ export function RecipeBOM() {
                       step="0.01"
                       value={modifierPrice}
                       onChange={(event) => setModifierPrice(event.target.value)}
-                      disabled={modifierType === "remove" || modifierType === "less"}
+                      disabled={modifierType !== "add_on"}
                       placeholder={modifierType === "add_on" ? suggestedModifierPrice.toFixed(2) : "0.00"}
                       className={`w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${numberInputClassName} disabled:cursor-not-allowed disabled:opacity-50`}
                     />
@@ -1877,7 +2019,7 @@ export function RecipeBOM() {
                         : "Optional price adjustment applied once when this modifier is selected."}
                     </p>
                   </div>
-                  <div>
+                  <div className={modifierType === "add_on" ? "md:order-7" : "hidden"}>
                     <label htmlFor="modifierMaxQuantity" className="block text-xs mb-1 text-foreground">
                       Maximum Add-on Count
                     </label>
@@ -1896,14 +2038,25 @@ export function RecipeBOM() {
                   <button
                     type="button"
                     onClick={handleAddModifier}
-                    disabled={!modifierName.trim() || !modifierGroup.trim()}
-                    className="self-end rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary/90 disabled:opacity-50"
+                    disabled={!modifierName.trim() || (modifierType === "add_on" && !modifierGroup.trim())}
+                    className="self-end rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary/90 disabled:opacity-50 md:order-8"
                   >
                     Add
                   </button>
                 </div>
 
                 <div className="mt-4 space-y-2">
+                  {modifiers.length > 0 && (
+                    <div className="flex items-center justify-between gap-3 border-t border-border pt-4">
+                      <div>
+                        <h4 className="text-sm font-semibold text-foreground">Created Modifiers</h4>
+                        <p className="text-[11px] text-muted-foreground">Configured options that will be available for this recipe in POS.</p>
+                      </div>
+                      <span className="shrink-0 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
+                        {modifiers.length} total
+                      </span>
+                    </div>
+                  )}
                   {modifiers.length === 0 ? (
                     <p className="rounded-lg bg-muted/30 px-3 py-4 text-center text-sm text-muted-foreground">
                       No modifiers configured for this menu item
