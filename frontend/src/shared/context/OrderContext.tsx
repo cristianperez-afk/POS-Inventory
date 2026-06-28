@@ -12,6 +12,11 @@ export interface OrderItem {
   itemType?: 'dine-in' | 'takeout';
   notes?: string;
   ingredients?: any[];
+  addedIngredients?: string[];
+  removedIngredients?: string[];
+  changedIngredients?: string[];
+  replacedIngredients?: string[];
+  modifiers?: string[];
   prepTimeMinutes?: number;
   customizationPrepMinutes?: number;
 }
@@ -565,6 +570,11 @@ function mapDatabaseRestaurantOrder(row: any): Order {
       itemType: item.item_type === 'dine-in' || item.item_type === 'DINE_IN' ? 'dine-in' : 'takeout',
       notes: item.notes ?? undefined,
       ingredients: item.ingredients ?? undefined,
+      addedIngredients: item.added_ingredients ?? item.addedIngredients ?? [],
+      removedIngredients: item.removed_ingredients ?? item.removedIngredients ?? [],
+      changedIngredients: item.changed_ingredients ?? item.changedIngredients ?? [],
+      replacedIngredients: item.replaced_ingredients ?? item.replacedIngredients ?? [],
+      modifiers: item.modifiers ?? [],
       prepTimeMinutes: item.prep_time_minutes !== null && item.prep_time_minutes !== undefined ? Number(item.prep_time_minutes) : undefined,
       customizationPrepMinutes: item.customization_prep_minutes !== null && item.customization_prep_minutes !== undefined ? Number(item.customization_prep_minutes) : undefined,
     })),

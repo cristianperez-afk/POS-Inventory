@@ -3204,10 +3204,13 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     const rows = await this.query<any>(
       `
-        SELECT inventory_item_id, ingredient_name, quantity_available, unit, COALESCE(is_available, TRUE) AS is_available
-        FROM ingredients_inventory
-        WHERE store_id = $1
-          AND inventory_item_id = ANY($2::text[])
+        SELECT ii.id AS ingredient_id, ii.inventory_item_id, ii.ingredient_name, ii.quantity_available, ii.unit,
+               COALESCE(ii.is_available, TRUE) AS is_available,
+               COALESCE(inv.price, 0) AS weighted_average_cost
+        FROM ingredients_inventory ii
+        LEFT JOIN "InventoryItem" inv ON inv.id = ii.inventory_item_id
+        WHERE ii.store_id = $1
+          AND ii.inventory_item_id = ANY($2::text[])
       `,
       [storeId, itemIds],
     );
@@ -3217,11 +3220,17 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       (Array.isArray(modifiers) ? modifiers : []).map((modifier) => {
         const stock = stockByItemId.get(String(modifier?.itemId ?? ''));
         const available = Boolean(stock?.is_available) && Number(stock?.quantity_available ?? 0) > 0;
+        const weightedPortionPrice = Math.round((
+          Number(stock?.weighted_average_cost ?? 0) * Number(modifier?.quantity ?? 0) + Number.EPSILON
+        ) * 100) / 100;
         return {
           ...modifier,
           itemName: modifier.itemName ?? stock?.ingredient_name,
+          ingredientId: stock?.ingredient_id ? Number(stock.ingredient_id) : modifier.ingredientId,
           quantityAvailable: stock ? Number(stock.quantity_available ?? 0) : null,
           unit: stock?.unit ?? modifier.unit,
+          suggestedPrice: modifier?.type === 'add_on' && stock ? weightedPortionPrice : undefined,
+          priceDelta: modifier?.type === 'remove' || modifier?.type === 'less' ? 0 : modifier?.priceDelta,
           stockStatus: modifier.itemId || modifier.requiresStock ? (available ? 'available' : 'unavailable') : 'untracked',
         };
       }),
@@ -3806,6 +3815,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           : null;
 
       for (const item of input.items ?? []) {
+        if (isRestaurantOrder) {
+          await this.validateRestaurantModifiers(client, user.store_id!, item);
+        }
         const itemRows = await this.queryWithClient<{ id: number }>(
           client,
           `
@@ -4356,7 +4368,12 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
                 'item_type', oi.item_type,
                 'notes', oi.notes,
                 'prep_time_minutes', oi.prep_time_minutes,
-                'customization_prep_minutes', oi.customization_prep_minutes
+                'customization_prep_minutes', oi.customization_prep_minutes,
+                'added_ingredients', COALESCE(customizations.added, '[]'::json),
+                'removed_ingredients', COALESCE(customizations.removed, '[]'::json),
+                'changed_ingredients', COALESCE(customizations.changed, '[]'::json),
+                'replaced_ingredients', COALESCE(customizations.replaced, '[]'::json),
+                'modifiers', COALESCE(customizations.modifiers, '[]'::json)
               )
               ORDER BY oi.id ASC
             ) FILTER (WHERE oi.id IS NOT NULL),
@@ -4367,6 +4384,28 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         LEFT JOIN users cashier_user ON cashier_user.id = o.cashier_id
         LEFT JOIN users payment_user ON payment_user.id = p.processed_by
         LEFT JOIN order_items oi ON oi.order_id = o.id
+        LEFT JOIN LATERAL (
+          SELECT
+            COALESCE(json_agg(DISTINCT CONCAT(
+              COALESCE(oic.notes, oic.replacement_ingredient_name, oic.original_ingredient_name, 'Add-on'),
+              CASE WHEN oic.new_quantity IS NOT NULL THEN CONCAT(' ', oic.new_quantity::text, COALESCE(CONCAT(' ', oic.unit), '')) ELSE '' END
+            )) FILTER (WHERE oic.customization_type IN ('ADD', 'EXTRA')), '[]'::json) AS added,
+            COALESCE(json_agg(DISTINCT COALESCE(oic.original_ingredient_name, oic.notes)) FILTER (WHERE oic.customization_type = 'REMOVE'), '[]'::json) AS removed,
+            COALESCE(json_agg(DISTINCT COALESCE(oic.notes, CONCAT(
+              COALESCE(oic.original_ingredient_name, 'Ingredient'), ': ',
+              COALESCE(oic.original_quantity::text, '0'), COALESCE(CONCAT(' ', oic.unit), ''), ' -> ',
+              COALESCE(oic.new_quantity::text, '0'), COALESCE(CONCAT(' ', oic.unit), '')
+            ))) FILTER (WHERE oic.customization_type IN ('CHANGE_QUANTITY', 'QUANTITY_CHANGE')), '[]'::json) AS changed,
+            COALESCE(json_agg(DISTINCT CONCAT(
+              COALESCE(oic.original_ingredient_name, 'Ingredient'), ' -> ',
+              COALESCE(oic.replacement_ingredient_name, 'Replacement')
+            )) FILTER (WHERE oic.customization_type = 'REPLACE'), '[]'::json) AS replaced,
+            COALESCE(json_agg(DISTINCT oic.notes) FILTER (
+              WHERE oic.customization_type = 'NOTE' AND oic.notes IS NOT NULL
+            ), '[]'::json) AS modifiers
+          FROM order_item_customizations oic
+          WHERE oic.order_item_id = oi.id
+        ) customizations ON TRUE
         LEFT JOIN products prod ON prod.id = oi.product_id
         LEFT JOIN product_variants pv ON pv.id = oi.variant_id
         WHERE o.store_id = $1
@@ -4438,6 +4477,219 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ingredient.is_removable ?? ingredient.isRemovable,
         ],
       );
+    }
+  }
+
+  private async recordRestaurantInstructionModifiers(client: PoolClient, storeId: number, orderItemId: number, item: any) {
+    const modifiers = Array.isArray(item.modifiers) ? item.modifiers : [];
+    for (const modifier of modifiers) {
+      if (String(modifier?.type ?? '').toLowerCase() !== 'note') continue;
+      const label = String(modifier?.name ?? '').trim();
+      if (!label) continue;
+      await this.queryWithClient(
+        client,
+        `
+          INSERT INTO order_item_customizations (
+            store_id, order_item_id, customization_type, notes,
+            original_quantity, new_quantity, additional_cost
+          )
+          VALUES ($1, $2, 'NOTE', $3, 0, 0, $4)
+        `,
+        [storeId, orderItemId, label, Number(modifier.priceDelta ?? 0)],
+      );
+    }
+  }
+
+  private async validateRestaurantModifiers(client: PoolClient, storeId: number, item: any) {
+    const selectedModifiers = Array.isArray(item.modifiers) ? item.modifiers : [];
+    const submittedIngredients = Array.isArray(item.ingredients) ? item.ingredients : [];
+    const hasSubmittedAddOn = submittedIngredients.some((ingredient: any) =>
+      String(ingredient.customization_type ?? ingredient.customizationType ?? '').toUpperCase() === 'ADD',
+    );
+    const hasSubmittedBasicAdjustment = submittedIngredients.some((ingredient: any) => {
+      const type = String(ingredient.customization_type ?? ingredient.customizationType ?? '').toUpperCase();
+      return ingredient.removed === true || type === 'REMOVE' || type === 'CHANGE_QUANTITY' || type === 'QUANTITY_CHANGE';
+    });
+    if (selectedModifiers.length === 0) {
+      if (hasSubmittedAddOn) throw new BadRequestException('An add-on selection is required for added ingredients.');
+      if (hasSubmittedBasicAdjustment) throw new BadRequestException('A configured modifier is required for ingredient adjustments.');
+      return;
+    }
+    const productId = Number(item.productId ?? item.id ?? 0);
+    if (!Number.isFinite(productId) || productId <= 0) {
+      throw new BadRequestException('A valid menu item is required for modifiers.');
+    }
+
+    const rows = await this.queryWithClient<{ modifiers: any[]; product_price: string | number }>(
+      client,
+      `
+        SELECT COALESCE(recipe.modifiers, '[]'::jsonb) AS modifiers,
+               product.price AS product_price
+        FROM products product
+        LEFT JOIN "InventoryItem" menu_item ON menu_item.id = product.inventory_item_id
+        LEFT JOIN LATERAL (
+          SELECT configured.modifiers
+          FROM "Recipe" configured
+          WHERE COALESCE(configured."isActive", TRUE) = TRUE
+            AND (menu_item."businessId" IS NULL OR configured."businessId" = menu_item."businessId")
+            AND (
+              configured."menuItemId" = product.inventory_item_id
+              OR lower(trim(COALESCE(configured.name, ''))) = lower(trim(COALESCE(product.name, '')))
+            )
+          ORDER BY CASE WHEN configured."menuItemId" = product.inventory_item_id THEN 0 ELSE 1 END,
+                   configured."updatedAt" DESC NULLS LAST
+          LIMIT 1
+        ) recipe ON TRUE
+        WHERE product.id = $1 AND product.store_id = $2
+        LIMIT 1
+      `,
+      [productId, storeId],
+    );
+    const configuredModifiers = Array.isArray(rows[0]?.modifiers) ? rows[0].modifiers : [];
+    const configuredById = new Map(configuredModifiers.map((modifier: any) => [String(modifier.id), modifier]));
+    const sameNumber = (left: unknown, right: unknown) => Math.abs(Number(left ?? 0) - Number(right ?? 0)) < 0.000001;
+    const selectedIds = new Set<string>();
+    const approvedAddOnIngredientIds = new Set<number>();
+    const approvedAdjustmentIngredientIds = new Set<number>();
+    const configuredBasePrice = Number(rows[0]?.product_price ?? 0);
+    let configuredSurchargePerItem = 0;
+
+    if (!sameNumber(item.price, configuredBasePrice)) {
+      throw new BadRequestException('The menu item price changed. Please refresh the order and try again.');
+    }
+
+    for (const selected of selectedModifiers) {
+      const selectedId = String(selected?.id ?? '');
+      if (!selectedId || selectedIds.has(selectedId)) {
+        throw new BadRequestException('Duplicate or invalid modifier selection.');
+      }
+      selectedIds.add(selectedId);
+      const configured: any = configuredById.get(selectedId);
+      if (!configured) {
+        throw new BadRequestException(`Modifier ${String(selected?.name ?? '') || 'selection'} is not allowed for this menu item.`);
+      }
+      if (String(selected.name ?? '') !== String(configured.name ?? '')) {
+        throw new BadRequestException('A modifier label does not match the configured recipe option.');
+      }
+      if (String(configured.type ?? 'note') !== String(selected.type ?? 'note')) {
+        throw new BadRequestException(`Modifier ${configured.name ?? selected.name} has an invalid behavior.`);
+      }
+      const selectedCount = configured.type === 'add_on' ? Number(selected.selectedQuantity ?? 1) : 1;
+      const configuredPrice = configured.type === 'remove' || configured.type === 'less'
+        ? 0
+        : Number(configured.priceDelta ?? 0);
+      if (!sameNumber(selected.priceDeltaPercent, configured.priceDeltaPercent)) {
+        throw new BadRequestException(`Modifier ${configured.name ?? selected.name} has an invalid percentage price.`);
+      }
+      if (configured.type !== 'add_on') {
+        if (!sameNumber(selected.priceDelta, configuredPrice)) {
+          throw new BadRequestException(`Modifier ${configured.name ?? selected.name} has an invalid price.`);
+        }
+        configuredSurchargePerItem += (
+          configuredPrice
+          + configuredBasePrice * (Number(configured.priceDeltaPercent ?? 0) / 100)
+        ) * selectedCount;
+      }
+      if (configured.type === 'add_on') {
+        const selectedQuantity = Number(selected.selectedQuantity ?? 1);
+        const maximum = Number(configured.maxQuantity);
+        if (!Number.isInteger(maximum) || maximum <= 0) {
+          throw new BadRequestException(`${configured.name ?? 'Add-on'} does not have a configured maximum count.`);
+        }
+        if (!Number.isInteger(selectedQuantity) || selectedQuantity < 1 || selectedQuantity > maximum) {
+          throw new BadRequestException(`${configured.name ?? 'Add-on'} allows a maximum of ${maximum}.`);
+        }
+        if (!configured.itemId || String(selected.itemId ?? '') !== String(configured.itemId)) {
+          throw new BadRequestException(`${configured.name ?? 'Add-on'} is not linked to the configured inventory item.`);
+        }
+        if (!sameNumber(selected.quantity, configured.quantity) || String(selected.unit ?? '') !== String(configured.unit ?? '')) {
+          throw new BadRequestException(`${configured.name ?? 'Add-on'} has an invalid portion.`);
+        }
+
+        const inventoryRows = await this.queryWithClient<{ id: number; weighted_average_cost: string | number }>(
+          client,
+          `
+            SELECT ii.id, COALESCE(inv.price, 0) AS weighted_average_cost
+            FROM ingredients_inventory ii
+            LEFT JOIN "InventoryItem" inv ON inv.id = ii.inventory_item_id
+            WHERE ii.store_id = $1 AND ii.inventory_item_id = $2
+            LIMIT 1
+          `,
+          [storeId, configured.itemId],
+        );
+        const ingredientId = Number(inventoryRows[0]?.id ?? 0);
+        approvedAddOnIngredientIds.add(ingredientId);
+        if (!sameNumber(selected.priceDelta, configured.priceDelta)) {
+          throw new BadRequestException(`${configured.name ?? 'Add-on'} has an invalid configured price.`);
+        }
+        configuredSurchargePerItem += (
+          Number(configured.priceDelta ?? 0)
+          + configuredBasePrice * (Number(configured.priceDeltaPercent ?? 0) / 100)
+        ) * selectedCount;
+        const expectedPortion = Number(configured.quantity ?? 0) * selectedQuantity;
+        const expectedAdditionalCost = Number(configured.priceDelta ?? 0) * selectedQuantity;
+        const submittedIngredient = submittedIngredients.find((ingredient: any) =>
+          String(ingredient.customization_type ?? ingredient.customizationType ?? '').toUpperCase() === 'ADD'
+          && Number(ingredient.replacement_ingredient_id ?? ingredient.replacementIngredientId ?? ingredient.ingredient_id ?? ingredient.ingredientId ?? 0) === ingredientId,
+        );
+        if (!ingredientId || !submittedIngredient) {
+          throw new BadRequestException(`${configured.name ?? 'Add-on'} is missing its configured inventory deduction.`);
+        }
+        if (!sameNumber(submittedIngredient.quantity, expectedPortion)
+          || String(submittedIngredient.unit ?? '') !== String(configured.unit ?? '')
+          || !sameNumber(submittedIngredient.additional_price ?? submittedIngredient.additionalCost, expectedAdditionalCost)) {
+          throw new BadRequestException(`${configured.name ?? 'Add-on'} does not match its configured portion or price.`);
+        }
+      } else if (configured.type === 'remove' || configured.type === 'less') {
+        if (!configured.itemId || String(selected.itemId ?? '') !== String(configured.itemId)) {
+          throw new BadRequestException(`${configured.name ?? 'Ingredient adjustment'} is not linked to the configured recipe ingredient.`);
+        }
+        const inventoryRows = await this.queryWithClient<{ id: number }>(
+          client,
+          `SELECT id FROM ingredients_inventory WHERE store_id = $1 AND inventory_item_id = $2 LIMIT 1`,
+          [storeId, configured.itemId],
+        );
+        const ingredientId = Number(inventoryRows[0]?.id ?? 0);
+        approvedAdjustmentIngredientIds.add(ingredientId);
+        const submittedIngredient = submittedIngredients.find((ingredient: any) =>
+          Number(ingredient.ingredient_id ?? ingredient.ingredientId ?? 0) === ingredientId,
+        );
+        if (!ingredientId || !submittedIngredient) {
+          throw new BadRequestException(`${configured.name ?? 'Ingredient adjustment'} does not match a basic recipe ingredient.`);
+        }
+        const originalQuantity = Number(submittedIngredient.original_quantity ?? submittedIngredient.originalQuantity ?? 0);
+        const submittedQuantity = Number(submittedIngredient.quantity ?? 0);
+        const isLess = configured.type === 'less' || /^less\b/i.test(String(configured.name ?? ''));
+        const validAdjustment = isLess
+          ? originalQuantity > 0 && sameNumber(submittedQuantity, originalQuantity / 2) && submittedIngredient.removed !== true
+          : submittedIngredient.removed === true || submittedQuantity <= 0;
+        if (!validAdjustment) {
+          throw new BadRequestException(`${configured.name ?? 'Ingredient adjustment'} does not match its configured action.`);
+        }
+      }
+    }
+
+    const unauthorizedAddOn = submittedIngredients.find((ingredient: any) => {
+      if (String(ingredient.customization_type ?? ingredient.customizationType ?? '').toUpperCase() !== 'ADD') return false;
+      const ingredientId = Number(ingredient.replacement_ingredient_id ?? ingredient.replacementIngredientId ?? ingredient.ingredient_id ?? ingredient.ingredientId ?? 0);
+      return !approvedAddOnIngredientIds.has(ingredientId);
+    });
+    if (unauthorizedAddOn) {
+      throw new BadRequestException('An add-on is not approved for this menu item.');
+    }
+    const unauthorizedAdjustment = submittedIngredients.find((ingredient: any) => {
+      const type = String(ingredient.customization_type ?? ingredient.customizationType ?? '').toUpperCase();
+      const adjusted = ingredient.removed === true || type === 'REMOVE' || type === 'CHANGE_QUANTITY' || type === 'QUANTITY_CHANGE';
+      const ingredientId = Number(ingredient.ingredient_id ?? ingredient.ingredientId ?? 0);
+      return adjusted && !approvedAdjustmentIngredientIds.has(ingredientId);
+    });
+    if (unauthorizedAdjustment) {
+      throw new BadRequestException('An ingredient adjustment is not approved for this menu item.');
+    }
+    const itemQuantity = Number(item.quantity ?? 1);
+    const expectedLineTotal = (configuredBasePrice + configuredSurchargePerItem) * itemQuantity;
+    if (!Number.isFinite(itemQuantity) || itemQuantity <= 0 || !sameNumber(item.lineTotal, expectedLineTotal)) {
+      throw new BadRequestException('The modified item total is invalid. Please review the order again.');
     }
   }
 
@@ -4706,6 +4958,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         ],
       );
     }
+    await this.recordRestaurantInstructionModifiers(client, storeId, orderItemId, item);
   }
 
   private async deductRestaurantIngredients(
@@ -4952,6 +5205,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         `,
         [storeId, orderId, orderItemId, ingredientId, item.productId ?? item.id ?? null, quantity, ingredient.unit ?? inventory.unit],
       );
+    }
+    if (shouldRecordCustomizations) {
+      await this.recordRestaurantInstructionModifiers(client, storeId, orderItemId, item);
     }
   }
 

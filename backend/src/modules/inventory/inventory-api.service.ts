@@ -702,12 +702,21 @@ export class InventoryApiService {
     if (scope.module !== 'RESTAURANT') {
       throw new BadRequestException('Recipes are only available for restaurant businesses.');
     }
+    this.assertCanManageRecipes(scope);
     return this.saveRecipe(scope, undefined, body);
   }
 
   async updateRecipe(headers: HeadersLike, id: string, body: Record<string, unknown>) {
     const scope = await this.resolveScope(headers);
+    this.assertCanManageRecipes(scope);
     return this.saveRecipe(scope, id, body);
+  }
+
+  private assertCanManageRecipes(scope: Scope) {
+    const role = String(scope.user.role ?? '').replace(/\s+/g, '').toLowerCase();
+    if (role !== 'admin' && role !== 'kitchenstaff') {
+      throw new ForbiddenException('Only Admin or Kitchen Staff users can manage recipes and modifier limits.');
+    }
   }
 
   /**
@@ -718,6 +727,7 @@ export class InventoryApiService {
    */
   async deleteRecipe(headers: HeadersLike, id: string, permanent = false) {
     const scope = await this.resolveScope(headers);
+    this.assertCanManageRecipes(scope);
     if (permanent) return this.purgeRecipe(scope, id);
 
     const rows = await this.safeQuery<{ id: string; menuItemId: string | null }>(
@@ -750,6 +760,7 @@ export class InventoryApiService {
   /** Bring an archived recipe back and re-list its menu item on the POS. */
   async restoreRecipe(headers: HeadersLike, id: string) {
     const scope = await this.resolveScope(headers);
+    this.assertCanManageRecipes(scope);
     const rows = await this.safeQuery<{ id: string; menuItemId: string | null }>(
       `UPDATE "Recipe"
          SET "archivedAt" = NULL, "isActive" = TRUE, "updatedAt" = CURRENT_TIMESTAMP
@@ -816,22 +827,37 @@ export class InventoryApiService {
 
   private async saveRecipe(scope: Scope, recipeId: string | undefined, body: Record<string, unknown>) {
     const ingredients = Array.isArray(body.ingredients) ? body.ingredients as Record<string, unknown>[] : [];
+    const modifiers = Array.isArray(body.modifiers) ? body.modifiers as Record<string, unknown>[] : [];
     if (!String(body.name ?? '').trim() || !String(body.category ?? '').trim()) {
       throw new BadRequestException('Recipe name and category are required.');
     }
     if (ingredients.length === 0) {
       throw new BadRequestException('A recipe must have at least one ingredient.');
     }
-
+    const addOnsWithoutMaximum = modifiers.filter((modifier) => {
+      if (String(modifier.type ?? '') !== 'add_on') return false;
+      const maximum = Number(modifier.maxQuantity);
+      return !Number.isInteger(maximum) || maximum <= 0;
+    });
     const defaultLocationId = await this.getDefaultLocationId(scope.businessId);
     const result = await this.databaseService.withTransaction(async (client) => {
       const current = recipeId
-        ? await client.query<{ menuItemId: string | null }>(
-            `SELECT "menuItemId" FROM "Recipe" WHERE id = $1 AND "businessId" = $2`,
+        ? await client.query<{ menuItemId: string | null; modifiers: Record<string, unknown>[] | null }>(
+            `SELECT "menuItemId", modifiers FROM "Recipe" WHERE id = $1 AND "businessId" = $2`,
             [recipeId, scope.businessId],
           )
         : null;
       if (recipeId && !current?.rows[0]) throw new NotFoundException('Recipe was not found.');
+      if (addOnsWithoutMaximum.length > 0) {
+        const existingModifierIds = new Set(
+          (Array.isArray(current?.rows[0]?.modifiers) ? current.rows[0].modifiers : [])
+            .map((modifier) => String(modifier.id ?? '')),
+        );
+        const newAddOnWithoutMaximum = addOnsWithoutMaximum.find((modifier) => !existingModifierIds.has(String(modifier.id ?? '')));
+        if (!recipeId || newAddOnWithoutMaximum) {
+          throw new BadRequestException(`Set a valid maximum add-on count for ${String(newAddOnWithoutMaximum?.name ?? addOnsWithoutMaximum[0]?.name ?? 'the add-on')}.`);
+        }
+      }
 
       const menuItemId = current?.rows[0]?.menuItemId ?? randomUUID();
       const locationId = String(body.locationId ?? defaultLocationId);
@@ -1110,13 +1136,16 @@ export class InventoryApiService {
                 LEFT JOIN order_items oi ON oi.order_id = o.id
                 LEFT JOIN LATERAL (
                   SELECT
-                    COALESCE(json_agg(DISTINCT COALESCE(oic.replacement_ingredient_name, oic.original_ingredient_name, oic.notes)) FILTER (
+                    COALESCE(json_agg(DISTINCT CONCAT(
+                      COALESCE(oic.notes, oic.replacement_ingredient_name, oic.original_ingredient_name, 'Add-on'),
+                      CASE WHEN oic.new_quantity IS NOT NULL THEN CONCAT(' ', oic.new_quantity::text, COALESCE(CONCAT(' ', oic.unit), '')) ELSE '' END
+                    )) FILTER (
                       WHERE oic.customization_type IN ('ADD', 'EXTRA')
                     ), '[]'::json) AS added,
                     COALESCE(json_agg(DISTINCT COALESCE(oic.original_ingredient_name, oic.notes)) FILTER (
                       WHERE oic.customization_type = 'REMOVE'
                     ), '[]'::json) AS removed,
-                    COALESCE(json_agg(DISTINCT CONCAT(
+                    COALESCE(json_agg(DISTINCT COALESCE(oic.notes, CONCAT(
                       COALESCE(oic.original_ingredient_name, 'Ingredient'),
                       ': ',
                       COALESCE(oic.original_quantity::text, '0'),
@@ -1124,17 +1153,17 @@ export class InventoryApiService {
                       ' -> ',
                       COALESCE(oic.new_quantity::text, '0'),
                       COALESCE(CONCAT(' ', oic.unit), '')
-                    )) FILTER (
+                    ))) FILTER (
                       WHERE oic.customization_type IN ('CHANGE_QUANTITY', 'QUANTITY_CHANGE')
                     ), '[]'::json) AS changed,
                     COALESCE(json_agg(DISTINCT CONCAT(COALESCE(oic.original_ingredient_name, 'Ingredient'), ' -> ', COALESCE(oic.replacement_ingredient_name, 'Replacement'))) FILTER (
                       WHERE oic.customization_type = 'REPLACE'
                     ), '[]'::json) AS replaced,
                     COALESCE(json_agg(DISTINCT oic.notes) FILTER (
-                      WHERE oic.notes IS NOT NULL AND oic.customization_type IN ('REMOVE', 'ADD', 'EXTRA', 'CHANGE_QUANTITY', 'QUANTITY_CHANGE', 'REPLACE')
+                      WHERE oic.notes IS NOT NULL AND oic.customization_type = 'NOTE'
                     ), '[]'::json) AS modifiers,
                     COALESCE(json_agg(DISTINCT oic.notes) FILTER (
-                      WHERE oic.notes IS NOT NULL AND oic.customization_type = 'NOTE'
+                      WHERE oic.notes IS NOT NULL AND oic.customization_type = 'SPECIAL_INSTRUCTION'
                     ), '[]'::json) AS instructions
                   FROM order_item_customizations oic
                   WHERE oic.order_item_id = oi.id

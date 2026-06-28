@@ -1,5 +1,5 @@
-import { useState, type WheelEvent } from "react";
-import { ChefHat, Plus, Search, Edit, Trash2, X, Save, Calculator, Scale, Upload, Archive, RotateCcw } from "lucide-react";
+import { useEffect, useRef, useState, type WheelEvent } from "react";
+import { ChefHat, Plus, Search, Edit, Trash2, X, Save, Calculator, Scale, Upload, Archive, RotateCcw, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "../../app/hooks/useSession";
 import { InventoryProduct } from "../lib/inventoryLogic";
@@ -42,11 +42,14 @@ type RecipeModifier = {
   id: string;
   name: string;
   group?: string;
-  type: "remove" | "note";
+  type: "remove" | "less" | "note" | "add_on";
   itemId?: string;
   itemName?: string;
   productId?: number | string;
   requiresStock?: boolean;
+  quantity?: number;
+  unit?: string;
+  maxQuantity?: number;
   priceDelta?: number;
   priceDeltaPercent?: number;
 };
@@ -368,7 +371,8 @@ const calculateRecipeGrossMarginPercent = (recipe: Recipe) => {
 
 export function RecipeBOM() {
   const { currentUser } = useSession();
-  const isAdmin = currentUser?.role === "Admin";
+  const normalizedRole = String(currentUser?.role ?? "").replace(/\s+/g, "").toLowerCase();
+  const canManageRecipes = normalizedRole === "admin" || normalizedRole === "kitchenstaff";
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [activeFilter, setActiveFilter] = useState<"all" | "active">("all");
@@ -401,6 +405,12 @@ export function RecipeBOM() {
   const [modifierGroup, setModifierGroup] = useState(MODIFIER_GROUPS[0]);
   const [modifierItemId, setModifierItemId] = useState("");
   const [modifierName, setModifierName] = useState("");
+  const [modifierType, setModifierType] = useState<RecipeModifier["type"]>("note");
+  const [modifierQuantity, setModifierQuantity] = useState("1");
+  const [modifierMaxQuantity, setModifierMaxQuantity] = useState("");
+  const [modifierPrice, setModifierPrice] = useState("");
+  const recipeSubmitLockRef = useRef(false);
+  const [isRecipeSubmitting, setIsRecipeSubmitting] = useState(false);
   const [currentIngredient, setCurrentIngredient] = useState({
     productId: "",
     name: "",
@@ -437,6 +447,10 @@ export function RecipeBOM() {
       return itemName === cleaned || itemName.includes(cleaned) || cleaned.includes(itemName);
     });
   };
+  const selectedModifierStockItem = findInventoryItem(modifierItemId);
+  const suggestedModifierPrice = modifierType === "add_on" && selectedModifierStockItem
+    ? Math.round((Number(selectedModifierStockItem.price ?? 0) * Number(modifierQuantity || 0) + Number.EPSILON) * 100) / 100
+    : 0;
   const isModifierUnavailable = (modifier: RecipeModifier) => {
     if (!modifier.requiresStock && !modifier.itemId && !modifier.productId) return false;
     const item = findInventoryItem(modifier.productId ?? modifier.itemId);
@@ -563,6 +577,38 @@ export function RecipeBOM() {
       toast.error("Please select a valid stock item");
       return;
     }
+    if ((modifierType === "add_on" || modifierType === "remove" || modifierType === "less") && !linkedItem) {
+      toast.error(`${modifierType === "add_on" ? "Add-on" : "Ingredient adjustment"} modifiers must be linked to an inventory item`);
+      return;
+    }
+    if ((modifierType === "remove" || modifierType === "less") && linkedItem && !ingredients.some((ingredient) => {
+      const ingredientInventoryItem = findInventoryItem(ingredient.itemBackendId ?? ingredient.productId);
+      return String(ingredient.itemBackendId ?? ingredient.productId ?? "") === String(linkedItem.backendId ?? "")
+        || String(ingredientInventoryItem?.backendId ?? "") === String(linkedItem.backendId ?? "")
+        || String(ingredientInventoryItem?.id ?? "") === String(linkedItem.id);
+    })) {
+      toast.error("Remove modifiers can only target an ingredient already used by this recipe");
+      return;
+    }
+    const quantity = Number(modifierQuantity);
+    if (modifierType === "add_on" && (!Number.isFinite(quantity) || quantity <= 0)) {
+      toast.error("Add-on quantity must be greater than zero");
+      return;
+    }
+    const maxQuantity = Number(modifierMaxQuantity);
+    if (modifierType === "add_on" && (!Number.isInteger(maxQuantity) || maxQuantity <= 0)) {
+      toast.error("Maximum add-on quantity must be a whole number greater than zero");
+      return;
+    }
+    const finalAdditionalPrice = modifierType === "remove" || modifierType === "less"
+      ? 0
+      : modifierPrice.trim() === "" && modifierType === "add_on"
+        ? suggestedModifierPrice
+        : Number(modifierPrice || 0);
+    if (!Number.isFinite(finalAdditionalPrice) || finalAdditionalPrice < 0) {
+      toast.error("Additional price must be zero or greater");
+      return;
+    }
 
     setModifiers([
       ...modifiers,
@@ -570,21 +616,35 @@ export function RecipeBOM() {
         id: `MOD-${Date.now()}`,
         name: modifierName.trim(),
         group: modifierGroup.trim() || "Modifiers",
-        type: linkedItem ? "remove" : "note",
+        type: modifierType,
         productId: linkedItem?.id,
         itemId: linkedItem?.backendId,
         itemName: linkedItem?.name,
-        requiresStock: Boolean(linkedItem),
-        priceDelta: 0,
+        requiresStock: modifierType === "add_on",
+        quantity: modifierType === "add_on" ? quantity : undefined,
+        unit: modifierType === "add_on" ? linkedItem?.unit : undefined,
+        maxQuantity: modifierType === "add_on" ? maxQuantity : undefined,
+        priceDelta: finalAdditionalPrice,
         priceDeltaPercent: 0,
       },
     ]);
     setModifierItemId("");
     setModifierName("");
+    setModifierType("note");
+    setModifierQuantity("1");
+    setModifierMaxQuantity("");
+    setModifierPrice("");
   };
 
   const handleRemoveModifier = (id: string) => {
     setModifiers(modifiers.filter((modifier) => modifier.id !== id));
+  };
+
+  const handleModifierMaximumChange = (id: string, value: string) => {
+    const parsed = Number(value);
+    setModifiers((current) => current.map((modifier) => modifier.id === id
+      ? { ...modifier, maxQuantity: value === "" || !Number.isFinite(parsed) ? undefined : Math.max(1, Math.floor(parsed)) }
+      : modifier));
   };
 
   const applyPresetModifiers = () => {
@@ -601,15 +661,25 @@ export function RecipeBOM() {
     setModifiers(preset.options.map((option, index) => {
       const requiresStock = modifierNeedsStock(option.group, option.name);
       const stockItem = requiresStock ? findModifierInventoryItem(option.group, option.name) : undefined;
+      const isRemove = /^(no|less)\b/i.test(option.name);
+      const isLess = /^less\b/i.test(option.name);
+      const isAddOn = !isRemove && (
+        /add-?ons?|toppings?|extra options?|beverage add-?ons?/i.test(option.group)
+        || /^(extra|add)\b/i.test(option.name)
+        || /^(bacon|egg|boiled egg|mushroom)$/i.test(option.name)
+      );
       return {
         id: `MOD-${Date.now()}-${index}`,
         name: option.name,
         group: option.group,
-        type: stockItem ? "remove" : "note",
+        type: isLess && stockItem ? "less" : isRemove && stockItem ? "remove" : isAddOn && stockItem ? "add_on" : "note",
         productId: stockItem?.id,
         itemId: stockItem?.backendId,
         itemName: stockItem?.name,
-        requiresStock,
+        requiresStock: Boolean(isAddOn && stockItem),
+        quantity: isAddOn && stockItem ? 1 : undefined,
+        unit: isAddOn && stockItem ? stockItem.unit : undefined,
+        maxQuantity: undefined,
         priceDelta: option.priceDelta ?? 0,
         priceDeltaPercent: option.priceDeltaPercent ?? 0,
       };
@@ -651,9 +721,19 @@ export function RecipeBOM() {
 
   const handleCreateRecipe = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (recipeSubmitLockRef.current) return;
 
-    if (!isAdmin) {
-      toast.error("Only admin users can create or edit recipes and pricing.");
+    if (!canManageRecipes) {
+      toast.error("Only Admin or Kitchen Staff users can create or edit recipes and pricing.");
+      return;
+    }
+    const existingModifierIds = new Set((editingRecipe?.modifiers ?? []).map((modifier) => String(modifier.id)));
+    const modifierWithoutMaximum = modifiers.find((modifier) =>
+      modifier.type === "add_on"
+      && !existingModifierIds.has(String(modifier.id))
+      && (!Number.isInteger(Number(modifier.maxQuantity)) || Number(modifier.maxQuantity) <= 0));
+    if (modifierWithoutMaximum) {
+      toast.error(`Set a maximum add-on count for ${modifierWithoutMaximum.name}`);
       return;
     }
 
@@ -716,6 +796,8 @@ export function RecipeBOM() {
       instructions: newRecipe.instructions,
     };
 
+    recipeSubmitLockRef.current = true;
+    setIsRecipeSubmitting(true);
     try {
       await saveRecipe.mutateAsync({
         id: editingRecipe?.id,
@@ -744,7 +826,12 @@ export function RecipeBOM() {
               itemId: inventoryItem?.backendId,
               itemName: inventoryItem?.name ?? modifier.itemName,
               requiresStock: Boolean(modifier.requiresStock),
-              priceDelta: Number(modifier.priceDelta ?? 0),
+              quantity: modifier.type === "add_on" ? Number(modifier.quantity ?? 1) : undefined,
+              unit: modifier.type === "add_on" ? inventoryItem?.unit ?? modifier.unit : undefined,
+              maxQuantity: modifier.type === "add_on" && Number.isInteger(Number(modifier.maxQuantity)) && Number(modifier.maxQuantity) > 0
+                ? Math.floor(Number(modifier.maxQuantity))
+                : undefined,
+              priceDelta: modifier.type === "remove" || modifier.type === "less" ? 0 : Number(modifier.priceDelta ?? 0),
               priceDeltaPercent: Number(modifier.priceDeltaPercent ?? 0),
             };
           }),
@@ -782,10 +869,17 @@ export function RecipeBOM() {
       setModifierGroup(MODIFIER_GROUPS[0]);
       setModifierItemId("");
       setModifierName("");
+      setModifierType("note");
+      setModifierQuantity("1");
+      setModifierMaxQuantity("");
+      setModifierPrice("");
       setIngredientSearch("");
       setIsIngredientPickerOpen(false);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to save recipe");
+    } finally {
+      recipeSubmitLockRef.current = false;
+      setIsRecipeSubmitting(false);
     }
   };
 
@@ -796,8 +890,8 @@ export function RecipeBOM() {
   };
 
   const handleEditRecipe = (recipe: Recipe) => {
-    if (!isAdmin) {
-      toast.error("Only admin users can edit recipes and pricing.");
+    if (!canManageRecipes) {
+      toast.error("Only Admin or Kitchen Staff users can edit recipes and pricing.");
       return;
     }
 
@@ -820,22 +914,26 @@ export function RecipeBOM() {
     setModifierGroup(MODIFIER_GROUPS[0]);
     setModifierItemId("");
     setModifierName("");
+    setModifierType("note");
+    setModifierQuantity("1");
+    setModifierMaxQuantity("");
+    setModifierPrice("");
     setIngredientSearch("");
     setIsIngredientPickerOpen(false);
     setShowCreateModal(true);
   };
 
   const handleDeleteRecipe = (id: string) => {
-    if (!isAdmin) {
-      toast.error("Only admin users can modify recipes.");
+    if (!canManageRecipes) {
+      toast.error("Only Admin or Kitchen Staff users can modify recipes.");
       return;
     }
     setPendingDeleteId(id);
   };
 
   const handleRestoreRecipe = async (id: string) => {
-    if (!isAdmin) {
-      toast.error("Only admin users can restore recipes.");
+    if (!canManageRecipes) {
+      toast.error("Only Admin or Kitchen Staff users can restore recipes.");
       return;
     }
     try {
@@ -944,8 +1042,12 @@ export function RecipeBOM() {
     setIsIngredientPickerOpen(false);
     setIngredients([]);
     setModifiers([]);
-    setModifierIngredientId("");
+    setModifierItemId("");
     setModifierName("");
+    setModifierType("note");
+    setModifierQuantity("1");
+    setModifierMaxQuantity("");
+    setModifierPrice("");
     setCurrentIngredient({
       productId: "",
       name: "",
@@ -1003,7 +1105,7 @@ export function RecipeBOM() {
         <div>
           <h1 className="text-3xl font-bold text-foreground mb-2">Recipe & BOM</h1>
           <p className="text-muted-foreground">
-            {isAdmin
+            {canManageRecipes
               ? "Manage recipes, ingredient costs, and menu pricing"
               : "View recipe costs, menu prices, and scaling"}
           </p>
@@ -1021,7 +1123,7 @@ export function RecipeBOM() {
             <Archive className="w-5 h-5" />
             {viewArchived ? `Back to Menu` : `Archived${archivedRecipes.length ? ` (${archivedRecipes.length})` : ""}`}
           </button>
-          {isAdmin && !viewArchived && (
+          {canManageRecipes && !viewArchived && (
             <button
               onClick={handleOpenCreateModal}
               className="px-6 py-3 bg-gradient-to-r from-primary to-secondary text-white rounded-2xl hover:-translate-y-0.5 hover:shadow-lg hover:shadow-primary/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-md transition-all duration-200 flex items-center gap-2"
@@ -1184,7 +1286,7 @@ export function RecipeBOM() {
                 <Calculator className="w-4 h-4" />
                 View & Scale
               </button>
-              {isAdmin && !viewArchived && (
+              {canManageRecipes && !viewArchived && (
                 <>
                   <button
                     onClick={() => handleEditRecipe(recipe)}
@@ -1202,7 +1304,7 @@ export function RecipeBOM() {
                   </button>
                 </>
               )}
-              {isAdmin && viewArchived && (
+              {canManageRecipes && viewArchived && (
                 <>
                   <button
                     onClick={() => handleRestoreRecipe(recipe.id)}
@@ -1245,12 +1347,13 @@ export function RecipeBOM() {
 
       {/* Create Recipe Modal */}
       {showCreateModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setShowCreateModal(false)}>
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => { if (!isRecipeSubmitting) setShowCreateModal(false); }}>
           <div className="bg-card rounded-2xl shadow-xl border border-border w-full max-w-3xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="sticky top-0 bg-card p-6 border-b border-border flex items-center justify-between">
               <h2 className="text-2xl font-bold text-foreground">{editingRecipe ? "Edit Recipe" : "Create New Recipe"}</h2>
               <button
-                onClick={() => setShowCreateModal(false)}
+                onClick={() => { if (!isRecipeSubmitting) setShowCreateModal(false); }}
+                disabled={isRecipeSubmitting}
                 className="p-2 hover:bg-muted rounded-xl transition-colors"
               >
                 <X className="w-6 h-6" />
@@ -1636,7 +1739,7 @@ export function RecipeBOM() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_1fr_auto]">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
                   <div>
                     <label htmlFor="modifierGroup" className="block text-xs mb-1 text-foreground">
                       Category
@@ -1652,6 +1755,36 @@ export function RecipeBOM() {
                     <datalist id="modifier-group-options">
                       {MODIFIER_GROUPS.map((group) => <option key={group} value={group} />)}
                     </datalist>
+                    <p className="mt-1 text-[10px] text-muted-foreground">Groups related choices for easier Admin setup, such as Add-ons, Preparation, or Protein Choice.</p>
+                  </div>
+                  <div>
+                    <label htmlFor="modifierType" className="block text-xs mb-1 text-foreground">
+                      Behavior
+                    </label>
+                    <select
+                      id="modifierType"
+                      value={modifierType}
+                      onChange={(event) => {
+                        const nextType = event.target.value as RecipeModifier["type"];
+                        setModifierType(nextType);
+                        if (nextType === "remove" || nextType === "less") setModifierPrice("");
+                      }}
+                      className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                    >
+                      <option value="note">Instruction / preference</option>
+                      <option value="less">Less ingredient (50%)</option>
+                      <option value="remove">Remove ingredient</option>
+                      <option value="add_on">Add-on ingredient</option>
+                    </select>
+                    <p className="mt-1 text-[10px] text-muted-foreground">
+                      {modifierType === "note"
+                        ? "Sends an instruction to POS and Kitchen without changing inventory quantity."
+                        : modifierType === "less"
+                          ? "Uses 50% of the linked basic ingredient and deducts only that reduced amount."
+                          : modifierType === "remove"
+                            ? "Removes the linked basic ingredient and prevents its stock deduction for the order."
+                            : "Adds a fixed extra portion, price, and inventory deduction for every 1x selected in POS."}
+                    </p>
                   </div>
                   <div>
                     <label htmlFor="modifierItem" className="block text-xs mb-1 text-foreground">
@@ -1663,13 +1796,20 @@ export function RecipeBOM() {
                       onChange={(event) => setModifierItemId(event.target.value)}
                       className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
                     >
-                      <option value="">No stock effect</option>
+                      <option value="">{modifierType === "note" ? "No stock effect" : "Select a stock item"}</option>
                       {inventoryItems.map((item) => (
                         <option key={item.backendId ?? item.id} value={item.backendId ?? item.id}>
                           {item.name} ({item.stock} {item.unit})
                         </option>
                       ))}
                     </select>
+                    <p className="mt-1 text-[10px] text-muted-foreground">
+                      {modifierType === "note"
+                        ? "Optional for instructions because this behavior has no stock effect."
+                        : modifierType === "add_on"
+                          ? "Select the inventory item that will be deducted whenever this add-on is ordered."
+                          : "Select the basic recipe ingredient affected by Less or Remove."}
+                    </p>
                   </div>
                   <div>
                     <label htmlFor="modifierName" className="block text-xs mb-1 text-foreground">
@@ -1682,6 +1822,64 @@ export function RecipeBOM() {
                       placeholder="No cheese"
                       className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
                     />
+                    <p className="mt-1 text-[10px] text-muted-foreground">Customer-friendly option name shown in POS, Kitchen Orders, order history, and receipts.</p>
+                  </div>
+                  <div>
+                    <label htmlFor="modifierQuantity" className="block text-xs mb-1 text-foreground">
+                      Fixed Portion per 1x Add-on
+                    </label>
+                    <input
+                      id="modifierQuantity"
+                      type="number"
+                      min="0.001"
+                      step="0.001"
+                      value={modifierQuantity}
+                      onChange={(event) => setModifierQuantity(event.target.value)}
+                      disabled={modifierType !== "add_on"}
+                      className={`w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${numberInputClassName} disabled:cursor-not-allowed disabled:opacity-50`}
+                    />
+                    <p className="mt-1 text-[10px] text-muted-foreground">Available for Add-on behavior only. Kitchen/Admin sets the stock portion; POS staff sees only 1x, 2x, and so on.</p>
+                  </div>
+                  <div>
+                    <label htmlFor="modifierPrice" className="block text-xs mb-1 text-foreground">
+                      Additional Price (₱) — Optional Override
+                    </label>
+                    <input
+                      id="modifierPrice"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={modifierPrice}
+                      onChange={(event) => setModifierPrice(event.target.value)}
+                      disabled={modifierType === "remove" || modifierType === "less"}
+                      placeholder={modifierType === "add_on" ? suggestedModifierPrice.toFixed(2) : "0.00"}
+                      className={`w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${numberInputClassName} disabled:cursor-not-allowed disabled:opacity-50`}
+                    />
+                    <p className="mt-1 text-[10px] text-muted-foreground">
+                      {modifierType === "remove" || modifierType === "less"
+                        ? "Disabled because removing or reducing a basic ingredient does not add a customer charge."
+                        : modifierType === "add_on"
+                        ? selectedModifierStockItem
+                          ? `Suggested ${formatMoney(suggestedModifierPrice)}: ${formatMoney(Number(selectedModifierStockItem.price ?? 0))}/${selectedModifierStockItem.unit} weighted average cost × ${Number(modifierQuantity || 0)} ${selectedModifierStockItem.unit}. Leave blank to use it, or enter your own selling price.`
+                          : "Select a Stock Link and enter a fixed portion to compute the price automatically."
+                        : "Optional price adjustment applied once when this modifier is selected."}
+                    </p>
+                  </div>
+                  <div>
+                    <label htmlFor="modifierMaxQuantity" className="block text-xs mb-1 text-foreground">
+                      Maximum Add-on Count
+                    </label>
+                    <input
+                      id="modifierMaxQuantity"
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={modifierMaxQuantity}
+                      onChange={(event) => setModifierMaxQuantity(event.target.value)}
+                      disabled={modifierType !== "add_on"}
+                      className={`w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${numberInputClassName} disabled:cursor-not-allowed disabled:opacity-50`}
+                    />
+                    <p className="mt-1 text-[10px] text-muted-foreground">Available for Add-on behavior only. Limits how many times it may be selected for one menu item.</p>
                   </div>
                   <button
                     type="button"
@@ -1709,9 +1907,31 @@ export function RecipeBOM() {
                             {formatModifierPrice(modifier) && <span className="ml-2 text-xs text-primary">{formatModifierPrice(modifier)}</span>}
                           </p>
                           <p className="text-xs text-muted-foreground">
-                            {unavailable ? "Unavailable in stock - disabled in POS" : modifier.itemName ? `Linked to ${modifier.itemName}` : "Instruction only"}
+                            {unavailable
+                              ? "Unavailable in stock - disabled in POS"
+                              : modifier.type === "add_on"
+                                ? `Add-on • ${modifier.quantity ?? 1} ${modifier.unit ?? "unit"} each • max ${modifier.maxQuantity ?? "not set"} • linked to ${modifier.itemName ?? "inventory"}`
+                                : modifier.type === "less"
+                                  ? `Less (50%) • linked to ${modifier.itemName ?? "recipe ingredient"}`
+                                : modifier.type === "remove"
+                                  ? `Remove • linked to ${modifier.itemName ?? "recipe ingredient"}`
+                                  : "Instruction only"}
                           </p>
                         </div>
+                        {modifier.type === "add_on" && (
+                          <label className="mx-3 flex items-center gap-2 text-xs text-muted-foreground">
+                            Maximum
+                            <input
+                              type="number"
+                              min="1"
+                              step="1"
+                              value={modifier.maxQuantity ?? ""}
+                              onChange={(event) => handleModifierMaximumChange(modifier.id, event.target.value)}
+                              className={`w-20 rounded-md border border-input bg-input-background px-2 py-1 text-foreground ${numberInputClassName}`}
+                              aria-label={`Maximum add-on count for ${modifier.name}`}
+                            />
+                          </label>
+                        )}
                         <button
                           type="button"
                           onClick={() => handleRemoveModifier(modifier.id)}
@@ -1775,17 +1995,19 @@ export function RecipeBOM() {
               <div className="flex gap-3 pt-4 border-t border-border">
                 <button
                   type="submit"
-                  className="flex-1 px-6 py-3 bg-gradient-to-r from-primary to-secondary text-white rounded-xl hover:shadow-lg hover:shadow-primary/30 transition-all duration-200 flex items-center justify-center gap-2"
+                  disabled={isRecipeSubmitting}
+                  className="flex-1 px-6 py-3 bg-gradient-to-r from-primary to-secondary text-white rounded-xl hover:shadow-lg hover:shadow-primary/30 transition-all duration-200 flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  <Save className="w-5 h-5" />
-                  {editingRecipe ? "Save Recipe" : "Create Recipe"}
+                  {isRecipeSubmitting ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
+                  {isRecipeSubmitting ? "Processing..." : editingRecipe ? "Save Recipe" : "Create Recipe"}
                 </button>
                 <button
                   type="button"
                   onClick={() => setShowCreateModal(false)}
-                  className="px-6 py-3 bg-muted text-foreground rounded-xl hover:bg-muted/80 transition-all duration-200"
+                  disabled={isRecipeSubmitting}
+                  className="px-6 py-3 bg-muted text-foreground rounded-xl hover:bg-muted/80 transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  Cancel
+                  {isRecipeSubmitting ? "Please wait..." : "Cancel"}
                 </button>
               </div>
             </form>

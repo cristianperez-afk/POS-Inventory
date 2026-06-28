@@ -3,7 +3,7 @@ import { Sidebar } from '../../shared/components/Sidebar';
 import { Page, type StoreBrand } from '../../shared/App';
 import type { StaffType, StoreType } from '../../auth/types/auth';
 import { X, Search, Eye, CreditCard, Printer, RotateCcw, CheckCircle, ChevronDown, Download, Users } from 'lucide-react';
-import { useOrders, Order } from '../../shared/context/OrderContext';
+import { useOrders, Order, type OrderItem } from '../../shared/context/OrderContext';
 import { ThermalReceipt } from '../../shared/components/ThermalReceipt';
 import { useStoreSettings } from '../../shared/context/StoreSettingsContext';
 import { DeleteConfirmDialog } from '../../shared/components/DeleteConfirmDialog';
@@ -41,6 +41,27 @@ function formatDuration(minutes?: number) {
   const hours = Math.floor(minutes / 60);
   const rest = minutes % 60;
   return `${hours} hr${hours === 1 ? '' : 's'}${rest ? ` ${rest} mins` : ''}`;
+}
+
+function OrderItemDetail({ item }: { item: OrderItem }) {
+  const details = [
+    ...(item.removedIngredients ?? []).map((value) => `REMOVE: ${value}`),
+    ...(item.addedIngredients ?? []).map((value) => `ADD: ${value}`),
+    ...(item.changedIngredients ?? []).map((value) => `CHANGE: ${value}`),
+    ...(item.replacedIngredients ?? []).map((value) => `REPLACE: ${value}`),
+    ...(item.modifiers ?? []).map((value) => `OPTION: ${value}`),
+    ...(item.notes?.trim() ? [`NOTE: ${item.notes.trim()}`] : []),
+  ];
+
+  return (
+    <div className={`border-b pb-2 ${details.length > 0 ? 'rounded-lg border border-amber-200 bg-amber-50 p-2' : 'border-gray-50'}`}>
+      <div className="flex justify-between gap-3 text-sm text-gray-700">
+        <span className="flex items-center gap-2">{item.quantity}× {item.name}{details.length > 0 && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-bold uppercase text-amber-800">Modified</span>}</span>
+        <span>₱{Number(item.lineTotal ?? item.price * item.quantity).toFixed(2)}</span>
+      </div>
+      {details.map((detail, index) => <p key={`${detail}-${index}`} className="mt-1 pl-3 text-[10px] font-medium text-amber-800">{detail}</p>)}
+    </div>
+  );
 }
 
 function formatElapsed(start?: string, end?: string, duration?: number, now = Date.now()) {
@@ -718,10 +739,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                         <p className="text-xs text-blue-600 font-medium mb-1.5">Dine-In</p>
                         <div className="space-y-2 mb-3">
                           {dineInItems.map((item, i) => (
-                            <div key={i} className="flex justify-between text-sm text-gray-700">
-                              <span>{item.quantity}× {item.name}</span>
-                              <span>₱{(item.price * item.quantity).toFixed(2)}</span>
-                            </div>
+                            <OrderItemDetail key={i} item={item} />
                           ))}
                         </div>
                       </>
@@ -731,10 +749,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                         <p className="text-xs text-amber-600 font-medium mb-1.5">Takeout</p>
                         <div className="space-y-2">
                           {takeoutItems.map((item, i) => (
-                            <div key={i} className="flex justify-between text-sm text-gray-700">
-                              <span>{item.quantity}× {item.name}</span>
-                              <span>₱{(item.price * item.quantity).toFixed(2)}</span>
-                            </div>
+                            <OrderItemDetail key={i} item={item} />
                           ))}
                         </div>
                       </>
@@ -743,10 +758,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                 ) : (
                   <div className="space-y-2">
                     {selectedOrder.items.map((item, i) => (
-                      <div key={i} className="flex justify-between text-sm text-gray-700 border-b border-gray-50 pb-2">
-                        <span>{item.quantity}× {item.name}</span>
-                        <span>₱{(item.price * item.quantity).toFixed(2)}</span>
-                      </div>
+                      <OrderItemDetail key={i} item={item} />
                     ))}
                   </div>
                 )}
@@ -970,7 +982,14 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                 name: item.name,
                 quantity: item.quantity,
                 price: item.price,
+                lineTotal: item.lineTotal,
                 itemType: item.itemType,
+                notes: item.notes,
+                addedIngredients: item.addedIngredients,
+                removedIngredients: item.removedIngredients,
+                changedIngredients: item.changedIngredients,
+                replacedIngredients: item.replacedIngredients,
+                modifiers: item.modifiers,
               }))}
               subtotal={selectedOrder.subtotal}
               serviceFee={selectedOrder.serviceFee}

@@ -48,13 +48,16 @@ interface Modifier {
   id: string;
   name: string;
   group?: string;
-  type: 'remove' | 'note';
+  type: 'remove' | 'less' | 'note' | 'add_on';
   itemId?: string;
+  ingredientId?: number;
   itemName?: string;
   quantityAvailable?: number | null;
   unit?: string;
   stockStatus?: 'available' | 'unavailable' | 'untracked';
   requiresStock?: boolean;
+  quantity?: number;
+  maxQuantity?: number;
   priceDelta?: number;
   priceDeltaPercent?: number;
 }
@@ -90,6 +93,7 @@ interface CartItem {
   originalIngredients: Ingredient[];
   modifiers?: Modifier[];
   selectedModifierIds?: string[];
+  modifierQuantities?: Record<string, number>;
 }
 
 // Customer history is now derived from actual orders
@@ -114,6 +118,32 @@ const clampMinutes = (minutes: number, min: number, max: number) => {
   if (!Number.isFinite(minutes)) return min;
   return Math.min(max, Math.max(min, minutes));
 };
+
+function getCartItemDisplayDetails(item: CartItem) {
+  const selected = (item.modifiers ?? []).filter((modifier) => (item.selectedModifierIds ?? []).includes(modifier.id));
+  const lessPreferences = selected.filter((modifier) => modifier.type === 'less' || (modifier.type === 'remove' && /^less\b/i.test(modifier.name)));
+  return {
+    addedIngredients: selected.filter((modifier) => modifier.type === 'add_on').map((modifier) => {
+      const count = Math.max(1, Number(item.modifierQuantities?.[modifier.id] ?? 1));
+      const quantity = Math.max(0.001, Number(modifier.quantity ?? 1)) * count;
+      return `${modifier.itemName ?? modifier.name} ${quantity} ${modifier.unit ?? 'pcs'}`;
+    }),
+    removedIngredients: selected.filter((modifier) => modifier.type === 'remove' && !/^less\b/i.test(modifier.name)).map((modifier) => modifier.itemName ?? modifier.name),
+    changedIngredients: [
+      ...lessPreferences.map((modifier) => modifier.name),
+      ...item.ingredients.filter((ingredient) => ingredient.customization_type === 'CHANGE_QUANTITY' && !lessPreferences.some((modifier) => modifierTargetsIngredient(modifier, ingredient))).map((ingredient) => `${ingredient.name} ${ingredient.quantity} ${ingredient.unit ?? ''}`.trim()),
+    ],
+    replacedIngredients: item.ingredients.filter((ingredient) => ingredient.customization_type === 'REPLACE').map((ingredient) => `${ingredient.name} -> ${ingredient.replacement_name ?? 'Replacement'}`),
+    modifiers: selected.filter((modifier) => modifier.type === 'note').map((modifier) => modifier.name),
+  };
+}
+
+function modifierTargetsIngredient(modifier: Modifier, ingredient: Ingredient) {
+  return Boolean(
+    (modifier.itemId && String(modifier.itemId) === String(ingredient.itemId ?? ingredient.inventory_item_id ?? '')) ||
+    (modifier.itemName && modifier.itemName.toLowerCase() === ingredient.name.toLowerCase()),
+  );
+}
 
 function toOrderListFormat(order: any, paid: boolean) {
   const hasDineIn = order.items.some((i: CartItem) => i.orderType === 'dine-in');
@@ -151,11 +181,19 @@ function toOrderListFormat(order: any, paid: boolean) {
       name: item.name,
       quantity: item.quantity,
       price: item.price,
-      lineTotal: (item.price * item.quantity) + item.ingredients.reduce((sum, ingredient) => sum + Number(ingredient.additional_price ?? 0), 0) * item.quantity,
+      lineTotal: (item.price * item.quantity)
+        + item.ingredients.reduce((sum, ingredient) => sum + Number(ingredient.additional_price ?? 0), 0) * item.quantity
+        + (item.modifiers ?? [])
+          .filter((modifier) => (item.selectedModifierIds ?? []).includes(modifier.id))
+          .reduce((sum, modifier) => {
+            const count = modifier.type === 'add_on' ? Number(item.modifierQuantities?.[modifier.id] ?? 1) : 1;
+            return sum + (Number(modifier.priceDelta ?? 0) + item.price * (Number(modifier.priceDeltaPercent ?? 0) / 100)) * count * item.quantity;
+          }, 0),
       image: item.image,
       itemType: item.orderType,
       notes: item.notes,
       ingredients: item.ingredients,
+      ...getCartItemDisplayDetails(item),
       prepTimeMinutes: item.prepTimeMinutes,
       customizationPrepMinutes: item.customizationPrepMinutes,
     })),
@@ -192,6 +230,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
   const [diningOption, setDiningOption] = useState<'' | 'dine-in' | 'takeout'>('');
   const [searchQuery, setSearchQuery] = useState('');
   const [customizeItemIndex, setCustomizeItemIndex] = useState<number | null>(null);
+  const customizeSnapshotRef = useRef<{ index: number; item: CartItem } | null>(null);
   const [showAddIngredient, setShowAddIngredient] = useState(false);
   const [addIngredientName, setAddIngredientName] = useState('');
   const [showPreview, setShowPreview] = useState(false);
@@ -256,13 +295,16 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
             id: String(modifier.id),
             name: String(modifier.name),
             group: String(modifier.group ?? 'Modifiers'),
-            type: modifier.type === 'note' ? 'note' : 'remove',
+            type: modifier.type === 'add_on' ? 'add_on' : modifier.type === 'note' ? 'note' : modifier.type === 'less' ? 'less' : 'remove',
             itemId: modifier.itemId,
+            ingredientId: finiteNumberOrUndefined(modifier.ingredientId),
             itemName: modifier.itemName,
             quantityAvailable: modifier.quantityAvailable,
             unit: modifier.unit,
             stockStatus: modifier.stockStatus,
             requiresStock: modifier.requiresStock,
+            quantity: Number(modifier.quantity ?? 1),
+            maxQuantity: Number.isInteger(Number(modifier.maxQuantity)) && Number(modifier.maxQuantity) > 0 ? Math.floor(Number(modifier.maxQuantity)) : undefined,
             priceDelta: Number(modifier.priceDelta ?? 0),
             priceDeltaPercent: Number(modifier.priceDeltaPercent ?? 0),
           }))
@@ -352,13 +394,16 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
               id: String(modifier.id),
               name: String(modifier.name),
               group: String(modifier.group ?? 'Modifiers'),
-              type: modifier.type === 'note' ? 'note' : 'remove',
+              type: modifier.type === 'add_on' ? 'add_on' : modifier.type === 'note' ? 'note' : modifier.type === 'less' ? 'less' : 'remove',
               itemId: modifier.itemId,
+              ingredientId: finiteNumberOrUndefined(modifier.ingredientId),
               itemName: modifier.itemName,
               quantityAvailable: modifier.quantityAvailable,
               unit: modifier.unit,
               stockStatus: modifier.stockStatus,
               requiresStock: modifier.requiresStock,
+              quantity: Number(modifier.quantity ?? 1),
+              maxQuantity: Number.isInteger(Number(modifier.maxQuantity)) && Number(modifier.maxQuantity) > 0 ? Math.floor(Number(modifier.maxQuantity)) : undefined,
               priceDelta: Number(modifier.priceDelta ?? 0),
               priceDeltaPercent: Number(modifier.priceDeltaPercent ?? 0),
             }))
@@ -531,6 +576,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       originalIngredients: JSON.parse(JSON.stringify(product.ingredients)),
       modifiers: product.modifiers,
       selectedModifierIds: [],
+      modifierQuantities: {},
     };
 
     setCart((items) => [...items, newItem]);
@@ -570,15 +616,84 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       if (i !== index) return item;
       const modifier = (item.modifiers ?? []).find((option) => option.id === modifierId);
       if (modifier?.stockStatus === 'unavailable') return item;
+      if (modifier?.type === 'add_on' && (!Number.isInteger(Number(modifier.maxQuantity)) || Number(modifier.maxQuantity) <= 0)) return item;
       const selectedModifierIds = item.selectedModifierIds ?? [];
       const selected = selectedModifierIds.includes(modifierId);
+      const modifierQuantities = { ...(item.modifierQuantities ?? {}) };
+      if (selected) delete modifierQuantities[modifierId];
+      else modifierQuantities[modifierId] = 1;
       return {
         ...item,
         selectedModifierIds: selected
           ? selectedModifierIds.filter((id) => id !== modifierId)
           : [...selectedModifierIds, modifierId],
+        modifierQuantities,
       };
     }));
+  };
+
+  const selectBasicIngredientModifier = (index: number, ingredient: Ingredient, modifierId: string | null) => {
+    setCart((items) => items.map((item, itemIndex) => {
+      if (itemIndex !== index) return item;
+      const ingredientModifierIds = (item.modifiers ?? [])
+        .filter((modifier) => (modifier.type === 'remove' || modifier.type === 'less') && modifierTargetsIngredient(modifier, ingredient))
+        .map((modifier) => modifier.id);
+      const retained = (item.selectedModifierIds ?? []).filter((id) => !ingredientModifierIds.includes(id));
+      return {
+        ...item,
+        selectedModifierIds: modifierId ? [...retained, modifierId] : retained,
+      };
+    }));
+  };
+
+  const updateModifierQuantity = (index: number, modifierId: string, quantity: number) => {
+    setCart((items) => items.map((item, itemIndex) => {
+      if (itemIndex !== index) return item;
+      const modifier = (item.modifiers ?? []).find((option) => option.id === modifierId);
+      if (!modifier || modifier.type !== 'add_on') return item;
+      if (!Number.isInteger(Number(modifier.maxQuantity)) || Number(modifier.maxQuantity) <= 0) return item;
+      const perUnit = Math.max(Number(modifier.quantity ?? 1), 0.001);
+      const maxByStock = modifier.quantityAvailable == null
+        ? Number.POSITIVE_INFINITY
+        : Math.floor(Number(modifier.quantityAvailable) / (perUnit * Math.max(item.quantity, 1)));
+      const configuredMax = Number.isInteger(Number(modifier.maxQuantity)) && Number(modifier.maxQuantity) > 0
+        ? Math.floor(Number(modifier.maxQuantity))
+        : 1;
+      const nextQuantity = Math.max(1, Math.min(Math.floor(quantity), configuredMax, Math.max(1, maxByStock)));
+      return {
+        ...item,
+        modifierQuantities: { ...(item.modifierQuantities ?? {}), [modifierId]: nextQuantity },
+      };
+    }));
+  };
+
+  const openCustomizeItem = (index: number) => {
+    customizeSnapshotRef.current = { index, item: structuredClone(cart[index]) };
+    setCustomizeItemIndex(index);
+  };
+
+  const cancelCustomizeItem = () => {
+    const snapshot = customizeSnapshotRef.current;
+    if (snapshot) {
+      setCart((items) => items.map((item, index) => index === snapshot.index ? snapshot.item : item));
+    }
+    customizeSnapshotRef.current = null;
+    setCustomizeItemIndex(null);
+  };
+
+  const confirmCustomizeItem = () => {
+    customizeSnapshotRef.current = null;
+    setCustomizeItemIndex(null);
+  };
+
+  const resetCustomizeItem = (index: number) => {
+    setCart((items) => items.map((item, itemIndex) => itemIndex === index ? {
+      ...item,
+      ingredients: structuredClone(item.originalIngredients),
+      selectedModifierIds: [],
+      modifierQuantities: {},
+      notes: '',
+    } : item));
   };
 
   const updateIngredientQuantity = (index: number, ingredientName: string, newQuantity: number) => {
@@ -698,7 +813,10 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
 
   const modifierPrice = (item: CartItem) => (item.modifiers ?? [])
     .filter((modifier) => (item.selectedModifierIds ?? []).includes(modifier.id))
-    .reduce((sum, modifier) => sum + Number(modifier.priceDelta ?? 0) + (item.price * (Number(modifier.priceDeltaPercent ?? 0) / 100)), 0);
+    .reduce((sum, modifier) => {
+      const count = modifier.type === 'add_on' ? Number(item.modifierQuantities?.[modifier.id] ?? 1) : 1;
+      return sum + (Number(modifier.priceDelta ?? 0) + (item.price * (Number(modifier.priceDeltaPercent ?? 0) / 100))) * count;
+    }, 0);
   const formatModifierPrice = (modifier: Modifier) => {
     if (modifier.priceDeltaPercent) return `${modifier.priceDeltaPercent > 0 ? '+' : ''}${modifier.priceDeltaPercent}%`;
     if (modifier.priceDelta) return `${modifier.priceDelta > 0 ? '+' : '-'}₱${Math.abs(modifier.priceDelta)}`;
@@ -709,10 +827,10 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
   function applySelectedModifiers(item: CartItem) {
     const selectedModifierIds = item.selectedModifierIds ?? [];
     const selectedRemoveModifiers = (item.modifiers ?? []).filter((modifier) =>
-      modifier.type === 'remove' && selectedModifierIds.includes(modifier.id)
+      (modifier.type === 'remove' || modifier.type === 'less') && selectedModifierIds.includes(modifier.id)
     );
 
-    return item.ingredients.map((ingredient): Ingredient => {
+    const adjustedIngredients = item.ingredients.map((ingredient): Ingredient => {
       const removeModifier = selectedRemoveModifiers.find((modifier) =>
         (modifier.itemId && modifier.itemId === (ingredient.itemId ?? ingredient.inventory_item_id)) ||
         (modifier.itemName && modifier.itemName === ingredient.name)
@@ -720,10 +838,33 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
 
       if (!removeModifier) return ingredient;
 
-      return /^less\b/i.test(removeModifier.name)
+      return removeModifier.type === 'less' || /^less\b/i.test(removeModifier.name)
         ? { ...ingredient, quantity: Number(ingredient.quantity ?? 0) / 2, customization_type: 'CHANGE_QUANTITY', notes: removeModifier.name }
         : { ...ingredient, quantity: 0, removed: true, customization_type: 'REMOVE', notes: removeModifier.name };
     });
+
+    const selectedAddOns = (item.modifiers ?? []).filter((modifier) =>
+      modifier.type === 'add_on' && selectedModifierIds.includes(modifier.id)
+    );
+    const addOnIngredients = selectedAddOns
+      .filter((modifier) => modifier.ingredientId)
+      .map((modifier): Ingredient => {
+        const count = Number(item.modifierQuantities?.[modifier.id] ?? 1);
+        return {
+          name: modifier.itemName ?? modifier.name,
+          quantity: Math.max(Number(modifier.quantity ?? 1), 0.001) * Math.max(count, 1),
+          original_quantity: 0,
+          unit: modifier.unit ?? 'pcs',
+          ingredient_id: modifier.ingredientId,
+          replacement_ingredient_id: modifier.ingredientId,
+          replacement_name: modifier.itemName ?? modifier.name,
+          additional_price: Number(modifier.priceDelta ?? 0) * Math.max(count, 1),
+          customization_type: 'ADD',
+          notes: `${modifier.name}${count > 1 ? ` x${count}` : ''}`,
+        };
+      });
+
+    return [...adjustedIngredients, ...addOnIngredients];
   }
 
   const getIngredientChanges = (item: CartItem) => {
@@ -747,7 +888,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
         const original = item.originalIngredients.find((originalIngredient) => originalIngredient.name === ingredient.name);
         return original && !ingredient.removed && !ingredient.replacement_name && Number(ingredient.quantity) !== Number(original.quantity);
       }),
-      selectedModifiers: (item.modifiers ?? []).filter((modifier) => (item.selectedModifierIds ?? []).includes(modifier.id)),
+      selectedModifiers: (item.modifiers ?? []).filter((modifier) => modifier.type === 'note' && (item.selectedModifierIds ?? []).includes(modifier.id)),
     };
   };
   const hasItemCustomization = (item: CartItem) => {
@@ -857,7 +998,12 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
     lineTotal: itemLineTotal(item),
     orderType: item.orderType,
     notes: item.notes,
-    modifiers: (item.modifiers ?? []).filter((modifier) => (item.selectedModifierIds ?? []).includes(modifier.id)),
+    modifiers: (item.modifiers ?? [])
+      .filter((modifier) => (item.selectedModifierIds ?? []).includes(modifier.id))
+      .map((modifier) => ({
+        ...modifier,
+        selectedQuantity: modifier.type === 'add_on' ? Number(item.modifierQuantities?.[modifier.id] ?? 1) : 1,
+      })),
     ingredients: applySelectedModifiers(item).map(serializeIngredientForOrder),
     prepTimeMinutes: item.prepTimeMinutes ?? 0,
     customizationPrepMinutes: hasItemCustomization(item) ? settings.customization_prep_time_minutes : 0,
@@ -867,7 +1013,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
     orderDetails: any,
     paid: boolean,
     payment?: { amountPaid: number; changeAmount: number; method: string },
-  ) => {
+  ): Promise<any> => {
     if (!currentUser?.id) return null;
 
     return completePaymentMutation.mutateAsync({
@@ -946,6 +1092,25 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
 
   const handleConfirmOrder = () => {
     console.log('Confirm Order clicked'); // Debug log
+
+    const unavailableAddOn = cart.flatMap((item) => (item.modifiers ?? [])
+      .filter((modifier) => modifier.type === 'add_on' && (item.selectedModifierIds ?? []).includes(modifier.id))
+      .map((modifier) => {
+        const count = Number(item.modifierQuantities?.[modifier.id] ?? 1);
+        const required = Number(modifier.quantity ?? 1) * count * item.quantity;
+        return modifier.stockStatus === 'unavailable'
+          || !Number.isInteger(Number(modifier.maxQuantity))
+          || count > Number(modifier.maxQuantity)
+          || (modifier.quantityAvailable != null && required > Number(modifier.quantityAvailable))
+          ? `${item.name}: ${modifier.name}`
+          : null;
+      }))
+      .find(Boolean);
+    if (unavailableAddOn) {
+      setValidationError(`Not enough add-on stock for ${unavailableAddOn}.`);
+      setShowPreview(false);
+      return;
+    }
 
     const hasDineIn = cart.some(item => item.orderType === 'dine-in');
     const hasTakeout = cart.some(item => item.orderType === 'takeout');
@@ -1624,7 +1789,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                             <div className="flex-1 min-w-0">
                               <p className="text-xs truncate">{item.name}</p>
                               <p className="text-xs text-muted-foreground">₱ {item.price.toFixed(2)} each</p>
-                              <p className="text-xs text-primary font-medium">₱ {(item.price * item.quantity).toFixed(2)}</p>
+                              <p className="text-xs text-primary font-medium">₱ {itemLineTotal(item).toFixed(2)}</p>
                             </div>
                             <div className="flex items-center gap-1">
                               <button
@@ -1649,7 +1814,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                             </button>
                           </div>
                           <button
-                            onClick={() => setCustomizeItemIndex(index)}
+                            onClick={() => openCustomizeItem(index)}
                             className="text-xs text-primary hover:underline mt-2 flex items-center gap-1"
                           >
                             <Edit2 className="w-3 h-3" />
@@ -1673,7 +1838,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                             <div className="flex-1 min-w-0">
                               <p className="text-xs truncate">{item.name}</p>
                               <p className="text-xs text-muted-foreground">₱ {item.price.toFixed(2)} each</p>
-                              <p className="text-xs text-secondary font-medium">₱ {(item.price * item.quantity).toFixed(2)}</p>
+                              <p className="text-xs text-secondary font-medium">₱ {itemLineTotal(item).toFixed(2)}</p>
                             </div>
                             <div className="flex items-center gap-1">
                               <button
@@ -1698,7 +1863,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                             </button>
                           </div>
                           <button
-                            onClick={() => setCustomizeItemIndex(index)}
+                            onClick={() => openCustomizeItem(index)}
                             className="text-xs text-secondary hover:underline mt-2 flex items-center gap-1"
                           >
                             <Edit2 className="w-3 h-3" />
@@ -1721,7 +1886,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                         <div className="flex-1 min-w-0">
                           <p className="text-xs truncate">{item.name}</p>
                           <p className="text-xs text-muted-foreground">₱ {item.price.toFixed(2)} each</p>
-                          <p className="text-xs font-medium">₱ {(item.price * item.quantity).toFixed(2)}</p>
+                          <p className="text-xs font-medium">₱ {itemLineTotal(item).toFixed(2)}</p>
                         </div>
                         <div className="flex items-center gap-1">
                           <button
@@ -1746,7 +1911,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                         </button>
                       </div>
                       <button
-                        onClick={() => setCustomizeItemIndex(index)}
+                        onClick={() => openCustomizeItem(index)}
                         className="text-xs text-primary hover:underline mt-2 flex items-center gap-1"
                       >
                         <Edit2 className="w-3 h-3" />
@@ -1946,8 +2111,11 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                       return (
                         <div key={`preview-dinein-${index}`} className="border border-border rounded-lg p-3 bg-primary/5">
                           <div className="flex justify-between mb-1">
-                            <p className="text-sm font-medium">{item.name} x{item.quantity}</p>
-                            <p className="text-sm font-medium">₱{(item.price * item.quantity).toFixed(2)}</p>
+                            <p className="flex items-center gap-2 text-sm font-medium">
+                              {item.name} x{item.quantity}
+                              {hasCustomization && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-800">Modified</span>}
+                            </p>
+                            <p className="text-sm font-medium">₱{itemLineTotal(item).toFixed(2)}</p>
                           </div>
                           {hasCustomization && (
                             <div className="mt-2 pt-2 border-t border-primary/20 space-y-1">
@@ -1957,8 +2125,8 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                                 </p>
                               )}
                               {addedIngredients.length > 0 && (
-                                <p className="text-xs text-green-700">
-                                  Add: {addedIngredients.map(ing => `${ing.name} ${ing.quantity}${ing.unit ? ` ${ing.unit}` : ''}`).join(', ')}
+                                <p className="text-xs font-medium text-emerald-700">
+                                  ADD: {addedIngredients.map(ing => `${ing.name} ${ing.quantity}${ing.unit ? ` ${ing.unit}` : ''}`).join(', ')}
                                 </p>
                               )}
                               {replacedIngredients.length > 0 && (
@@ -2005,8 +2173,11 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                       return (
                         <div key={`preview-takeout-${index}`} className="border border-border rounded-lg p-3 bg-secondary/5">
                           <div className="flex justify-between mb-1">
-                            <p className="text-sm font-medium">{item.name} x{item.quantity}</p>
-                            <p className="text-sm font-medium">₱{(item.price * item.quantity).toFixed(2)}</p>
+                            <p className="flex items-center gap-2 text-sm font-medium">
+                              {item.name} x{item.quantity}
+                              {hasCustomization && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-800">Modified</span>}
+                            </p>
+                            <p className="text-sm font-medium">₱{itemLineTotal(item).toFixed(2)}</p>
                           </div>
                           {hasCustomization && (
                             <div className="mt-2 pt-2 border-t border-secondary/20 space-y-1">
@@ -2100,168 +2271,143 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
             <div className="flex justify-between items-center p-5 border-b border-border flex-shrink-0">
               <h2 className="text-lg text-primary">Modify - {cart[customizeItemIndex].name}</h2>
               <button
-                onClick={() => setCustomizeItemIndex(null)}
+                onClick={cancelCustomizeItem}
                 className="text-muted-foreground hover:text-foreground transition-colors"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="overflow-y-auto flex-1 p-5">
-              {(cart[customizeItemIndex].modifiers ?? []).length > 0 && (
-                <div className="mb-4">
-                  <label className="block text-xs text-muted-foreground mb-2">Modifiers:</label>
-                  <div className="space-y-3">
-                    {Object.entries((cart[customizeItemIndex].modifiers ?? []).reduce<Record<string, Modifier[]>>((groups, modifier) => {
-                      const group = modifier.group ?? 'Modifiers';
-                      groups[group] = [...(groups[group] ?? []), modifier];
-                      return groups;
-                    }, {})).map(([group, options]) => (
-                      <div key={group} className="rounded-lg border border-border p-3">
-                        <p className="mb-2 text-xs font-semibold text-foreground">{group}</p>
-                        <div className="space-y-2">
-                          {options.map((modifier) => {
-                            const disabled = modifier.stockStatus === 'unavailable';
-                            return (
-                              <label
-                                key={modifier.id}
-                                className={`flex items-center justify-between gap-2 rounded-lg border p-2 text-sm ${disabled ? 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400' : 'border-border hover:bg-muted/50'}`}
-                              >
-                                <span className="flex min-w-0 items-center gap-2">
-                                  <input
-                                    type="checkbox"
-                                    name={`modifier-${customizeItemIndex}-${group}`}
-                                    checked={(cart[customizeItemIndex].selectedModifierIds ?? []).includes(modifier.id)}
-                                    onChange={() => toggleModifier(customizeItemIndex, modifier.id)}
-                                    disabled={disabled}
-                                  />
-                                  <span className="truncate">
-                                    {modifier.name}
-                                    {formatModifierPrice(modifier) && <span className="ml-1 text-xs text-primary">{formatModifierPrice(modifier)}</span>}
-                                  </span>
-                                </span>
-                                {modifier.itemId && (
-                                  <span className="shrink-0 text-[10px] text-muted-foreground">
-                                    {disabled ? 'Out of stock' : `${Number(modifier.quantityAvailable ?? 0)} ${modifier.unit ?? ''}`}
-                                  </span>
-                                )}
-                              </label>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-              <div className="mb-4">
-                <div className="mb-2 flex items-center justify-between">
-                  <label className="block text-xs text-muted-foreground">Ingredients:</label>
-                  <button
-                    type="button"
-                    title="add ingredient"
-                    onClick={() => setShowAddIngredient((open) => !open)}
-                    className="w-7 h-7 rounded bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-primary"
-                  >
-                    <Plus className="w-4 h-4" />
-                  </button>
-                </div>
-                {showAddIngredient && (
-                  <div className="mb-2 flex gap-2">
-                    <input
-                      list="pos-available-ingredients"
-                      value={addIngredientName}
-                      onChange={(event) => setAddIngredientName(event.target.value)}
-                      placeholder="Search ingredient"
-                      className="min-w-0 flex-1 rounded-lg border border-border bg-input-background px-3 py-2 text-xs"
-                    />
-                    <datalist id="pos-available-ingredients">
-                      {(posIngredientsQuery.data ?? []).map((ingredient) => (
-                        <option key={ingredient.id} value={ingredient.name}>
-                          {Number(ingredient.quantity_available ?? 0)} {ingredient.unit ?? 'pcs'}
-                        </option>
-                      ))}
-                    </datalist>
-                    <button
-                      type="button"
-                      onClick={() => addIngredient(customizeItemIndex)}
-                      disabled={!addIngredientName.trim()}
-                      className="px-3 py-2 rounded-lg bg-primary text-primary-foreground text-xs disabled:opacity-50"
-                    >
-                      Add
-                    </button>
-                  </div>
-                )}
-                <div className="space-y-2">
-                  {cart[customizeItemIndex].ingredients.map((ingredient, ingIndex) => (
-                    <div key={`ing-${ingIndex}-${ingredient.name}`} className="p-2 border border-border rounded-lg">
-                      <div className="flex items-center gap-2">
-                        <div className="flex-1">
-                          <p className="text-xs">{ingredient.name}</p>
-                          <p className="text-xs text-muted-foreground">{ingredient.quantity} {ingredient.unit}</p>
-                          {ingredient.replacement_name && (
-                            <p className="text-xs text-primary">{ingredient.replacement_name} instead +PHP {Number(ingredient.additional_price ?? 0).toFixed(2)}</p>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <button
-                            onClick={() => updateIngredientQuantity(customizeItemIndex, ingredient.name, ingredient.quantity - (ingredient.unit === 'g' || ingredient.unit === 'ml' ? 5 : 1))}
-                            className="w-6 h-6 rounded bg-gray-100 hover:bg-gray-200 flex items-center justify-center"
-                          >
-                            <Minus className="w-3 h-3" />
-                          </button>
-                          <span className="text-xs w-10 text-center">{ingredient.quantity}</span>
-                          <button
-                            onClick={() => updateIngredientQuantity(customizeItemIndex, ingredient.name, ingredient.quantity + (ingredient.unit === 'g' || ingredient.unit === 'ml' ? 5 : 1))}
-                            className="w-6 h-6 rounded bg-gray-100 hover:bg-gray-200 flex items-center justify-center"
-                          >
-                            <Plus className="w-3 h-3" />
-                          </button>
-                        </div>
-                        <button
-                          onClick={() => setDeletingIngredient({ index: customizeItemIndex, name: ingredient.name })}
-                          className="text-destructive hover:bg-destructive/10 p-1.5 rounded"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                      {ingredient.alternatives && ingredient.alternatives.length > 0 && (
-                        <select
-                          value={ingredient.replacement_ingredient_id ? String(ingredient.replacement_ingredient_id) : ''}
-                          onChange={(event) => replaceIngredient(customizeItemIndex, ingredient.name, event.target.value)}
-                          className="mt-2 w-full rounded-lg border border-border bg-input-background px-3 py-2 text-xs"
-                        >
-                          <option value="">No replacement</option>
-                          {ingredient.alternatives.map((alternative) => (
-                            <option key={alternative.id} value={alternative.alternative_ingredient_id}>
-                              {alternative.ingredient_name} +PHP {Number(alternative.additional_price ?? 0).toFixed(2)}
-                            </option>
-                          ))}
-                        </select>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
+            {(() => {
+              const item = cart[customizeItemIndex];
+              const addOns = (item.modifiers ?? []).filter((modifier) => modifier.type === 'add_on');
+              const preferences = (item.modifiers ?? []).filter((modifier) => modifier.type === 'note');
+              const selectedIds = item.selectedModifierIds ?? [];
+              const selectedRemovals = (item.modifiers ?? []).filter((modifier) => (modifier.type === 'remove' || modifier.type === 'less') && selectedIds.includes(modifier.id));
+              const selectedAddOns = addOns.filter((modifier) => selectedIds.includes(modifier.id));
+              const selectedPreferences = preferences.filter((modifier) => selectedIds.includes(modifier.id));
+              const lessOptions = selectedRemovals.filter((modifier) => modifier.type === 'less' || /^less\b/i.test(modifier.name));
+              const removedOptions = selectedRemovals.filter((modifier) => modifier.type === 'remove' && !/^less\b/i.test(modifier.name));
+              const additionalCharge = modifierPrice(item) * item.quantity;
 
-              <div className="mb-4">
-                <label className="block text-xs text-muted-foreground mb-1.5">Special Instructions:</label>
-                <textarea
-                  value={cart[customizeItemIndex].notes}
-                  onChange={(e) => updateNotes(customizeItemIndex, e.target.value)}
-                  placeholder="e.g., Well done, Extra sauce"
-                  className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                  rows={3}
-                />
-              </div>
-            </div>
-            <div className="p-5 border-t border-border flex-shrink-0">
-              <button
-                onClick={() => setCustomizeItemIndex(null)}
-                className="w-full px-6 py-2.5 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors text-sm"
-              >
-                Done
-              </button>
-            </div>
+              return <>
+                <div className="overflow-y-auto flex-1 space-y-5 p-5">
+                  <section>
+                    <div className="mb-2">
+                      <h3 className="text-sm font-semibold text-foreground">1. Basic Ingredients</h3>
+                      <p className="text-xs text-muted-foreground">Default recipe ingredients. Only kitchen-approved adjustments are available.</p>
+                    </div>
+                    <div className="space-y-2">
+                      {item.originalIngredients.map((ingredient, ingredientIndex) => {
+                        const options = (item.modifiers ?? []).filter((modifier) => (modifier.type === 'remove' || modifier.type === 'less') && modifierTargetsIngredient(modifier, ingredient));
+                        const selectedOption = options.find((modifier) => selectedIds.includes(modifier.id));
+                        return (
+                          <div key={`basic-${ingredientIndex}-${ingredient.name}`} className="rounded-lg border border-border p-3">
+                            <div className="flex items-center justify-between gap-3">
+                              <div>
+                                <p className="text-sm font-medium text-foreground">{ingredient.name}</p>
+                                <p className="text-[11px] text-muted-foreground">Included in the standard recipe</p>
+                              </div>
+                              <span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${selectedOption ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-700'}`}>
+                                {selectedOption?.name ?? 'Regular'}
+                              </span>
+                            </div>
+                            {options.length > 0 && (
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                <label className="flex cursor-pointer items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs">
+                                  <input type="radio" name={`ingredient-${customizeItemIndex}-${ingredientIndex}`} checked={!selectedOption} onChange={() => selectBasicIngredientModifier(customizeItemIndex, ingredient, null)} />
+                                  Regular
+                                </label>
+                                {options.map((modifier) => (
+                                  <label key={modifier.id} className="flex cursor-pointer items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs">
+                                    <input type="radio" name={`ingredient-${customizeItemIndex}-${ingredientIndex}`} checked={selectedOption?.id === modifier.id} onChange={() => selectBasicIngredientModifier(customizeItemIndex, ingredient, modifier.id)} />
+                                    {modifier.name}
+                                  </label>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </section>
+
+                  <section>
+                    <div className="mb-2">
+                      <h3 className="text-sm font-semibold text-foreground">2. Available Add-ons</h3>
+                      <p className="text-xs text-muted-foreground">Only add-ons configured by the Admin/Kitchen for this recipe are shown.</p>
+                    </div>
+                    {addOns.length === 0 ? <p className="rounded-lg bg-muted/40 p-3 text-xs text-muted-foreground">No add-ons configured for this item.</p> : (
+                      <div className="space-y-2">
+                        {addOns.map((modifier) => {
+                          const selected = selectedIds.includes(modifier.id);
+                          const selectedQuantity = Number(item.modifierQuantities?.[modifier.id] ?? 1);
+                          const perUnit = Math.max(Number(modifier.quantity ?? 1), 0.001);
+                          const stockMaximum = modifier.quantityAvailable == null ? Number.POSITIVE_INFINITY : Math.floor(Number(modifier.quantityAvailable) / (perUnit * Math.max(item.quantity, 1)));
+                          const hasConfiguredMaximum = Number.isInteger(Number(modifier.maxQuantity)) && Number(modifier.maxQuantity) > 0;
+                          const disabled = modifier.stockStatus === 'unavailable' || stockMaximum < 1 || !hasConfiguredMaximum;
+                          const configuredMaximum = hasConfiguredMaximum ? Number(modifier.maxQuantity) : 1;
+                          const maximum = Math.max(1, Math.min(configuredMaximum, Math.max(1, stockMaximum)));
+                          return (
+                            <div key={modifier.id} className={`rounded-lg border p-3 ${disabled ? 'border-gray-200 bg-gray-100 text-gray-400' : selected ? 'border-emerald-300 bg-emerald-50' : 'border-border'}`}>
+                              <div className="flex items-center justify-between gap-3">
+                                <label className={`flex min-w-0 flex-1 items-center gap-2 ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
+                                  <input type="checkbox" checked={selected} onChange={() => toggleModifier(customizeItemIndex, modifier.id)} disabled={disabled} />
+                                  <span className="text-sm font-medium">{modifier.name} {formatModifierPrice(modifier) && <span className="text-primary">{formatModifierPrice(modifier)}</span>}</span>
+                                </label>
+                                {selected && !disabled && (
+                                  <div className="flex items-center gap-1">
+                                    <button type="button" onClick={() => updateModifierQuantity(customizeItemIndex, modifier.id, selectedQuantity - 1)} disabled={selectedQuantity <= 1} className="flex size-7 items-center justify-center rounded border border-border bg-white disabled:opacity-40"><Minus className="size-3" /></button>
+                                    <span className="min-w-8 text-center text-xs font-bold">{selectedQuantity}x</span>
+                                    <button type="button" onClick={() => updateModifierQuantity(customizeItemIndex, modifier.id, selectedQuantity + 1)} disabled={selectedQuantity >= maximum} className="flex size-7 items-center justify-center rounded border border-border bg-white disabled:opacity-40"><Plus className="size-3" /></button>
+                                  </div>
+                                )}
+                              </div>
+                              <p className="mt-1 pl-6 text-[10px] text-muted-foreground">{!hasConfiguredMaximum ? 'Add-on limit is not configured by Admin/Kitchen' : disabled ? 'Currently out of stock' : `Maximum ${maximum} per order item`}</p>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </section>
+
+                  <section>
+                    <div className="mb-2">
+                      <h3 className="text-sm font-semibold text-foreground">3. Preferences</h3>
+                      <p className="text-xs text-muted-foreground">Kitchen-approved preparation preferences and a customer note.</p>
+                    </div>
+                    {preferences.length > 0 && <div className="mb-3 grid gap-2 sm:grid-cols-2">{preferences.map((modifier) => (
+                      <label key={modifier.id} className={`flex cursor-pointer items-center gap-2 rounded-lg border p-2 text-sm ${selectedIds.includes(modifier.id) ? 'border-blue-300 bg-blue-50' : 'border-border'}`}>
+                        <input type="checkbox" checked={selectedIds.includes(modifier.id)} onChange={() => toggleModifier(customizeItemIndex, modifier.id)} />
+                        {modifier.name}
+                      </label>
+                    ))}</div>}
+                    <textarea value={item.notes} onChange={(event) => updateNotes(customizeItemIndex, event.target.value)} placeholder="Optional customer note for the kitchen" className="w-full rounded-lg border border-border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary" rows={2} />
+                  </section>
+
+                  <section className="rounded-xl border-2 border-primary/20 bg-primary/5 p-4">
+                    <h3 className="text-sm font-bold text-foreground">4. Customer Confirmation</h3>
+                    <p className="mb-3 text-xs text-muted-foreground">Repeat these changes to the customer before confirming.</p>
+                    <div className="space-y-1 text-xs">
+                      {removedOptions.length > 0 && <p><strong className="text-red-700">Removed:</strong> {removedOptions.map((modifier) => modifier.itemName ?? modifier.name).join(', ')}</p>}
+                      {lessOptions.length > 0 && <p><strong className="text-amber-700">Less:</strong> {lessOptions.map((modifier) => modifier.itemName ?? modifier.name).join(', ')}</p>}
+                      {selectedAddOns.length > 0 && <p><strong className="text-emerald-700">Add-ons:</strong> {selectedAddOns.map((modifier) => `${modifier.name} ×${item.modifierQuantities?.[modifier.id] ?? 1}`).join(', ')}</p>}
+                      {selectedPreferences.length > 0 && <p><strong className="text-blue-700">Preferences:</strong> {selectedPreferences.map((modifier) => modifier.name).join(', ')}</p>}
+                      {item.notes.trim() && <p><strong>Note:</strong> {item.notes.trim()}</p>}
+                      {selectedRemovals.length === 0 && selectedAddOns.length === 0 && selectedPreferences.length === 0 && !item.notes.trim() && <p className="text-muted-foreground">No changes selected. Standard recipe will be prepared.</p>}
+                    </div>
+                    <div className="mt-3 border-t border-primary/20 pt-3 text-xs">
+                      <div className="flex justify-between"><span>Additional charge</span><strong>₱{additionalCharge.toFixed(2)}</strong></div>
+                      <div className="mt-1 flex justify-between text-sm"><span>Updated item total</span><strong className="text-primary">₱{itemLineTotal(item).toFixed(2)}</strong></div>
+                    </div>
+                  </section>
+                </div>
+                <div className="grid grid-cols-3 gap-2 border-t border-border p-5">
+                  <button type="button" onClick={() => resetCustomizeItem(customizeItemIndex)} className="rounded-lg border border-border px-3 py-2.5 text-xs font-medium hover:bg-muted">Reset Original</button>
+                  <button type="button" onClick={cancelCustomizeItem} className="rounded-lg border border-border px-3 py-2.5 text-xs font-medium hover:bg-muted">Cancel</button>
+                  <button type="button" onClick={confirmCustomizeItem} className="rounded-lg bg-primary px-3 py-2.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90">Confirm Changes</button>
+                </div>
+              </>;
+            })()}
           </div>
         </div>
       )}
@@ -3160,7 +3306,10 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                   name: item.name,
                   quantity: item.quantity,
                   price: item.price,
+                  lineTotal: itemLineTotal(item),
                   itemType: getReceiptItemType(item),
+                  notes: item.notes,
+                  ...getCartItemDisplayDetails(item),
                 }))}
                 subtotal={successOrderDetails.subtotal}
                 serviceFee={successOrderDetails.serviceFee}

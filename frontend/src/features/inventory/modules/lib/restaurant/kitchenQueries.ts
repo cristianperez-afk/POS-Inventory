@@ -63,6 +63,7 @@ export function useRestaurantRecipesQuery(params?: { archived?: boolean }) {
         const ingredients = (recipe.ingredients ?? []).map((ingredient) => ({
           id: ingredient.id,
           productId: ingredient.itemId,
+          itemBackendId: ingredient.itemId,
           backendItemId: ingredient.itemId,
           productSku: ingredient.item?.sku ?? undefined,
           name: ingredient.item?.name ?? 'Ingredient',
@@ -112,10 +113,19 @@ export function useRestaurantRecipesQuery(params?: { archived?: boolean }) {
             ? (recipe as any).modifiers.map((modifier: any) => ({
                 id: modifier.id,
                 name: modifier.name,
+                group: modifier.group ?? 'Modifiers',
                 type: modifier.type ?? 'remove',
                 itemId: modifier.itemId,
                 itemName: modifier.itemName ?? '',
                 productId: modifier.itemId,
+                requiresStock: Boolean(modifier.requiresStock),
+                quantity: Number(modifier.quantity ?? 1),
+                unit: modifier.unit,
+                maxQuantity: Number.isInteger(Number(modifier.maxQuantity)) && Number(modifier.maxQuantity) > 0
+                  ? Math.floor(Number(modifier.maxQuantity))
+                  : undefined,
+                priceDelta: Number(modifier.priceDelta ?? 0),
+                priceDeltaPercent: Number(modifier.priceDeltaPercent ?? 0),
               }))
             : [],
           instructions: recipe.instructions ?? '',

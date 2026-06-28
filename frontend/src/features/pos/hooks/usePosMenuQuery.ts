@@ -18,9 +18,16 @@ export type PosMenuIngredient = {
 export type PosMenuModifier = {
   id: string;
   name: string;
-  type: 'remove';
+  type: 'remove' | 'less' | 'note' | 'add_on';
   itemId?: string;
   itemName?: string;
+  quantity?: number;
+  unit?: string;
+  maxQuantity?: number;
+  priceDelta?: number;
+  priceDeltaPercent?: number;
+  quantityAvailable?: number | null;
+  stockStatus?: 'available' | 'unavailable' | 'untracked';
 };
 
 export type PosIngredient = {
@@ -66,6 +73,8 @@ export function usePosMenuQuery(userId?: number | string | null) {
     queryKey: ['pos-menu', userId],
     enabled: Boolean(userId),
     queryFn: () => apiClient<PosMenuProduct[]>(`/pos/menu?user_id=${userId}`),
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
   });
 }
 
@@ -82,6 +91,7 @@ export function useProductRecipeQuery(userId?: number | string | null, productId
     queryKey: ['pos-product-recipe', userId, productId],
     enabled: Boolean(userId && productId),
     queryFn: () => apiClient(`/products/${productId}/recipe?user_id=${userId}`),
+    refetchOnWindowFocus: true,
   });
 }
 

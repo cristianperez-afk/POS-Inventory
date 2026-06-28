@@ -33,6 +33,13 @@ export function Receipt({ onNavigate, currentOrder, onLogout, storeBrand, userNa
                   quantity: item.quantity,
                   price: item.price,
                   itemType: item.itemType || item.orderType,
+                  lineTotal: item.lineTotal,
+                  notes: item.notes,
+                  addedIngredients: item.addedIngredients,
+                  removedIngredients: item.removedIngredients,
+                  changedIngredients: item.changedIngredients,
+                  replacedIngredients: item.replacedIngredients,
+                  modifiers: item.modifiers,
                 }))}
                 subtotal={currentOrder?.subtotal || 0}
                 serviceFee={currentOrder?.serviceFee || 0}

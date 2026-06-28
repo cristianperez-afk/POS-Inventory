@@ -276,6 +276,9 @@ function KitchenTicketItems({ orderId, items }: { orderId: string; items: Kitche
         const itemKey = `${orderId}-${item.id}`;
         const isExpanded = expandedItems[itemKey] ?? false;
         const modified = hasModifications(item);
+        const removedSummary = cleanList(item.removedIngredients);
+        const addedSummary = cleanList(item.addedIngredients);
+        const modifierSummary = cleanList(item.modifiers);
 
         return (
           <div key={itemKey} className={`rounded-lg border ${modified ? "border-amber-200 bg-amber-50/40" : "border-border bg-card"}`}>
@@ -287,10 +290,24 @@ function KitchenTicketItems({ orderId, items }: { orderId: string; items: Kitche
               <span className="flex min-w-0 items-center gap-2">
                 {isExpanded ? <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />}
                 <span className="truncate text-sm font-semibold text-foreground">{item.name}</span>
-                {modified && <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" />}
+                {modified && (
+                  <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-800">
+                    <AlertTriangle className="h-3 w-3" />
+                    Modified
+                  </span>
+                )}
               </span>
               <span className="shrink-0 text-sm font-medium text-muted-foreground">x{item.quantity}</span>
             </button>
+
+            {modified && (
+              <div className="mx-3 mb-2 space-y-1 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px]">
+                {removedSummary.length > 0 && <p className="font-medium text-red-700">REMOVE: {removedSummary.join(', ')}</p>}
+                {addedSummary.length > 0 && <p className="font-medium text-emerald-700">ADD: {addedSummary.join(', ')}</p>}
+                {modifierSummary.length > 0 && <p className="font-medium text-amber-800">OPTIONS: {modifierSummary.join(', ')}</p>}
+                {cleanList(item.specialInstructions).length > 0 && <p className="font-medium text-blue-700">NOTE: {cleanList(item.specialInstructions).join(', ')}</p>}
+              </div>
+            )}
 
             {isExpanded && (
               <div className="space-y-3 border-t border-border px-3 py-3">
@@ -310,6 +327,7 @@ function KitchenTicketItems({ orderId, items }: { orderId: string; items: Kitche
                       <DetailList label="Added" values={item.addedIngredients} />
                       <DetailList label="Changed Qty" values={item.changedIngredients} />
                       <DetailList label="Replaced" values={item.replacedIngredients} />
+                      <DetailList label="Selected Options" values={item.modifiers} />
                       <DetailList label="Special Notes" values={[...(item.specialInstructions ?? []), item.notes ?? ""]} />
                     </div>
                   </div>
@@ -423,6 +441,7 @@ export function POSKitchenOrders() {
         ...cleanList(item.addedIngredients).map((value) => `  Added: ${value}`),
         ...cleanList(item.changedIngredients).map((value) => `  Changed Qty: ${value}`),
         ...cleanList(item.replacedIngredients).map((value) => `  Replaced: ${value}`),
+        ...cleanList(item.modifiers).map((value) => `  Modifier: ${value}`),
         ...cleanList([...(item.specialInstructions ?? []), item.notes ?? ""]).map((value) => `  Note: ${value}`),
       ]),
     ];
@@ -564,7 +583,12 @@ export function POSKitchenOrders() {
                               </div>
                               <p className="mt-1 text-xs text-muted-foreground">Customer: {order.customerName || "Walk-in Customer"}</p>
                             </div>
-                            {hasAnyModification && <AlertTriangle className="h-5 w-5 shrink-0 text-amber-600" />}
+                            {hasAnyModification && (
+                              <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-100 px-2 py-1 text-[10px] font-bold uppercase text-amber-800">
+                                <AlertTriangle className="h-3.5 w-3.5" />
+                                Modified
+                              </span>
+                            )}
                           </button>
 
                           <div className="mt-3 grid gap-2 text-xs text-muted-foreground">
