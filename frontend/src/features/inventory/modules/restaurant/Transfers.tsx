@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowLeftRight, Plus, Search, TrendingUp, TrendingDown, AlertCircle, CheckCircle, Clock, X, FileText, Trash2, PhilippinePeso, BarChart3, Calendar, Eye, ClipboardCheck } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -128,6 +128,32 @@ export function Transfers() {
   const saveTransfer = useCreateRestaurantTransferMutation();
   const moveTransfer = useRestaurantTransferActionMutation();
   const saveMovement = useCreateRestaurantStockMovementMutation();
+
+  // Focus the right tab when arriving from a notification deep-link (handles both
+  // navigating in fresh and the page already being mounted).
+  useEffect(() => {
+    const applyDeeplink = () => {
+      const hint = window.__INVENTORY_DEEPLINK__;
+      if (!hint) return;
+      if (hint.entityType === "StockAdjustment") {
+        setActiveTab("adjustments");
+        // Leave the breadcrumb for the embedded StockAdjustments panel to consume.
+        return;
+      }
+      if (hint.entityType === "TRANSFER") {
+        setActiveTab("transfers");
+        if (hint.entityId) {
+          // Isolate the exact transfer row (search matches the transfer id).
+          setStatusFilter("all");
+          setSearchQuery(hint.entityId);
+        }
+      }
+      window.__INVENTORY_DEEPLINK__ = null;
+    };
+    applyDeeplink();
+    window.addEventListener("inventory:deeplink", applyDeeplink);
+    return () => window.removeEventListener("inventory:deeplink", applyDeeplink);
+  }, []);
 
   const filteredTransfers = transfers.filter(transfer => {
     const matchesSearch = (transfer.item || '').toLowerCase().includes(searchQuery.toLowerCase()) ||

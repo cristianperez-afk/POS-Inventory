@@ -30,6 +30,9 @@ declare global {
   interface Window {
     __POS_INVENTORY_USER__?: AuthUser | null;
     __POS_STORE_TYPE__?: string | null;
+    // Breadcrumb set when a notification is clicked, so the destination page can
+    // focus the right tab/entity on arrival. Consumed-and-cleared by the target.
+    __INVENTORY_DEEPLINK__?: { entityType?: string | null; entityId?: string | null; type?: string | null } | null;
   }
 }
 

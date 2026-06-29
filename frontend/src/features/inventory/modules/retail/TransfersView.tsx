@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { Plus, X, Search, Package, ArrowRightLeft, CheckCircle, RefreshCw, ChevronRight, ChevronDown, Trash2 } from 'lucide-react';
 import {
@@ -57,6 +57,33 @@ export default function TransfersView({
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [cancelTarget, setCancelTarget] = useState<any | null>(null);
   const [cancelReason, setCancelReason] = useState('');
+  const [highlightTransferId, setHighlightTransferId] = useState<string | null>(null);
+
+  // Focus the right tab when arriving from a notification deep-link (handles both
+  // navigating in fresh and the page already being mounted), and for a transfer
+  // remember which row to scroll to + highlight.
+  useEffect(() => {
+    const applyDeeplink = () => {
+      const hint = window.__INVENTORY_DEEPLINK__;
+      if (!hint) return;
+      if (hint.entityType === 'StockAdjustment') {
+        setActiveTab('adjustments');
+        // Leave the breadcrumb for the embedded StockAdjustmentsView to consume.
+        return;
+      }
+      if (hint.entityType === 'TRANSFER') {
+        setActiveTab('transfers');
+        if (hint.entityId) {
+          setFilterStatus('all');
+          setHighlightTransferId(hint.entityId);
+        }
+      }
+      window.__INVENTORY_DEEPLINK__ = null;
+    };
+    applyDeeplink();
+    window.addEventListener('inventory:deeplink', applyDeeplink);
+    return () => window.removeEventListener('inventory:deeplink', applyDeeplink);
+  }, []);
 
   const [transferForm, setTransferForm] = useState({
     fromLocationId: '',
@@ -173,6 +200,16 @@ export default function TransfersView({
 
   const filteredTransfers = transfers.filter(t => filterStatus === 'all' || t.status === filterStatus);
 
+  // Once the deep-linked transfer card is in the DOM, scroll to + briefly highlight it.
+  useEffect(() => {
+    if (!highlightTransferId) return;
+    const el = document.getElementById(`tr-${highlightTransferId}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const timer = setTimeout(() => setHighlightTransferId(null), 4000);
+    return () => clearTimeout(timer);
+  }, [highlightTransferId, filteredTransfers]);
+
   if (loading) {
     return <div className="flex items-center justify-center h-64 text-muted-foreground">Loading transfers…</div>;
   }
@@ -242,7 +279,7 @@ export default function TransfersView({
             </div>
           ) : (
             filteredTransfers.map((transfer: any) => (
-              <div key={transfer.id} className="bg-card border border-border rounded-[14px] p-6">
+              <div key={transfer.id} id={`tr-${transfer.id}`} className={`bg-card border border-border rounded-[14px] p-6 ${transfer.id === highlightTransferId ? 'ring-2 ring-secondary ring-offset-2' : ''}`}>
                 <div className="flex items-start justify-between mb-4">
                   <div>
                     <div className="flex items-center gap-3 mb-2">
