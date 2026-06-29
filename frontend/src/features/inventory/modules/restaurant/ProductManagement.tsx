@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { AlertTriangle, Boxes, Link2, Merge, PackageSearch, Save, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "../../app/hooks/useSession";
+import { InlineDataLoading } from "../shared/InlineDataLoading";
 import { defaultCategoryHierarchy, InventoryProduct } from "../lib/inventoryLogic";
 import {
   useRestaurantCategoryHierarchyQuery,
@@ -75,7 +76,23 @@ type CatalogProduct = {
   supplierNames: string[];
 };
 
-const units = ["kg", "g", "pcs", "liter", "bottle", "pack", "box", "dozen"];
+const units = [
+  "kg",
+  "g",
+  "pcs",
+  "liter",
+  "milliliter",
+  "bottle",
+  "can",
+  "pack",
+  "box",
+  "bag",
+  "sack",
+  "carton",
+  "tray",
+  "dozen",
+  "gallon",
+];
 const normalizeName = (value: string | undefined) => (value || '').trim().toLowerCase();
 
 function splitCategory(value?: string) {
@@ -98,12 +115,20 @@ export function ProductManagement() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedKey, setSelectedKey] = useState<string>("");
   const [mergeKey, setMergeKey] = useState<string>("");
-  const { data: products = [] } = useRestaurantInventoryQuery<RestaurantInventoryProduct[]>();
-  const { data: globalProducts = [] } = useRestaurantGlobalProductsQuery() as { data?: GlobalProduct[] };
-  const { data: suppliers = [] } = useRestaurantSuppliersQuery() as { data?: Supplier[] };
-  const { data: categoryHierarchy = defaultCategoryHierarchy } = useRestaurantCategoryHierarchyQuery();
-  const { data: locations = [] } = useRestaurantLocationsQuery() as { data?: { id: string; name: string }[] };
-  const { data: productMetadata = {} } = useRestaurantProductMergeMetadataQuery<ProductMergeMetadata>();
+  const productsQuery = useRestaurantInventoryQuery<RestaurantInventoryProduct[]>();
+  const globalProductsQuery = useRestaurantGlobalProductsQuery();
+  const suppliersQuery = useRestaurantSuppliersQuery();
+  const categoryHierarchyQuery = useRestaurantCategoryHierarchyQuery();
+  const locationsQuery = useRestaurantLocationsQuery();
+  const productMetadataQuery = useRestaurantProductMergeMetadataQuery<ProductMergeMetadata>();
+  const products = productsQuery.data ?? [];
+  const globalProducts = (globalProductsQuery.data ?? []) as GlobalProduct[];
+  const suppliers = (suppliersQuery.data ?? []) as Supplier[];
+  const categoryHierarchy = categoryHierarchyQuery.data ?? defaultCategoryHierarchy;
+  const locations = (locationsQuery.data ?? []) as { id: string; name: string }[];
+  const productMetadata = productMetadataQuery.data ?? {};
+  const catalogLoading = productsQuery.isLoading || globalProductsQuery.isLoading || suppliersQuery.isLoading
+    || categoryHierarchyQuery.isLoading || locationsQuery.isLoading || productMetadataQuery.isLoading;
   const updateInventory = useUpdateRestaurantInventoryMutation();
   const saveMetadata = useUpsertRestaurantProductMergeMetadataMutation();
   const [form, setForm] = useState({
@@ -369,7 +394,7 @@ export function ProductManagement() {
             className="mb-4 w-full rounded-lg border border-input bg-input-background px-3 py-2 text-sm outline-none focus:border-primary"
           />
           <div className="max-h-[620px] space-y-2 overflow-y-auto">
-            {filteredCatalog.map((product) => (
+            {!catalogLoading && filteredCatalog.map((product) => (
               <button
                 key={product.key}
                 type="button"
@@ -384,7 +409,9 @@ export function ProductManagement() {
                 <p className="mt-1 text-xs text-muted-foreground">{product.supplierNames.length} supplier link{product.supplierNames.length === 1 ? "" : "s"}</p>
               </button>
             ))}
-            {filteredCatalog.length === 0 && <div className="p-8 text-center text-sm text-muted-foreground">No product records found</div>}
+            {catalogLoading
+              ? <InlineDataLoading label="Loading product records…" />
+              : filteredCatalog.length === 0 && <div className="p-8 text-center text-sm text-muted-foreground">No product records found</div>}
           </div>
         </div>
 

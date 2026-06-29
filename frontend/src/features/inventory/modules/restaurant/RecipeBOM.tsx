@@ -11,6 +11,7 @@ import {
   useSaveRestaurantRecipeMutation,
 } from "../lib/restaurant";
 import { getManilaDateKey } from "../../../../shared/utils/date";
+import { InlineDataLoading } from "../shared/InlineDataLoading";
 
 type Ingredient = {
   id: string;
@@ -81,7 +82,26 @@ type Recipe = {
 // Use the actual inventory product structure from the restaurant inventory query.
 type InventoryItem = InventoryProduct & { backendId?: string };
 
-const UNIT_OPTIONS = ["kg", "g", "L", "ml", "pcs", "piece", "liter", "bottle", "pack", "box", "dozen"];
+const UNIT_OPTIONS = [
+  "kg",
+  "g",
+  "L",
+  "ml",
+  "milliliter",
+  "pcs",
+  "piece",
+  "liter",
+  "bottle",
+  "can",
+  "pack",
+  "box",
+  "bag",
+  "sack",
+  "carton",
+  "tray",
+  "dozen",
+  "gallon",
+];
 const MODIFIER_GROUPS = [
   "Protein Choice",
   "Flavor Adjustment",
@@ -273,6 +293,7 @@ const modifierNeedsStock = (group: string, name: string) => {
 const normalizeUnit = (unit: string | undefined) => {
   const normalized = (unit || '').trim().toLowerCase();
   if (normalized === "ltr" || normalized === "litre" || normalized === "liters" || normalized === "liter") return "l";
+  if (normalized === "milliliter" || normalized === "millilitre" || normalized === "milliliters" || normalized === "millilitres") return "ml";
   if (normalized === "pc" || normalized === "piece" || normalized === "pieces") return "pcs";
   return normalized;
 };
@@ -389,13 +410,14 @@ export function RecipeBOM() {
     unitCost: "",
   });
 
-  const { data: inventoryItems = [] } = useRestaurantInventoryQuery<InventoryItem[]>();
+  const { data: inventoryItems = [], isLoading: inventoryItemsLoading } = useRestaurantInventoryQuery<InventoryItem[]>();
 
   // Only show products that are actually in stock and not expired.
   const availableInventoryItems = inventoryItems.filter(item => item.stock > 0 && !isExpiredInventoryItem(item));
 
-  const { data: recipes = [] } = useRestaurantRecipesQuery();
-  const { data: archivedRecipes = [] } = useRestaurantRecipesQuery({ archived: true });
+  const { data: recipes = [], isLoading: recipesLoading } = useRestaurantRecipesQuery();
+  const { data: archivedRecipes = [], isLoading: archivedRecipesLoading } = useRestaurantRecipesQuery({ archived: true });
+  const recipeListLoading = inventoryItemsLoading || (viewArchived ? archivedRecipesLoading : recipesLoading);
   const saveRecipe = useSaveRestaurantRecipeMutation();
   const removeRecipe = useDeleteRestaurantRecipeMutation();
   const restoreRecipe = useRestoreRestaurantRecipeMutation();
@@ -1070,7 +1092,7 @@ export function RecipeBOM() {
 
       {/* Recipes Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {filteredRecipes.map((recipe) => (
+        {!recipeListLoading && filteredRecipes.map((recipe) => (
           <div key={recipe.id} className="bg-card rounded-2xl p-6 shadow-sm border border-border hover:shadow-md transition-all duration-200">
             <div className="flex items-start justify-between mb-4">
               <div className="flex items-center gap-3">
@@ -1202,7 +1224,11 @@ export function RecipeBOM() {
             </div>
           </div>
         ))}
-        {filteredRecipes.length === 0 && (
+        {recipeListLoading ? (
+          <div className="col-span-full rounded-2xl border border-border bg-card shadow-sm">
+            <InlineDataLoading label="Loading recipes…" className="min-h-48" />
+          </div>
+        ) : filteredRecipes.length === 0 && (
           <div className="col-span-full bg-card rounded-2xl p-12 shadow-sm border border-dashed border-border flex flex-col items-center justify-center text-center">
             <Archive className="w-10 h-10 text-muted-foreground mb-3" />
             <p className="text-foreground font-medium">
@@ -1332,6 +1358,7 @@ export function RecipeBOM() {
                     className={`w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${numberInputClassName}`}
                     required
                   />
+                  <p className="mt-1 text-[11px] text-muted-foreground">Number of portions produced by one batch; used to calculate the cost per serving.</p>
                 </div>
 
                 <div>
@@ -1352,6 +1379,7 @@ export function RecipeBOM() {
                     className={`w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${numberInputClassName}`}
                     required
                   />
+                  <p className="mt-1 text-[11px] text-muted-foreground">Expected usable output after preparation or cooking loss; adjusts the recipe cost.</p>
                 </div>
 
                 <div>
@@ -1412,17 +1440,21 @@ export function RecipeBOM() {
                     className={`w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${numberInputClassName}`}
                     required
                   />
+                  <p className="mt-1 text-[11px] text-muted-foreground">Estimated minutes needed to prepare one recipe batch for operational reference.</p>
                 </div>
 
-                <label className="flex items-center gap-3 rounded-xl border border-border bg-muted/30 px-4 py-3 text-sm text-foreground">
+                <label className="flex items-start gap-3 rounded-xl border border-border bg-muted/30 px-4 py-3 text-sm text-foreground">
                   <input
                     name="isActive"
                     type="checkbox"
                     checked={newRecipe.isActive}
                     onChange={handleInputChange}
-                    className="h-4 w-4 accent-primary"
+                    className="mt-0.5 h-4 w-4 accent-primary"
                   />
-                  Active in POS menu
+                  <span>
+                    <span className="block font-medium">Active in POS menu</span>
+                    <span className="mt-1 block text-[11px] leading-4 text-muted-foreground">Keep checked to make this recipe available in POS; uncheck to hide it without deleting the recipe.</span>
+                  </span>
                 </label>
               </div>
 

@@ -140,6 +140,9 @@ export function AddProduct({ onClose }: { onClose?: () => void } = {}) {
         quantity: product.stock,
         price: product.price,
         unit: product.unit,
+        purchaseUnit: product.unit,
+        baseUnit: product.unit,
+        conversionFactor: 1,
         minStock: product.minStock,
         maxStock: product.maxStock,
         reorderPoint: product.reorderPoint,
@@ -200,6 +203,9 @@ export function AddProduct({ onClose }: { onClose?: () => void } = {}) {
             quantity: nextQuantity,
             price: Number(formData.price) || existingProduct.price || 0,
             unit: formData.unit || existingProduct.unit || "pcs",
+            purchaseUnit: formData.unit || existingProduct.unit || "pcs",
+            baseUnit: formData.unit || existingProduct.unit || "pcs",
+            conversionFactor: 1,
             minStock,
             maxStock,
             reorderPoint,
@@ -663,9 +669,17 @@ export function AddProduct({ onClose }: { onClose?: () => void } = {}) {
                     <option value="kg">kg</option>
                     <option value="g">g</option>
                     <option value="liter">liter</option>
+                    <option value="milliliter">milliliter</option>
                     <option value="bottle">bottle</option>
+                    <option value="can">can</option>
                     <option value="pack">pack</option>
                     <option value="box">box</option>
+                    <option value="bag">bag</option>
+                    <option value="sack">sack</option>
+                    <option value="carton">carton</option>
+                    <option value="tray">tray</option>
+                    <option value="dozen">dozen</option>
+                    <option value="gallon">gallon</option>
                   </select>
                 </div>
 

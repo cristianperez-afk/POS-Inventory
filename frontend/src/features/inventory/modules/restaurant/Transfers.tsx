@@ -12,6 +12,7 @@ import {
 } from "../lib/restaurant";
 import { StockAdjustments } from "./StockAdjustments";
 import { getLocalDateKey } from "../../../../shared/utils/date";
+import { InlineDataLoading } from "../shared/InlineDataLoading";
 
 type TransferStatus = "pending" | "approved" | "in-transit" | "completed" | "rejected";
 type AdjustmentType = "damage" | "shrinkage" | "waste" | "found" | "correction";
@@ -71,9 +72,9 @@ export function Transfers() {
   const [selectedItem, setSelectedItem] = useState<Transfer | Adjustment | WasteLog | null>(null);
   const [dateRange, setDateRange] = useState({ start: "2026-05-01", end: "2026-05-31" });
 
-  const { data: transfers = [] } = useRestaurantTransfersQuery();
+  const { data: transfers = [], isLoading: transfersLoading } = useRestaurantTransfersQuery();
 
-  const { data: wasteLogs = [] } = useRestaurantWasteQuery();
+  const { data: wasteLogs = [], isLoading: wasteLoading } = useRestaurantWasteQuery();
 
   const [newTransfer, setNewTransfer] = useState({
     item: "",
@@ -94,10 +95,28 @@ export function Transfers() {
     notes: "",
   });
 
-  const { data: locations = [] } = useRestaurantLocationsQuery();
-  const { data: inventoryItems = [] } = useRestaurantInventoryQuery();
+  const { data: locations = [], isLoading: locationsLoading } = useRestaurantLocationsQuery();
+  const { data: inventoryItems = [], isLoading: inventoryLoading } = useRestaurantInventoryQuery();
+  const transferReferenceDataLoading = locationsLoading || inventoryLoading;
   const availableItems = inventoryItems.filter(item => item.backendId && item.stock > 0);
-  const units = ["kg", "g", "L", "ml", "pcs"];
+  const units = [
+    "kg",
+    "g",
+    "L",
+    "ml",
+    "milliliter",
+    "pcs",
+    "liter",
+    "bottle",
+    "can",
+    "pack",
+    "box",
+    "bag",
+    "sack",
+    "carton",
+    "tray",
+    "gallon",
+  ];
   const saveTransfer = useCreateRestaurantTransferMutation();
   const moveTransfer = useRestaurantTransferActionMutation();
   const saveMovement = useCreateRestaurantStockMovementMutation();
@@ -476,7 +495,11 @@ export function Transfers() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {filteredTransfers.map((transfer) => (
+                {transfersLoading ? (
+                  <tr><td colSpan={9}><InlineDataLoading label="Loading transfers…" /></td></tr>
+                ) : filteredTransfers.length === 0 ? (
+                  <tr><td colSpan={9} className="px-4 py-10 text-center text-muted-foreground">No transfers found.</td></tr>
+                ) : filteredTransfers.map((transfer) => (
                   <tr key={transfer.id} className="hover:bg-muted/30 transition-colors">
                     <td className="px-4 py-3">
                       <span className="font-medium text-primary text-sm">{transfer.id}</span>
@@ -553,7 +576,11 @@ export function Transfers() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {filteredWasteLogs.map((waste) => (
+                {wasteLoading ? (
+                  <tr><td colSpan={9}><InlineDataLoading label="Loading waste records…" /></td></tr>
+                ) : filteredWasteLogs.length === 0 ? (
+                  <tr><td colSpan={9} className="px-4 py-10 text-center text-muted-foreground">No waste records found.</td></tr>
+                ) : filteredWasteLogs.map((waste) => (
                   <tr key={waste.id} className="hover:bg-muted/30 transition-colors">
                     <td className="px-4 py-3">
                       <span className="font-medium text-primary text-sm">{waste.id}</span>
@@ -719,9 +746,9 @@ export function Transfers() {
                   onChange={(e) => setNewTransfer({ ...newTransfer, item: e.target.value })}
                   className="w-full px-3 py-2 bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 text-sm"
                   required
-                  disabled={availableItems.length === 0}
+                  disabled={transferReferenceDataLoading || availableItems.length === 0}
                 >
-                  <option value="">{availableItems.length === 0 ? "No available inventory items" : "Select item"}</option>
+                  <option value="">{transferReferenceDataLoading ? "Loading inventory items…" : availableItems.length === 0 ? "No available inventory items" : "Select item"}</option>
                   {availableItems.map(item => <option key={item.id} value={item.backendId}>{item.name}</option>)}
                 </select>
               </div>
@@ -820,9 +847,9 @@ export function Transfers() {
                   onChange={(e) => setNewWaste({ ...newWaste, item: e.target.value })}
                   className="w-full px-3 py-2 bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 text-sm"
                   required
-                  disabled={availableItems.length === 0}
+                  disabled={transferReferenceDataLoading || availableItems.length === 0}
                 >
-                  <option value="">{availableItems.length === 0 ? "No available inventory items" : "Select item"}</option>
+                  <option value="">{transferReferenceDataLoading ? "Loading inventory items…" : availableItems.length === 0 ? "No available inventory items" : "Select item"}</option>
                   {availableItems.map(item => <option key={item.id} value={item.backendId}>{item.name}</option>)}
                 </select>
               </div>

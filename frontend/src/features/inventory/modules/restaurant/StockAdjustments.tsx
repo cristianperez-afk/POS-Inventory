@@ -12,6 +12,7 @@ import {
   type RestaurantAdjustmentType,
   type RestaurantStockAdjustment,
 } from "../lib/restaurant";
+import { InlineDataLoading } from "../shared/InlineDataLoading";
 import { formatManilaFullDateTime } from "../../../../shared/utils/date";
 
 const ADJUSTMENT_TYPES: {
@@ -44,9 +45,13 @@ export function StockAdjustments({ embedded = false }: { embedded?: boolean } = 
   const { currentUser } = useSession();
   const canReview = currentUser?.role === "Admin";
 
-  const { data: items = [] } = useRestaurantInventoryQuery();
-  const { data: locations = [] } = useRestaurantLocationsQuery() as { data?: { id: string; name: string }[] };
-  const { data: adjustments = [] } = useRestaurantStockAdjustmentsQuery();
+  const itemsQuery = useRestaurantInventoryQuery();
+  const locationsQuery = useRestaurantLocationsQuery();
+  const adjustmentsQuery = useRestaurantStockAdjustmentsQuery();
+  const items = itemsQuery.data ?? [];
+  const locations = (locationsQuery.data ?? []) as { id: string; name: string }[];
+  const adjustments = adjustmentsQuery.data ?? [];
+  const adjustmentsLoading = itemsQuery.isLoading || locationsQuery.isLoading || adjustmentsQuery.isLoading;
   const createMutation = useCreateRestaurantStockAdjustmentMutation();
   const approveMutation = useApproveRestaurantStockAdjustmentMutation();
   const rejectMutation = useRejectRestaurantStockAdjustmentMutation();
@@ -198,7 +203,9 @@ export function StockAdjustments({ embedded = false }: { embedded?: boolean } = 
                     <p className="text-xs text-muted-foreground">{i.location} • stock: {i.stock} {i.unit}</p>
                   </button>
                 ))}
-                {filteredItems.length === 0 && <div className="px-3 py-6 text-center text-xs text-muted-foreground">No items found</div>}
+                {adjustmentsLoading
+                  ? <InlineDataLoading label="Loading inventory items…" />
+                  : filteredItems.length === 0 && <div className="px-3 py-6 text-center text-xs text-muted-foreground">No items found</div>}
               </div>
             </>
           ) : (

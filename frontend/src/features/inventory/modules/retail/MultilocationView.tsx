@@ -11,12 +11,19 @@ import {
   useRetailTransfersQuery,
   useUpdateRetailLocationMutation,
 } from '../lib/retail';
+import { InlineDataLoading } from '../shared/InlineDataLoading';
 
 export default function MultilocationView() {
-  const { data: locations = [] } = useRetailLocationsQuery() as { data?: Location[] };
-  const { data: inventory = [] } = useRetailInventoryQuery() as { data?: InventoryItem[] };
-  const { data: transfers = [] } = useRetailTransfersQuery() as { data?: Transfer[] };
-  const { data: purchaseOrders = [] } = useRetailPurchaseOrdersQuery() as { data?: PurchaseOrder[] };
+  const locationsQuery = useRetailLocationsQuery();
+  const inventoryQuery = useRetailInventoryQuery();
+  const transfersQuery = useRetailTransfersQuery();
+  const purchaseOrdersQuery = useRetailPurchaseOrdersQuery();
+  const locations = (locationsQuery.data ?? []) as Location[];
+  const inventory = (inventoryQuery.data ?? []) as InventoryItem[];
+  const transfers = (transfersQuery.data ?? []) as Transfer[];
+  const purchaseOrders = (purchaseOrdersQuery.data ?? []) as PurchaseOrder[];
+  const locationsLoading = locationsQuery.isLoading || inventoryQuery.isLoading
+    || transfersQuery.isLoading || purchaseOrdersQuery.isLoading;
   const createLocationMutation = useCreateRetailLocationMutation();
   const updateLocationMutation = useUpdateRetailLocationMutation();
   const deleteLocationMutation = useDeleteRetailLocationMutation();
@@ -239,7 +246,11 @@ export default function MultilocationView() {
       </div>
 
       {/* Locations */}
-      {filteredLocations.length === 0 ? (
+      {locationsLoading ? (
+        <div className="bg-card border border-border rounded-[14px] p-6">
+          <InlineDataLoading label="Loading locations…" className="min-h-36" />
+        </div>
+      ) : filteredLocations.length === 0 ? (
         <div className="bg-card border border-border rounded-[14px] p-12 text-center">
           <MapPin className="size-16 text-muted mx-auto mb-4" />
           <p className="text-[16px] text-foreground font-medium">No locations found</p>

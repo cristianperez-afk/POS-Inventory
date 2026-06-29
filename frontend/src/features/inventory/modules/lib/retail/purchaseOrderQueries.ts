@@ -211,6 +211,8 @@ export function useReceiveRetailPurchaseOrderMutation() {
         condition?: string;
         notes?: string;
         expiryDate?: string;
+        expiryPeriod?: string;
+        noExpiry?: boolean;
         storageTemperature?: string;
       }[];
       notes?: string;

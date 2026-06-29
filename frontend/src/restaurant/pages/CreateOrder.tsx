@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef, type CSSProperties } from 'react'
 import { Sidebar } from '../../shared/components/Sidebar';
 import { Page, type StoreBrand } from '../../shared/App';
 import type { StaffType, StoreType } from '../../auth/types/auth';
-import { Banknote, Building2, Minus, Plus, Search, Edit2, Trash2, X, AlertCircle, Printer, Download, Users, Smartphone, Wallet, MoreVertical } from 'lucide-react';
+import { Banknote, Building2, Minus, Plus, Search, Edit2, Trash2, X, AlertCircle, Printer, Download, Users, Smartphone, Wallet, MoreVertical, LoaderCircle } from 'lucide-react';
 import { useOrders, type Order } from '../../shared/context/OrderContext';
 import { useTables } from '../../shared/context/TableContext';
 import { useStoreSettings } from '../../shared/context/StoreSettingsContext';
@@ -1838,7 +1838,12 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
             width: hoveredProductPreview.width,
           }}
         >
-          <div className="overflow-hidden rounded-[1.35rem] border border-primary/20 bg-white shadow-[0_24px_48px_rgba(15,23,42,0.22)] ring-1 ring-primary/10">
+          <div className="relative overflow-hidden rounded-[1.35rem] border border-primary/20 bg-white shadow-[0_24px_48px_rgba(15,23,42,0.22)] ring-1 ring-primary/10">
+            {hoveredProductRecipeQuery.isFetching && (
+              <div className="absolute right-3 top-3 z-10 flex size-8 items-center justify-center rounded-full border border-primary/20 bg-white/95 shadow-sm" role="status" aria-label="Loading recipe details">
+                <LoaderCircle className="size-4 animate-spin text-primary" aria-hidden="true" />
+              </div>
+            )}
             <div className="aspect-[16/10] overflow-hidden bg-slate-100">
               <img
                 src={hoveredProduct.image}

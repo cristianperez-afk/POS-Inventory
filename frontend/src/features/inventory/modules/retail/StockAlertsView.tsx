@@ -14,6 +14,7 @@ import type {
 import { categorySubcategories, CHART_COLORS } from '../../app/utils/constants';
 import { autoSortItem } from '../../app/utils/autoSortingRules';
 import { useRetailWorkspace } from '../lib/retail';
+import { InlineDataLoading } from '../shared/InlineDataLoading';
 
 
 export interface StockAlert {
@@ -28,6 +29,7 @@ export function StockAlertsView() {
   const {
     stockAlerts: alerts,
     inventory,
+    loading,
   } = useRetailWorkspace({
     enabled: true,
     loadSharedData: true,
@@ -276,7 +278,9 @@ export function StockAlertsView() {
         <div className="p-6">
           {activeTab === 'low-stock' && (
             <div>
-              {filteredLowStockItems.length === 0 ? (
+              {loading ? (
+                <InlineDataLoading label="Loading low-stock alerts…" className="min-h-36" />
+              ) : filteredLowStockItems.length === 0 ? (
                 <div className="py-12 text-center">
                   <div className="bg-secondary/10 rounded-full size-[64px] flex items-center justify-center mb-4 mx-auto">
                     <svg className="size-8 text-secondary" fill="none" viewBox="0 0 24 24">
@@ -352,7 +356,9 @@ export function StockAlertsView() {
 
           {activeTab === 'stock-control' && (
             <div>
-              {filteredStockItems.length === 0 ? (
+              {loading ? (
+                <InlineDataLoading label="Loading stock items…" className="min-h-36" />
+              ) : filteredStockItems.length === 0 ? (
                 <div className="py-12 text-center">
                   <p className="text-foreground text-[18px] font-medium">No items found</p>
                   <p className="text-foreground text-[14px] mt-1">Try adjusting your filters</p>
@@ -415,7 +421,9 @@ export function StockAlertsView() {
 
           {activeTab === 'bad-condition' && (
             <div>
-              {filteredDamagedItems.length === 0 ? (
+              {loading ? (
+                <InlineDataLoading label="Loading item conditions…" className="min-h-36" />
+              ) : filteredDamagedItems.length === 0 ? (
                 <div className="py-12 text-center">
                   <div className="bg-secondary/10 rounded-full size-[64px] flex items-center justify-center mb-4 mx-auto">
                     <svg className="size-8 text-secondary" fill="none" viewBox="0 0 24 24">

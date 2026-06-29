@@ -50,6 +50,7 @@ type RestaurantProductMergeMetadata = {
 
 type ReceiptItemQualityMetadata = {
   remarks?: string;
+  noExpiry?: boolean;
   expiryDate?: string;
   expiryPeriod?: string;
   storageTemperature?: string;
@@ -76,6 +77,9 @@ const toDateInput = (value?: string | null) => {
 const formatActorName = (actor: any) =>
   actor?.name ?? actor?.full_name ?? actor?.fullName ?? actor?.email ?? '';
 
+const compareItemNames = (left: string, right: string) =>
+  left.trim().localeCompare(right.trim(), undefined, { sensitivity: 'base', numeric: true });
+
 export function mapRestaurantPurchaseOrders(orders: ApiPurchaseOrder[]) {
   return orders.map((order) => ({
     id: order.id,
@@ -84,17 +88,25 @@ export function mapRestaurantPurchaseOrders(orders: ApiPurchaseOrder[]) {
     supplierId: order.supplierId,
     date: toDateInput(order.createdAt),
     items: order.items?.length ?? 0,
-    orderItems: (order.items ?? []).map((item) => ({
-      backendId: item.id,
-      productId: item.inventoryItemId,
-      backendInventoryId: item.inventoryItemId,
-      productName: item.name,
-      quantity: item.quantity,
-      unitPrice: item.unitPrice,
-      category: item.inventoryItem?.category ?? '',
-      subCategory: item.inventoryItem?.subcategory ?? '',
-      unit: item.inventoryItem?.unit ?? 'pcs',
-    })),
+    orderItems: (order.items ?? [])
+      .map((item) => ({
+        backendId: item.id,
+        productId: item.inventoryItemId,
+        backendInventoryId: item.inventoryItemId,
+        productName: item.name,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        category: item.inventoryItem?.category ?? '',
+        subCategory: item.inventoryItem?.subcategory ?? '',
+        unit: item.purchaseUnit ?? item.inventoryItem?.purchaseUnit ?? item.inventoryItem?.unit ?? 'pcs',
+        purchaseUnit: item.purchaseUnit ?? item.inventoryItem?.purchaseUnit ?? item.inventoryItem?.unit ?? 'pcs',
+        baseUnit: item.baseUnit ?? item.inventoryItem?.baseUnit ?? item.inventoryItem?.unit ?? 'pcs',
+        conversionFactor: item.conversionFactor ?? item.inventoryItem?.conversionFactor ?? 1,
+      }))
+      .sort((left, right) =>
+        compareItemNames(left.productName, right.productName) ||
+        String(left.backendId ?? '').localeCompare(String(right.backendId ?? '')),
+      ),
     total: order.totalAmount,
     status:
       ({
@@ -107,7 +119,8 @@ export function mapRestaurantPurchaseOrders(orders: ApiPurchaseOrder[]) {
         CANCELLED: 'cancelled',
       } as Record<string, string>)[order.status] ?? order.status.toLowerCase(),
     expectedDelivery: toDateTimeLocalInput(order.expectedDelivery),
-    createdBy: order.createdBy?.email ?? order.createdBy?.name ?? '',
+    createdBy: order.createdBy?.name ?? order.createdBy?.email ?? '',
+    createdByRole: order.createdBy?.role?.toLowerCase(),
     createdAt: order.createdAt,
     rejectionNote: order.rejectionReason,
     backendStatus: order.status,
@@ -150,6 +163,9 @@ export function mapRestaurantGlobalProducts(
       category?: string;
       subCategory?: string;
       unit?: string;
+      purchaseUnit?: string;
+      baseUnit?: string;
+      conversionFactor?: number;
     }
   >();
 
@@ -172,7 +188,10 @@ export function mapRestaurantGlobalProducts(
         sku: override?.sku ?? item.sku ?? undefined,
         category,
         subCategory,
-        unit: override?.unit ?? item.unit ?? 'pcs',
+        unit: override?.unit ?? item.purchaseUnit ?? item.unit ?? 'pcs',
+        purchaseUnit: item.purchaseUnit ?? override?.unit ?? item.unit ?? 'pcs',
+        baseUnit: item.baseUnit ?? item.unit ?? 'pcs',
+        conversionFactor: item.conversionFactor ?? 1,
       });
     }
   });
@@ -264,6 +283,7 @@ export function useRestaurantGoodsRecordsQuery() {
           '',
         receivedDate: toDateInput(receipt.createdAt),
         receivedAt: receipt.createdAt,
+        expectedDelivery: purchaseOrderById.get(receipt.purchaseOrderId)?.expectedDelivery ?? null,
         items: receipt.items?.length ?? 0,
         receivedItems: (receipt.items ?? []).map((line) => {
           const quality = parseReceiptItemNotes(line.notes);
@@ -282,8 +302,12 @@ export function useRestaurantGoodsRecordsQuery() {
             quantity: line.receivedQty + line.rejectedQty,
             acceptedQuantity: line.receivedQty,
             rejectedQuantity: line.rejectedQty,
-            unit: line.inventoryItem?.unit ?? 'pcs',
+            unit: line.purchaseOrderItem?.purchaseUnit ?? line.inventoryItem?.purchaseUnit ?? line.inventoryItem?.unit ?? 'pcs',
+            purchaseUnit: line.purchaseOrderItem?.purchaseUnit ?? line.inventoryItem?.purchaseUnit ?? line.inventoryItem?.unit ?? 'pcs',
+            baseUnit: line.purchaseOrderItem?.baseUnit ?? line.inventoryItem?.baseUnit ?? line.inventoryItem?.unit ?? 'pcs',
+            conversionFactor: line.purchaseOrderItem?.conversionFactor ?? line.inventoryItem?.conversionFactor ?? 1,
             unitPrice: line.purchaseOrderItem?.unitPrice ?? 0,
+            noExpiry: quality.noExpiry === true,
             expiryDate: toDateInput(quality.expiryDate ?? line.inventoryItem?.expiryDate),
             expiryPeriod: quality.expiryPeriod ?? '',
             storageTemperature: quality.storageTemperature ?? line.inventoryItem?.storageTemperature ?? '',
@@ -335,12 +359,16 @@ export function useRestaurantGoodsRecordsQuery() {
           receivedDate: toDateInput(
             order.expectedDelivery ?? order.createdAt,
           ),
+          expectedDelivery: order.expectedDelivery ?? null,
           items: order.items?.length ?? 0,
           receivedItems: (order.items ?? []).map((item) => ({
             backendItemId: item.id,
             productName: item.name,
             quantity: item.quantity - item.receivedQty - item.rejectedQty,
-            unit: item.inventoryItem?.unit ?? 'pcs',
+            unit: item.purchaseUnit ?? item.inventoryItem?.purchaseUnit ?? item.inventoryItem?.unit ?? 'pcs',
+            purchaseUnit: item.purchaseUnit ?? item.inventoryItem?.purchaseUnit ?? item.inventoryItem?.unit ?? 'pcs',
+            baseUnit: item.baseUnit ?? item.inventoryItem?.baseUnit ?? item.inventoryItem?.unit ?? 'pcs',
+            conversionFactor: item.conversionFactor ?? item.inventoryItem?.conversionFactor ?? 1,
             unitPrice: item.unitPrice,
             condition: 'Pending Check',
           })),
@@ -372,12 +400,19 @@ type SaveRestaurantPurchaseOrderLine = {
   quantity: number;
   unitPrice: number;
   unit?: string;
+  purchaseUnit?: string;
+  baseUnit?: string;
+  conversionFactor?: number;
 };
 
 type RestaurantPurchaseOrderProduct = {
   id: string;
   backendId?: string;
   inventoryId?: string | number;
+  purchaseUnit?: string;
+  baseUnit?: string;
+  unit?: string;
+  conversionFactor?: number;
 };
 
 export function useSaveRestaurantPurchaseOrderMutation() {
@@ -418,6 +453,9 @@ export function useSaveRestaurantPurchaseOrderMutation() {
             : undefined);
 
         if (!inventoryItemId) {
+          const purchaseUnit = line.purchaseUnit || line.unit || 'pcs';
+          const baseUnit = line.baseUnit || line.unit || purchaseUnit;
+          const conversionFactor = line.conversionFactor || 1;
           const created = await createInventoryItem({
             name: line.productName,
             itemType: 'INGREDIENT',
@@ -425,7 +463,10 @@ export function useSaveRestaurantPurchaseOrderMutation() {
             category: `${line.category || 'Other'} > ${line.subCategory || 'General'}`,
             quantity: 0,
             price: line.unitPrice,
-            unit: line.unit || 'pcs',
+            unit: baseUnit,
+            purchaseUnit,
+            baseUnit,
+            conversionFactor,
             minStock: 0,
             maxStock: 0,
             reorderPoint: 0,
@@ -439,6 +480,10 @@ export function useSaveRestaurantPurchaseOrderMutation() {
           name: line.productName,
           quantity: line.quantity,
           unitPrice: line.unitPrice,
+          unit: line.purchaseUnit || line.unit,
+          purchaseUnit: line.purchaseUnit || line.unit,
+          baseUnit: line.baseUnit || product?.baseUnit || product?.unit || line.unit,
+          conversionFactor: line.conversionFactor || product?.conversionFactor || 1,
         });
       }
 

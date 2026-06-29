@@ -5,11 +5,21 @@ import { Page, type StoreBrand } from '../App';
 import type { AuthenticatedUser } from '../../auth/types/auth';
 import logoImage from '../../imports/logo1.png';
 import { LogoutConfirmDialog } from './LogoutConfirmDialog';
+import { getApiBaseUrl } from '../../auth/services/auth';
 import {
   applyUserPreferences,
+  applyThemePreset,
   defaultUserPreferences,
+  fromRemoteThemePreferences,
+  fromRemoteUserPreferences,
   loadUserPreferences,
+  mergeUserPreferencesWithTheme,
+  normalizeUserPreferences,
   saveUserPreferences,
+  themePresets,
+  toRemoteThemePreferences,
+  toRemoteUserPreferences,
+  type ThemeScope,
   type UserPreferenceValues,
 } from '../utils/themePreferences';
 
@@ -82,6 +92,10 @@ type PendingAction = { type: 'navigate'; page: Page } | { type: 'logout' };
 
 export function GeneralSettings({ currentUser, storeBrand, onLogout, onNavigate }: GeneralSettingsProps) {
   const [userPreferences, setUserPreferences] = useState<UserPreferenceValues>(defaultUserPreferences);
+  const [personalPreferences, setPersonalPreferences] = useState<UserPreferenceValues>(defaultUserPreferences);
+  const [storePreferences, setStorePreferences] = useState<UserPreferenceValues>(defaultUserPreferences);
+  const [themeScope, setThemeScope] = useState<ThemeScope>('personal');
+  const [canManageStoreTheme, setCanManageStoreTheme] = useState(false);
   // Last saved preferences (what's persisted to localStorage / shown on every
   // other page). userPreferences is the live-edited draft -- it's applied to
   // THIS document immediately for live preview, but only written to
@@ -93,13 +107,50 @@ export function GeneralSettings({ currentUser, storeBrand, onLogout, onNavigate 
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const canChooseDefaultWorkspace = currentUser?.role === 'ADMIN';
   const canUseInventoryPreferences = currentUser?.role !== 'SUPERADMIN';
+  const canEditStoreTheme = canManageStoreTheme && currentUser?.role !== 'STAFF';
   const hasPreferenceChanges = JSON.stringify(userPreferences) !== JSON.stringify(appliedPreferences);
   const hasUnsavedChanges = hasPreferenceChanges;
 
   useEffect(() => {
-    const loaded = loadUserPreferences(currentUser?.id);
-    setUserPreferences(loaded);
-    setAppliedPreferences(loaded);
+    if (!currentUser?.id) return;
+
+    const cached = loadUserPreferences(currentUser.id);
+    setUserPreferences(cached);
+    setAppliedPreferences(cached);
+    setPersonalPreferences(cached);
+    setStorePreferences(cached);
+
+    let cancelled = false;
+    const loadSettings = async () => {
+      try {
+        const response = await fetch(`${getApiBaseUrl()}/admin/theme-preferences?user_id=${currentUser.id}`);
+        if (!response.ok) throw new Error('Unable to load settings.');
+        const data = await response.json();
+        if (cancelled) return;
+
+        const storeTheme = fromRemoteThemePreferences(data.store_theme);
+        const effectiveTheme = fromRemoteThemePreferences(data.effective_theme);
+        const personal = fromRemoteUserPreferences(data.user_preferences) ?? mergeUserPreferencesWithTheme(cached, effectiveTheme);
+        const store = mergeUserPreferencesWithTheme(personal, storeTheme);
+
+        setCanManageStoreTheme(Boolean(data.can_manage_store_theme));
+        setPersonalPreferences(personal);
+        setStorePreferences(store);
+        setThemeScope('personal');
+        setUserPreferences(personal);
+        setAppliedPreferences(personal);
+        applyUserPreferences(personal);
+        saveUserPreferences(currentUser.id, personal);
+      } catch (error) {
+        if (!cancelled) setMessage(error instanceof Error ? error.message : 'Unable to load settings.');
+      }
+    };
+
+    void loadSettings();
+
+    return () => {
+      cancelled = true;
+    };
   }, [currentUser?.id]);
 
   // Live preview: every edit (color picker, appearance, Reset to Default)
@@ -125,14 +176,71 @@ export function GeneralSettings({ currentUser, storeBrand, onLogout, onNavigate 
 
     try {
       applyUserPreferences(userPreferences);
-      saveUserPreferences(currentUser.id, userPreferences);
+      const endpoint = themeScope === 'store' ? 'store' : 'personal';
+      const body = themeScope === 'store'
+        ? { user_id: currentUser.id, ...toRemoteThemePreferences(userPreferences) }
+        : { user_id: currentUser.id, ...toRemoteUserPreferences(userPreferences) };
+      const response = await fetch(`${getApiBaseUrl()}/admin/theme-preferences/${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(data?.message ?? 'Unable to save settings.');
+
+      if (themeScope === 'store') {
+        const nextStore = mergeUserPreferencesWithTheme(personalPreferences, fromRemoteThemePreferences(data));
+        setStorePreferences(nextStore);
+      } else {
+        const nextPersonal = fromRemoteUserPreferences(data) ?? normalizeUserPreferences(userPreferences);
+        setPersonalPreferences(nextPersonal);
+        saveUserPreferences(currentUser.id, nextPersonal);
+      }
       setAppliedPreferences(userPreferences);
 
-      setMessage('Settings saved.');
+      setMessage(themeScope === 'store' ? 'Store theme saved for this store.' : 'Personal settings saved.');
       return true;
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Unable to save settings.');
       return false;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const resetTheme = async () => {
+    if (!currentUser?.id) return;
+    setSaving(true);
+    setMessage('');
+
+    try {
+      const endpoint = themeScope === 'store' ? 'store' : 'personal';
+      const response = await fetch(`${getApiBaseUrl()}/admin/theme-preferences/${endpoint}?user_id=${currentUser.id}`, {
+        method: 'DELETE',
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(data?.message ?? 'Unable to reset theme.');
+
+      const storeTheme = fromRemoteThemePreferences(data.store_theme);
+      const effectiveTheme = fromRemoteThemePreferences(data.effective_theme);
+      const personal = fromRemoteUserPreferences(data.user_preferences) ?? mergeUserPreferencesWithTheme(personalPreferences, effectiveTheme);
+      const store = mergeUserPreferencesWithTheme(personal, storeTheme);
+
+      setPersonalPreferences(personal);
+      setStorePreferences(store);
+      const next = themeScope === 'store' ? store : personal;
+      setUserPreferences(next);
+      setAppliedPreferences(next);
+      applyUserPreferences(next);
+      saveUserPreferences(currentUser.id, personal);
+
+      setMessage(
+        themeScope === 'store'
+          ? 'Store theme reset to default for every account without a personal override.'
+          : 'Personal theme reset. Now using the store theme.',
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Unable to reset theme.');
     } finally {
       setSaving(false);
     }
@@ -144,6 +252,14 @@ export function GeneralSettings({ currentUser, storeBrand, onLogout, onNavigate 
     // render, but apply synchronously too so the revert is instant even if
     // discardChanges is immediately followed by navigating away.
     applyUserPreferences(appliedPreferences);
+  };
+
+  const changeThemeScope = (scope: ThemeScope) => {
+    const next = scope === 'store' ? storePreferences : personalPreferences;
+    setThemeScope(scope);
+    setUserPreferences(next);
+    setAppliedPreferences(next);
+    applyUserPreferences(next);
   };
 
   const runPendingAction = (action: PendingAction) => {
@@ -182,10 +298,14 @@ export function GeneralSettings({ currentUser, storeBrand, onLogout, onNavigate 
       hasUnsavedChanges={hasUnsavedChanges}
       message={message}
       pendingAction={pendingAction}
+      resetTheme={resetTheme}
       saveSettings={saveSettings}
       saving={saving}
       setPendingAction={setPendingAction}
       setUserPreferences={setUserPreferences}
+      themeScope={themeScope}
+      canEditStoreTheme={canEditStoreTheme}
+      changeThemeScope={changeThemeScope}
       userPreferences={userPreferences}
     />
   );
@@ -229,10 +349,14 @@ function SettingsContent({
   hasUnsavedChanges,
   message,
   pendingAction,
+  resetTheme,
   saveSettings,
   saving,
   setPendingAction,
   setUserPreferences,
+  themeScope,
+  canEditStoreTheme,
+  changeThemeScope,
   userPreferences,
 }: {
   canChooseDefaultWorkspace: boolean;
@@ -244,10 +368,14 @@ function SettingsContent({
   hasUnsavedChanges: boolean;
   message: string;
   pendingAction: PendingAction | null;
+  resetTheme: () => Promise<void>;
   saveSettings: () => Promise<boolean>;
   saving: boolean;
   setPendingAction: (action: PendingAction | null) => void;
   setUserPreferences: Dispatch<SetStateAction<UserPreferenceValues>>;
+  themeScope: ThemeScope;
+  canEditStoreTheme: boolean;
+  changeThemeScope: (scope: ThemeScope) => void;
   userPreferences: UserPreferenceValues;
 }) {
   const isSuperadmin = currentUser?.role === 'SUPERADMIN';
@@ -314,10 +442,15 @@ function SettingsContent({
                 </span>
                 <div>
                   <h2 className="text-lg font-semibold">User Preferences</h2>
-                  <p className="text-sm text-muted-foreground">Saved locally for this user.</p>
+                  <p className="text-sm text-muted-foreground">Personal settings saved for this account.</p>
                 </div>
               </div>
-              <div className="divide-y divide-border">
+              {themeScope === 'store' && (
+                <div className="mb-4 rounded-lg border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
+                  Switch to Personal scope to edit compact mode, stock alerts, and default workspace.
+                </div>
+              )}
+              <div className={`divide-y divide-border ${themeScope === 'store' ? 'pointer-events-none opacity-50' : ''}`}>
                 <SettingRow label="Compact Mode" description="Use tighter spacing for dense work screens.">
                   <SettingToggle checked={userPreferences.compactMode} onChange={(checked) => setUserPreferences((current) => ({ ...current, compactMode: checked }))} />
                 </SettingRow>
@@ -349,23 +482,82 @@ function SettingsContent({
                 </span>
                 <div>
                   <h2 className="text-lg font-semibold">Theme Options</h2>
-                  <p className="text-sm text-muted-foreground">Appearance and brand colors for this browser.</p>
+                  <p className="text-sm text-muted-foreground">{themeScope === 'store' ? 'Shared appearance for every account in this store.' : 'Your personal appearance preference for this account.'}</p>
                 </div>
                 <button
                   type="button"
-                  onClick={() => setUserPreferences((current) => ({
-                    ...current,
-                    appearance: defaultUserPreferences.appearance,
-                    primaryColor: defaultUserPreferences.primaryColor,
-                    secondaryColor: defaultUserPreferences.secondaryColor,
-                    sidebarColor: defaultUserPreferences.sidebarColor,
-                  }))}
-                  className="ml-auto inline-flex items-center gap-2 rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+                  disabled={saving}
+                  onClick={resetTheme}
+                  className="ml-auto inline-flex items-center gap-2 rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-60"
                 >
-                  Reset to Default
+                  {themeScope === 'store' ? 'Reset Store Theme' : 'Reset Personal Theme'}
                 </button>
               </div>
               <div className="divide-y divide-border">
+                <SettingRow label="Theme Scope" description={canEditStoreTheme ? "Personal affects only you. Store applies to every account in this store unless they use a personal override." : "Staff and cashier accounts can only change their own personal preference."}>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => changeThemeScope('personal')}
+                      className={`rounded-lg border px-3 py-2 text-sm font-medium transition ${
+                        themeScope === 'personal' ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:bg-muted'
+                      }`}
+                    >
+                      Personal
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => changeThemeScope('store')}
+                      disabled={!canEditStoreTheme}
+                      className={`rounded-lg border px-3 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                        themeScope === 'store' ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:bg-muted'
+                      }`}
+                    >
+                      Store
+                    </button>
+                  </div>
+                </SettingRow>
+                <SettingRow label="Customization Level" description="Basic uses preset themes. Advanced lets you choose exact colors.">
+                  <div className="grid grid-cols-2 gap-2">
+                    {(['basic', 'advanced'] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => setUserPreferences((current) => ({ ...current, themeMode: mode }))}
+                        className={`rounded-lg border px-3 py-2 text-sm font-medium capitalize transition ${
+                          userPreferences.themeMode === mode ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:bg-muted'
+                        }`}
+                      >
+                        {mode}
+                      </button>
+                    ))}
+                  </div>
+                </SettingRow>
+                {userPreferences.themeMode === 'basic' && (
+                  <SettingRow label="Theme Preset" description="Choose a complete color set.">
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                      {themePresets.map((preset) => (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          onClick={() => setUserPreferences((current) => applyThemePreset(current, preset.id))}
+                          className={`overflow-hidden rounded-lg border text-sm font-medium transition ${
+                            userPreferences.themePreset === preset.id ? 'border-primary ring-2 ring-primary/40' : 'border-border hover:border-primary/50'
+                          }`}
+                        >
+                          <span className="flex h-10 w-full">
+                            <span className="flex-1" style={{ backgroundColor: preset.values.primaryColor }} />
+                            <span className="flex-1" style={{ backgroundColor: preset.values.secondaryColor }} />
+                            <span className="flex-1" style={{ backgroundColor: preset.values.sidebarColor }} />
+                          </span>
+                          <span className={`block px-3 py-2 ${userPreferences.themePreset === preset.id ? 'text-primary' : 'text-foreground'}`}>
+                            {preset.label}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </SettingRow>
+                )}
                 <SettingRow label="Appearance" description="System follows your device's light/dark setting.">
                   <div className="grid grid-cols-3 gap-2">
                     {appearanceOptions.map((option) => (
@@ -382,17 +574,19 @@ function SettingsContent({
                     ))}
                   </div>
                 </SettingRow>
+                {userPreferences.themeMode === 'advanced' && (
+                <>
                 <SettingRow label="Primary Color" description={isSuperadmin ? "Buttons, links, highlights, and the sidebar." : "Buttons, links, highlights, and the sidebar across POS and Inventory (retail and restaurant)."}>
                   <div className="flex items-center gap-3">
                     <input
                       type="color"
                       value={userPreferences.primaryColor}
-                      onChange={(event) => setUserPreferences((current) => ({ ...current, primaryColor: event.target.value }))}
+                      onChange={(event) => setUserPreferences((current) => ({ ...current, themeMode: 'advanced', themePreset: 'custom', primaryColor: event.target.value }))}
                       className="h-10 w-12 rounded border border-border bg-input-background p-1"
                     />
                     <input
                       value={userPreferences.primaryColor}
-                      onChange={(event) => setUserPreferences((current) => ({ ...current, primaryColor: event.target.value }))}
+                      onChange={(event) => setUserPreferences((current) => ({ ...current, themeMode: 'advanced', themePreset: 'custom', primaryColor: event.target.value }))}
                       className="w-32 rounded-lg border border-border bg-input-background px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                     />
                   </div>
@@ -402,12 +596,12 @@ function SettingsContent({
                     <input
                       type="color"
                       value={userPreferences.secondaryColor}
-                      onChange={(event) => setUserPreferences((current) => ({ ...current, secondaryColor: event.target.value }))}
+                      onChange={(event) => setUserPreferences((current) => ({ ...current, themeMode: 'advanced', themePreset: 'custom', secondaryColor: event.target.value }))}
                       className="h-10 w-12 rounded border border-border bg-input-background p-1"
                     />
                     <input
                       value={userPreferences.secondaryColor}
-                      onChange={(event) => setUserPreferences((current) => ({ ...current, secondaryColor: event.target.value }))}
+                      onChange={(event) => setUserPreferences((current) => ({ ...current, themeMode: 'advanced', themePreset: 'custom', secondaryColor: event.target.value }))}
                       className="w-32 rounded-lg border border-border bg-input-background px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                     />
                   </div>
@@ -417,16 +611,18 @@ function SettingsContent({
                     <input
                       type="color"
                       value={userPreferences.sidebarColor}
-                      onChange={(event) => setUserPreferences((current) => ({ ...current, sidebarColor: event.target.value }))}
+                      onChange={(event) => setUserPreferences((current) => ({ ...current, themeMode: 'advanced', themePreset: 'custom', sidebarColor: event.target.value }))}
                       className="h-10 w-12 rounded border border-border bg-input-background p-1"
                     />
                     <input
                       value={userPreferences.sidebarColor}
-                      onChange={(event) => setUserPreferences((current) => ({ ...current, sidebarColor: event.target.value }))}
+                      onChange={(event) => setUserPreferences((current) => ({ ...current, themeMode: 'advanced', themePreset: 'custom', sidebarColor: event.target.value }))}
                       className="w-32 rounded-lg border border-border bg-input-background px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                     />
                   </div>
                 </SettingRow>
+                </>
+                )}
               </div>
             </section>
 

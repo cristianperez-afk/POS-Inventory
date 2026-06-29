@@ -16,6 +16,7 @@ import { autoSortItem } from '../../app/utils/autoSortingRules';
 import { useRetailWorkspace } from '../lib/retail';
 import { useQueryClient } from '@tanstack/react-query';
 import { getManilaTime } from '../../../../shared/utils/date';
+import { InlineDataLoading } from '../shared/InlineDataLoading';
 
 
 export interface StockAlert {
@@ -35,6 +36,7 @@ export function DashboardView({ onNavigate }: { onNavigate?: (view: string) => v
     inventory,
     purchaseOrders,
     productsReceived,
+    loading,
   } = useRetailWorkspace({
     enabled: true,
     loadSharedData: true,
@@ -227,6 +229,8 @@ export function DashboardView({ onNavigate }: { onNavigate?: (view: string) => v
                 })}
               </div>
             </div>
+          ) : loading ? (
+            <InlineDataLoading label="Loading dashboard data…" />
           ) : (
             <p className="text-center text-muted-foreground py-8">No data available</p>
           )}
@@ -296,7 +300,9 @@ export function DashboardView({ onNavigate }: { onNavigate?: (view: string) => v
         {/* Recent Receipts */}
         <div className="bg-card border border-border rounded-[14px] p-6">
           <h3 className="text-[18px] font-semibold text-foreground mb-4">Recent Receipts</h3>
-          {recentReceipts.length === 0 ? (
+          {loading ? (
+            <InlineDataLoading label="Loading recent receipts…" />
+          ) : recentReceipts.length === 0 ? (
             <p className="text-[14px] text-muted-foreground text-center py-8">No recent receipts</p>
           ) : (
             <div className="space-y-3">
@@ -319,7 +325,9 @@ export function DashboardView({ onNavigate }: { onNavigate?: (view: string) => v
         {/* Low Stock Alerts */}
         <div className="bg-card border border-border rounded-[14px] p-6">
           <h3 className="text-[18px] font-semibold text-foreground mb-4">Low Stock Alerts</h3>
-          {stockAlerts.length === 0 ? (
+          {loading ? (
+            <InlineDataLoading label="Loading stock alerts…" />
+          ) : stockAlerts.length === 0 ? (
             <p className="text-[14px] text-muted-foreground text-center py-8">No low stock alerts</p>
           ) : (
             <div className="space-y-3">

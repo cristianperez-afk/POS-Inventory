@@ -11,6 +11,7 @@ export interface ApiActor {
   id: string;
   name: string;
   email?: string;
+  role?: UserRole;
 }
 
 export interface ApiLocation {
@@ -47,6 +48,9 @@ export interface ApiInventoryItem {
   costPrice?: number | null;
   imageUrl?: string | null;
   unit?: string | null;
+  purchaseUnit?: string | null;
+  baseUnit?: string | null;
+  conversionFactor?: number | null;
   minStock?: number | null;
   maxStock?: number | null;
   reorderPoint?: number | null;
@@ -94,6 +98,9 @@ export interface ApiPurchaseOrderItem {
   rejectedQty: number;
   unitPrice: number;
   totalPrice: number;
+  purchaseUnit?: string | null;
+  baseUnit?: string | null;
+  conversionFactor?: number | null;
 }
 
 export interface ApiPurchaseOrder {

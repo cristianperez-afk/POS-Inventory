@@ -2,6 +2,7 @@ import { useSearchParams, useNavigate } from "react-router";
 import { ArrowLeft, Package, AlertTriangle, TrendingDown, TrendingUp } from "lucide-react";
 import { splitCategory } from "../lib/inventoryLogic";
 import { useRestaurantInventoryQuery } from "../lib/restaurant";
+import { InlineDataLoading } from "../shared/InlineDataLoading";
 
 type CategoryItem = {
   id: number;
@@ -63,7 +64,7 @@ export function CategoryDetail() {
     { id: 27, name: "Blue Cheese", sku: "DRY-CHE-004", subCategory: "Cheese", stock: 0, maxStock: 40, price: 12.99, expiry: "2024-06-10", location: "Refrigerator 2" },
   ];
 
-  const { data: inventoryProducts = [] } = useRestaurantInventoryQuery();
+  const { data: inventoryProducts = [], isLoading: inventoryLoading } = useRestaurantInventoryQuery();
   const liveCategoryItems = inventoryProducts
     .filter((item) => {
       const { main } = splitCategory(item.category);
@@ -305,7 +306,9 @@ export function CategoryDetail() {
         })}
       </div>
 
-      {filteredItems.length === 0 && (
+        {inventoryLoading ? (
+          <InlineDataLoading label="Loading category items…" className="col-span-full" />
+        ) : filteredItems.length === 0 && (
         <div className="py-12 text-center">
           <Package className="w-16 h-16 text-muted-foreground mx-auto mb-6" />
           <p className="text-muted-foreground">No items found in this category</p>

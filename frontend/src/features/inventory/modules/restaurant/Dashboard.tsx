@@ -10,6 +10,7 @@ import {
 import { useSession } from "../../app/hooks/useSession";
 import { defaultCategoryHierarchy, formatCurrency, getInventoryValue, isExpiringSoon, splitCategory, type InventoryProduct } from "../lib/inventoryLogic";
 import { formatManilaFullDateTime, getManilaDateKey } from "../../../../shared/utils/date";
+import { InlineDataLoading } from "../shared/InlineDataLoading";
 
 type PendingOrder = {
   id: string;
@@ -76,7 +77,7 @@ export function Dashboard() {
     setChartKey(prev => prev + 1);
   }, [selectedMainCategory, selectedSubCategory]);
 
-  const { data: products = [] } = useRestaurantInventoryQuery<InventoryProduct[]>();
+  const { data: products = [], isLoading: productsLoading } = useRestaurantInventoryQuery<InventoryProduct[]>();
   const liveCategoryHierarchy = products.reduce<{ [key: string]: string[] }>((acc, product) => {
     const { main, sub } = splitCategory(product.category);
     if (!acc[main]) acc[main] = [];
@@ -95,9 +96,10 @@ export function Dashboard() {
     setSelectedSubCategory("all");
   };
 
-  const { data: purchaseOrders = [] } = useRestaurantPurchaseOrdersQuery();
-  const { data: goodsRecords = [] } = useRestaurantGoodsRecordsQuery();
-  const { data: kitchenOrders = [] } = useRestaurantKitchenOrdersQuery();
+  const { data: purchaseOrders = [], isLoading: purchaseOrdersLoading } = useRestaurantPurchaseOrdersQuery();
+  const { data: goodsRecords = [], isLoading: goodsRecordsLoading } = useRestaurantGoodsRecordsQuery();
+  const { data: kitchenOrders = [], isLoading: kitchenOrdersLoading } = useRestaurantKitchenOrdersQuery();
+  const dashboardLoading = productsLoading || purchaseOrdersLoading || goodsRecordsLoading || kitchenOrdersLoading;
   const pendingOrders: PendingOrder[] = purchaseOrders
     .filter((order) => order.backendStatus === "SUBMITTED")
     .map((order) => ({
@@ -334,7 +336,9 @@ export function Dashboard() {
               </div>
             )}
           </div>
-          {receiptTrendData.length === 0 ? (
+          {dashboardLoading ? (
+            <InlineDataLoading label="Loading receipt activity…" className="min-h-[120px]" />
+          ) : receiptTrendData.length === 0 ? (
             <div className="h-[120px] flex items-center justify-center text-sm text-muted-foreground">
               No received purchase order activity yet
             </div>
@@ -502,7 +506,9 @@ export function Dashboard() {
       <div className="bg-card rounded-2xl p-6 shadow-sm border border-border">
         <h2 className="text-lg font-bold text-foreground mb-4">Recent Activity</h2>
         <div className="space-y-2">
-          {recentActivity.length === 0 ? (
+          {dashboardLoading ? (
+            <InlineDataLoading label="Loading recent activity…" />
+          ) : recentActivity.length === 0 ? (
             <div className="py-8 text-center text-sm text-muted-foreground">No activity yet</div>
           ) : recentActivity.map((activity) => (
             <div key={activity.id} className="flex items-center gap-3 p-3 rounded-xl hover:bg-muted/50 transition-colors">

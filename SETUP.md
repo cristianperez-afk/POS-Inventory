@@ -21,6 +21,15 @@ copy backend\.env.example backend\.env
 
 Edit `backend/.env` and put the real PostgreSQL connection string in `DATABASE_URL`.
 
+For Supabase, use the pooler URLs:
+
+```env
+DATABASE_URL="postgresql://postgres.<project-ref>:<password>@<pooler-host>:6543/postgres?sslmode=no-verify"
+DIRECT_URL="postgresql://postgres.<project-ref>:<password>@<pooler-host>:5432/postgres?sslmode=no-verify"
+```
+
+`DATABASE_URL` is for app traffic and uses Supabase's transaction pooler. `DIRECT_URL` is for Prisma migrations and uses Supabase's session pooler. Do not use `db.<project-ref>.supabase.co:5432` on Render unless the Supabase project has IPv4/direct connectivity enabled.
+
 ## 3. Prepare the database
 
 Run the SQL in:
@@ -65,3 +74,29 @@ If login says `Failed to fetch`, the frontend cannot reach the backend. Check:
 - `frontend/.env` has `VITE_API_BASE_URL=http://localhost:3000`
 - `backend/.env` exists and has a valid `DATABASE_URL`
 - Supabase allows the connection and the password is URL-encoded
+
+## Render Deploy With Supabase
+
+Use these Render backend environment variables:
+
+```env
+DATABASE_URL=postgresql://postgres.<project-ref>:<password>@<pooler-host>:6543/postgres?sslmode=no-verify
+DIRECT_URL=postgresql://postgres.<project-ref>:<password>@<pooler-host>:5432/postgres?sslmode=no-verify
+DB_POOL_MAX=1
+```
+
+Keep the backend build command:
+
+```bash
+npm install && npm run db:deploy
+```
+
+If Render fails with `P1001` against `db.<project-ref>.supabase.co:5432`, `DIRECT_URL` is using Supabase's direct IPv6 host. Replace it with the session pooler URL above, or enable Supabase's IPv4 add-on.
+
+If Render fails with `P3005` because the database schema is not empty, the database already has tables but no Prisma migration history. If this is the intended existing database and it already matches this repo schema, add this Render env var for one deploy:
+
+```env
+PRISMA_BASELINE_EXISTING_DB=true
+```
+
+Redeploy once, then remove `PRISMA_BASELINE_EXISTING_DB` after the deploy succeeds. The deploy script will mark the existing migrations as applied and future deploys will run normal pending migrations only.

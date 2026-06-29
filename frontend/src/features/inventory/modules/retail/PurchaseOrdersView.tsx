@@ -72,7 +72,25 @@ type POItemDraft = {
 };
 
 // Units a general-merchandise buyer orders in (a mall buys cases/boxes, not bales).
-const GENERAL_UNITS = ['pcs', 'box', 'case', 'pack', 'dozen', 'set', 'roll', 'kg'];
+const GENERAL_UNITS = [
+  'pcs',
+  'box',
+  'case',
+  'pack',
+  'dozen',
+  'set',
+  'roll',
+  'kg',
+  'liter',
+  'milliliter',
+  'bottle',
+  'can',
+  'bag',
+  'sack',
+  'carton',
+  'tray',
+  'gallon',
+];
 // Thrift suppliers sell sealed bales or sacks.
 const THRIFT_UNITS = ['bale', 'sack', 'bundle'];
 

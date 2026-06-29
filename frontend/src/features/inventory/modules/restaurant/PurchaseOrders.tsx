@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { Plus, Search, Filter, Eye, Download, CheckCircle, Clock, XCircle, X, Save, Trash2, Edit, Building2, Users, AlertCircle } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { Plus, Search, Filter, Eye, Download, CheckCircle, Clock, XCircle, X, Save, Trash2, Edit, Building2, Users, AlertCircle, Loader2, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "../../app/hooks/useSession";
 import { PurchaseOrderItemInput, PurchaseOrderItemInputValue } from "./PurchaseOrderItemInput";
@@ -25,6 +25,7 @@ import {
   isPurchaseOrderDelayed,
 } from "../lib/purchaseOrderDelivery";
 import { SuppliersManager } from "../shared/suppliers/SuppliersManager";
+import { InlineDataLoading } from "../shared/InlineDataLoading";
 import { formatManilaFullDateTime } from "../../../../shared/utils/date";
 
 // Helper function to normalize product names (capitalize first letter of each word, trim)
@@ -45,6 +46,9 @@ const blankOrderItemInput = (): OrderItemInput => ({
   category: "",
   subCategory: "",
   unit: "",
+  purchaseUnit: "",
+  baseUnit: "",
+  conversionFactor: "1",
   quantity: "",
   unitPrice: "",
   isNewProduct: false,
@@ -61,6 +65,9 @@ type OrderItem = {
   category: string;
   subCategory: string;
   unit: string;
+  purchaseUnit: string;
+  baseUnit: string;
+  conversionFactor: number;
 };
 
 type Order = {
@@ -72,6 +79,7 @@ type Order = {
   orderItems: OrderItem[];
   total: number;
   status: string;
+  backendStatus?: string;
   expectedDelivery: string;
   createdByUserId?: number;
   createdBy?: string;
@@ -93,6 +101,9 @@ type GlobalProduct = {
   category?: string;
   subCategory?: string;
   unit?: string;
+  purchaseUnit?: string;
+  baseUnit?: string;
+  conversionFactor?: number;
 };
 
 type SupplierProduct = {
@@ -116,6 +127,91 @@ type Supplier = {
   address: string;
   products: Product[];
 };
+
+function SupplierAutocomplete({
+  id,
+  value,
+  suppliers,
+  onChange,
+}: {
+  id: string;
+  value: string;
+  suppliers: Supplier[];
+  onChange: (value: string) => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const query = value.trim().toLowerCase();
+  const filteredSuppliers = suppliers
+    .filter((supplier) => !query || supplier.name.toLowerCase().includes(query))
+    .sort((left, right) => {
+      const leftStartsWith = query && left.name.toLowerCase().startsWith(query) ? 0 : 1;
+      const rightStartsWith = query && right.name.toLowerCase().startsWith(query) ? 0 : 1;
+      return leftStartsWith - rightStartsWith
+        || left.name.localeCompare(right.name, undefined, { sensitivity: "base", numeric: true });
+    });
+
+  return (
+    <div className="relative">
+      <div className="relative">
+        <input
+          id={id}
+          name="supplier"
+          type="text"
+          value={value}
+          onChange={(event) => {
+            onChange(event.target.value);
+            setIsOpen(true);
+          }}
+          onFocus={() => setIsOpen(true)}
+          onBlur={() => window.setTimeout(() => setIsOpen(false), 150)}
+          placeholder="Search or select supplier"
+          autoComplete="off"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={isOpen}
+          aria-controls={`${id}-options`}
+          className="w-full rounded-xl border border-input bg-input-background px-4 py-3 pr-10 text-sm transition-all focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/50"
+          required
+        />
+        <ChevronDown className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+      </div>
+
+      {isOpen && (
+        <div
+          id={`${id}-options`}
+          role="listbox"
+          className="absolute z-30 mt-1 max-h-60 w-full overflow-y-auto rounded-xl border border-border bg-card py-1 shadow-xl"
+        >
+          {filteredSuppliers.length > 0 ? filteredSuppliers.map((supplier) => (
+            <button
+              key={supplier.backendId ?? supplier.id ?? supplier.name}
+              type="button"
+              role="option"
+              aria-selected={supplier.name === value}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                onChange(supplier.name);
+                setIsOpen(false);
+              }}
+              className={`block w-full px-4 py-2.5 text-left text-sm transition-colors hover:bg-primary/10 ${
+                supplier.name === value ? "bg-primary/10 font-medium text-primary" : "text-foreground"
+              }`}
+            >
+              <span className="block">{supplier.name}</span>
+              {(supplier.contact || supplier.email) && (
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  {[supplier.contact, supplier.email].filter(Boolean).join(" • ")}
+                </span>
+              )}
+            </button>
+          )) : (
+            <div className="px-4 py-3 text-sm text-muted-foreground">No active suppliers found.</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 type GoodsItem = {
   id: string;
@@ -155,6 +251,14 @@ const getOrderCreator = (order: Order, users: UserSummary[]) => {
 
 const getOrderCreatorRole = (order: Order) => order.createdByRole || "unknown";
 
+const getOrderCreatedDateTime = (order: Order) =>
+  formatManilaFullDateTime(order.createdAt ?? order.date);
+
+const isOrderEditable = (order: Order) =>
+  ["DRAFT", "SUBMITTED", "APPROVED"].includes(
+    order.backendStatus ?? order.status.toUpperCase(),
+  );
+
 export function PurchaseOrders() {
   const { currentUser: sessionUser } = useSession();
   const userRole = sessionUser?.role === "Admin" ? "admin" : "staff";
@@ -190,11 +294,13 @@ export function PurchaseOrders() {
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
   const [currentItem, setCurrentItem] = useState<OrderItemInput>(blankOrderItemInput());
 
-  const { data: globalProducts = [] } = useRestaurantGlobalProductsQuery();
-  const { data: orders = [] } = useRestaurantPurchaseOrdersQuery<Order[]>();
-  const { data: users = [] } = useRestaurantUsersQuery();
+  const { data: globalProducts = [], isLoading: globalProductsLoading } = useRestaurantGlobalProductsQuery();
+  const { data: orders = [], isLoading: ordersLoading } = useRestaurantPurchaseOrdersQuery<Order[]>();
+  const { data: users = [], isLoading: usersLoading } = useRestaurantUsersQuery();
+  const purchaseOrdersLoading = globalProductsLoading || ordersLoading || usersLoading;
 
   const statuses = ["all", "pending", "approved", "received", "partial", "rejected", "cancelled"];
+  const approvableOrders = orders.filter(order => order.backendStatus === "SUBMITTED");
 
   const filteredOrders = orders.filter(order => {
     const matchesSearch = (order.id || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -246,9 +352,9 @@ export function PurchaseOrders() {
     const delayLabel = getDeliveryDelayLabel(order.expectedDelivery, now);
 
     return (
-      <span className="px-3 py-1 rounded-full text-xs font-medium border inline-flex items-center gap-1" style={{ backgroundColor: "#FEE2E2", color: "#991B1B", borderColor: "#DC2626" }}>
-        <AlertCircle className="w-5 h-5" />
-        Delayed: {delayLabel}
+      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-red-700">
+        <AlertCircle className="w-3.5 h-3.5" />
+        {delayLabel}
       </span>
     );
   };
@@ -268,12 +374,16 @@ export function PurchaseOrders() {
     setStatusFilter((current) => (current === status ? "all" : status));
   };
 
-  const { data: suppliers = [] } = useRestaurantSuppliersQuery();
+  const { data: suppliers = [] } = useRestaurantSuppliersQuery({ isActive: true });
   const { data: archivedSuppliers = [] } = useRestaurantSuppliersQuery({ isActive: false, enabled: userRole === "admin" });
   const saveOrder = useSaveRestaurantPurchaseOrderMutation();
   const approveOrder = useApproveRestaurantPurchaseOrderMutation();
   const rejectOrder = useRejectRestaurantPurchaseOrderMutation();
   const cancelOrder = useCancelRestaurantPurchaseOrderMutation();
+  const saveOrderLock = useRef(false);
+  const approveOrderLock = useRef(false);
+  const rejectOrderLock = useRef(false);
+  const cancelOrderLock = useRef(false);
   const addSupplier = useCreateRestaurantSupplierMutation();
   const updateSupplier = useUpdateRestaurantSupplierMutation();
   const archiveSupplier = useArchiveRestaurantSupplierMutation();
@@ -292,6 +402,9 @@ export function PurchaseOrders() {
     category: string;
     subCategory: string;
     unit: string;
+    purchaseUnit?: string;
+    baseUnit?: string;
+    conversionFactor?: number;
   }) => {
     const normalized = normalizeProductName(payload.name);
 
@@ -309,14 +422,24 @@ export function PurchaseOrders() {
       sku: payload.sku?.trim(),
       category: payload.category || "Other",
       subCategory: payload.subCategory,
-      unit: payload.unit || "pcs",
+      unit: payload.purchaseUnit || payload.unit || "pcs",
+      purchaseUnit: payload.purchaseUnit || payload.unit || "pcs",
+      baseUnit: payload.baseUnit || payload.unit || payload.purchaseUnit || "pcs",
+      conversionFactor: payload.conversionFactor || 1,
     };
 
     return newProduct;
   };
 
   const handleAddItem = () => {
-if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentItem.unitPrice.trim() || !currentItem.unit.trim()) {
+if (
+  !currentItem.productName.trim() ||
+  !currentItem.quantity.trim() ||
+  !currentItem.unitPrice.trim() ||
+  !currentItem.purchaseUnit.trim() ||
+  !currentItem.baseUnit.trim() ||
+  Number(currentItem.conversionFactor || 0) <= 0
+) {
       return;
     }
 
@@ -324,7 +447,10 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
     let inventoryId = currentItem.inventoryId;
     let category = currentItem.category;
     let subCategory = currentItem.subCategory;
-    let unit = currentItem.unit;
+    let unit = currentItem.purchaseUnit || currentItem.unit;
+    let purchaseUnit = currentItem.purchaseUnit || currentItem.unit;
+    let baseUnit = currentItem.baseUnit || currentItem.unit;
+    let conversionFactor = Number(currentItem.conversionFactor || 1);
 
     if (currentItem.isNewProduct || !productId) {
       const created = handleCreateNewProduct({
@@ -332,13 +458,19 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
         sku: currentItem.sku,
         category: currentItem.category || "Other",
         subCategory: currentItem.subCategory,
-        unit: currentItem.unit || "pcs",
+        unit: currentItem.purchaseUnit || currentItem.unit || "pcs",
+        purchaseUnit,
+        baseUnit,
+        conversionFactor,
       });
       productId = created.id;
       inventoryId = created.inventoryId;
       category = created.category || "Other";
       subCategory = created.subCategory || "General";
-      unit = created.unit || "pcs";
+      unit = created.purchaseUnit || created.unit || "pcs";
+      purchaseUnit = created.purchaseUnit || unit;
+      baseUnit = created.baseUnit || unit;
+      conversionFactor = created.conversionFactor || 1;
     }
 
     const newItem: OrderItem = {
@@ -346,11 +478,14 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
       inventoryId,
       sku: currentItem.sku?.trim(),
       productName: normalizeProductName(currentItem.productName),
-      quantity: parseInt(currentItem.quantity, 10),
+      quantity: parseFloat(currentItem.quantity),
       unitPrice: parseFloat(currentItem.unitPrice),
       category: category || "",
       subCategory: subCategory || "",
       unit: unit || "",
+      purchaseUnit: purchaseUnit || unit || "",
+      baseUnit: baseUnit || unit || "",
+      conversionFactor,
     };
 
     setOrderItems([...orderItems, newItem]);
@@ -367,6 +502,7 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
 
   const handleCreateOrder = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (saveOrderLock.current) return;
 
     if (orderItems.length === 0) {
       toast.error("Please add at least one item to the order");
@@ -378,6 +514,7 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
       return;
     }
 
+    saveOrderLock.current = true;
     try {
       const supplier = suppliers.find((item) => item.name === newOrder.supplier);
       const supplierId = supplier?.backendId ?? supplier?.id;
@@ -395,6 +532,8 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
       setCurrentItem(blankOrderItemInput());
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to create purchase order");
+    } finally {
+      saveOrderLock.current = false;
     }
   };
 
@@ -426,8 +565,7 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
     csvContent += `Created By:,${getOrderCreator(order, users)}\n`;
     csvContent += `Creator User ID:,${order.createdByUserId ?? "N/A"}\n`;
     csvContent += `Creator Role:,${getOrderCreatorRole(order)}\n`;
-    csvContent += `Created At:,${order.createdAt || order.date}\n`;
-    csvContent += `Order Date:,${order.date}\n`;
+    csvContent += `Date Created:,${getOrderCreatedDateTime(order)}\n`;
     csvContent += `Expected Delivery:,${formatExpectedDelivery(order.expectedDelivery)}\n`;
     csvContent += `Status:,${order.status}\n\n`;
     if (order.rejectionNote) {
@@ -458,14 +596,27 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
   };
 
   const handleApproveOrder = async (order: Order) => {
+    if (approveOrderLock.current || rejectOrderLock.current) return;
+    approveOrderLock.current = true;
     try {
       await approveOrder.mutateAsync(order.backendId ?? order.id);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to approve purchase order");
+    } finally {
+      approveOrderLock.current = false;
     }
   };
 
+  const handleSupplierChange = (value: string) => {
+    if (value !== newOrder.supplier) {
+      setOrderItems([]);
+      setCurrentItem(blankOrderItemInput());
+    }
+    setNewOrder((current) => ({ ...current, supplier: value }));
+  };
+
   const handleRejectOrder = async () => {
+    if (rejectOrderLock.current || approveOrderLock.current) return;
     const orderToReject = rejectingOrder || approvingOrder;
     if (!orderToReject) return;
 
@@ -475,6 +626,7 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
       return;
     }
 
+    rejectOrderLock.current = true;
     try {
       await rejectOrder.mutateAsync({
         id: orderToReject.backendId ?? orderToReject.id,
@@ -486,18 +638,28 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
       setRejectionNote("");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to reject purchase order");
+    } finally {
+      rejectOrderLock.current = false;
     }
   };
 
   const handleCancelOrder = async (orderId: string) => {
+    if (cancelOrderLock.current) return;
+    cancelOrderLock.current = true;
     try {
       await cancelOrder.mutateAsync(orderId);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to cancel purchase order");
+    } finally {
+      cancelOrderLock.current = false;
     }
   };
 
   const handleEditOrder = (order: Order) => {
+    if (!isOrderEditable(order)) {
+      toast.error("Only draft, submitted, or approved orders can be edited before receiving starts.");
+      return;
+    }
     setEditingOrder(order);
     setNewOrder({
       supplier: order.supplier,
@@ -509,6 +671,7 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
 
   const handleUpdateOrder = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (saveOrderLock.current) return;
 
     if (orderItems.length === 0) {
       toast.error("Please add at least one item to the order");
@@ -522,6 +685,7 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
       return;
     }
 
+    saveOrderLock.current = true;
     try {
       const supplier = suppliers.find((item) => item.name === newOrder.supplier);
       const supplierId = supplier?.backendId ?? supplier?.id;
@@ -541,6 +705,8 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
       setCurrentItem(blankOrderItemInput());
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to update purchase order");
+    } finally {
+      saveOrderLock.current = false;
     }
   };
 
@@ -645,7 +811,7 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
                 <th className="px-6 py-4 text-left text-sm font-medium text-foreground">Order ID</th>
                 <th className="px-6 py-4 text-left text-sm font-medium text-foreground">Supplier</th>
                 <th className="px-6 py-4 text-left text-sm font-medium text-foreground">Created By</th>
-                <th className="px-6 py-4 text-left text-sm font-medium text-foreground">Date</th>
+                <th className="px-6 py-4 text-left text-sm font-medium text-foreground">Date Created</th>
                 <th className="px-6 py-4 text-left text-sm font-medium text-foreground">Items</th>
                 <th className="px-6 py-4 text-left text-sm font-medium text-foreground">Total</th>
                 <th className="px-6 py-4 text-left text-sm font-medium text-foreground">Expected Delivery</th>
@@ -654,7 +820,11 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {filteredOrders.map((order) => (
+              {purchaseOrdersLoading ? (
+                <tr><td colSpan={9}><InlineDataLoading label="Loading purchase orders…" /></td></tr>
+              ) : filteredOrders.length === 0 ? (
+                <tr><td colSpan={9} className="px-6 py-10 text-center text-muted-foreground">No purchase orders found.</td></tr>
+              ) : filteredOrders.map((order) => (
                 <tr key={order.id} className="hover:bg-muted/30 transition-colors">
                   <td className="px-6 py-4">
                     <span className="font-medium text-primary">{order.id}</span>
@@ -667,7 +837,7 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
                       <p className="text-xs text-muted-foreground capitalize">{getOrderCreatorRole(order)}</p>
                     </div>
                   </td>
-                  <td className="px-6 py-4 text-muted-foreground">{order.date}</td>
+                  <td className="px-6 py-4 text-muted-foreground whitespace-nowrap">{getOrderCreatedDateTime(order)}</td>
                   <td className="px-6 py-4 text-foreground">{order.items}</td>
                   <td className="px-6 py-4 text-foreground font-medium">₱{order.total.toLocaleString()}</td>
                   <td className="px-6 py-4 text-muted-foreground">{formatExpectedDelivery(order.expectedDelivery)}</td>
@@ -689,12 +859,12 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
                       <button
                         onClick={() => handleEditOrder(order)}
                         className={`p-2 rounded-xl transition-colors ${
-                          order.status === "received" || order.status === "cancelled" || order.status === "rejected"
+                          !isOrderEditable(order)
                             ? "text-muted-foreground cursor-not-allowed opacity-50"
                             : "hover:bg-orange-50 text-orange-600"
                         }`}
-                        title={order.status === "received" || order.status === "cancelled" || order.status === "rejected" ? "Cannot edit received, cancelled, or rejected orders" : "Edit Order"}
-                        disabled={order.status === "received" || order.status === "cancelled" || order.status === "rejected"}
+                        title={isOrderEditable(order) ? "Edit Order" : "Cannot edit after receiving has started or the order is closed"}
+                        disabled={!isOrderEditable(order)}
                       >
                         <Edit className="w-4 h-4" />
                       </button>
@@ -707,11 +877,16 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
                       </button>
                       {order.status === "pending" && userRole !== "admin" && (
                         <button
-                          onClick={() => handleCancelOrder(order.id)}
-                          className="p-2 hover:bg-red-50 text-red-600 rounded-xl transition-colors"
-                          title="Cancel Order"
+                          onClick={() => void handleCancelOrder(order.backendId ?? order.id)}
+                          disabled={cancelOrder.isPending}
+                          className="p-2 hover:bg-red-50 text-red-600 rounded-xl transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                          title={cancelOrder.isPending ? "Processing cancellation..." : "Cancel Order"}
                         >
-                          <XCircle className="w-4 h-4" />
+                          {cancelOrder.isPending && cancelOrder.variables === (order.backendId ?? order.id) ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <XCircle className="w-4 h-4" />
+                          )}
                         </button>
                       )}
                     </div>
@@ -756,21 +931,12 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
                 <label htmlFor="supplier" className="block text-sm mb-2 text-foreground">
                   Supplier *
                 </label>
-                <select
+                <SupplierAutocomplete
                   id="supplier"
-                  name="supplier"
                   value={newOrder.supplier}
-                  onChange={handleInputChange}
-                  className="w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all appearance-none cursor-pointer"
-                  required
-                >
-                  <option value="">Select supplier</option>
-                  {suppliers.map((sup) => (
-                    <option key={sup.name} value={sup.name}>
-                      {sup.name}
-                    </option>
-                  ))}
-                </select>
+                  suppliers={suppliers}
+                  onChange={handleSupplierChange}
+                />
               </div>
 
               <div>
@@ -838,21 +1004,23 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
               <div className="flex gap-3 pt-4 border-t border-border">
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-3 bg-gradient-to-r from-primary to-secondary text-white rounded-xl hover:shadow-lg hover:shadow-primary/30 transition-all duration-200 flex items-center justify-center gap-2"
+                  disabled={saveOrder.isPending}
+                  className="flex-1 px-4 py-3 bg-gradient-to-r from-primary to-secondary text-white rounded-xl hover:shadow-lg hover:shadow-primary/30 transition-all duration-200 flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-70"
                 >
-                  <Save className="w-5 h-5" />
-                  Save Order
+                  {saveOrder.isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
+                  {saveOrder.isPending ? "Processing..." : "Save Order"}
                 </button>
                 <button
                   type="button"
+                  disabled={saveOrder.isPending}
                   onClick={() => {
                     setShowCreateModal(false);
                     setOrderItems([]);
                     setCurrentItem(blankOrderItemInput());
                   }}
-                  className="flex-1 px-4 py-3 bg-muted text-foreground rounded-xl hover:bg-muted/80 transition-all duration-200"
+                  className="flex-1 px-4 py-3 bg-muted text-foreground rounded-xl hover:bg-muted/80 transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  Cancel
+                  {saveOrder.isPending ? "Please wait..." : "Cancel"}
                 </button>
               </div>
             </form>
@@ -886,8 +1054,8 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
                     <p className="text-lg font-semibold text-foreground">{selectedOrder.supplier}</p>
                   </div>
                   <div>
-                    <p className="text-sm text-muted-foreground mb-1">Order Date</p>
-                    <p className="text-foreground">{selectedOrder.date}</p>
+                    <p className="text-sm text-muted-foreground mb-1">Date Created</p>
+                    <p className="text-foreground">{getOrderCreatedDateTime(selectedOrder)}</p>
                   </div>
                   <div>
                     <p className="text-sm text-muted-foreground mb-1">Expected Delivery</p>
@@ -999,7 +1167,7 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
 
       {/* Reject Order Modal */}
       {showRejectModal && (rejectingOrder || approvingOrder) && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setShowRejectModal(false)}>
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => !rejectOrder.isPending && setShowRejectModal(false)}>
           <div className="bg-card rounded-2xl shadow-xl border border-border w-full max-w-lg p-6" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-start justify-between gap-4 mb-6">
               <div>
@@ -1008,13 +1176,14 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
                 <p className="text-xs text-muted-foreground mt-1">Created by {getOrderCreator((rejectingOrder || approvingOrder)!, users)}</p>
               </div>
               <button
+                disabled={rejectOrder.isPending}
                 onClick={() => {
                   setShowRejectModal(false);
                   setRejectingOrder(null);
                   setApprovingOrder(null);
                   setRejectionNote("");
                 }}
-                className="p-2 hover:bg-muted rounded-xl transition-colors"
+                className="p-2 hover:bg-muted rounded-xl transition-colors disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1033,6 +1202,7 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
               id="rejectionNote"
               value={rejectionNote}
               onChange={(event) => setRejectionNote(event.target.value)}
+              disabled={rejectOrder.isPending}
               placeholder="Example: Supplier price mismatch, duplicate order, wrong quantity, missing approval document..."
               className="min-h-[130px] w-full rounded-xl border border-input bg-input-background px-4 py-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/30"
             />
@@ -1041,24 +1211,27 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
               <button
                 type="button"
                 onClick={handleRejectOrder}
-                className="flex-1 px-6 py-3 text-white rounded-xl transition-all duration-200 font-semibold"
+                disabled={rejectOrder.isPending || approveOrder.isPending}
+                className="flex-1 px-6 py-3 text-white rounded-xl transition-all duration-200 font-semibold flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-70"
                 style={{ backgroundColor: "#DC2626" }}
                 onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "#B91C1C")}
                 onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "#DC2626")}
               >
-                Reject Order
+                {rejectOrder.isPending && <Loader2 className="w-5 h-5 animate-spin" />}
+                {rejectOrder.isPending ? "Processing..." : "Reject Order"}
               </button>
               <button
                 type="button"
+                disabled={rejectOrder.isPending}
                 onClick={() => {
                   setShowRejectModal(false);
                   setRejectingOrder(null);
                   setApprovingOrder(null);
                   setRejectionNote("");
                 }}
-                className="px-6 py-3 bg-muted text-foreground rounded-xl hover:bg-muted/80 transition-all duration-200"
+                className="px-6 py-3 bg-muted text-foreground rounded-xl hover:bg-muted/80 transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Cancel
+                {rejectOrder.isPending ? "Please wait..." : "Cancel"}
               </button>
             </div>
           </div>
@@ -1087,21 +1260,12 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
                 <label htmlFor="edit-supplier" className="block text-sm mb-2 text-foreground">
                   Supplier *
                 </label>
-                <select
+                <SupplierAutocomplete
                   id="edit-supplier"
-                  name="supplier"
                   value={newOrder.supplier}
-                  onChange={handleInputChange}
-                  className="w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all appearance-none cursor-pointer"
-                  required
-                >
-                  <option value="">Select supplier</option>
-                  {suppliers.map((sup) => (
-                    <option key={sup.name} value={sup.name}>
-                      {sup.name}
-                    </option>
-                  ))}
-                </select>
+                  suppliers={suppliers}
+                  onChange={handleSupplierChange}
+                />
               </div>
 
               <div>
@@ -1169,22 +1333,24 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
               <div className="flex gap-3 pt-4 border-t border-border">
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-3 bg-gradient-to-r from-primary to-secondary text-white rounded-xl hover:shadow-lg hover:shadow-primary/30 transition-all duration-200 flex items-center justify-center gap-2"
+                  disabled={saveOrder.isPending}
+                  className="flex-1 px-4 py-3 bg-gradient-to-r from-primary to-secondary text-white rounded-xl hover:shadow-lg hover:shadow-primary/30 transition-all duration-200 flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-70"
                 >
-                  <Save className="w-5 h-5" />
-                  Update Order
+                  {saveOrder.isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
+                  {saveOrder.isPending ? "Processing..." : "Update Order"}
                 </button>
                 <button
                   type="button"
+                  disabled={saveOrder.isPending}
                   onClick={() => {
                     setShowEditModal(false);
                     setEditingOrder(null);
                     setOrderItems([]);
                     setCurrentItem(blankOrderItemInput());
                   }}
-                  className="flex-1 px-4 py-3 bg-muted text-foreground rounded-xl hover:bg-muted/80 transition-all duration-200"
+                  className="flex-1 px-4 py-3 bg-muted text-foreground rounded-xl hover:bg-muted/80 transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  Cancel
+                  {saveOrder.isPending ? "Please wait..." : "Cancel"}
                 </button>
               </div>
             </form>
@@ -1281,7 +1447,7 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
             </div>
 
             <div className="p-6 overflow-y-auto max-h-[calc(90vh-120px)]">
-              {orders.filter(o => o.status === "pending").length === 0 ? (
+              {approvableOrders.length === 0 ? (
                 <div className="text-center py-12">
                   <CheckCircle className="w-16 h-16 text-success mx-auto mb-4 opacity-50" />
                   <h3 className="text-xl font-semibold text-foreground mb-2">All Caught Up!</h3>
@@ -1289,9 +1455,7 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {orders
-                    .filter(o => o.status === "pending")
-                    .map((order) => (
+                  {approvableOrders.map((order) => (
                       <div
                         key={order.id}
                         className="bg-background rounded-2xl p-6 border-2 border-primary/20 hover:border-primary/40 transition-all"
@@ -1312,8 +1476,8 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
                                 <p className="text-sm font-medium text-foreground">{getOrderCreator(order, users)}</p>
                               </div>
                               <div>
-                                <p className="text-xs text-muted-foreground mb-1">Date</p>
-                                <p className="text-sm font-medium text-foreground">{order.date}</p>
+                                <p className="text-xs text-muted-foreground mb-1">Date Created</p>
+                                <p className="text-sm font-medium text-foreground">{getOrderCreatedDateTime(order)}</p>
                               </div>
                               <div>
                                 <p className="text-xs text-muted-foreground mb-1">Expected Delivery</p>
@@ -1355,18 +1519,24 @@ if (!currentItem.productName.trim() || !currentItem.quantity.trim() || !currentI
                         <div className="flex gap-3 mt-4">
                           <button
                             onClick={() => void handleApproveOrder(order)}
-                            className="flex-1 px-6 py-3 bg-gradient-to-r from-primary to-secondary text-white rounded-xl hover:shadow-lg hover:shadow-primary/30 transition-all duration-200 flex items-center justify-center gap-2"
+                            disabled={approveOrder.isPending || rejectOrder.isPending}
+                            className="flex-1 px-6 py-3 bg-gradient-to-r from-primary to-secondary text-white rounded-xl hover:shadow-lg hover:shadow-primary/30 transition-all duration-200 flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-70"
                           >
-                            <CheckCircle className="w-5 h-5" />
-                            Approve Order
+                            {approveOrder.isPending && approveOrder.variables === (order.backendId ?? order.id) ? (
+                              <Loader2 className="w-5 h-5 animate-spin" />
+                            ) : (
+                              <CheckCircle className="w-5 h-5" />
+                            )}
+                            {approveOrder.isPending && approveOrder.variables === (order.backendId ?? order.id) ? "Processing..." : "Approve Order"}
                           </button>
                           <button
+                            disabled={approveOrder.isPending || rejectOrder.isPending}
                             onClick={() => {
                               setApprovingOrder(order);
                               setShowApprovalModal(false);
                               setShowRejectModal(true);
                             }}
-                            className="flex-1 px-6 py-3 text-white rounded-xl transition-all duration-200 flex items-center justify-center gap-2"
+                            className="flex-1 px-6 py-3 text-white rounded-xl transition-all duration-200 flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-70"
                             style={{ backgroundColor: "#DC2626" }}
                             onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "#B91C1C")}
                             onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "#DC2626")}

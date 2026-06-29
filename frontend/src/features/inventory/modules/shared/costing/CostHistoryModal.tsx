@@ -94,7 +94,7 @@ export function CostHistoryModal({ itemId, itemName, onClose }: CostHistoryModal
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-muted text-muted-foreground text-left text-xs uppercase tracking-wide">
-                    <th className="px-4 py-3 font-medium">Date Received</th>
+                    <th className="px-4 py-3 font-medium">Date &amp; Time Received</th>
                     <th className="px-4 py-3 font-medium">Source</th>
                     <th className="px-4 py-3 font-medium text-right">Qty Received</th>
                     <th className="px-4 py-3 font-medium text-right">Unit Cost</th>

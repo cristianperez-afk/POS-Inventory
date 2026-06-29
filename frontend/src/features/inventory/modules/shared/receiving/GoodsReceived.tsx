@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { WheelEvent } from 'react';
 import {
   Search,
@@ -9,8 +9,10 @@ import {
   ClipboardCheck,
   Eye,
   Upload,
+  AlertCircle,
 } from 'lucide-react';
-import { formatManilaDateTime, parseDatabaseTimestamp } from '../../../../../shared/utils/date';
+import { formatManilaFullDateTime, parseDatabaseTimestamp } from '../../../../../shared/utils/date';
+import { getDeliveryDelayLabel } from '../../lib/purchaseOrderDelivery';
 
 const preventNumberWheel = (event: WheelEvent<HTMLInputElement>) => {
   event.currentTarget.blur();
@@ -37,6 +39,7 @@ export type PendingReceipt = {
   orderNumber: string;
   supplier: string;
   status: string; // 'APPROVED' | 'PARTIALLY_RECEIVED'
+  expectedDelivery?: string | null;
   total: number;
   items: NormalizedLine[];
 };
@@ -52,6 +55,7 @@ export type ReceiptRecord = {
   status: string; // module-specific label
   // Parseable date (ISO or YYYY-MM-DD) used for time-range filtering.
   receivedAt?: string;
+  expectedDelivery?: string | null;
   actionReason?: string | null;
   proofImages?: string[];
   totalAccepted: number;
@@ -73,6 +77,7 @@ export type ReceiveItemInput = {
   notes?: string;
   expiryDate?: string;
   expiryPeriod?: string;
+  noExpiry?: boolean;
   storageTemperature?: string;
 };
 
@@ -80,6 +85,7 @@ export type ReceiveItemInput = {
 export type LineDraft = {
   acceptedQty: number;
   rejectedQty: number;
+  noExpiry: boolean;
   fields: Record<string, any>; // module-specific field values
 };
 
@@ -88,6 +94,11 @@ export type FieldDef =
   | { key: string; type: 'date'; label: string }
   | { key: string; type: 'textarea'; label: string }
   | { key: string; type: 'text'; label: string };
+
+export type LineValidationError = {
+  message: string;
+  fieldKey?: string;
+};
 
 // Everything the shared screen needs. A module provides this (usually via a hook
 // that runs the module-specific queries/mutations).
@@ -112,7 +123,7 @@ export type ResolvedReceivingConfig = {
     draft: LineDraft,
     patch: (partial: Partial<LineDraft>) => void,
   ) => React.ReactNode;
-  validateLine?: (line: NormalizedLine, draft: LineDraft) => string | null;
+  validateLine?: (line: NormalizedLine, draft: LineDraft) => LineValidationError | null;
   buildReceiveItem: (line: NormalizedLine, draft: LineDraft) => ReceiveItemInput;
   receive: (poId: string, items: ReceiveItemInput[], proofImages?: string[]) => Promise<void>;
   quickAction?: (
@@ -154,6 +165,7 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
   const [drafts, setDrafts] = useState<Record<string, LineDraft>>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lineErrors, setLineErrors] = useState<Record<string, LineValidationError>>({});
   const [viewRecord, setViewRecord] = useState<ReceiptRecord | null>(null);
   const [quickActionTarget, setQuickActionTarget] = useState<{
     po: PendingReceipt;
@@ -162,8 +174,15 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
   const [quickActionReason, setQuickActionReason] = useState('');
   const [proofImages, setProofImages] = useState<string[]>([]);
   const [proofImageNames, setProofImageNames] = useState<string[]>([]);
+  const [now, setNow] = useState(() => new Date());
   const pendingRef = useRef<HTMLDivElement | null>(null);
   const historyRef = useRef<HTMLDivElement | null>(null);
+  const lineRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   // Stat cards toggle the outcome filter that drives the receiving history below;
   // clicking the active card (or Total Receipts) clears it back to "all".
@@ -187,7 +206,7 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
     if (!value) return 'N/A';
     const date = parseDatabaseTimestamp(value);
     if (Number.isNaN(date.getTime())) return record.receivedDate || value;
-    return formatManilaDateTime(value);
+    return formatManilaFullDateTime(value);
   };
 
   const stats = useMemo(
@@ -229,11 +248,13 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
 
   const openInspection = (po: PendingReceipt) => {
     setError(null);
+    setLineErrors({});
     const initial: Record<string, LineDraft> = {};
     po.items.forEach((line) => {
       initial[line.id] = {
         acceptedQty: line.orderedQty,
         rejectedQty: 0,
+        noExpiry: false,
         fields: initLineFields(line),
       };
     });
@@ -245,6 +266,7 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
     setSelected(null);
     setDrafts({});
     setError(null);
+    setLineErrors({});
   };
 
   const openQuickAction = (po: PendingReceipt, action: 'reject' | 'cancel') => {
@@ -302,6 +324,17 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
   };
 
   const patchDraft = (lineId: string, line: NormalizedLine, partial: Partial<LineDraft>) => {
+    setLineErrors((current) => {
+      const activeError = current[lineId];
+      if (!activeError) return current;
+      const changedFields = Object.keys(partial.fields ?? {});
+      const changedTargetField = !activeError.fieldKey || changedFields.includes(activeError.fieldKey);
+      const changedQuantity = partial.acceptedQty !== undefined || partial.rejectedQty !== undefined;
+      if (!changedTargetField && !changedQuantity) return current;
+      const next = { ...current };
+      delete next[lineId];
+      return next;
+    });
     setDrafts((prev) => {
       const current = prev[lineId];
       const next: LineDraft = {
@@ -327,16 +360,30 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
   const handleSubmit = async () => {
     if (!selected || saving) return;
     const items: ReceiveItemInput[] = [];
+    const validationErrors: Record<string, LineValidationError> = {};
     for (const line of selected.items) {
       const draft = drafts[line.id];
       if (!draft) continue;
-      const err = validateLine?.(line, draft);
-      if (err) {
-        setError(err);
-        return;
-      }
-      items.push(buildReceiveItem(line, draft));
+      const validationError = validateLine?.(line, draft);
+      if (validationError) validationErrors[line.id] = validationError;
+      else items.push(buildReceiveItem(line, draft));
     }
+    const firstInvalidLine = selected.items.find((line) => validationErrors[line.id]);
+    if (firstInvalidLine) {
+      setError(null);
+      setLineErrors(validationErrors);
+      window.requestAnimationFrame(() => {
+        const card = lineRefs.current[firstInvalidLine.id];
+        card?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        const fieldKey = validationErrors[firstInvalidLine.id]?.fieldKey;
+        const field = fieldKey
+          ? card?.querySelector<HTMLElement>(`[data-receiving-field="${fieldKey}"]`)
+          : null;
+        window.setTimeout(() => (field ?? card)?.focus({ preventScroll: true }), 350);
+      });
+      return;
+    }
+    setLineErrors({});
     const totalProcessed = items.reduce((sum, i) => sum + i.receivedQty + i.rejectedQty, 0);
     if (totalProcessed <= 0) {
       setError('Enter an accepted or rejected quantity for at least one item.');
@@ -361,13 +408,27 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
   ) => {
     const value = draft.fields[field.key] ?? '';
     const onChange = (v: string) => patchDraft(line.id, line, { fields: { [field.key]: v } });
+    const isExpiryField = field.key === 'expiryDate' || field.key === 'expiryPeriod';
+    const isDisabled = draft.noExpiry && isExpiryField;
+    const isInvalid = !isDisabled && lineErrors[line.id]?.fieldKey === field.key;
     const base =
-      'w-full px-3 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary';
+      `w-full px-3 py-2 border rounded-[8px] text-[14px] focus:outline-none ${
+        isInvalid
+          ? 'border-[#E7000B] bg-[#fff7f7] focus:border-[#E7000B] focus:ring-2 focus:ring-[#E7000B]/20'
+          : `border-[rgba(0,0,0,0.1)] focus:border-primary ${isDisabled ? 'bg-muted cursor-not-allowed opacity-70' : ''}`
+      }`;
     return (
       <div key={field.key}>
         <label className="block text-[12px] font-medium text-foreground mb-2">{field.label}</label>
         {field.type === 'select' ? (
-          <select value={value} onChange={(e) => onChange(e.target.value)} className={base}>
+          <select
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            className={base}
+            data-receiving-field={field.key}
+            aria-invalid={isInvalid}
+            disabled={isDisabled}
+          >
             {field.options.map((o) => (
               <option key={o} value={o}>
                 {o}
@@ -380,6 +441,9 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
             onChange={(e) => onChange(e.target.value)}
             rows={2}
             className={`${base} resize-none`}
+            data-receiving-field={field.key}
+            aria-invalid={isInvalid}
+            disabled={isDisabled}
           />
         ) : (
           <input
@@ -387,6 +451,9 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
             value={value}
             onChange={(e) => onChange(e.target.value)}
             className={base}
+            data-receiving-field={field.key}
+            aria-invalid={isInvalid}
+            disabled={isDisabled}
           />
         )}
       </div>
@@ -478,11 +545,13 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
             Approved deliveries awaiting inspection. Stock is only added after the quality check.
           </p>
           <div className="space-y-3">
-            {pending.map((po) => (
-              <div
+            {pending.map((po) => {
+              const delayLabel = getDeliveryDelayLabel(po.expectedDelivery, now);
+              return (
+                <div
                 key={po.id}
                 className="border border-[rgba(0,0,0,0.1)] rounded-[12px] p-4 flex items-start justify-between gap-4"
-              >
+                >
                 <div className="flex-1">
                   <div className="flex items-center gap-3 mb-1">
                     <h4 className="text-[15px] font-semibold text-foreground">{po.orderNumber}</h4>
@@ -500,6 +569,12 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
                   <p className="text-[12px] text-muted-foreground">
                     {po.items.length} item(s) • ₱{po.total.toLocaleString()}
                   </p>
+                  {delayLabel && (
+                    <p className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-[#B91C1C]">
+                      <AlertCircle className="size-3.5" />
+                      {delayLabel}
+                    </p>
+                  )}
                 </div>
                 <button
                   onClick={() => openInspection(po)}
@@ -525,8 +600,9 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
                     </button>
                   </div>
                 )}
-              </div>
-            ))}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -577,8 +653,13 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
             </p>
           </div>
         ) : (
-          filteredHistory.map((r) => (
-            <div key={r.id} className="bg-card border border-[rgba(0,0,0,0.1)] rounded-[14px] p-6">
+          filteredHistory.map((r) => {
+            const completedAt = parseDatabaseTimestamp(r.receivedAt ?? r.receivedDate);
+            const delayLabel = Number.isNaN(completedAt.getTime())
+              ? null
+              : getDeliveryDelayLabel(r.expectedDelivery, completedAt);
+            return (
+              <div key={r.id} className="bg-card border border-[rgba(0,0,0,0.1)] rounded-[14px] p-6">
               <div className="flex items-start justify-between mb-4">
                 <div>
                   <div className="flex items-center gap-3 mb-2">
@@ -595,6 +676,12 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
                     Supplier: <span className="font-medium">{r.supplier || 'N/A'}</span>
                   </p>
                   <p className="text-[14px] text-foreground">Date Received: {formatReceivedDateTime(r)}</p>
+                  {delayLabel && (
+                    <p className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-[#B91C1C]">
+                      <AlertCircle className="size-3.5" />
+                      {delayLabel}
+                    </p>
+                  )}
                   <p className="text-[14px] text-foreground">Received By: {r.receivedBy || 'N/A'}</p>
                   {r.actionReason && (
                     <p className="text-[14px] text-foreground">
@@ -664,8 +751,9 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
                   ))}
                 </div>
               </div>
-            </div>
-          ))
+              </div>
+            );
+          })
         )}
       </div>
 
@@ -706,13 +794,29 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
                 return (
                   <div
                     key={line.id}
-                    className="bg-background border border-[rgba(0,0,0,0.1)] rounded-[12px] p-5"
+                    ref={(node) => {
+                      lineRefs.current[line.id] = node;
+                    }}
+                    tabIndex={-1}
+                    className={`bg-background border rounded-[12px] p-5 outline-none transition-colors ${
+                      lineErrors[line.id]
+                        ? 'border-[#E7000B] bg-[#fffafa] ring-2 ring-[#E7000B]/10'
+                        : 'border-[rgba(0,0,0,0.1)]'
+                    }`}
                   >
                     <div className="mb-4">
                       <h4 className="text-[16px] font-semibold text-foreground">{line.name}</h4>
                       <p className="text-[13px] text-foreground">
                         To receive: {line.orderedQty} units @ ₱{line.unitPrice} each
                       </p>
+                      {lineErrors[line.id] && (
+                        <div
+                          role="alert"
+                          className="mt-3 rounded-[8px] border border-[#E7000B] bg-[#ffe2e2] px-3 py-2 text-[13px] font-medium text-[#E7000B]"
+                        >
+                          {lineErrors[line.id].message}
+                        </div>
+                      )}
                     </div>
 
                     <div className="grid grid-cols-3 gap-4 mb-4">
@@ -758,6 +862,30 @@ export function GoodsReceived({ config }: { config: ResolvedReceivingConfig }) {
                       <div className="grid grid-cols-1 gap-4 mb-2">
                         {lineFields.slice(1).map((f) => renderField(f, line, draft))}
                       </div>
+                    )}
+
+                    {lineFields.some((field) => field.key === 'expiryDate') && (
+                      <label className="mb-4 mt-3 flex cursor-pointer items-start gap-3 rounded-[8px] border border-[rgba(0,0,0,0.1)] bg-card px-3 py-3">
+                        <input
+                          type="checkbox"
+                          checked={draft.noExpiry}
+                          onChange={(event) =>
+                            patchDraft(line.id, line, {
+                              noExpiry: event.target.checked,
+                              fields: event.target.checked
+                                ? { expiryDate: '', expiryPeriod: '' }
+                                : {},
+                            })
+                          }
+                          className="mt-0.5 size-4 accent-primary"
+                        />
+                        <span>
+                          <span className="block text-[13px] font-medium text-foreground">No expiry date</span>
+                          <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                            Use this for items that do not expire, like ice or non-perishable supplies.
+                          </span>
+                        </span>
+                      </label>
                     )}
 
                     {renderLineExtras?.(line, draft, (partial) => patchDraft(line.id, line, partial))}
