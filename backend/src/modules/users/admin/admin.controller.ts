@@ -1,6 +1,6 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { Type } from 'class-transformer';
-import { IsArray, IsBoolean, IsEmail, IsIn, IsNumber, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsArray, IsBoolean, IsEmail, IsIn, IsNumber, IsObject, IsOptional, IsString, MinLength } from 'class-validator';
 import { AuthenticatedUser } from '../../../shared/common/types';
 import { CurrentUser } from '../../auth/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
@@ -8,8 +8,10 @@ import { Roles } from '../../auth/roles.decorator';
 import { RolesGuard } from '../../auth/roles.guard';
 import { AdminService } from './admin.service';
 
-const STAFF_TYPES = ['POS_STAFF', 'INVENTORY_STAFF', 'MANAGER'] as const;
+const STAFF_TYPES = ['POS_STAFF', 'INVENTORY_STAFF'] as const;
+const STAFF_ROLES = ['STAFF', 'POS_MANAGER', 'INVENTORY_MANAGER'] as const;
 type StaffType = (typeof STAFF_TYPES)[number];
+type StaffRole = (typeof STAFF_ROLES)[number];
 
 class CreateStaffDto {
   @IsOptional()
@@ -29,6 +31,15 @@ class CreateStaffDto {
 
   @IsIn(STAFF_TYPES)
   staff_type!: StaffType;
+
+  @IsOptional()
+  @IsIn(STAFF_ROLES)
+  role?: StaffRole;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(4)
+  void_pin?: string;
 }
 
 class UpdateStaffDto {
@@ -50,6 +61,31 @@ class UpdateStaffDto {
 
   @IsIn(STAFF_TYPES)
   staff_type!: StaffType;
+
+  @IsOptional()
+  @IsIn(STAFF_ROLES)
+  role?: StaffRole;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(4)
+  void_pin?: string;
+}
+
+class VerifyRetailVoidPinDto {
+  @Type(() => Number)
+  @IsNumber()
+  user_id!: number;
+
+  @IsString()
+  @MinLength(4)
+  void_pin!: string;
+}
+
+class RetailManagerProfileDto {
+  @Type(() => Number)
+  @IsNumber()
+  user_id!: number;
 }
 
 class UpdateStoreInformationDto {
@@ -140,6 +176,19 @@ class UpdateStoreSettingsDto {
 
   @IsOptional()
   @IsBoolean()
+  enable_estimated_prep_time?: boolean;
+
+  @IsOptional()
+  @IsString()
+  prep_time_strategy?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  customization_prep_time_minutes?: number;
+
+  @IsOptional()
+  @IsBoolean()
   enable_service_charge?: boolean;
 
   @IsOptional()
@@ -167,6 +216,10 @@ class UpdateStoreSettingsDto {
   enabled_payment_methods?: string[];
 
   @IsOptional()
+  @IsObject()
+  payment_method_accounts?: Record<string, unknown>;
+
+  @IsOptional()
   @IsBoolean()
   enable_dine_in?: boolean;
 
@@ -181,6 +234,84 @@ class UpdateStoreSettingsDto {
   @IsOptional()
   @IsBoolean()
   enable_receipt_printing?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  auto_deduct_inventory_on_sale?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  allow_negative_stock?: boolean;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  default_low_stock_threshold?: number;
+
+  @IsOptional()
+  @IsString()
+  default_inventory_unit?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  cycle_count_interval_days?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  auto_reorder_threshold_percent?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  enable_expiry_tracking?: boolean;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  default_markup_percent?: number;
+}
+
+class ThemePreferencesDto {
+  @Type(() => Number)
+  @IsNumber()
+  user_id!: number;
+
+  @IsOptional()
+  @IsBoolean()
+  compact_mode?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  low_stock_alerts?: boolean;
+
+  @IsOptional()
+  @IsString()
+  default_workspace?: string;
+
+  @IsOptional()
+  @IsString()
+  theme_mode?: string;
+
+  @IsOptional()
+  @IsString()
+  theme_preset?: string | null;
+
+  @IsOptional()
+  @IsString()
+  appearance?: string;
+
+  @IsOptional()
+  @IsString()
+  primary_color?: string;
+
+  @IsOptional()
+  @IsString()
+  secondary_color?: string;
+
+  @IsOptional()
+  @IsString()
+  sidebar_color?: string;
 }
 
 class DiscountSettingDto {
@@ -220,6 +351,8 @@ export class AdminController {
       email: body.email,
       password: body.password,
       staffType: body.staff_type,
+      role: body.role,
+      voidPin: body.void_pin,
     });
   }
 
@@ -232,7 +365,27 @@ export class AdminController {
       email: body.email,
       password: body.password,
       staffType: body.staff_type,
+      role: body.role,
+      voidPin: body.void_pin,
     });
+  }
+
+  @Post('retail/void-pin/verify')
+  verifyRetailVoidPin(@Body() body: VerifyRetailVoidPinDto) {
+    return this.adminService.verifyRetailVoidPin({
+      userId: Number(body.user_id),
+      voidPin: body.void_pin,
+    });
+  }
+
+  @Get('retail/manager-profile')
+  getRetailManagerProfile(@Query('user_id') userId: string) {
+    return this.adminService.getRetailManagerProfile(Number(userId));
+  }
+
+  @Post('retail/manager-profile/unique-pin')
+  generateRetailManagerUniquePin(@Body() body: RetailManagerProfileDto) {
+    return this.adminService.generateRetailManagerUniquePin(Number(body.user_id));
   }
 
   @Delete('staff/:id')
@@ -298,6 +451,9 @@ export class AdminController {
       enableRefund: body.enable_refund,
       enableVoid: body.enable_void,
       enableDiscount: body.enable_discount,
+      enableEstimatedPrepTime: body.enable_estimated_prep_time,
+      prepTimeStrategy: body.prep_time_strategy,
+      customizationPrepTimeMinutes: body.customization_prep_time_minutes,
       enableServiceCharge: body.enable_service_charge,
       serviceChargeRate: body.service_charge_rate ?? body.service_charge_percentage,
       enableTax: body.enable_tax,
@@ -307,12 +463,85 @@ export class AdminController {
       enableIngredientCustomization: body.enable_ingredient_customization,
       enableReceiptPrinting: body.enable_receipt_printing,
       enabledPaymentMethods: body.enabled_payment_methods,
+      paymentMethodAccounts: body.payment_method_accounts,
+      autoDeductInventoryOnSale: body.auto_deduct_inventory_on_sale,
+      allowNegativeStock: body.allow_negative_stock,
+      defaultLowStockThreshold: body.default_low_stock_threshold,
+      defaultInventoryUnit: body.default_inventory_unit,
+      cycleCountIntervalDays: body.cycle_count_interval_days,
+      autoReorderThresholdPercent: body.auto_reorder_threshold_percent,
+      enableExpiryTracking: body.enable_expiry_tracking,
+      defaultMarkupPercent: body.default_markup_percent,
     });
+  }
+
+  @Get('theme-preferences')
+  getThemePreferences(@Query('user_id') userId: string) {
+    return this.adminService.getThemePreferences(Number(userId));
+  }
+
+  @Post('theme-preferences/personal')
+  updatePersonalThemePreferences(@Body() body: ThemePreferencesDto) {
+    const { user_id, ...preferences } = body;
+    return this.adminService.updatePersonalThemePreferences({
+      userId: Number(user_id),
+      preferences,
+    });
+  }
+
+  @Delete('theme-preferences/personal')
+  clearPersonalThemePreferences(@Query('user_id') userId: string) {
+    return this.adminService.clearPersonalThemePreferences(Number(userId));
+  }
+
+  @Post('theme-preferences/store')
+  updateStoreThemePreferences(@Body() body: ThemePreferencesDto) {
+    const { user_id, ...preferences } = body;
+    return this.adminService.updateStoreThemePreferences({
+      userId: Number(user_id),
+      preferences,
+    });
+  }
+
+  @Delete('theme-preferences/store')
+  clearStoreThemePreferences(@Query('user_id') userId: string) {
+    return this.adminService.clearStoreThemePreferences(Number(userId));
   }
 
   @Get('discount-settings')
   listDiscountSettings(@CurrentUser() user: AuthenticatedUser) {
     return this.adminService.listDiscountSettings(user.id);
+  }
+
+  @Get('activity-logs')
+  listActivityLogs(
+    @Query('user_id') userId: string,
+    @Query('date_from') dateFrom?: string,
+    @Query('date_to') dateTo?: string,
+    @Query('actor_user_id') actorUserId?: string,
+    @Query('module') module?: string,
+    @Query('action') action?: string,
+    @Query('search') search?: string,
+  ) {
+    return this.adminService.listActivityLogs({
+      userId: Number(userId),
+      dateFrom,
+      dateTo,
+      actorUserId: actorUserId ? Number(actorUserId) : undefined,
+      module,
+      action,
+      search,
+    });
+  }
+
+  @Post('activity-logs')
+  recordActivityLog(@Body() body: any) {
+    return this.adminService.recordActivityLog({
+      userId: Number(body.user_id),
+      module: String(body.module ?? ''),
+      action: String(body.action ?? ''),
+      details: String(body.details ?? ''),
+    });
   }
 
   @Post('discount-settings')
@@ -352,6 +581,49 @@ export class AdminController {
   @Get('pos/orders')
   listPosOrders(@CurrentUser() user: AuthenticatedUser) {
     return this.adminService.listPosOrders(user.id);
+  }
+
+  @Get('pos/tables')
+  listDiningTables(@Query('user_id') userId: string) {
+    return this.adminService.listDiningTables(Number(userId));
+  }
+
+  @Post('pos/tables')
+  createDiningTable(@Body() body: any) {
+    return this.adminService.createDiningTable({
+      userId: Number(body.user_id),
+      tableNumber: String(body.table_number ?? body.table_name ?? ''),
+      totalSeats: Number(body.total_seats),
+      isShared: Boolean(body.is_shared),
+    });
+  }
+
+  @Patch('pos/tables/:id')
+  updateDiningTable(@Param('id') id: string, @Body() body: any) {
+    return this.adminService.updateDiningTable({
+      userId: Number(body.user_id),
+      tableId: id,
+      tableNumber: String(body.table_number ?? body.table_name ?? ''),
+      totalSeats: Number(body.total_seats),
+      isShared: Boolean(body.is_shared),
+    });
+  }
+
+  @Delete('pos/tables/:id')
+  deleteDiningTable(@Param('id') id: string, @Query('user_id') userId: string) {
+    return this.adminService.deleteDiningTable({
+      userId: Number(userId),
+      tableId: id,
+    });
+  }
+
+  @Patch('pos/tables/:id/occupancy')
+  setDiningTableOccupancy(@Param('id') id: string, @Body() body: any) {
+    return this.adminService.setDiningTableOccupancy({
+      userId: Number(body.user_id),
+      tableId: id,
+      occupiedSeats: Number(body.occupied_seats),
+    });
   }
 
   @Get('pos/next-order-number')

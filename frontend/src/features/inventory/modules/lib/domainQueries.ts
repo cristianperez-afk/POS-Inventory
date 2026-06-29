@@ -9,6 +9,7 @@ import {
   getBundles,
   getGoodsReceipts,
   getInventory,
+  getItemCostHistory,
   getKitchenOrders,
   getLocations,
   getNotifications,
@@ -58,6 +59,7 @@ export const domainQueryKeys = {
   recipes: ['recipes'] as const,
   kitchenOrders: ['kitchen-orders'] as const,
   restaurantSettings: ['restaurant-settings'] as const,
+  auditLogs: ['audit-logs'] as const,
 };
 
 const domainInvalidationDependencies = new Map<string, QueryKey[]>([
@@ -67,6 +69,7 @@ const domainInvalidationDependencies = new Map<string, QueryKey[]>([
     domainQueryKeys.bundles,
     domainQueryKeys.purchaseOrders,
     domainQueryKeys.goodsReceipts,
+    domainQueryKeys.recipes,
   ]],
   ['locations', [
     domainQueryKeys.inventory,
@@ -120,6 +123,14 @@ export function useInventoryQuery<TData = ApiInventoryItem[]>(
     queryKey: [...domainQueryKeys.inventory, params ?? {}],
     queryFn: () => getInventory(params),
     ...options,
+  });
+}
+
+export function useItemCostHistoryQuery(itemId: string | null | undefined, enabled = true) {
+  return useQuery({
+    queryKey: [...domainQueryKeys.inventory, 'cost-history', itemId ?? null],
+    queryFn: () => getItemCostHistory(itemId as string),
+    enabled: enabled && Boolean(itemId),
   });
 }
 
@@ -200,6 +211,8 @@ export function useStockMovementsQuery<TData = ApiStockMovement[]>(
     type?: string;
     referenceType?: string;
     referenceId?: string;
+    page?: number;
+    limit?: number;
   },
   options?: SelectOptions<ApiStockMovement[], TData>,
 ) {
@@ -230,7 +243,7 @@ export function useSalesQuery<TData = ApiSale[]>(
 }
 
 export function useBundlesQuery<TData = ApiBundle[]>(
-  params?: { status?: string },
+  params?: { status?: string; archived?: boolean },
   options?: SelectOptions<ApiBundle[], TData>,
 ) {
   return useQuery({
@@ -241,7 +254,7 @@ export function useBundlesQuery<TData = ApiBundle[]>(
 }
 
 export function useRecipesQuery<TData = ApiRecipe[]>(
-  params?: { active?: boolean },
+  params?: { active?: boolean; archived?: boolean },
   options?: SelectOptions<ApiRecipe[], TData>,
 ) {
   return useQuery({

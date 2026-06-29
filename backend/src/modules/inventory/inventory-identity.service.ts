@@ -279,7 +279,7 @@ export class InventoryIdentityService {
 
   private mapRole(user: AuthenticatedUser): InventoryRole {
     if (user.role === 'ADMIN') return 'Admin';
-    if (user.staff_type === 'MANAGER') return 'Manager';
+    if (user.role === 'POS_MANAGER' || user.role === 'INVENTORY_MANAGER') return 'Manager';
     return 'Staff';
   }
 

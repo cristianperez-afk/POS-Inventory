@@ -8,6 +8,7 @@ import type {
 import {
   approvePurchaseOrder,
   cancelPurchaseOrder,
+  cancelGoodsReceipt,
   createInventoryItem,
   createPurchaseOrder,
   createSupplier,
@@ -15,9 +16,11 @@ import {
   getInventory,
   getPurchaseOrders,
   receivePurchaseOrder,
+  rejectGoodsReceipt,
   rejectPurchaseOrder,
   submitPurchaseOrder,
   updatePurchaseOrder,
+  updateSupplier,
 } from '../../../app/api/client';
 import {
   domainQueryKeys,
@@ -28,6 +31,8 @@ import {
   useSuppliersQuery,
 } from '../domainQueries';
 import { useRestaurantProductMergeMetadataQuery } from './shared';
+import { toDateTimeLocalInput } from '../purchaseOrderDelivery';
+import { getManilaDateKey } from '../../../../../shared/utils/date';
 
 type RestaurantProductMergeMetadata = {
   aliases?: Record<string, string>;
@@ -45,6 +50,11 @@ type RestaurantProductMergeMetadata = {
 
 type ReceiptItemQualityMetadata = {
   remarks?: string;
+  noExpiry?: boolean;
+  expiryDate?: string;
+  expiryPeriod?: string;
+  storageTemperature?: string;
+  qualityCriteria?: Array<{ key: string; label: string }>;
   qualityScores?: Record<string, { passed: number; total: number; remarks?: string }>;
 };
 
@@ -61,9 +71,14 @@ function parseReceiptItemNotes(notes?: string | null): ReceiptItemQualityMetadat
 
 const toDateInput = (value?: string | null) => {
   if (!value) return '';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
+  return getManilaDateKey(value);
 };
+
+const formatActorName = (actor: any) =>
+  actor?.name ?? actor?.full_name ?? actor?.fullName ?? actor?.email ?? '';
+
+const compareItemNames = (left: string, right: string) =>
+  left.trim().localeCompare(right.trim(), undefined, { sensitivity: 'base', numeric: true });
 
 export function mapRestaurantPurchaseOrders(orders: ApiPurchaseOrder[]) {
   return orders.map((order) => ({
@@ -73,17 +88,25 @@ export function mapRestaurantPurchaseOrders(orders: ApiPurchaseOrder[]) {
     supplierId: order.supplierId,
     date: toDateInput(order.createdAt),
     items: order.items?.length ?? 0,
-    orderItems: (order.items ?? []).map((item) => ({
-      backendId: item.id,
-      productId: item.inventoryItemId,
-      backendInventoryId: item.inventoryItemId,
-      productName: item.name,
-      quantity: item.quantity,
-      unitPrice: item.unitPrice,
-      category: item.inventoryItem?.category ?? '',
-      subCategory: item.inventoryItem?.subcategory ?? '',
-      unit: item.inventoryItem?.unit ?? 'pcs',
-    })),
+    orderItems: (order.items ?? [])
+      .map((item) => ({
+        backendId: item.id,
+        productId: item.inventoryItemId,
+        backendInventoryId: item.inventoryItemId,
+        productName: item.name,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        category: item.inventoryItem?.category ?? '',
+        subCategory: item.inventoryItem?.subcategory ?? '',
+        unit: item.purchaseUnit ?? item.inventoryItem?.purchaseUnit ?? item.inventoryItem?.unit ?? 'pcs',
+        purchaseUnit: item.purchaseUnit ?? item.inventoryItem?.purchaseUnit ?? item.inventoryItem?.unit ?? 'pcs',
+        baseUnit: item.baseUnit ?? item.inventoryItem?.baseUnit ?? item.inventoryItem?.unit ?? 'pcs',
+        conversionFactor: item.conversionFactor ?? item.inventoryItem?.conversionFactor ?? 1,
+      }))
+      .sort((left, right) =>
+        compareItemNames(left.productName, right.productName) ||
+        String(left.backendId ?? '').localeCompare(String(right.backendId ?? '')),
+      ),
     total: order.totalAmount,
     status:
       ({
@@ -95,8 +118,9 @@ export function mapRestaurantPurchaseOrders(orders: ApiPurchaseOrder[]) {
         REJECTED: 'rejected',
         CANCELLED: 'cancelled',
       } as Record<string, string>)[order.status] ?? order.status.toLowerCase(),
-    expectedDelivery: toDateInput(order.expectedDelivery),
-    createdBy: order.createdBy?.email ?? order.createdBy?.name ?? '',
+    expectedDelivery: toDateTimeLocalInput(order.expectedDelivery),
+    createdBy: order.createdBy?.name ?? order.createdBy?.email ?? '',
+    createdByRole: order.createdBy?.role?.toLowerCase(),
     createdAt: order.createdAt,
     rejectionNote: order.rejectionReason,
     backendStatus: order.status,
@@ -139,6 +163,9 @@ export function mapRestaurantGlobalProducts(
       category?: string;
       subCategory?: string;
       unit?: string;
+      purchaseUnit?: string;
+      baseUnit?: string;
+      conversionFactor?: number;
     }
   >();
 
@@ -161,7 +188,10 @@ export function mapRestaurantGlobalProducts(
         sku: override?.sku ?? item.sku ?? undefined,
         category,
         subCategory,
-        unit: override?.unit ?? item.unit ?? 'pcs',
+        unit: override?.unit ?? item.purchaseUnit ?? item.unit ?? 'pcs',
+        purchaseUnit: item.purchaseUnit ?? override?.unit ?? item.unit ?? 'pcs',
+        baseUnit: item.baseUnit ?? item.unit ?? 'pcs',
+        conversionFactor: item.conversionFactor ?? 1,
       });
     }
   });
@@ -185,10 +215,10 @@ export function useRestaurantPurchaseOrdersQuery<
   );
 }
 
-export function useRestaurantSuppliersQuery() {
+export function useRestaurantSuppliersQuery(params?: { isActive?: boolean; enabled?: boolean }) {
   return useSuppliersQuery(
-    { module: 'RESTAURANT' },
-    { select: mapRestaurantSuppliers },
+    { module: 'RESTAURANT', isActive: params?.isActive ?? true },
+    { enabled: params?.enabled, select: mapRestaurantSuppliers },
   );
 }
 
@@ -203,9 +233,10 @@ export function useRestaurantGlobalProductsQuery() {
       metadataQuery.data ?? {},
     ],
     queryFn: async () => {
+      // Purchase orders cover raw ingredients and supplies only — finished
+      // MENU_ITEM dishes are not orderable through inventory.
       const groups = await Promise.all([
         getInventory({ itemType: 'INGREDIENT' }),
-        getInventory({ itemType: 'MENU_ITEM' }),
         getInventory({ itemType: 'SUPPLY' }),
       ]);
       return groups.flat();
@@ -236,12 +267,23 @@ export function useRestaurantGoodsRecordsQuery() {
         getGoodsReceipts({ module: 'RESTAURANT' }),
         getPurchaseOrders({ module: 'RESTAURANT' }),
       ]);
+      const purchaseOrderNumberById = new Map(orders.map((order) => [order.id, order.orderNumber]));
+      const purchaseOrderById = new Map(orders.map((order) => [order.id, order]));
+      const purchaseOrderItemNameById = new Map(
+        orders.flatMap((order) => (order.items ?? []).map((item) => [item.id, item.name] as const)),
+      );
       const received = receipts.map((receipt) => ({
         id: receipt.receiptNumber,
         backendId: receipt.id,
         poId: receipt.purchaseOrderId,
-        supplier: receipt.purchaseOrder?.supplier?.name ?? '',
+        poNumber: purchaseOrderNumberById.get(receipt.purchaseOrderId) ?? receipt.purchaseOrder?.orderNumber ?? receipt.purchaseOrderId,
+        supplier:
+          receipt.purchaseOrder?.supplier?.name ??
+          purchaseOrderById.get(receipt.purchaseOrderId)?.supplier?.name ??
+          '',
         receivedDate: toDateInput(receipt.createdAt),
+        receivedAt: receipt.createdAt,
+        expectedDelivery: purchaseOrderById.get(receipt.purchaseOrderId)?.expectedDelivery ?? null,
         items: receipt.items?.length ?? 0,
         receivedItems: (receipt.items ?? []).map((line) => {
           const quality = parseReceiptItemNotes(line.notes);
@@ -250,16 +292,28 @@ export function useRestaurantGoodsRecordsQuery() {
             productName:
               line.purchaseOrderItem?.name ??
               line.inventoryItem?.name ??
+              purchaseOrderItemNameById.get(line.purchaseOrderItemId) ??
               'Item',
+            category:
+              line.category ??
+              line.inventoryItem?.category ??
+              line.purchaseOrderItem?.category ??
+              '',
             quantity: line.receivedQty + line.rejectedQty,
             acceptedQuantity: line.receivedQty,
             rejectedQuantity: line.rejectedQty,
-            unit: line.inventoryItem?.unit ?? 'pcs',
+            unit: line.purchaseOrderItem?.purchaseUnit ?? line.inventoryItem?.purchaseUnit ?? line.inventoryItem?.unit ?? 'pcs',
+            purchaseUnit: line.purchaseOrderItem?.purchaseUnit ?? line.inventoryItem?.purchaseUnit ?? line.inventoryItem?.unit ?? 'pcs',
+            baseUnit: line.purchaseOrderItem?.baseUnit ?? line.inventoryItem?.baseUnit ?? line.inventoryItem?.unit ?? 'pcs',
+            conversionFactor: line.purchaseOrderItem?.conversionFactor ?? line.inventoryItem?.conversionFactor ?? 1,
             unitPrice: line.purchaseOrderItem?.unitPrice ?? 0,
-            expiryDate: toDateInput(line.inventoryItem?.expiryDate),
-            storageTemperature: line.inventoryItem?.storageTemperature ?? '',
+            noExpiry: quality.noExpiry === true,
+            expiryDate: toDateInput(quality.expiryDate ?? line.inventoryItem?.expiryDate),
+            expiryPeriod: quality.expiryPeriod ?? '',
+            storageTemperature: quality.storageTemperature ?? line.inventoryItem?.storageTemperature ?? '',
             condition: line.condition ?? 'Inspected',
             qualityRemarks: quality.remarks ?? '',
+            qualityCriteria: quality.qualityCriteria,
             qualityScores: quality.qualityScores,
             qualityStatus:
               line.receivedQty <= 0
@@ -275,11 +329,17 @@ export function useRestaurantGoodsRecordsQuery() {
             line.receivedQty * (line.purchaseOrderItem?.unitPrice ?? 0),
           0,
         ),
-        receivedBy:
-          receipt.receivedBy?.email ?? receipt.receivedBy?.name ?? '',
-        status: (receipt.items ?? []).some((line) => line.rejectedQty > 0)
-          ? 'partial'
-          : 'verified',
+        receivedBy: formatActorName(receipt.receivedBy),
+        status:
+          receipt.status === 'REJECTED'
+            ? 'rejected'
+            : receipt.status === 'CANCELLED'
+              ? 'cancelled'
+              : (receipt.items ?? []).some((line) => line.rejectedQty > 0)
+                ? 'partial'
+                : 'verified',
+        actionReason: receipt.actionReason ?? receipt.notes ?? '',
+        proofImages: receipt.proofImages ?? [],
         notes: receipt.notes ?? '',
       }));
       const pending = orders
@@ -299,12 +359,16 @@ export function useRestaurantGoodsRecordsQuery() {
           receivedDate: toDateInput(
             order.expectedDelivery ?? order.createdAt,
           ),
+          expectedDelivery: order.expectedDelivery ?? null,
           items: order.items?.length ?? 0,
           receivedItems: (order.items ?? []).map((item) => ({
             backendItemId: item.id,
             productName: item.name,
             quantity: item.quantity - item.receivedQty - item.rejectedQty,
-            unit: item.inventoryItem?.unit ?? 'pcs',
+            unit: item.purchaseUnit ?? item.inventoryItem?.purchaseUnit ?? item.inventoryItem?.unit ?? 'pcs',
+            purchaseUnit: item.purchaseUnit ?? item.inventoryItem?.purchaseUnit ?? item.inventoryItem?.unit ?? 'pcs',
+            baseUnit: item.baseUnit ?? item.inventoryItem?.baseUnit ?? item.inventoryItem?.unit ?? 'pcs',
+            conversionFactor: item.conversionFactor ?? item.inventoryItem?.conversionFactor ?? 1,
             unitPrice: item.unitPrice,
             condition: 'Pending Check',
           })),
@@ -336,12 +400,19 @@ type SaveRestaurantPurchaseOrderLine = {
   quantity: number;
   unitPrice: number;
   unit?: string;
+  purchaseUnit?: string;
+  baseUnit?: string;
+  conversionFactor?: number;
 };
 
 type RestaurantPurchaseOrderProduct = {
   id: string;
   backendId?: string;
   inventoryId?: string | number;
+  purchaseUnit?: string;
+  baseUnit?: string;
+  unit?: string;
+  conversionFactor?: number;
 };
 
 export function useSaveRestaurantPurchaseOrderMutation() {
@@ -382,6 +453,9 @@ export function useSaveRestaurantPurchaseOrderMutation() {
             : undefined);
 
         if (!inventoryItemId) {
+          const purchaseUnit = line.purchaseUnit || line.unit || 'pcs';
+          const baseUnit = line.baseUnit || line.unit || purchaseUnit;
+          const conversionFactor = line.conversionFactor || 1;
           const created = await createInventoryItem({
             name: line.productName,
             itemType: 'INGREDIENT',
@@ -389,7 +463,10 @@ export function useSaveRestaurantPurchaseOrderMutation() {
             category: `${line.category || 'Other'} > ${line.subCategory || 'General'}`,
             quantity: 0,
             price: line.unitPrice,
-            unit: line.unit || 'pcs',
+            unit: baseUnit,
+            purchaseUnit,
+            baseUnit,
+            conversionFactor,
             minStock: 0,
             maxStock: 0,
             reorderPoint: 0,
@@ -403,13 +480,17 @@ export function useSaveRestaurantPurchaseOrderMutation() {
           name: line.productName,
           quantity: line.quantity,
           unitPrice: line.unitPrice,
+          unit: line.purchaseUnit || line.unit,
+          purchaseUnit: line.purchaseUnit || line.unit,
+          baseUnit: line.baseUnit || product?.baseUnit || product?.unit || line.unit,
+          conversionFactor: line.conversionFactor || product?.conversionFactor || 1,
         });
       }
 
       const payload = {
         supplierId,
         expectedDelivery: expectedDelivery
-          ? new Date(`${expectedDelivery}T00:00:00`).toISOString()
+          ? new Date(expectedDelivery).toISOString()
           : undefined,
         items: apiItems,
         module: 'RESTAURANT',
@@ -421,7 +502,8 @@ export function useSaveRestaurantPurchaseOrderMutation() {
       const created = await createPurchaseOrder(payload);
       return submitPurchaseOrder(created.id, 'RESTAURANT');
     },
-    [domainQueryKeys.purchaseOrders, domainQueryKeys.inventory],
+    // restaurantSettings: auto-created PO line items may add CATEGORY_HIERARCHY entries.
+    [domainQueryKeys.purchaseOrders, domainQueryKeys.inventory, domainQueryKeys.restaurantSettings],
   );
 }
 
@@ -468,11 +550,13 @@ export function useReceiveRestaurantPurchaseOrderMutation() {
       id,
       items,
       notes,
+      proofImages,
     }: {
       id: string;
       items: Parameters<typeof receivePurchaseOrder>[1];
       notes?: string;
-    }) => receivePurchaseOrder(id, items, notes, 'RESTAURANT'),
+      proofImages?: string[];
+    }) => receivePurchaseOrder(id, items, notes, 'RESTAURANT', proofImages),
     [
       domainQueryKeys.purchaseOrders,
       domainQueryKeys.goodsReceipts,
@@ -482,10 +566,48 @@ export function useReceiveRestaurantPurchaseOrderMutation() {
   );
 }
 
+export function useRejectRestaurantGoodsReceiptMutation() {
+  return useDomainMutation(
+    ({ id, reason, proofImages }: { id: string; reason: string; proofImages?: string[] }) =>
+      rejectGoodsReceipt(id, reason, proofImages, 'RESTAURANT'),
+    [domainQueryKeys.purchaseOrders, domainQueryKeys.goodsReceipts],
+  );
+}
+
+export function useCancelRestaurantGoodsReceiptMutation() {
+  return useDomainMutation(
+    ({ id, reason, proofImages }: { id: string; reason: string; proofImages?: string[] }) =>
+      cancelGoodsReceipt(id, reason, proofImages, 'RESTAURANT'),
+    [domainQueryKeys.purchaseOrders, domainQueryKeys.goodsReceipts],
+  );
+}
+
 export function useCreateRestaurantSupplierMutation() {
   return useDomainMutation(
     (data: Record<string, unknown>) =>
       createSupplier({ ...data, module: 'RESTAURANT' }),
+    [domainQueryKeys.suppliers, domainQueryKeys.purchaseOrders],
+  );
+}
+
+export function useUpdateRestaurantSupplierMutation() {
+  return useDomainMutation(
+    ({ id, data }: { id: string; data: Record<string, unknown> }) =>
+      updateSupplier(id, data, 'RESTAURANT'),
+    [domainQueryKeys.suppliers, domainQueryKeys.purchaseOrders],
+  );
+}
+
+export function useArchiveRestaurantSupplierMutation() {
+  return useDomainMutation(
+    (id: string) => updateSupplier(id, { isActive: false }, 'RESTAURANT'),
+    [domainQueryKeys.suppliers, domainQueryKeys.purchaseOrders],
+  );
+}
+
+export function useRestoreRestaurantSupplierMutation() {
+  return useDomainMutation(
+    (id: string) => updateSupplier(id, { isActive: true }, 'RESTAURANT'),
     [domainQueryKeys.suppliers, domainQueryKeys.purchaseOrders],
   );
 }

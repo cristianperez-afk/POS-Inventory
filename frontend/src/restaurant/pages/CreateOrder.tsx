@@ -2,16 +2,16 @@ import { useState, useEffect, useMemo, useRef, type CSSProperties } from 'react'
 import { Sidebar } from '../../shared/components/Sidebar';
 import { Page, type StoreBrand } from '../../shared/App';
 import type { StaffType, StoreType } from '../../auth/types/auth';
-import { Banknote, Building2, Minus, Plus, Search, Edit2, Trash2, X, AlertCircle, Printer, Download, Users, Smartphone, Wallet, MoreVertical } from 'lucide-react';
-import { useOrders } from '../../shared/context/OrderContext';
+import { Banknote, Building2, Minus, Plus, Search, Edit2, Trash2, X, AlertCircle, Printer, Download, Users, Smartphone, Wallet, MoreVertical, LoaderCircle } from 'lucide-react';
+import { useOrders, type Order } from '../../shared/context/OrderContext';
 import { useTables } from '../../shared/context/TableContext';
 import { useStoreSettings } from '../../shared/context/StoreSettingsContext';
 import { ThermalReceipt } from '../../shared/components/ThermalReceipt';
 import { DeleteConfirmDialog } from '../../shared/components/DeleteConfirmDialog';
 import { getApiBaseUrl } from '../../auth/services/auth';
 import type { AuthenticatedUser } from '../../auth/types/auth';
-import { getLocalDateKey } from '../../shared/utils/date';
-import { useCompletePaymentMutation, usePosMenuQuery } from '../../features/pos/hooks/usePosMenuQuery';
+import { formatManilaTime, getLocalDateKey, getManilaTime } from '../../shared/utils/date';
+import { useCompletePaymentMutation, usePosIngredientsQuery, usePosMenuQuery, useProductRecipeQuery } from '../../features/pos/hooks/usePosMenuQuery';
 
 interface CreateOrderProps {
   currentUser: AuthenticatedUser | null;
@@ -29,6 +29,7 @@ interface Ingredient {
   itemId?: string;
   inventory_item_id?: string;
   ingredient_id?: number;
+  quantity_available?: number;
   product_ingredient_id?: number;
   original_quantity?: number;
   name: string;
@@ -47,9 +48,23 @@ interface Ingredient {
 interface Modifier {
   id: string;
   name: string;
-  type: 'remove';
+  group?: string;
+  type: 'remove' | 'ingredient_level' | 'size_variant' | 'note' | 'add_on';
   itemId?: string;
+  ingredientId?: number;
   itemName?: string;
+  quantityAvailable?: number | null;
+  unit?: string;
+  stockStatus?: 'available' | 'unavailable' | 'untracked';
+  requiresStock?: boolean;
+  quantity?: number;
+  maxQuantity?: number;
+  levelPercent?: number;
+  sizeMultiplier?: number;
+  sellingPrice?: number;
+  ingredientQuantities?: Record<string, number>;
+  priceDelta?: number;
+  priceDeltaPercent?: number;
 }
 
 interface MenuProduct {
@@ -61,6 +76,9 @@ interface MenuProduct {
   categoryName?: string;
   image: string;
   availableQuantity?: number;
+  availableOrders?: number;
+  servings?: number;
+  prepTimeMinutes?: number;
   ingredients: Ingredient[];
   modifiers: Modifier[];
 }
@@ -71,15 +89,66 @@ interface CartItem {
   price: number;
   quantity: number;
   image: string;
+  availableQuantity?: number;
+  prepTimeMinutes?: number;
+  customizationPrepMinutes?: number;
   orderType: 'dine-in' | 'takeout';
   notes: string;
   ingredients: Ingredient[];
   originalIngredients: Ingredient[];
   modifiers?: Modifier[];
   selectedModifierIds?: string[];
+  modifierQuantities?: Record<string, number>;
 }
 
 // Customer history is now derived from actual orders
+const finiteNumberOrUndefined = (value: unknown) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+};
+
+const finiteNumberIncludingZeroOrUndefined = (value: unknown) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const DEFAULT_ITEM_PREP_MINUTES = 5;
+const MAX_ITEM_PREP_MINUTES = 30;
+const MAX_CART_PREP_MINUTES = 35;
+const MAX_QUEUE_DELAY_MINUTES = 20;
+const MAX_CUSTOMER_WAIT_MINUTES = 45;
+const KITCHEN_PARALLEL_ORDER_CAPACITY = 3;
+
+const clampMinutes = (minutes: number, min: number, max: number) => {
+  if (!Number.isFinite(minutes)) return min;
+  return Math.min(max, Math.max(min, minutes));
+};
+
+function getCartItemDisplayDetails(item: CartItem) {
+  const selected = (item.modifiers ?? []).filter((modifier) => (item.selectedModifierIds ?? []).includes(modifier.id));
+  const levelAdjustments = selected.filter((modifier) => modifier.type === 'ingredient_level');
+  return {
+    addedIngredients: selected.filter((modifier) => modifier.type === 'add_on').map((modifier) => {
+      const count = Math.max(1, Number(item.modifierQuantities?.[modifier.id] ?? 1));
+      const quantity = Math.max(0.001, Number(modifier.quantity ?? 1)) * count;
+      return `${modifier.itemName ?? modifier.name} ${quantity} ${modifier.unit ?? 'pcs'}`;
+    }),
+    removedIngredients: selected.filter((modifier) => modifier.type === 'remove' && !/^less\b/i.test(modifier.name)).map((modifier) => modifier.itemName ?? modifier.name),
+    changedIngredients: [
+      ...levelAdjustments.map((modifier) => modifier.name),
+      ...item.ingredients.filter((ingredient) => ingredient.customization_type === 'CHANGE_QUANTITY' && !levelAdjustments.some((modifier) => modifierTargetsIngredient(modifier, ingredient))).map((ingredient) => `${ingredient.name} ${ingredient.quantity} ${ingredient.unit ?? ''}`.trim()),
+    ],
+    replacedIngredients: item.ingredients.filter((ingredient) => ingredient.customization_type === 'REPLACE').map((ingredient) => `${ingredient.name} -> ${ingredient.replacement_name ?? 'Replacement'}`),
+    modifiers: selected.filter((modifier) => modifier.type === 'note' || modifier.type === 'size_variant').map((modifier) => modifier.name),
+  };
+}
+
+function modifierTargetsIngredient(modifier: Modifier, ingredient: Ingredient) {
+  return Boolean(
+    (modifier.itemId && String(modifier.itemId) === String(ingredient.itemId ?? ingredient.inventory_item_id ?? '')) ||
+    (modifier.itemName && modifier.itemName.toLowerCase() === ingredient.name.toLowerCase()),
+  );
+}
 
 function toOrderListFormat(order: any, paid: boolean) {
   const hasDineIn = order.items.some((i: CartItem) => i.orderType === 'dine-in');
@@ -98,8 +167,6 @@ function toOrderListFormat(order: any, paid: boolean) {
     ? order.tableNumbers.map((tableNumber: number) => `Table ${tableNumber}`).join(' + ')
     : order.isQueued ? 'Queue' : '—';
 
-  const hasAssignedTable = Boolean(order.tableNumber || (Array.isArray(order.tableNumbers) && order.tableNumbers.length > 0));
-
   return {
     orderNumber: order.orderNumber,
     customer: order.customerName,
@@ -111,33 +178,46 @@ function toOrderListFormat(order: any, paid: boolean) {
     discount: order.discount,
     discountType: discountTypeLabel,
     paymentStatus: paid ? 'Paid' as const : 'Not Paid' as const,
-    orderStatus: paid ? (hasAssignedTable ? 'Served' as const : 'Completed' as const) : 'Pending' as const,
+    orderStatus: 'Pending' as const,
     date: getLocalDateKey(now),
-    time: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+    time: getManilaTime(now),
     cashier: order.cashier,
     items: order.items.map((item: CartItem) => ({
       name: item.name,
       quantity: item.quantity,
       price: item.price,
-      lineTotal: (item.price * item.quantity) + item.ingredients.reduce((sum, ingredient) => sum + Number(ingredient.additional_price ?? 0), 0) * item.quantity,
+      lineTotal: (item.price * item.quantity)
+        + item.ingredients.reduce((sum, ingredient) => sum + Number(ingredient.additional_price ?? 0), 0) * item.quantity
+        + (item.modifiers ?? [])
+          .filter((modifier) => (item.selectedModifierIds ?? []).includes(modifier.id))
+          .reduce((sum, modifier) => {
+            const count = modifier.type === 'add_on' ? Number(item.modifierQuantities?.[modifier.id] ?? 1) : 1;
+            return sum + (Number(modifier.priceDelta ?? 0) + item.price * (Number(modifier.priceDeltaPercent ?? 0) / 100)) * count * item.quantity;
+          }, 0),
       image: item.image,
       itemType: item.orderType,
       notes: item.notes,
       ingredients: item.ingredients,
+      ...getCartItemDisplayDetails(item),
+      prepTimeMinutes: item.prepTimeMinutes,
+      customizationPrepMinutes: item.customizationPrepMinutes,
     })),
     isQueued: order.isQueued || false,
     queuePosition: order.queuePosition,
     partySize: order.partySize,
     tableNumbers: order.tableNumbers,
     table: tableLabel,
+    estimatedPrepMinutes: order.estimatedPrepMinutes,
+    estimatedReadyAt: order.estimatedReadyAt,
   };
 }
 
 export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout, storeBrand, userName, storeType, staffType }: CreateOrderProps) {
-  const { addOrder, orders, queuedOrders } = useOrders();
+  const { addOrder, orders, queuedOrders, reloadOrders } = useOrders();
   const { tables } = useTables();
   const { settings, discounts } = useStoreSettings();
   const posMenuQuery = usePosMenuQuery(currentUser?.id);
+  const posIngredientsQuery = usePosIngredientsQuery(currentUser?.id);
   const completePaymentMutation = useCompletePaymentMutation();
   const tableManagementEnabled = settings.enable_table_management;
   const customerRecommendationEnabled = settings.enable_customer_recommendation;
@@ -155,6 +235,9 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
   const [diningOption, setDiningOption] = useState<'' | 'dine-in' | 'takeout'>('');
   const [searchQuery, setSearchQuery] = useState('');
   const [customizeItemIndex, setCustomizeItemIndex] = useState<number | null>(null);
+  const customizeSnapshotRef = useRef<{ index: number; item: CartItem } | null>(null);
+  const [showAddIngredient, setShowAddIngredient] = useState(false);
+  const [addIngredientName, setAddIngredientName] = useState('');
   const [showPreview, setShowPreview] = useState(false);
   const [showTakeoutMode, setShowTakeoutMode] = useState(false);
   const [showPayment, setShowPayment] = useState(false);
@@ -166,11 +249,9 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
   const [changeAmount, setChangeAmount] = useState(0);
   const [successOrderDetails, setSuccessOrderDetails] = useState<any>(null);
   const [showTableSelection, setShowTableSelection] = useState(false);
-  const [selectedTableNumber, setSelectedTableNumber] = useState<number | null>(null);
-  const [selectedTables, setSelectedTables] = useState<number[]>([]);
+  const [selectedTableNumber, setSelectedTableNumber] = useState<string | null>(null);
+  const [selectedTables, setSelectedTables] = useState<string[]>([]);
   const [partySize, setPartySize] = useState<string>('');
-  const [occupancyType, setOccupancyType] = useState<OccupancyType | ''>('');
-  const [billingSetup, setBillingSetup] = useState<BillingSetup>('single-bill');
   const [discountType, setDiscountType] = useState<string>('none');
   const [customDiscountPercent, setCustomDiscountPercent] = useState<number>(0);
   const [discountIdNumber, setDiscountIdNumber] = useState<string>('');
@@ -181,7 +262,13 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
   const receiptRef = useRef<HTMLDivElement>(null);
   const [isInQueue, setIsInQueue] = useState(false);
   const [queuePosition, setQueuePosition] = useState<number | null>(null);
+  const [hoveredProductId, setHoveredProductId] = useState<number | null>(null);
+  const [hoveredProductPreview, setHoveredProductPreview] = useState<{ left: number; top: number; width: number } | null>(null);
+  const customizeProductId = customizeItemIndex !== null ? cart[customizeItemIndex]?.id : null;
+  const productRecipeQuery = useProductRecipeQuery(currentUser?.id, customizeProductId);
+  const hoveredProductRecipeQuery = useProductRecipeQuery(currentUser?.id, hoveredProductId);
   const enabledPaymentMethods = settings.enabled_payment_methods.length > 0 ? settings.enabled_payment_methods : ['Cash'];
+  const selectedPaymentAccount = settings.payment_method_accounts[paymentMethod];
   const posProducts = useMemo<MenuProduct[]>(() => {
     return (posMenuQuery.data ?? []).map((product: any) => ({
       id: Number(product.id),
@@ -191,13 +278,17 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       category: product.category_name ?? 'Uncategorized',
       categoryName: product.category_name ?? null,
       image: product.image_url || storeBrand?.logo || '',
-      availableQuantity: Number(product.available_quantity ?? 0),
+      availableQuantity: Number(product.available_orders ?? product.availableOrders ?? product.available_quantity ?? 0),
+      availableOrders: Number(product.available_orders ?? product.availableOrders ?? product.available_quantity ?? 0),
+      servings: finiteNumberIncludingZeroOrUndefined(product.servings),
+      prepTimeMinutes: finiteNumberIncludingZeroOrUndefined(product.prep_time_minutes),
       ingredients: (product.ingredients ?? []).map((ingredient: any) => ({
-        id: Number(ingredient.id),
+        id: finiteNumberOrUndefined(ingredient.id) ?? finiteNumberOrUndefined(ingredient.product_ingredient_id) ?? finiteNumberOrUndefined(ingredient.ingredient_id) ?? 0,
         itemId: ingredient.inventory_item_id ?? ingredient.itemId,
         inventory_item_id: ingredient.inventory_item_id,
-        product_ingredient_id: Number(ingredient.id),
-        ingredient_id: Number(ingredient.ingredient_id),
+        product_ingredient_id: finiteNumberOrUndefined(ingredient.product_ingredient_id ?? ingredient.id),
+        ingredient_id: finiteNumberOrUndefined(ingredient.ingredient_id),
+        quantity_available: finiteNumberIncludingZeroOrUndefined(ingredient.quantity_available),
         name: ingredient.name,
         quantity: Number(ingredient.quantity ?? 0),
         original_quantity: Number(ingredient.quantity ?? 0),
@@ -209,18 +300,25 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
         ? product.modifiers.map((modifier: any): Modifier => ({
             id: String(modifier.id),
             name: String(modifier.name),
-            type: 'remove',
+            group: String(modifier.group ?? 'Modifiers'),
+            type: modifier.type === 'add_on' ? 'add_on' : modifier.type === 'note' ? 'note' : modifier.type === 'size_variant' ? 'size_variant' : modifier.type === 'ingredient_level' || modifier.type === 'less' ? 'ingredient_level' : 'remove',
             itemId: modifier.itemId,
+            ingredientId: finiteNumberOrUndefined(modifier.ingredientId),
             itemName: modifier.itemName,
+            quantityAvailable: modifier.quantityAvailable,
+            unit: modifier.unit,
+            stockStatus: modifier.stockStatus,
+            requiresStock: modifier.requiresStock,
+            quantity: Number(modifier.quantity ?? 1),
+            maxQuantity: Number.isInteger(Number(modifier.maxQuantity)) && Number(modifier.maxQuantity) > 0 ? Math.floor(Number(modifier.maxQuantity)) : undefined,
+            levelPercent: finiteNumberIncludingZeroOrUndefined(modifier.levelPercent ?? (modifier.type === 'less' ? 50 : undefined)),
+            sizeMultiplier: finiteNumberOrUndefined(modifier.sizeMultiplier),
+            sellingPrice: finiteNumberIncludingZeroOrUndefined(modifier.sellingPrice),
+            ingredientQuantities: modifier.ingredientQuantities && typeof modifier.ingredientQuantities === 'object' ? modifier.ingredientQuantities : undefined,
+            priceDelta: Number(modifier.priceDelta ?? 0),
+            priceDeltaPercent: Number(modifier.priceDeltaPercent ?? 0),
           }))
-        // ponytail: fallback choices until POS reliably receives saved recipe modifiers.
-        : (product.ingredients ?? []).map((ingredient: any): Modifier => ({
-            id: `less-${ingredient.id}`,
-            name: `Less ${ingredient.name}`,
-            type: 'remove',
-            itemId: ingredient.inventory_item_id ?? ingredient.itemId,
-            itemName: ingredient.name,
-          })),
+        : [],
     }));
   }, [posMenuQuery.data, storeBrand?.logo]);
   const dynamicMenuCategories = useMemo(
@@ -260,6 +358,74 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
 
     void loadNextOrderNumber();
   }, [currentUser?.id]);
+
+  useEffect(() => {
+    const ingredients = Array.isArray((productRecipeQuery.data as any)?.ingredients)
+      ? (productRecipeQuery.data as any).ingredients
+      : [];
+    const modifiers = Array.isArray((productRecipeQuery.data as any)?.modifiers)
+      ? (productRecipeQuery.data as any).modifiers
+      : [];
+
+    if (customizeItemIndex === null || (ingredients.length === 0 && modifiers.length === 0)) return;
+
+    setCart((items) => items.map((item, index) => {
+      if (index !== customizeItemIndex) return item;
+
+      const currentByIngredientId = new Map(
+        item.ingredients.map((ingredient) => [Number(ingredient.ingredient_id ?? ingredient.replacement_ingredient_id ?? ingredient.id), ingredient]),
+      );
+      const nextIngredients = ingredients.map((ingredient: any) => {
+        const ingredientId = Number(ingredient.ingredient_id);
+        const current = currentByIngredientId.get(ingredientId);
+        return current ?? {
+          id: finiteNumberOrUndefined(ingredient.id) ?? finiteNumberOrUndefined(ingredient.product_ingredient_id) ?? finiteNumberOrUndefined(ingredient.ingredient_id) ?? 0,
+          itemId: ingredient.inventory_item_id ?? ingredient.itemId,
+          inventory_item_id: ingredient.inventory_item_id,
+          product_ingredient_id: finiteNumberOrUndefined(ingredient.product_ingredient_id ?? ingredient.id),
+          ingredient_id: finiteNumberOrUndefined(ingredientId),
+          quantity_available: finiteNumberIncludingZeroOrUndefined(ingredient.quantity_available),
+          name: ingredient.name,
+          quantity: Number(ingredient.quantity ?? 0),
+          original_quantity: Number(ingredient.quantity ?? 0),
+          unit: ingredient.unit,
+          is_removable: ingredient.is_removable,
+          alternatives: ingredient.alternatives ?? [],
+        };
+      });
+
+      return {
+        ...item,
+        ingredients: nextIngredients.length > 0
+          ? [...nextIngredients, ...item.ingredients.filter((ingredient) => ingredient.customization_type === 'ADD')]
+          : item.ingredients,
+        originalIngredients: nextIngredients.length > 0 ? nextIngredients : item.originalIngredients,
+        modifiers: modifiers.length > 0
+          ? modifiers.map((modifier: any): Modifier => ({
+              id: String(modifier.id),
+              name: String(modifier.name),
+              group: String(modifier.group ?? 'Modifiers'),
+              type: modifier.type === 'add_on' ? 'add_on' : modifier.type === 'note' ? 'note' : modifier.type === 'size_variant' ? 'size_variant' : modifier.type === 'ingredient_level' || modifier.type === 'less' ? 'ingredient_level' : 'remove',
+              itemId: modifier.itemId,
+              ingredientId: finiteNumberOrUndefined(modifier.ingredientId),
+              itemName: modifier.itemName,
+              quantityAvailable: modifier.quantityAvailable,
+              unit: modifier.unit,
+              stockStatus: modifier.stockStatus,
+              requiresStock: modifier.requiresStock,
+              quantity: Number(modifier.quantity ?? 1),
+              maxQuantity: Number.isInteger(Number(modifier.maxQuantity)) && Number(modifier.maxQuantity) > 0 ? Math.floor(Number(modifier.maxQuantity)) : undefined,
+              levelPercent: finiteNumberIncludingZeroOrUndefined(modifier.levelPercent ?? (modifier.type === 'less' ? 50 : undefined)),
+              sizeMultiplier: finiteNumberOrUndefined(modifier.sizeMultiplier),
+              sellingPrice: finiteNumberIncludingZeroOrUndefined(modifier.sellingPrice),
+              ingredientQuantities: modifier.ingredientQuantities && typeof modifier.ingredientQuantities === 'object' ? modifier.ingredientQuantities : undefined,
+              priceDelta: Number(modifier.priceDelta ?? 0),
+              priceDeltaPercent: Number(modifier.priceDeltaPercent ?? 0),
+            }))
+          : item.modifiers,
+      };
+    }));
+  }, [customizeItemIndex, productRecipeQuery.data]);
 
   // Autocomplete for customer name
   const [showCustomerSuggestions, setShowCustomerSuggestions] = useState(false);
@@ -399,49 +565,57 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
   }, [customerName, orders, customerRecommendationEnabled, posProducts]);
 
   const addToCart = (product: MenuProduct, orderType?: 'dine-in' | 'takeout') => {
-    const typeToUse = orderType || (diningOption === 'dine-in' || diningOption === 'takeout' ? diningOption : 'dine-in');
+    const availableQuantity = finiteNumberIncludingZeroOrUndefined(product.availableQuantity);
+    const quantityInCart = cart
+      .filter((item) => item.id === product.id)
+      .reduce((sum, item) => sum + Number(item.quantity ?? 0), 0);
 
-    // Check if item already exists in cart with same id and orderType
-    const existingItemIndex = cart.findIndex(item =>
-      item.id === product.id &&
-      item.orderType === typeToUse &&
-      item.notes === '' && // Only merge if no customization
-      (item.selectedModifierIds ?? []).length === 0 &&
-      JSON.stringify(item.ingredients) === JSON.stringify(product.ingredients) // Same ingredients
-    );
-
-    if (existingItemIndex !== -1) {
-      // Item exists, increment quantity
-      setCart(cart.map((item, index) =>
-        index === existingItemIndex
-          ? { ...item, quantity: item.quantity + 1 }
-          : item
-      ));
-    } else {
-      // Item doesn't exist, add new
-      const newItem: CartItem = {
-        id: product.id,
-        name: product.name,
-        price: product.price,
-        image: product.image,
-        quantity: 1,
-        orderType: typeToUse,
-        notes: '',
-        ingredients: JSON.parse(JSON.stringify(product.ingredients)),
-        originalIngredients: JSON.parse(JSON.stringify(product.ingredients)),
-        modifiers: product.modifiers,
-        selectedModifierIds: [],
-      };
-      setCart([...cart, newItem]);
+    if (availableQuantity !== undefined && quantityInCart >= availableQuantity) {
+      setValidationError(`${product.name} only has ${availableQuantity} available order${availableQuantity === 1 ? '' : 's'}.`);
+      return;
     }
+
+    const typeToUse = orderType || (diningOption === 'dine-in' || diningOption === 'takeout' ? diningOption : 'dine-in');
+    const newItem: CartItem = {
+      id: product.id,
+      name: product.name,
+      price: product.price,
+      image: product.image,
+      availableQuantity,
+      quantity: 1,
+      prepTimeMinutes: product.prepTimeMinutes ?? 0,
+      customizationPrepMinutes: 0,
+      orderType: typeToUse,
+      notes: '',
+      ingredients: JSON.parse(JSON.stringify(product.ingredients)),
+      originalIngredients: JSON.parse(JSON.stringify(product.ingredients)),
+      modifiers: product.modifiers,
+      selectedModifierIds: [],
+      modifierQuantities: {},
+    };
+
+    setCart((items) => [...items, newItem]);
   };
 
   const updateQuantity = (index: number, newQuantity: number) => {
     if (newQuantity <= 0) {
       setCart(cart.filter((_, i) => i !== index));
     } else {
+      const targetItem = cart[index];
+      const sameProductQuantityOutsideLine = cart
+        .filter((item, itemIndex) => itemIndex !== index && item.id === targetItem?.id)
+        .reduce((sum, item) => sum + Number(item.quantity ?? 0), 0);
+      const maxLineQuantity = targetItem?.availableQuantity !== undefined
+        ? Math.max(0, targetItem.availableQuantity - sameProductQuantityOutsideLine)
+        : newQuantity;
+      const nextQuantity = Math.min(newQuantity, maxLineQuantity);
+
+      if (targetItem?.availableQuantity !== undefined && newQuantity > maxLineQuantity) {
+        setValidationError(`${targetItem.name} only has ${targetItem.availableQuantity} available order${targetItem.availableQuantity === 1 ? '' : 's'}.`);
+      }
+
       setCart(cart.map((item, i) =>
-        i === index ? { ...item, quantity: newQuantity } : item
+        i === index ? { ...item, quantity: nextQuantity } : item
       ));
     }
   };
@@ -455,15 +629,95 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
   const toggleModifier = (index: number, modifierId: string) => {
     setCart(cart.map((item, i) => {
       if (i !== index) return item;
+      const modifier = (item.modifiers ?? []).find((option) => option.id === modifierId);
+      if (modifier?.stockStatus === 'unavailable') return item;
+      if (modifier?.type === 'add_on' && (!Number.isInteger(Number(modifier.maxQuantity)) || Number(modifier.maxQuantity) <= 0)) return item;
       const selectedModifierIds = item.selectedModifierIds ?? [];
       const selected = selectedModifierIds.includes(modifierId);
+      const modifierQuantities = { ...(item.modifierQuantities ?? {}) };
+      if (selected) delete modifierQuantities[modifierId];
+      else modifierQuantities[modifierId] = 1;
       return {
         ...item,
         selectedModifierIds: selected
           ? selectedModifierIds.filter((id) => id !== modifierId)
           : [...selectedModifierIds, modifierId],
+        modifierQuantities,
       };
     }));
+  };
+
+  const selectBasicIngredientModifier = (index: number, ingredient: Ingredient, modifierId: string | null) => {
+    setCart((items) => items.map((item, itemIndex) => {
+      if (itemIndex !== index) return item;
+      const ingredientModifierIds = (item.modifiers ?? [])
+        .filter((modifier) => (modifier.type === 'remove' || modifier.type === 'ingredient_level') && modifierTargetsIngredient(modifier, ingredient))
+        .map((modifier) => modifier.id);
+      const retained = (item.selectedModifierIds ?? []).filter((id) => !ingredientModifierIds.includes(id));
+      return {
+        ...item,
+        selectedModifierIds: modifierId ? [...retained, modifierId] : retained,
+      };
+    }));
+  };
+
+  const selectSizeVariant = (index: number, modifierId: string | null) => {
+    setCart((items) => items.map((item, itemIndex) => {
+      if (itemIndex !== index) return item;
+      const sizeVariantIds = (item.modifiers ?? []).filter((modifier) => modifier.type === 'size_variant').map((modifier) => modifier.id);
+      const retained = (item.selectedModifierIds ?? []).filter((id) => !sizeVariantIds.includes(id));
+      return { ...item, selectedModifierIds: modifierId ? [...retained, modifierId] : retained };
+    }));
+  };
+
+  const updateModifierQuantity = (index: number, modifierId: string, quantity: number) => {
+    setCart((items) => items.map((item, itemIndex) => {
+      if (itemIndex !== index) return item;
+      const modifier = (item.modifiers ?? []).find((option) => option.id === modifierId);
+      if (!modifier || modifier.type !== 'add_on') return item;
+      if (!Number.isInteger(Number(modifier.maxQuantity)) || Number(modifier.maxQuantity) <= 0) return item;
+      const perUnit = Math.max(Number(modifier.quantity ?? 1), 0.001);
+      const maxByStock = modifier.quantityAvailable == null
+        ? Number.POSITIVE_INFINITY
+        : Math.floor(Number(modifier.quantityAvailable) / (perUnit * Math.max(item.quantity, 1)));
+      const configuredMax = Number.isInteger(Number(modifier.maxQuantity)) && Number(modifier.maxQuantity) > 0
+        ? Math.floor(Number(modifier.maxQuantity))
+        : 1;
+      const nextQuantity = Math.max(1, Math.min(Math.floor(quantity), configuredMax, Math.max(1, maxByStock)));
+      return {
+        ...item,
+        modifierQuantities: { ...(item.modifierQuantities ?? {}), [modifierId]: nextQuantity },
+      };
+    }));
+  };
+
+  const openCustomizeItem = (index: number) => {
+    customizeSnapshotRef.current = { index, item: structuredClone(cart[index]) };
+    setCustomizeItemIndex(index);
+  };
+
+  const cancelCustomizeItem = () => {
+    const snapshot = customizeSnapshotRef.current;
+    if (snapshot) {
+      setCart((items) => items.map((item, index) => index === snapshot.index ? snapshot.item : item));
+    }
+    customizeSnapshotRef.current = null;
+    setCustomizeItemIndex(null);
+  };
+
+  const confirmCustomizeItem = () => {
+    customizeSnapshotRef.current = null;
+    setCustomizeItemIndex(null);
+  };
+
+  const resetCustomizeItem = (index: number) => {
+    setCart((items) => items.map((item, itemIndex) => itemIndex === index ? {
+      ...item,
+      ingredients: structuredClone(item.originalIngredients),
+      selectedModifierIds: [],
+      modifierQuantities: {},
+      notes: '',
+    } : item));
   };
 
   const updateIngredientQuantity = (index: number, ingredientName: string, newQuantity: number) => {
@@ -519,14 +773,47 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
     }));
   };
 
+  const addIngredient = (index: number) => {
+    const name = addIngredientName.trim().toLowerCase();
+    const ingredient = (posIngredientsQuery.data ?? []).find((item) => item.name.toLowerCase() === name);
+    if (!ingredient) return;
+
+    setCart(cart.map((item, i) => {
+      if (i !== index || item.ingredients.some((ing) => Number(ing.ingredient_id ?? ing.replacement_ingredient_id) === Number(ingredient.id))) {
+        return item;
+      }
+
+      return {
+        ...item,
+        ingredients: [
+          ...item.ingredients,
+          {
+            name: ingredient.name,
+            quantity: 1,
+            original_quantity: 0,
+            unit: ingredient.unit ?? 'pcs',
+            replacement_ingredient_id: Number(ingredient.id),
+            replacement_name: ingredient.name,
+            additional_price: 0,
+            customization_type: 'ADD',
+          },
+        ],
+      };
+    }));
+    setAddIngredientName('');
+    setShowAddIngredient(false);
+  };
+
   const deleteIngredient = (index: number, ingredientName: string) => {
     setCart(cart.map((item, i) => {
       if (i === index) {
         return {
           ...item,
-          ingredients: item.ingredients.map(ing =>
-            ing.name === ingredientName ? { ...ing, quantity: 0, removed: true, customization_type: 'REMOVE' } : ing
-          )
+          ingredients: item.ingredients
+            .filter((ing) => !(ing.name === ingredientName && ing.customization_type === 'ADD'))
+            .map(ing =>
+              ing.name === ingredientName ? { ...ing, quantity: 0, removed: true, customization_type: 'REMOVE' } : ing
+            )
         };
       }
       return item;
@@ -548,26 +835,77 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
     return matchesCategory && matchesSearch;
   });
 
-  const itemAdditionalCost = (item: CartItem) => item.ingredients.reduce((sum, ingredient) => sum + Number(ingredient.additional_price ?? 0), 0) * item.quantity;
+  const modifierPrice = (item: CartItem) => (item.modifiers ?? [])
+    .filter((modifier) => (item.selectedModifierIds ?? []).includes(modifier.id))
+    .reduce((sum, modifier) => {
+      const count = modifier.type === 'add_on' ? Number(item.modifierQuantities?.[modifier.id] ?? 1) : 1;
+      return sum + (Number(modifier.priceDelta ?? 0) + (item.price * (Number(modifier.priceDeltaPercent ?? 0) / 100))) * count;
+    }, 0);
+  const formatModifierPrice = (modifier: Modifier) => {
+    if (modifier.priceDeltaPercent) return `${modifier.priceDeltaPercent > 0 ? '+' : ''}${modifier.priceDeltaPercent}%`;
+    if (modifier.priceDelta) return `${modifier.priceDelta > 0 ? '+' : '-'}₱${Math.abs(modifier.priceDelta)}`;
+    return '';
+  };
+  const itemAdditionalCost = (item: CartItem) => (item.ingredients.reduce((sum, ingredient) => sum + Number(ingredient.additional_price ?? 0), 0) + modifierPrice(item)) * item.quantity;
   const itemLineTotal = (item: CartItem) => (item.price * item.quantity) + itemAdditionalCost(item);
   function applySelectedModifiers(item: CartItem) {
     const selectedModifierIds = item.selectedModifierIds ?? [];
-    const selectedRemoveModifiers = (item.modifiers ?? []).filter((modifier) =>
-      modifier.type === 'remove' && selectedModifierIds.includes(modifier.id)
+    const selectedIngredientAdjustments = (item.modifiers ?? []).filter((modifier) =>
+      (modifier.type === 'remove' || modifier.type === 'ingredient_level') && selectedModifierIds.includes(modifier.id)
     );
+    const selectedSizeVariant = (item.modifiers ?? []).find((modifier) =>
+      modifier.type === 'size_variant' && selectedModifierIds.includes(modifier.id)
+    );
+    const sizeMultiplier = Math.max(Number(selectedSizeVariant?.sizeMultiplier ?? 1), 0.01);
 
-    return item.ingredients.map((ingredient): Ingredient => {
-      const removeModifier = selectedRemoveModifiers.find((modifier) =>
+    const adjustedIngredients = item.ingredients.map((ingredient): Ingredient => {
+      if (ingredient.customization_type === 'ADD') return ingredient;
+      const adjustment = selectedIngredientAdjustments.find((modifier) =>
         (modifier.itemId && modifier.itemId === (ingredient.itemId ?? ingredient.inventory_item_id)) ||
         (modifier.itemName && modifier.itemName === ingredient.name)
       );
-
-      if (!removeModifier) return ingredient;
-
-      return /^less\b/i.test(removeModifier.name)
-        ? { ...ingredient, quantity: Number(ingredient.quantity ?? 0) / 2, customization_type: 'CHANGE_QUANTITY', notes: removeModifier.name }
-        : { ...ingredient, quantity: 0, removed: true, customization_type: 'REMOVE', notes: removeModifier.name };
+      const originalQuantity = Number(ingredient.original_quantity ?? ingredient.quantity ?? 0);
+      if (adjustment?.type === 'remove') {
+        return { ...ingredient, quantity: 0, removed: true, customization_type: 'REMOVE', notes: adjustment.name };
+      }
+      const ingredientLevel = adjustment?.type === 'ingredient_level' ? Number(adjustment.levelPercent ?? 100) / 100 : 1;
+      const ingredientItemId = String(ingredient.itemId ?? ingredient.inventory_item_id ?? '');
+      const exactVariantQuantity = selectedSizeVariant?.ingredientQuantities?.[ingredientItemId];
+      const variantQuantity = exactVariantQuantity != null && Number.isFinite(Number(exactVariantQuantity))
+        ? Number(exactVariantQuantity)
+        : originalQuantity * sizeMultiplier;
+      const quantity = variantQuantity * ingredientLevel;
+      const changed = Math.abs(quantity - originalQuantity) > 0.000001;
+      return {
+        ...ingredient,
+        quantity,
+        removed: quantity <= 0,
+        customization_type: changed ? (quantity <= 0 ? 'REMOVE' : 'CHANGE_QUANTITY') : undefined,
+        notes: adjustment?.name ?? selectedSizeVariant?.name,
+      };
     });
+
+    const selectedAddOns = (item.modifiers ?? []).filter((modifier) =>
+      modifier.type === 'add_on' && selectedModifierIds.includes(modifier.id)
+    );
+    const addOnIngredients = selectedAddOns
+      .filter((modifier) => modifier.ingredientId)
+      .map((modifier): Ingredient => {
+        const count = Number(item.modifierQuantities?.[modifier.id] ?? 1);
+        return {
+          name: modifier.itemName ?? modifier.name,
+          quantity: Math.max(Number(modifier.quantity ?? 1), 0.001) * Math.max(count, 1),
+          original_quantity: 0,
+          unit: modifier.unit ?? 'pcs',
+          replacement_ingredient_id: modifier.ingredientId,
+          replacement_name: modifier.itemName ?? modifier.name,
+          additional_price: Number(modifier.priceDelta ?? 0) * Math.max(count, 1),
+          customization_type: 'ADD',
+          notes: `${modifier.name}${count > 1 ? ` x${count}` : ''}`,
+        };
+      });
+
+    return [...adjustedIngredients, ...addOnIngredients];
   }
 
   const getIngredientChanges = (item: CartItem) => {
@@ -576,6 +914,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       const original = item.originalIngredients.find((originalIngredient) => originalIngredient.name === ingredient.name);
       return (
         ingredient.removed ||
+        ingredient.customization_type === 'ADD' ||
         ingredient.replacement_name ||
         !original ||
         Number(ingredient.quantity) !== Number(original.quantity)
@@ -583,15 +922,79 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
     });
 
     return {
+      addedIngredients: changedIngredients.filter((ingredient) => ingredient.customization_type === 'ADD' && !ingredient.removed),
       removedIngredients: changedIngredients.filter((ingredient) => ingredient.removed || Number(ingredient.quantity) <= 0),
-      replacedIngredients: changedIngredients.filter((ingredient) => ingredient.replacement_name && !ingredient.removed),
+      replacedIngredients: changedIngredients.filter((ingredient) => ingredient.customization_type !== 'ADD' && ingredient.replacement_name && !ingredient.removed),
       quantityChanges: changedIngredients.filter((ingredient) => {
         const original = item.originalIngredients.find((originalIngredient) => originalIngredient.name === ingredient.name);
         return original && !ingredient.removed && !ingredient.replacement_name && Number(ingredient.quantity) !== Number(original.quantity);
       }),
-      selectedModifiers: (item.modifiers ?? []).filter((modifier) => (item.selectedModifierIds ?? []).includes(modifier.id)),
+      selectedModifiers: (item.modifiers ?? []).filter((modifier) => (modifier.type === 'note' || modifier.type === 'size_variant') && (item.selectedModifierIds ?? []).includes(modifier.id)),
     };
   };
+  const hasItemCustomization = (item: CartItem) => {
+    const { addedIngredients, removedIngredients, replacedIngredients, quantityChanges, selectedModifiers } = getIngredientChanges(item);
+    return Boolean(item.notes?.trim()) ||
+      selectedModifiers.length > 0 ||
+      addedIngredients.length > 0 ||
+      removedIngredients.length > 0 ||
+      replacedIngredients.length > 0 ||
+      quantityChanges.length > 0;
+  };
+  const estimateItemMinutes = (item: CartItem) => {
+    const baseMinutes = clampMinutes(Number(item.prepTimeMinutes ?? DEFAULT_ITEM_PREP_MINUTES), 0, MAX_ITEM_PREP_MINUTES);
+    const customizationMinutes = hasItemCustomization(item)
+      ? Math.max(0, Number(settings.customization_prep_time_minutes ?? 0))
+      : 0;
+    const lineMinutes = clampMinutes(baseMinutes + customizationMinutes, 0, MAX_ITEM_PREP_MINUTES);
+    return settings.prep_time_strategy === 'sequential'
+      ? lineMinutes * Math.max(1, Number(item.quantity ?? 1))
+      : lineMinutes;
+  };
+  const rawCartPrepMinutes = settings.prep_time_strategy === 'sequential'
+    ? cart.reduce((sum, item) => sum + estimateItemMinutes(item), 0)
+    : cart.reduce((max, item) => Math.max(max, estimateItemMinutes(item)), 0);
+  const cartPrepMinutes = cart.length > 0 ? clampMinutes(rawCartPrepMinutes, DEFAULT_ITEM_PREP_MINUTES, MAX_CART_PREP_MINUTES) : 0;
+  const estimateExistingOrderMinutes = (order: Order) => {
+    const itemMinutes = order.items.map((item) => {
+      const baseMinutes = clampMinutes(Number(item.prepTimeMinutes ?? DEFAULT_ITEM_PREP_MINUTES), 0, MAX_ITEM_PREP_MINUTES);
+      const customizationMinutes = Math.max(0, Number(item.customizationPrepMinutes ?? 0));
+      const lineMinutes = clampMinutes(baseMinutes + customizationMinutes, 0, MAX_ITEM_PREP_MINUTES);
+      const quantity = Math.max(1, Number(item.quantity ?? 1));
+      return lineMinutes > 0
+        ? settings.prep_time_strategy === 'sequential' ? lineMinutes * quantity : lineMinutes
+        : DEFAULT_ITEM_PREP_MINUTES * quantity;
+    });
+    if (itemMinutes.length === 0) return 0;
+    const rawEstimate = settings.prep_time_strategy === 'sequential'
+      ? itemMinutes.reduce((sum, minutes) => sum + minutes, 0)
+      : Math.max(0, ...itemMinutes);
+    return clampMinutes(rawEstimate, 0, MAX_CART_PREP_MINUTES);
+  };
+  const remainingEstimateMinutes = (order: Order) => {
+    if (!['Pending', 'Preparing'].includes(order.orderStatus)) return 0;
+    const estimate = estimateExistingOrderMinutes(order);
+    if (!Number.isFinite(estimate) || estimate <= 0) return 0;
+    return Math.max(0, estimate - Math.max(0, order.runningTimeMinutes ?? 0));
+  };
+  const activeKitchenWorkloadMinutes = settings.enable_estimated_prep_time
+    ? orders
+        .reduce((sum, order) => sum + remainingEstimateMinutes(order), 0)
+    : 0;
+  const queueDelayMinutes = activeKitchenWorkloadMinutes > 0
+    ? clampMinutes(Math.ceil(activeKitchenWorkloadMinutes / KITCHEN_PARALLEL_ORDER_CAPACITY), 0, MAX_QUEUE_DELAY_MINUTES)
+    : 0;
+  const estimatedWaitingMinutes = settings.enable_estimated_prep_time
+    ? cart.length > 0
+      ? clampMinutes(Math.ceil(cartPrepMinutes + queueDelayMinutes), DEFAULT_ITEM_PREP_MINUTES, MAX_CUSTOMER_WAIT_MINUTES)
+      : 0
+    : 0;
+  const estimatedReadyAt = settings.enable_estimated_prep_time && estimatedWaitingMinutes > 0
+    ? new Date(Date.now() + estimatedWaitingMinutes * 60000)
+    : null;
+  const estimatedReadyTimeLabel = estimatedReadyAt
+    ? formatManilaTime(estimatedReadyAt)
+    : '';
   const subtotal = cart.reduce((sum, item) => sum + itemLineTotal(item), 0);
   const serviceFee = settings.enable_service_charge ? subtotal * (settings.service_charge_rate / 100) : 0;
   const tax = 0;
@@ -613,17 +1016,18 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
   const serializeIngredientForOrder = (ingredient: Ingredient) => ({
     id: ingredient.id,
     itemId: ingredient.itemId ?? ingredient.inventory_item_id,
-    ingredient_id: ingredient.ingredient_id,
-    product_ingredient_id: ingredient.product_ingredient_id,
+    ingredient_id: finiteNumberOrUndefined(ingredient.ingredient_id),
+    product_ingredient_id: finiteNumberOrUndefined(ingredient.product_ingredient_id),
     original_quantity: ingredient.original_quantity,
     name: ingredient.name,
     quantity: ingredient.quantity,
     unit: ingredient.unit,
-    replacement_ingredient_id: ingredient.replacement_ingredient_id,
+    replacement_ingredient_id: finiteNumberOrUndefined(ingredient.replacement_ingredient_id),
     replacement_name: ingredient.replacement_name,
     additional_price: ingredient.additional_price,
     customization_type: ingredient.customization_type,
     removed: ingredient.removed,
+    notes: ingredient.notes,
   });
   const serializeItemForOrder = (item: CartItem) => ({
     id: item.id,
@@ -632,17 +1036,25 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
     categoryName: posProducts.find((product) => product.id === item.id)?.categoryName ?? null,
     price: item.price,
     quantity: item.quantity,
+    lineTotal: itemLineTotal(item),
     orderType: item.orderType,
     notes: item.notes,
-    modifiers: (item.modifiers ?? []).filter((modifier) => (item.selectedModifierIds ?? []).includes(modifier.id)),
+    modifiers: (item.modifiers ?? [])
+      .filter((modifier) => (item.selectedModifierIds ?? []).includes(modifier.id))
+      .map((modifier) => ({
+        ...modifier,
+        selectedQuantity: modifier.type === 'add_on' ? Number(item.modifierQuantities?.[modifier.id] ?? 1) : 1,
+      })),
     ingredients: applySelectedModifiers(item).map(serializeIngredientForOrder),
+    prepTimeMinutes: item.prepTimeMinutes ?? 0,
+    customizationPrepMinutes: hasItemCustomization(item) ? settings.customization_prep_time_minutes : 0,
   });
 
   const persistRestaurantOrder = async (
     orderDetails: any,
     paid: boolean,
     payment?: { amountPaid: number; changeAmount: number; method: string },
-  ) => {
+  ): Promise<any> => {
     if (!currentUser?.id) return null;
 
     return completePaymentMutation.mutateAsync({
@@ -664,9 +1076,9 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       serviceFee: orderDetails.serviceFee,
       tax: orderDetails.tax,
       total: orderDetails.total,
-      orderStatus: paid && !orderDetails.isQueued
-        ? (orderDetails.tableNumber || (Array.isArray(orderDetails.tableNumbers) && orderDetails.tableNumbers.length > 0) ? 'SERVED' : 'COMPLETED')
-        : 'PENDING',
+      estimatedPrepMinutes: orderDetails.estimatedPrepMinutes ?? null,
+      estimatedReadyAt: orderDetails.estimatedReadyAt ?? null,
+      orderStatus: 'PENDING',
       paymentStatus: paid ? 'PAID' : 'NOT_PAID',
       items: orderDetails.items.map(serializeItemForOrder),
       payment: paid && payment ? {
@@ -722,6 +1134,41 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
   const handleConfirmOrder = () => {
     console.log('Confirm Order clicked'); // Debug log
 
+    const insufficientAdjustedStock = cart.flatMap((item) => applySelectedModifiers(item)
+      .filter((ingredient) => ingredient.customization_type !== 'ADD' && !ingredient.removed)
+      .map((ingredient) => {
+        const required = Number(ingredient.quantity ?? 0) * Number(item.quantity ?? 1);
+        const available = ingredient.quantity_available;
+        return available != null && required > Number(available) + 0.000001
+          ? `${item.name}: ${ingredient.name} requires ${required} ${ingredient.unit}, only ${available} available`
+          : null;
+      }))
+      .find(Boolean);
+    if (insufficientAdjustedStock) {
+      setValidationError(`Not enough stock for ${insufficientAdjustedStock}.`);
+      setShowPreview(false);
+      return;
+    }
+
+    const unavailableAddOn = cart.flatMap((item) => (item.modifiers ?? [])
+      .filter((modifier) => modifier.type === 'add_on' && (item.selectedModifierIds ?? []).includes(modifier.id))
+      .map((modifier) => {
+        const count = Number(item.modifierQuantities?.[modifier.id] ?? 1);
+        const required = Number(modifier.quantity ?? 1) * count * item.quantity;
+        return modifier.stockStatus === 'unavailable'
+          || !Number.isInteger(Number(modifier.maxQuantity))
+          || count > Number(modifier.maxQuantity)
+          || (modifier.quantityAvailable != null && required > Number(modifier.quantityAvailable))
+          ? `${item.name}: ${modifier.name}`
+          : null;
+      }))
+      .find(Boolean);
+    if (unavailableAddOn) {
+      setValidationError(`Not enough add-on stock for ${unavailableAddOn}.`);
+      setShowPreview(false);
+      return;
+    }
+
     const hasDineIn = cart.some(item => item.orderType === 'dine-in');
     const hasTakeout = cart.some(item => item.orderType === 'takeout');
 
@@ -743,6 +1190,8 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       partySize: parseInt(partySize) || undefined,
       isQueued: isInQueue,
       queuePosition,
+      estimatedPrepMinutes: settings.enable_estimated_prep_time ? estimatedWaitingMinutes : undefined,
+      estimatedReadyAt: estimatedReadyAt?.toISOString(),
     };
 
     console.log('Order data:', order); // Debug log
@@ -786,6 +1235,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       } else {
         addOrder(orderForList);
       }
+      await reloadOrders();
       onOrderCreated(savedOrderDetails);
       setSuccessOrderDetails(savedOrderDetails);
       setShowPaymentChoice(false);
@@ -824,6 +1274,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
           return;
         }
         addOrder({ ...toOrderListFormat(paidOrder, true), cashReceived: amountPaid, changeGiven: change });
+        await reloadOrders();
         onOrderCreated(paidOrder);
         setSuccessOrderDetails(paidOrder);
       }
@@ -865,7 +1316,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       const party = parseInt(partySize) || 0;
       const totalCapacity = selectedTables.reduce((sum, tableNum) => {
         const table = tables.find(t => t.number === tableNum);
-        return sum + (table?.seats || 0);
+        return sum + (table?.isShared ? table.availableSeats : table?.seats || 0);
       }, 0);
 
       if (party > totalCapacity) {
@@ -914,23 +1365,14 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
           frame: '#f7d5bf',
           surface: 'linear-gradient(145deg, #fff9f4 0%, #fff2e8 100%)',
         };
-      case 'reserved':
+      case 'partially_occupied':
         return {
-          accent: '#3b82f6',
-          accentSoft: 'rgba(59, 130, 246, 0.16)',
-          border: 'rgba(59, 130, 246, 0.72)',
-          glow: 'rgba(59, 130, 246, 0.22)',
-          frame: '#c9dbfb',
-          surface: 'linear-gradient(145deg, #f7fbff 0%, #edf5ff 100%)',
-        };
-      case 'maintenance':
-        return {
-          accent: '#6b7280',
-          accentSoft: 'rgba(107, 114, 128, 0.18)',
-          border: 'rgba(107, 114, 128, 0.72)',
-          glow: 'rgba(107, 114, 128, 0.18)',
-          frame: '#d8dee5',
-          surface: 'linear-gradient(145deg, #fbfbfc 0%, #eef1f4 100%)',
+          accent: '#eab308',
+          accentSoft: 'rgba(234, 179, 8, 0.16)',
+          border: 'rgba(234, 179, 8, 0.72)',
+          glow: 'rgba(234, 179, 8, 0.22)',
+          frame: '#f3df8b',
+          surface: 'linear-gradient(145deg, #fffdf2 0%, #fef7d2 100%)',
         };
       default:
         return {
@@ -1084,16 +1526,76 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
     </div>
   );
 
-  const availableTables = tables.filter(t => t.status === 'available');
+  const tableCanSeat = (table: (typeof tables)[number], party: number) =>
+    table.isShared
+      ? table.availableSeats >= party
+      : table.status === 'available' && table.seats >= party;
+  const availableTables = tables.filter(t => tableCanSeat(t, Math.max(1, parseInt(partySize) || 1)));
 
   const dineInItems = cart.filter(item => item.orderType === 'dine-in');
   const takeoutItems = cart.filter(item => item.orderType === 'takeout');
+  const updateHoveredProductPreview = (element: HTMLElement) => {
+    const rect = element.getBoundingClientRect();
+    setHoveredProductPreview({
+      left: rect.left + rect.width / 2,
+      top: rect.top + rect.height / 2,
+      width: Math.min(320, Math.max(280, rect.width * 1.18)),
+    });
+  };
+  const clearHoveredProductPreview = (productId: number) => {
+    setHoveredProductId((current) => (current === productId ? null : current));
+    setHoveredProductPreview(null);
+  };
+  const hoveredProduct = hoveredProductId
+    ? filteredProducts.find((product) => product.id === hoveredProductId)
+    : undefined;
+  const hoveredProductAvailableOrders = hoveredProduct
+    ? finiteNumberIncludingZeroOrUndefined(hoveredProduct.availableOrders ?? hoveredProduct.availableQuantity)
+    : undefined;
+  const hoveredProductCartQuantity = hoveredProduct
+    ? cart.filter((item) => item.id === hoveredProduct.id).reduce((sum, item) => sum + Number(item.quantity ?? 0), 0)
+    : 0;
+  const hoveredProductRemainingOrders = hoveredProductAvailableOrders !== undefined
+    ? Math.max(0, hoveredProductAvailableOrders - hoveredProductCartQuantity)
+    : undefined;
+  const hoveredRecipeDetails = hoveredProductRecipeQuery.data as Record<string, unknown> | undefined;
+  const hoveredProductPrepTimeMinutes = hoveredProduct
+    ? finiteNumberIncludingZeroOrUndefined(
+        hoveredRecipeDetails?.prep_time_minutes ?? hoveredRecipeDetails?.prepTimeMinutes ?? hoveredProduct.prepTimeMinutes,
+      )
+    : undefined;
+  const hoveredProductServings = hoveredProduct
+    ? finiteNumberIncludingZeroOrUndefined(hoveredRecipeDetails?.servings ?? hoveredProduct.servings)
+    : undefined;
+  const showPosStaffLoadingOverlay =
+    staffType === 'POS_STAFF' &&
+    (
+      posMenuQuery.isLoading ||
+      posMenuQuery.isFetching ||
+      posIngredientsQuery.isLoading ||
+      posIngredientsQuery.isFetching ||
+      completePaymentMutation.isPending ||
+      isPaymentSubmitting
+    );
 
   return (
     <div className="flex h-screen bg-background">
       <Sidebar currentPage="create-order" onNavigate={onNavigate} onLogout={onLogout} storeBrand={storeBrand} userName={userName} storeType={storeType} staffType={staffType} />
 
-      <div className="flex-1 min-w-0 overflow-auto bg-gray-50">
+      <div className="relative flex-1 min-w-0 overflow-auto bg-gray-50">
+        {showPosStaffLoadingOverlay && (
+          <div
+            className="absolute inset-0 z-40 flex items-center justify-center bg-gray-50/80 backdrop-blur-[1px]"
+            role="status"
+            aria-live="polite"
+            aria-label="Loading create order data"
+          >
+            <div className="flex flex-col items-center gap-3 rounded-lg border border-border bg-white px-6 py-5 shadow-lg">
+              <LoaderCircle className="size-8 animate-spin text-primary" aria-hidden="true" />
+              <p className="text-sm font-medium text-foreground">Loading order data...</p>
+            </div>
+          </div>
+        )}
         <div className="p-5">
           <h2 className="text-lg mb-4">Menu</h2>
 
@@ -1155,25 +1657,64 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-            {filteredProducts.map(product => (
-              <button
+            {filteredProducts.map(product => {
+              const availableOrders = finiteNumberIncludingZeroOrUndefined(product.availableOrders ?? product.availableQuantity);
+              const cartQuantity = cart
+                .filter((item) => item.id === product.id)
+                .reduce((sum, item) => sum + Number(item.quantity ?? 0), 0);
+              const remainingOrders = availableOrders !== undefined ? Math.max(0, availableOrders - cartQuantity) : undefined;
+              const isUnavailable = remainingOrders !== undefined && remainingOrders <= 0;
+
+              return (
+                <button
                 key={product.id}
                 onClick={() => addToCart(product)}
-                disabled={product.availableQuantity !== undefined && product.availableQuantity <= 0}
-                className="bg-white rounded-lg p-2.5 hover:shadow-md transition-shadow text-left disabled:cursor-not-allowed disabled:opacity-50"
+                onMouseEnter={(event) => {
+                  if (!isUnavailable) {
+                    setHoveredProductId(product.id);
+                    updateHoveredProductPreview(event.currentTarget);
+                  }
+                }}
+                onMouseLeave={() => clearHoveredProductPreview(product.id)}
+                onFocus={(event) => {
+                  if (!isUnavailable) {
+                    setHoveredProductId(product.id);
+                    updateHoveredProductPreview(event.currentTarget);
+                  }
+                }}
+                onBlur={() => clearHoveredProductPreview(product.id)}
+                disabled={isUnavailable}
+                className={`group relative isolate overflow-visible rounded-2xl text-left transition-transform duration-300 ease-out focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 ${
+                  isUnavailable
+                    ? 'cursor-not-allowed'
+                    : 'hover:z-30 hover:-translate-y-3 hover:scale-[1.18] focus-visible:z-30 focus-visible:-translate-y-3 focus-visible:scale-[1.18]'
+                }`}
               >
-                <div className="aspect-square bg-muted rounded-lg mb-2 overflow-hidden">
+                <div className={`overflow-hidden rounded-2xl border border-border bg-white p-2.5 shadow-sm transition-all duration-300 ease-out ${
+                  isUnavailable
+                    ? ''
+                    : 'group-hover:border-primary/35 group-hover:shadow-[0_18px_38px_rgba(15,23,42,0.18)] group-focus-visible:border-primary/35 group-focus-visible:shadow-[0_18px_38px_rgba(15,23,42,0.18)]'
+                }`}>
+                  <div className="aspect-square overflow-hidden rounded-xl bg-muted">
                   <img
                     src={product.image}
                     alt={product.name}
-                    className="w-full h-full object-cover"
+                    className={`h-full w-full object-cover transition-transform duration-300 ease-out ${
+                      isUnavailable ? '' : 'group-hover:scale-[1.06] group-focus-visible:scale-[1.06]'
+                    }`}
                   />
                 </div>
-                <h3 className="text-xs font-medium mb-0.5 line-clamp-1">{product.name}</h3>
-                {product.description && <p className="text-xs text-muted-foreground mb-1 line-clamp-2">{product.description}</p>}
+                <h3 className="mt-3 line-clamp-2 text-sm font-semibold text-foreground">{product.name}</h3>
+                {remainingOrders !== undefined && (
+                  <p className={`mt-1 text-[11px] font-semibold ${remainingOrders > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                    Available Orders: {remainingOrders}
+                  </p>
+                )}
                 <p className="text-xs text-primary font-medium">₱ {product.price.toFixed(2)}</p>
-              </button>
-            ))}
+                </div>
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>
@@ -1258,67 +1799,6 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
         {tableManagementEnabled && diningOption === 'dine-in' && (
           <div className="mb-4 space-y-2">
             <div>
-              <label className="block text-xs text-muted-foreground mb-1.5">Occupancy Type:</label>
-              <select
-                value={occupancyType}
-                onChange={(e) => {
-                  const nextOccupancyType = e.target.value as OccupancyType | '';
-                  setOccupancyType(nextOccupancyType);
-                  setSelectedTableNumber(null);
-                  setSelectedTables([]);
-                  setIsInQueue(false);
-                  setQueuePosition(null);
-                  if (nextOccupancyType === 'whole-table') {
-                    setBillingSetup('single-bill');
-                  }
-                }}
-                className={`w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary ${
-                  !occupancyType ? 'text-gray-400' : 'bg-white'
-                }`}
-              >
-                <option value="" disabled hidden>Select Occupancy Type</option>
-                <option value="whole-table">Whole Table</option>
-                <option value="per-seat">Per Seat</option>
-              </select>
-            </div>
-
-            <div className="rounded-lg border border-border bg-muted/30 p-3">
-              <label className="block text-xs text-muted-foreground mb-1.5">Billing Setup:</label>
-              {occupancyType === 'whole-table' ? (
-                <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-                  Single Bill only for Whole Table occupancy
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  <button
-                    type="button"
-                    onClick={() => setBillingSetup('single-bill')}
-                    className={`rounded-lg border px-3 py-2 text-sm text-left transition-colors ${
-                      billingSetup === 'single-bill'
-                        ? 'border-primary bg-primary/10 text-primary'
-                        : 'border-border bg-white hover:bg-muted'
-                    }`}
-                  >
-                    <strong>Single Bill</strong>
-                    <p className="mt-1 text-xs text-muted-foreground">Per-seat occupancy, but one customer or group pays for all seats.</p>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setBillingSetup('separate-bills')}
-                    className={`rounded-lg border px-3 py-2 text-sm text-left transition-colors ${
-                      billingSetup === 'separate-bills'
-                        ? 'border-primary bg-primary/10 text-primary'
-                        : 'border-border bg-white hover:bg-muted'
-                    }`}
-                  >
-                    <strong>Separate Bills</strong>
-                    <p className="mt-1 text-xs text-muted-foreground">Each seat or customer can have an individual bill and payment transaction.</p>
-                  </button>
-                </div>
-              )}
-            </div>
-
-            <div>
               <label className="block text-xs text-muted-foreground mb-1.5">Number of Customers (Pila mo kabuok?):</label>
               <input
                 type="number"
@@ -1389,7 +1869,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                             <div className="flex-1 min-w-0">
                               <p className="text-xs truncate">{item.name}</p>
                               <p className="text-xs text-muted-foreground">₱ {item.price.toFixed(2)} each</p>
-                              <p className="text-xs text-primary font-medium">₱ {(item.price * item.quantity).toFixed(2)}</p>
+                              <p className="text-xs text-primary font-medium">₱ {itemLineTotal(item).toFixed(2)}</p>
                             </div>
                             <div className="flex items-center gap-1">
                               <button
@@ -1414,7 +1894,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                             </button>
                           </div>
                           <button
-                            onClick={() => setCustomizeItemIndex(index)}
+                            onClick={() => openCustomizeItem(index)}
                             className="text-xs text-primary hover:underline mt-2 flex items-center gap-1"
                           >
                             <Edit2 className="w-3 h-3" />
@@ -1438,7 +1918,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                             <div className="flex-1 min-w-0">
                               <p className="text-xs truncate">{item.name}</p>
                               <p className="text-xs text-muted-foreground">₱ {item.price.toFixed(2)} each</p>
-                              <p className="text-xs text-secondary font-medium">₱ {(item.price * item.quantity).toFixed(2)}</p>
+                              <p className="text-xs text-secondary font-medium">₱ {itemLineTotal(item).toFixed(2)}</p>
                             </div>
                             <div className="flex items-center gap-1">
                               <button
@@ -1463,7 +1943,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                             </button>
                           </div>
                           <button
-                            onClick={() => setCustomizeItemIndex(index)}
+                            onClick={() => openCustomizeItem(index)}
                             className="text-xs text-secondary hover:underline mt-2 flex items-center gap-1"
                           >
                             <Edit2 className="w-3 h-3" />
@@ -1486,7 +1966,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                         <div className="flex-1 min-w-0">
                           <p className="text-xs truncate">{item.name}</p>
                           <p className="text-xs text-muted-foreground">₱ {item.price.toFixed(2)} each</p>
-                          <p className="text-xs font-medium">₱ {(item.price * item.quantity).toFixed(2)}</p>
+                          <p className="text-xs font-medium">₱ {itemLineTotal(item).toFixed(2)}</p>
                         </div>
                         <div className="flex items-center gap-1">
                           <button
@@ -1511,7 +1991,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                         </button>
                       </div>
                       <button
-                        onClick={() => setCustomizeItemIndex(index)}
+                        onClick={() => openCustomizeItem(index)}
                         className="text-xs text-primary hover:underline mt-2 flex items-center gap-1"
                       >
                         <Edit2 className="w-3 h-3" />
@@ -1571,6 +2051,12 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
             <span>TOTAL:</span>
             <span className="text-primary">₱ {total.toFixed(2)}</span>
           </div>
+          {settings.enable_estimated_prep_time && cart.length > 0 && (
+            <div className="rounded-lg border border-primary/20 bg-primary/5 p-2 text-primary">
+              <p className="font-medium">Estimated waiting time: {estimatedWaitingMinutes} minutes</p>
+              {estimatedReadyTimeLabel && <p className="text-[11px] text-muted-foreground">Approx. ready by {estimatedReadyTimeLabel}</p>}
+            </div>
+          )}
         </div>
 
         {validationError && (
@@ -1587,6 +2073,63 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
           PREVIEW ORDER
         </button>
       </div>
+
+      {hoveredProduct && hoveredProductPreview && (
+        <div
+          className="pointer-events-none fixed z-[45] -translate-x-1/2 -translate-y-1/2 transition-all duration-300 ease-out"
+          style={{
+            left: hoveredProductPreview.left,
+            top: hoveredProductPreview.top,
+            width: hoveredProductPreview.width,
+          }}
+        >
+          <div className="relative overflow-hidden rounded-[1.35rem] border border-primary/20 bg-white shadow-[0_24px_48px_rgba(15,23,42,0.22)] ring-1 ring-primary/10">
+            {hoveredProductRecipeQuery.isFetching && (
+              <div className="absolute right-3 top-3 z-10 flex size-8 items-center justify-center rounded-full border border-primary/20 bg-white/95 shadow-sm" role="status" aria-label="Loading recipe details">
+                <LoaderCircle className="size-4 animate-spin text-primary" aria-hidden="true" />
+              </div>
+            )}
+            <div className="aspect-[16/10] overflow-hidden bg-slate-100">
+              <img
+                src={hoveredProduct.image}
+                alt={hoveredProduct.name}
+                className="h-full w-full object-contain p-2"
+              />
+            </div>
+            <div className="space-y-3 p-4">
+              <div className="min-w-0 space-y-2">
+                <h3 className="text-base font-semibold leading-5 text-foreground">{hoveredProduct.name}</h3>
+                <p className="text-xs leading-5 text-muted-foreground">
+                  {hoveredProduct.description || 'No description available.'}
+                </p>
+              </div>
+              <p className="shrink-0 text-xs font-semibold text-primary">₱ {hoveredProduct.price.toFixed(2)}</p>
+            </div>
+            <div className="mx-4 mb-4 space-y-1.5 rounded-xl bg-slate-50 px-3 py-2.5 text-xs">
+              <p className="text-foreground">
+                <span className="font-semibold text-slate-700">Available Orders:</span>{' '}
+                {hoveredProductRemainingOrders !== undefined ? hoveredProductRemainingOrders : 'N/A'}
+              </p>
+              <p className="text-foreground">
+                <span className="font-semibold text-slate-700">Prep Time:</span>{' '}
+                {hoveredProductPrepTimeMinutes !== undefined
+                  ? `${hoveredProductPrepTimeMinutes} mins`
+                  : hoveredProductRecipeQuery.isFetching
+                    ? 'Loading...'
+                    : 'N/A'}
+              </p>
+              <p className="text-foreground">
+                <span className="font-semibold text-slate-700">Servings:</span>{' '}
+                {hoveredProductServings !== undefined
+                  ? hoveredProductServings
+                  : hoveredProductRecipeQuery.isFetching
+                    ? 'Loading...'
+                    : 'N/A'}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Order Preview Modal */}
       {showPreview && (
@@ -1628,6 +2171,12 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                   </p>
                 )}
                 {isInQueue && <p className="text-sm"><strong>Queue Position:</strong> #{queuePosition}</p>}
+                {settings.enable_estimated_prep_time && (
+                  <p className="text-sm">
+                    <strong>Estimated preparation time:</strong> {estimatedWaitingMinutes} minutes
+                    {estimatedReadyTimeLabel ? ` (ready around ${estimatedReadyTimeLabel})` : ''}
+                  </p>
+                )}
               </div>
 
               {/* Dine-In Order List */}
@@ -1636,20 +2185,28 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                   <h3 className="text-sm font-medium mb-2 text-primary">Dine-In Orders:</h3>
                   <div className="space-y-2">
                     {dineInItems.map((item, index) => {
-                      const { removedIngredients, replacedIngredients, quantityChanges, selectedModifiers } = getIngredientChanges(item);
-                      const hasCustomization = item.notes || selectedModifiers.length > 0 || removedIngredients.length > 0 || replacedIngredients.length > 0 || quantityChanges.length > 0;
+                      const { addedIngredients, removedIngredients, replacedIngredients, quantityChanges, selectedModifiers } = getIngredientChanges(item);
+                      const hasCustomization = item.notes || selectedModifiers.length > 0 || addedIngredients.length > 0 || removedIngredients.length > 0 || replacedIngredients.length > 0 || quantityChanges.length > 0;
 
                       return (
                         <div key={`preview-dinein-${index}`} className="border border-border rounded-lg p-3 bg-primary/5">
                           <div className="flex justify-between mb-1">
-                            <p className="text-sm font-medium">{item.name} x{item.quantity}</p>
-                            <p className="text-sm font-medium">₱{(item.price * item.quantity).toFixed(2)}</p>
+                            <p className="flex items-center gap-2 text-sm font-medium">
+                              {item.name} x{item.quantity}
+                              {hasCustomization && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-800">Modified</span>}
+                            </p>
+                            <p className="text-sm font-medium">₱{itemLineTotal(item).toFixed(2)}</p>
                           </div>
                           {hasCustomization && (
                             <div className="mt-2 pt-2 border-t border-primary/20 space-y-1">
                               {removedIngredients.length > 0 && (
                                 <p className="text-xs text-red-600">
                                   ❌ No: {removedIngredients.map(ing => ing.name).join(', ')}
+                                </p>
+                              )}
+                              {addedIngredients.length > 0 && (
+                                <p className="text-xs font-medium text-emerald-700">
+                                  ADD: {addedIngredients.map(ing => `${ing.name} ${ing.quantity}${ing.unit ? ` ${ing.unit}` : ''}`).join(', ')}
                                 </p>
                               )}
                               {replacedIngredients.length > 0 && (
@@ -1690,20 +2247,28 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                   <h3 className="text-sm font-medium mb-2 text-secondary">Takeout Orders:</h3>
                   <div className="space-y-2">
                     {takeoutItems.map((item, index) => {
-                      const { removedIngredients, replacedIngredients, quantityChanges, selectedModifiers } = getIngredientChanges(item);
-                      const hasCustomization = item.notes || selectedModifiers.length > 0 || removedIngredients.length > 0 || replacedIngredients.length > 0 || quantityChanges.length > 0;
+                      const { addedIngredients, removedIngredients, replacedIngredients, quantityChanges, selectedModifiers } = getIngredientChanges(item);
+                      const hasCustomization = item.notes || selectedModifiers.length > 0 || addedIngredients.length > 0 || removedIngredients.length > 0 || replacedIngredients.length > 0 || quantityChanges.length > 0;
 
                       return (
                         <div key={`preview-takeout-${index}`} className="border border-border rounded-lg p-3 bg-secondary/5">
                           <div className="flex justify-between mb-1">
-                            <p className="text-sm font-medium">{item.name} x{item.quantity}</p>
-                            <p className="text-sm font-medium">₱{(item.price * item.quantity).toFixed(2)}</p>
+                            <p className="flex items-center gap-2 text-sm font-medium">
+                              {item.name} x{item.quantity}
+                              {hasCustomization && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-800">Modified</span>}
+                            </p>
+                            <p className="text-sm font-medium">₱{itemLineTotal(item).toFixed(2)}</p>
                           </div>
                           {hasCustomization && (
                             <div className="mt-2 pt-2 border-t border-secondary/20 space-y-1">
                               {removedIngredients.length > 0 && (
                                 <p className="text-xs text-red-600">
                                   ❌ No: {removedIngredients.map(ing => ing.name).join(', ')}
+                                </p>
+                              )}
+                              {addedIngredients.length > 0 && (
+                                <p className="text-xs text-green-700">
+                                  Add: {addedIngredients.map(ing => `${ing.name} ${ing.quantity}${ing.unit ? ` ${ing.unit}` : ''}`).join(', ')}
                                 </p>
                               )}
                               {replacedIngredients.length > 0 && (
@@ -1786,103 +2351,165 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
             <div className="flex justify-between items-center p-5 border-b border-border flex-shrink-0">
               <h2 className="text-lg text-primary">Modify - {cart[customizeItemIndex].name}</h2>
               <button
-                onClick={() => setCustomizeItemIndex(null)}
+                onClick={cancelCustomizeItem}
                 className="text-muted-foreground hover:text-foreground transition-colors"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="overflow-y-auto flex-1 p-5">
-              {(cart[customizeItemIndex].modifiers ?? []).length > 0 && (
-                <div className="mb-4">
-                  <label className="block text-xs text-muted-foreground mb-2">Modifiers:</label>
-                  <div className="space-y-2">
-                    {(cart[customizeItemIndex].modifiers ?? []).map((modifier) => (
-                      <label key={modifier.id} className="flex items-center gap-2 rounded-lg border border-border p-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={(cart[customizeItemIndex].selectedModifierIds ?? []).includes(modifier.id)}
-                          onChange={() => toggleModifier(customizeItemIndex, modifier.id)}
-                        />
-                        <span>{modifier.name}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              )}
-              <div className="mb-4">
-                <label className="block text-xs text-muted-foreground mb-2">Ingredients:</label>
-                <div className="space-y-2">
-                  {cart[customizeItemIndex].ingredients.map((ingredient, ingIndex) => (
-                    <div key={`ing-${ingIndex}-${ingredient.name}`} className="p-2 border border-border rounded-lg">
-                      <div className="flex items-center gap-2">
-                        <div className="flex-1">
-                          <p className="text-xs">{ingredient.name}</p>
-                          <p className="text-xs text-muted-foreground">{ingredient.quantity} {ingredient.unit}</p>
-                          {ingredient.replacement_name && (
-                            <p className="text-xs text-primary">{ingredient.replacement_name} instead +PHP {Number(ingredient.additional_price ?? 0).toFixed(2)}</p>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <button
-                            onClick={() => updateIngredientQuantity(customizeItemIndex, ingredient.name, ingredient.quantity - (ingredient.unit === 'g' || ingredient.unit === 'ml' ? 5 : 1))}
-                            className="w-6 h-6 rounded bg-gray-100 hover:bg-gray-200 flex items-center justify-center"
-                          >
-                            <Minus className="w-3 h-3" />
-                          </button>
-                          <span className="text-xs w-10 text-center">{ingredient.quantity}</span>
-                          <button
-                            onClick={() => updateIngredientQuantity(customizeItemIndex, ingredient.name, ingredient.quantity + (ingredient.unit === 'g' || ingredient.unit === 'ml' ? 5 : 1))}
-                            className="w-6 h-6 rounded bg-gray-100 hover:bg-gray-200 flex items-center justify-center"
-                          >
-                            <Plus className="w-3 h-3" />
-                          </button>
-                        </div>
-                        <button
-                          onClick={() => setDeletingIngredient({ index: customizeItemIndex, name: ingredient.name })}
-                          className="text-destructive hover:bg-destructive/10 p-1.5 rounded"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                      {ingredient.alternatives && ingredient.alternatives.length > 0 && (
-                        <select
-                          value={ingredient.replacement_ingredient_id ? String(ingredient.replacement_ingredient_id) : ''}
-                          onChange={(event) => replaceIngredient(customizeItemIndex, ingredient.name, event.target.value)}
-                          className="mt-2 w-full rounded-lg border border-border bg-input-background px-3 py-2 text-xs"
-                        >
-                          <option value="">No replacement</option>
-                          {ingredient.alternatives.map((alternative) => (
-                            <option key={alternative.id} value={alternative.alternative_ingredient_id}>
-                              {alternative.ingredient_name} +PHP {Number(alternative.additional_price ?? 0).toFixed(2)}
-                            </option>
-                          ))}
-                        </select>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
+            {(() => {
+              const item = cart[customizeItemIndex];
+              const addOns = (item.modifiers ?? []).filter((modifier) => modifier.type === 'add_on');
+              const sizeVariants = (item.modifiers ?? []).filter((modifier) => modifier.type === 'size_variant');
+              const preferences = (item.modifiers ?? []).filter((modifier) => modifier.type === 'note');
+              const selectedIds = item.selectedModifierIds ?? [];
+              const selectedIngredientAdjustments = (item.modifiers ?? []).filter((modifier) => (modifier.type === 'remove' || modifier.type === 'ingredient_level') && selectedIds.includes(modifier.id));
+              const selectedAddOns = addOns.filter((modifier) => selectedIds.includes(modifier.id));
+              const selectedPreferences = preferences.filter((modifier) => selectedIds.includes(modifier.id));
+              const selectedSizeVariant = sizeVariants.find((modifier) => selectedIds.includes(modifier.id));
+              const levelOptions = selectedIngredientAdjustments.filter((modifier) => modifier.type === 'ingredient_level');
+              const removedOptions = selectedIngredientAdjustments.filter((modifier) => modifier.type === 'remove');
+              const additionalCharge = modifierPrice(item) * item.quantity;
 
-              <div className="mb-4">
-                <label className="block text-xs text-muted-foreground mb-1.5">Special Instructions:</label>
-                <textarea
-                  value={cart[customizeItemIndex].notes}
-                  onChange={(e) => updateNotes(customizeItemIndex, e.target.value)}
-                  placeholder="e.g., Well done, Extra sauce"
-                  className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                  rows={3}
-                />
-              </div>
-            </div>
-            <div className="p-5 border-t border-border flex-shrink-0">
-              <button
-                onClick={() => setCustomizeItemIndex(null)}
-                className="w-full px-6 py-2.5 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors text-sm"
-              >
-                Done
-              </button>
-            </div>
+              return <>
+                <div className="overflow-y-auto flex-1 space-y-5 p-5">
+                  <section>
+                    <div className="mb-2">
+                      <h3 className="text-sm font-semibold text-foreground">1. Basic Ingredients</h3>
+                      <p className="text-xs text-muted-foreground">Default recipe ingredients. Only kitchen-approved adjustments are available.</p>
+                    </div>
+                    <div className="space-y-2">
+                      {item.originalIngredients.map((ingredient, ingredientIndex) => {
+                        const options = (item.modifiers ?? []).filter((modifier) => (modifier.type === 'remove' || modifier.type === 'ingredient_level') && modifierTargetsIngredient(modifier, ingredient));
+                        const selectedOption = options.find((modifier) => selectedIds.includes(modifier.id));
+                        return (
+                          <div key={`basic-${ingredientIndex}-${ingredient.name}`} className="rounded-lg border border-border p-3">
+                            <div className="flex items-center justify-between gap-3">
+                              <div>
+                                <p className="text-sm font-medium text-foreground">{ingredient.name}</p>
+                                <p className="text-[11px] text-muted-foreground">Included in the standard recipe</p>
+                              </div>
+                              <span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${selectedOption ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-700'}`}>
+                                {selectedOption?.name ?? 'Regular'}
+                              </span>
+                            </div>
+                            {options.length > 0 && (
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                <label className="flex cursor-pointer items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs">
+                                  <input type="radio" name={`ingredient-${customizeItemIndex}-${ingredientIndex}`} checked={!selectedOption} onChange={() => selectBasicIngredientModifier(customizeItemIndex, ingredient, null)} />
+                                  Regular
+                                </label>
+                                {options.map((modifier) => (
+                                  <label key={modifier.id} className="flex cursor-pointer items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs">
+                                    <input type="radio" name={`ingredient-${customizeItemIndex}-${ingredientIndex}`} checked={selectedOption?.id === modifier.id} onChange={() => selectBasicIngredientModifier(customizeItemIndex, ingredient, modifier.id)} />
+                                    {modifier.name}
+                                  </label>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </section>
+
+                  <section>
+                    <div className="mb-2">
+                      <h3 className="text-sm font-semibold text-foreground">2. Size</h3>
+                      <p className="text-xs text-muted-foreground">A size changes the full recipe quantity, food cost, selling price, and stock deduction.</p>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <label className={`flex cursor-pointer items-center justify-between gap-2 rounded-lg border p-3 text-sm ${!selectedSizeVariant ? 'border-violet-300 bg-violet-50' : 'border-border'}`}>
+                        <span className="flex items-center gap-2"><input type="radio" name={`size-${customizeItemIndex}`} checked={!selectedSizeVariant} onChange={() => selectSizeVariant(customizeItemIndex, null)} />Regular / Standard</span>
+                        <span className="text-xs font-medium">₱{item.price.toFixed(2)}</span>
+                      </label>
+                      {sizeVariants.map((modifier) => (
+                        <label key={modifier.id} className={`flex cursor-pointer items-center justify-between gap-2 rounded-lg border p-3 text-sm ${selectedSizeVariant?.id === modifier.id ? 'border-violet-300 bg-violet-50' : 'border-border'}`}>
+                          <span className="flex items-center gap-2"><input type="radio" name={`size-${customizeItemIndex}`} checked={selectedSizeVariant?.id === modifier.id} onChange={() => selectSizeVariant(customizeItemIndex, modifier.id)} />{modifier.name}</span>
+                          <span className="text-right text-xs"><strong>₱{Number(modifier.sellingPrice ?? item.price + Number(modifier.priceDelta ?? 0)).toFixed(2)}</strong><span className="block text-muted-foreground">{modifier.sizeMultiplier ?? 1}× BOM</span></span>
+                        </label>
+                      ))}
+                    </div>
+                  </section>
+
+                  <section>
+                    <div className="mb-2">
+                      <h3 className="text-sm font-semibold text-foreground">3. Available Add-ons</h3>
+                      <p className="text-xs text-muted-foreground">Only add-ons configured by the Admin/Kitchen for this recipe are shown.</p>
+                    </div>
+                    {addOns.length === 0 ? <p className="rounded-lg bg-muted/40 p-3 text-xs text-muted-foreground">No add-ons configured for this item.</p> : (
+                      <div className="space-y-2">
+                        {addOns.map((modifier) => {
+                          const selected = selectedIds.includes(modifier.id);
+                          const selectedQuantity = Number(item.modifierQuantities?.[modifier.id] ?? 1);
+                          const perUnit = Math.max(Number(modifier.quantity ?? 1), 0.001);
+                          const stockMaximum = modifier.quantityAvailable == null ? Number.POSITIVE_INFINITY : Math.floor(Number(modifier.quantityAvailable) / (perUnit * Math.max(item.quantity, 1)));
+                          const hasConfiguredMaximum = Number.isInteger(Number(modifier.maxQuantity)) && Number(modifier.maxQuantity) > 0;
+                          const disabled = modifier.stockStatus === 'unavailable' || stockMaximum < 1 || !hasConfiguredMaximum;
+                          const configuredMaximum = hasConfiguredMaximum ? Number(modifier.maxQuantity) : 1;
+                          const maximum = Math.max(1, Math.min(configuredMaximum, Math.max(1, stockMaximum)));
+                          return (
+                            <div key={modifier.id} className={`rounded-lg border p-3 ${disabled ? 'border-gray-200 bg-gray-100 text-gray-400' : selected ? 'border-emerald-300 bg-emerald-50' : 'border-border'}`}>
+                              <div className="flex items-center justify-between gap-3">
+                                <label className={`flex min-w-0 flex-1 items-center gap-2 ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
+                                  <input type="checkbox" checked={selected} onChange={() => toggleModifier(customizeItemIndex, modifier.id)} disabled={disabled} />
+                                  <span className="text-sm font-medium">{modifier.name} {formatModifierPrice(modifier) && <span className="text-primary">{formatModifierPrice(modifier)}</span>}</span>
+                                </label>
+                                {selected && !disabled && (
+                                  <div className="flex items-center gap-1">
+                                    <button type="button" onClick={() => updateModifierQuantity(customizeItemIndex, modifier.id, selectedQuantity - 1)} disabled={selectedQuantity <= 1} className="flex size-7 items-center justify-center rounded border border-border bg-white disabled:opacity-40"><Minus className="size-3" /></button>
+                                    <span className="min-w-8 text-center text-xs font-bold">{selectedQuantity}x</span>
+                                    <button type="button" onClick={() => updateModifierQuantity(customizeItemIndex, modifier.id, selectedQuantity + 1)} disabled={selectedQuantity >= maximum} className="flex size-7 items-center justify-center rounded border border-border bg-white disabled:opacity-40"><Plus className="size-3" /></button>
+                                  </div>
+                                )}
+                              </div>
+                              <p className="mt-1 pl-6 text-[10px] text-muted-foreground">{!hasConfiguredMaximum ? 'Add-on limit is not configured by Admin/Kitchen' : disabled ? 'Currently out of stock' : `Maximum ${maximum} per order item`}</p>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </section>
+
+                  <section>
+                    <div className="mb-2">
+                      <h3 className="text-sm font-semibold text-foreground">4. Instruction / Preferences</h3>
+                      <p className="text-xs text-muted-foreground">Kitchen-approved preparation preferences and a customer note.</p>
+                    </div>
+                    {preferences.length > 0 && <div className="mb-3 grid gap-2 sm:grid-cols-2">{preferences.map((modifier) => (
+                      <label key={modifier.id} className={`flex cursor-pointer items-center gap-2 rounded-lg border p-2 text-sm ${selectedIds.includes(modifier.id) ? 'border-blue-300 bg-blue-50' : 'border-border'}`}>
+                        <input type="checkbox" checked={selectedIds.includes(modifier.id)} onChange={() => toggleModifier(customizeItemIndex, modifier.id)} />
+                        {modifier.name}
+                      </label>
+                    ))}</div>}
+                    <textarea value={item.notes} onChange={(event) => updateNotes(customizeItemIndex, event.target.value)} placeholder="Optional customer note for the kitchen" className="w-full rounded-lg border border-border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary" rows={2} />
+                  </section>
+
+                  <section className="rounded-xl border-2 border-primary/20 bg-primary/5 p-4">
+                    <h3 className="text-sm font-bold text-foreground">5. Customer Confirmation</h3>
+                    <p className="mb-3 text-xs text-muted-foreground">Repeat these changes to the customer before confirming.</p>
+                    <div className="space-y-1 text-xs">
+                      {removedOptions.length > 0 && <p><strong className="text-red-700">Removed:</strong> {removedOptions.map((modifier) => modifier.itemName ?? modifier.name).join(', ')}</p>}
+                      {levelOptions.length > 0 && <p><strong className="text-amber-700">Ingredient levels:</strong> {levelOptions.map((modifier) => `${modifier.itemName ?? modifier.name} ${modifier.levelPercent ?? 100}%`).join(', ')}</p>}
+                      {selectedSizeVariant && <p><strong className="text-violet-700">Size:</strong> {selectedSizeVariant.name} ({selectedSizeVariant.sizeMultiplier ?? 1}× BOM)</p>}
+                      {selectedAddOns.length > 0 && <p><strong className="text-emerald-700">Add-ons:</strong> {selectedAddOns.map((modifier) => `${modifier.name} ×${item.modifierQuantities?.[modifier.id] ?? 1}`).join(', ')}</p>}
+                      {selectedPreferences.length > 0 && <p><strong className="text-blue-700">Preferences:</strong> {selectedPreferences.map((modifier) => modifier.name).join(', ')}</p>}
+                      {item.notes.trim() && <p><strong>Note:</strong> {item.notes.trim()}</p>}
+                      {selectedIngredientAdjustments.length === 0 && !selectedSizeVariant && selectedAddOns.length === 0 && selectedPreferences.length === 0 && !item.notes.trim() && <p className="text-muted-foreground">No changes selected. Standard recipe will be prepared.</p>}
+                    </div>
+                    <div className="mt-3 border-t border-primary/20 pt-3 text-xs">
+                      <div className="flex justify-between"><span>Price adjustment</span><strong>{additionalCharge >= 0 ? '+' : '-'}₱{Math.abs(additionalCharge).toFixed(2)}</strong></div>
+                      <div className="mt-1 flex justify-between text-sm"><span>Updated item total</span><strong className="text-primary">₱{itemLineTotal(item).toFixed(2)}</strong></div>
+                    </div>
+                  </section>
+                </div>
+                <div className="grid grid-cols-3 gap-2 border-t border-border p-5">
+                  <button type="button" onClick={() => resetCustomizeItem(customizeItemIndex)} className="rounded-lg border border-border px-3 py-2.5 text-xs font-medium hover:bg-muted">Reset Original</button>
+                  <button type="button" onClick={cancelCustomizeItem} className="rounded-lg border border-border px-3 py-2.5 text-xs font-medium hover:bg-muted">Cancel</button>
+                  <button type="button" onClick={confirmCustomizeItem} className="rounded-lg bg-primary px-3 py-2.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90">Confirm Changes</button>
+                </div>
+              </>;
+            })()}
           </div>
         </div>
       )}
@@ -1920,26 +2547,47 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
               </div>
 
               <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3">
-                {filteredProducts.map(product => (
+                {filteredProducts.map(product => {
+                  const availableOrders = finiteNumberIncludingZeroOrUndefined(product.availableOrders ?? product.availableQuantity);
+                  const cartQuantity = cart
+                    .filter((item) => item.id === product.id)
+                    .reduce((sum, item) => sum + Number(item.quantity ?? 0), 0);
+                  const remainingOrders = availableOrders !== undefined ? Math.max(0, availableOrders - cartQuantity) : undefined;
+                  const isUnavailable = remainingOrders !== undefined && remainingOrders <= 0;
+
+                  return (
                   <button
                     key={product.id}
                     onClick={() => {
                       addToCart(product, 'takeout');
                     }}
-                    className="bg-white rounded-lg p-2.5 hover:shadow-md transition-shadow text-left border border-border"
+                    disabled={isUnavailable}
+                    className={`group rounded-lg border border-border bg-white p-2.5 text-left shadow-sm transition-all duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-50 ${
+                      isUnavailable
+                        ? 'cursor-not-allowed'
+                        : 'hover:-translate-y-0.5 hover:border-secondary/50 hover:bg-secondary/[0.03] hover:shadow-lg focus-visible:-translate-y-0.5 focus-visible:border-secondary/50 focus-visible:ring-2 focus-visible:ring-secondary/20'
+                    }`}
                   >
-                    <div className="aspect-square bg-muted rounded-lg mb-2 overflow-hidden">
+                    <div className="mb-2 aspect-square overflow-hidden rounded-lg bg-muted">
                       <img
                         src={product.image}
                         alt={product.name}
-                        className="w-full h-full object-cover"
+                        className={`h-full w-full object-cover transition-transform duration-150 ease-out ${
+                          isUnavailable ? '' : 'group-hover:scale-[1.03]'
+                        }`}
                       />
                     </div>
                     <h3 className="text-xs font-medium mb-0.5 line-clamp-1">{product.name}</h3>
+                    {remainingOrders !== undefined && (
+                      <p className={`mb-1 text-[11px] font-semibold ${remainingOrders > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                        Available Orders: {remainingOrders}
+                      </p>
+                    )}
                     {product.description && <p className="text-xs text-muted-foreground mb-1 line-clamp-2">{product.description}</p>}
                     <p className="text-xs text-secondary font-medium">₱ {product.price.toFixed(2)}</p>
                   </button>
-                ))}
+                  );
+                })}
               </div>
             </div>
             <div className="p-5 border-t border-border flex-shrink-0">
@@ -1975,6 +2623,11 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                 <p className="mt-2 text-sm text-muted-foreground">
                   Choose Pay Later if the table should stay occupied until the customer pays.
                 </p>
+                {settings.enable_estimated_prep_time && (
+                  <p className="mt-2 text-sm font-medium text-primary">
+                    Estimated preparation time: {successOrderDetails.estimatedPrepMinutes ?? estimatedWaitingMinutes} minutes
+                  </p>
+                )}
               </div>
               <div className="grid gap-3">
                 <button
@@ -2020,6 +2673,9 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
               <div className="mb-4">
                 <p className="text-sm mb-2"><strong>Order Number:</strong> {currentOrderNumber}</p>
                 <p className="text-sm mb-2"><strong>Customer:</strong> {customerName}</p>
+                {settings.enable_estimated_prep_time && (
+                  <p className="text-sm mb-2"><strong>Estimated waiting time:</strong> {estimatedWaitingMinutes} minutes</p>
+                )}
                 <div className="bg-muted rounded-lg p-3 mb-3">
                   <h4 className="text-xs font-medium mb-2">Ordered Items:</h4>
                   <div className="space-y-1">
@@ -2097,6 +2753,15 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                 </div>
               )}
 
+              {paymentMethod !== 'Cash' && selectedPaymentAccount && (
+                <div className="mb-4 rounded-lg border border-primary/20 bg-primary/5 p-4 text-sm">
+                  {selectedPaymentAccount.qr_image && <img src={selectedPaymentAccount.qr_image} alt={`${paymentMethod} QR code`} className="mb-3 h-40 w-40 rounded-lg border border-border bg-white object-contain p-2" />}
+                  {selectedPaymentAccount.account_name && <p><span className="font-medium">Account Name:</span> {selectedPaymentAccount.account_name}</p>}
+                  {selectedPaymentAccount.account_number && <p><span className="font-medium">Account Details:</span> {selectedPaymentAccount.account_number}</p>}
+                  {selectedPaymentAccount.instructions && <p className="mt-2 text-muted-foreground">{selectedPaymentAccount.instructions}</p>}
+                </div>
+              )}
+
               {paymentMethod === 'Cash' && cashAmount && parseFloat(cashAmount) >= total && (
                 <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-4">
                   <p className="text-sm text-muted-foreground mb-1">Change</p>
@@ -2160,6 +2825,12 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                   }
                 </p>
                 <p className="text-sm mb-2"><strong>Total Amount:</strong> ₱{successOrderDetails.total?.toFixed(2)}</p>
+                {settings.enable_estimated_prep_time && successOrderDetails.estimatedPrepMinutes !== undefined && (
+                  <p className="text-sm mb-2">
+                    <strong>Estimated Ready:</strong> {successOrderDetails.estimatedPrepMinutes} minutes
+                    {successOrderDetails.estimatedReadyAt ? ` (${formatManilaTime(successOrderDetails.estimatedReadyAt)})` : ''}
+                  </p>
+                )}
                 <p className="text-sm mb-2">
                   <strong>Payment Status:</strong>{' '}
                   <span className={successOrderDetails.paid ? 'text-green-600' : 'text-orange-600'}>
@@ -2439,15 +3110,14 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                         {(() => {
                           const party = parseInt(partySize);
                           const bestTable = availableTables
-                            .filter(t => t.seats >= party)
-                            .sort((a, b) => a.seats - b.seats)[0];
+                            .sort((a, b) => (a.isShared ? a.availableSeats : a.seats) - (b.isShared ? b.availableSeats : b.seats))[0];
 
                           if (bestTable) {
-                            return `Recommended: Table ${bestTable.number} (${bestTable.seats} seats)`;
+                            return `Recommended: Table ${bestTable.number} (${bestTable.isShared ? bestTable.availableSeats : bestTable.seats} seats available)`;
                           } else {
-                            const totalAvailableSeats = availableTables.reduce((sum, t) => sum + t.seats, 0);
+                            const totalAvailableSeats = availableTables.reduce((sum, t) => sum + (t.isShared ? t.availableSeats : t.seats), 0);
                             if (totalAvailableSeats >= party) {
-                              return 'Multiple tables needed - select tables to combine';
+                              return 'Select one table with enough available seats';
                             } else {
                               return 'No available tables can accommodate this party size';
                             }
@@ -2461,7 +3131,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                         <p className="text-lg font-bold text-blue-700">
                           {selectedTables.reduce((sum, tableNum) => {
                             const table = tables.find(t => t.number === tableNum);
-                            return sum + (table?.seats || 0);
+                            return sum + (table?.isShared ? table.availableSeats : table?.seats || 0);
                           }, 0)} seats
                         </p>
                       </div>
@@ -2477,7 +3147,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                     <h3 className="font-medium text-orange-900">No Tables Available</h3>
                   </div>
                   <p className="text-sm text-orange-800">
-                    All tables are currently occupied, reserved, or under maintenance. You can either:
+                    No table has enough available seats. You can either:
                   </p>
                   <ul className="text-sm text-orange-800 mt-2 ml-4 list-disc space-y-1">
                     <li>Wait in the queue and we'll assign you a table when one becomes available</li>
@@ -2490,19 +3160,21 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                 {tables.map(table => {
                   const party = parseInt(partySize) || 0;
                   const isSelected = selectedTables.includes(table.number);
-                  const isBestMatch = table.status === 'available' && table.seats >= party &&
-                    table.seats === availableTables.filter(t => t.seats >= party).sort((a, b) => a.seats - b.seats)[0]?.seats;
+                  const canSeat = tableCanSeat(table, party);
+                  const tableAvailableSeats = table.isShared ? table.availableSeats : table.seats;
+                  const bestTable = [...availableTables].sort((a, b) => (a.isShared ? a.availableSeats : a.seats) - (b.isShared ? b.availableSeats : b.seats))[0];
+                  const isBestMatch = canSeat && bestTable?.id === table.id;
                   const theme = getTableTheme(table.status);
                   const rectangular = table.seats > 4;
                   const chairs = getChairLayout(table.seats, rectangular);
                   const displayedChairs = chairs.slice(0, 8);
                   const statusLabel = table.status === 'available'
                     ? 'Available'
+                    : table.status === 'partially_occupied'
+                    ? 'Partially Occupied'
                     : table.status === 'occupied'
                     ? 'Occupied'
-                    : table.status === 'reserved'
-                    ? 'Reserved'
-                    : 'Maintenance';
+                    : 'Available';
 
                   return (
                     <div
@@ -2533,24 +3205,24 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                           <p className="text-[13px] font-semibold text-slate-800">Table {table.number}</p>
                           <div className="flex items-center gap-1 text-xs text-gray-500 mt-1">
                             <Users className="w-3 h-3" />
-                            <span>{table.seats} seats</span>
+                            <span>{table.isShared ? `${table.availableSeats}/${table.seats} seats available` : `${table.seats} seats`}</span>
                           </div>
                         </div>
                       </div>
 
                       <button
                         onClick={() => {
-                          if (table.status === 'available') {
+                          if (canSeat) {
                             if (isSelected) {
                               setSelectedTables(selectedTables.filter(t => t !== table.number));
                             } else {
-                              setSelectedTables([...selectedTables, table.number]);
+                              setSelectedTables([table.number]);
                             }
                           }
                         }}
-                        disabled={table.status !== 'available'}
+                        disabled={!canSeat}
                         className={`relative h-32 w-full rounded-[18px] focus:outline-none transition-transform ${
-                          table.status === 'available' ? 'cursor-pointer hover:scale-[1.01]' : 'cursor-not-allowed opacity-80'
+                          canSeat ? 'cursor-pointer hover:scale-[1.01]' : 'cursor-not-allowed opacity-80'
                         }`}
                       >
                         {displayedChairs.map((chair, index) =>
@@ -2618,8 +3290,8 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                         </span>
                         <div className={`w-full px-7 pr-8 py-1.5 rounded-xl text-[13px] font-medium border ${
                           table.status === 'available' ? 'border-green-200 bg-green-50/70 text-green-700' :
+                          table.status === 'partially_occupied' ? 'border-yellow-200 bg-yellow-50/80 text-yellow-700' :
                           table.status === 'occupied' ? 'border-orange-200 bg-orange-50/80 text-orange-700' :
-                          table.status === 'reserved' ? 'border-blue-200 bg-blue-50/80 text-blue-700' :
                           'border-gray-200 bg-gray-50 text-gray-700'
                         }`}>
                           {statusLabel}
@@ -2652,21 +3324,12 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white font-bold text-sm shadow-md">
+                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-yellow-400 to-yellow-600 flex items-center justify-center text-white font-bold text-sm shadow-md">
                       #
                     </div>
                     <div>
-                      <p className="text-sm font-medium text-gray-800">Reserved</p>
-                      <p className="text-xs text-gray-500">Booked</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-gray-400 to-gray-600 flex items-center justify-center text-white font-bold text-sm shadow-md">
-                      #
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-gray-800">Maintenance</p>
-                      <p className="text-xs text-gray-500">Out of service</p>
+                      <p className="text-sm font-medium text-gray-800">Partially Occupied</p>
+                      <p className="text-xs text-gray-500">Shared seats open</p>
                     </div>
                   </div>
                 </div>
@@ -2745,7 +3408,10 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                   name: item.name,
                   quantity: item.quantity,
                   price: item.price,
+                  lineTotal: itemLineTotal(item),
                   itemType: getReceiptItemType(item),
+                  notes: item.notes,
+                  ...getCartItemDisplayDetails(item),
                 }))}
                 subtotal={successOrderDetails.subtotal}
                 serviceFee={successOrderDetails.serviceFee}
@@ -2755,6 +3421,8 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                 total={successOrderDetails.total}
                 cashReceived={successOrderDetails.cashReceived}
                 changeGiven={successOrderDetails.changeGiven}
+                estimatedPrepMinutes={successOrderDetails.estimatedPrepMinutes}
+                estimatedReadyAt={successOrderDetails.estimatedReadyAt}
                 cashier={successOrderDetails.cashier || userName || 'Staff'}
                 storeBrand={storeBrand}
               />

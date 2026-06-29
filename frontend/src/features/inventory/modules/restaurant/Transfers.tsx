@@ -11,6 +11,8 @@ import {
   useRestaurantWasteQuery,
 } from "../lib/restaurant";
 import { StockAdjustments } from "./StockAdjustments";
+import { getLocalDateKey } from "../../../../shared/utils/date";
+import { InlineDataLoading } from "../shared/InlineDataLoading";
 
 type TransferStatus = "pending" | "approved" | "in-transit" | "completed" | "rejected";
 type AdjustmentType = "damage" | "shrinkage" | "waste" | "found" | "correction";
@@ -70,9 +72,9 @@ export function Transfers() {
   const [selectedItem, setSelectedItem] = useState<Transfer | Adjustment | WasteLog | null>(null);
   const [dateRange, setDateRange] = useState({ start: "2026-05-01", end: "2026-05-31" });
 
-  const { data: transfers = [] } = useRestaurantTransfersQuery();
+  const { data: transfers = [], isLoading: transfersLoading } = useRestaurantTransfersQuery();
 
-  const { data: wasteLogs = [] } = useRestaurantWasteQuery();
+  const { data: wasteLogs = [], isLoading: wasteLoading } = useRestaurantWasteQuery();
 
   const [newTransfer, setNewTransfer] = useState({
     item: "",
@@ -93,10 +95,28 @@ export function Transfers() {
     notes: "",
   });
 
-  const { data: locations = [] } = useRestaurantLocationsQuery();
-  const { data: inventoryItems = [] } = useRestaurantInventoryQuery();
+  const { data: locations = [], isLoading: locationsLoading } = useRestaurantLocationsQuery();
+  const { data: inventoryItems = [], isLoading: inventoryLoading } = useRestaurantInventoryQuery();
+  const transferReferenceDataLoading = locationsLoading || inventoryLoading;
   const availableItems = inventoryItems.filter(item => item.backendId && item.stock > 0);
-  const units = ["kg", "g", "L", "ml", "pcs"];
+  const units = [
+    "kg",
+    "g",
+    "L",
+    "ml",
+    "milliliter",
+    "pcs",
+    "liter",
+    "bottle",
+    "can",
+    "pack",
+    "box",
+    "bag",
+    "sack",
+    "carton",
+    "tray",
+    "gallon",
+  ];
   const saveTransfer = useCreateRestaurantTransferMutation();
   const moveTransfer = useRestaurantTransferActionMutation();
   const saveMovement = useCreateRestaurantStockMovementMutation();
@@ -175,7 +195,7 @@ export function Transfers() {
 
     if (!style) {
       return (
-        <span className="px-3 py-1 rounded-full text-xs font-medium border bg-gray-100 text-gray-700 border-gray-200">
+        <span className="px-3 py-1 rounded-full text-xs font-medium border bg-muted text-muted-foreground border-border">
           {status.charAt(0).toUpperCase() + status.slice(1)}
         </span>
       );
@@ -192,7 +212,7 @@ export function Transfers() {
     const styles = {
       damage: { bg: "bg-red-100", text: "text-red-700", border: "border-red-200", icon: AlertCircle },
       shrinkage: { bg: "bg-orange-100", text: "text-orange-700", border: "border-orange-200", icon: TrendingDown },
-      waste: { bg: "bg-gray-100", text: "text-gray-700", border: "border-gray-200", icon: X },
+      waste: { bg: "bg-muted", text: "text-muted-foreground", border: "border-border", icon: X },
       found: { bg: "bg-green-100", text: "text-green-700", border: "border-green-200", icon: TrendingUp },
       correction: { bg: "bg-blue-100", text: "text-blue-700", border: "border-blue-200", icon: FileText },
     };
@@ -200,7 +220,7 @@ export function Transfers() {
 
     if (!style) {
       return (
-        <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium border bg-gray-100 text-gray-700 border-gray-200">
+        <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium border bg-muted text-muted-foreground border-border">
           {type.charAt(0).toUpperCase() + type.slice(1)}
         </span>
       );
@@ -222,7 +242,7 @@ export function Transfers() {
       damage: { bg: "bg-yellow-100", text: "text-yellow-700", border: "border-yellow-200" },
       spillage: { bg: "bg-blue-100", text: "text-blue-700", border: "border-blue-200" },
       contamination: { bg: "bg-purple-100", text: "text-purple-700", border: "border-purple-200" },
-      overproduction: { bg: "bg-gray-100", text: "text-gray-700", border: "border-gray-200" },
+      overproduction: { bg: "bg-muted", text: "text-muted-foreground", border: "border-border" },
     };
     const style = styles[type];
     return (
@@ -238,7 +258,7 @@ export function Transfers() {
         Auto (Recipe BOM)
       </span>
     ) : (
-      <span className="px-2 py-1 rounded text-xs font-medium bg-gray-100 text-gray-700 border border-gray-200">
+      <span className="px-2 py-1 rounded text-xs font-medium bg-muted text-muted-foreground border border-border">
         Manual
       </span>
     );
@@ -262,10 +282,17 @@ export function Transfers() {
   const totalWasteValue = filteredWasteLogs.reduce((sum, log) => sum + log.totalValue, 0);
   const totalWasteQuantity = filteredWasteLogs.length;
 
+  // Cards jump to the Transfers tab and toggle its status filter; clicking the
+  // active card clears the filter back to "all".
+  const toggleTransferStatus = (status: string) => {
+    setActiveTab("transfers");
+    setStatusFilter((current) => (current === status ? "all" : status));
+  };
+
   const transferStats = [
-    { label: "Pending Approvals", value: transfers.filter(t => t.status === "pending").length, icon: Clock, color: "from-yellow-500 to-orange-500" },
-    { label: "In Transit", value: transfers.filter(t => t.status === "in-transit").length, icon: ArrowLeftRight, color: "from-purple-500 to-indigo-500" },
-    { label: "Completed Today", value: transfers.filter(t => t.status === "completed" && t.completedDate === new Date().toISOString().split('T')[0]).length, icon: CheckCircle, color: "from-green-500 to-emerald-500" },
+    { label: "Pending Approvals", value: transfers.filter(t => t.status === "pending").length, icon: Clock, color: "from-yellow-500 to-orange-500", filter: "pending" },
+    { label: "In Transit", value: transfers.filter(t => t.status === "in-transit").length, icon: ArrowLeftRight, color: "from-purple-500 to-indigo-500", filter: "in-transit" },
+    { label: "Completed Today", value: transfers.filter(t => t.status === "completed" && t.completedDate === getLocalDateKey()).length, icon: CheckCircle, color: "from-green-500 to-emerald-500", filter: "completed" },
   ];
 
   return (
@@ -280,7 +307,7 @@ export function Transfers() {
           {activeTab === "transfers" && (
             <button
               onClick={() => setShowTransferModal(true)}
-              className="px-4 py-2 bg-gradient-to-r from-primary to-secondary text-white rounded-xl hover:shadow-lg hover:shadow-primary/30 transition-all duration-200 flex items-center gap-2 text-sm"
+              className="px-4 py-2 bg-gradient-to-r from-primary to-secondary text-white rounded-xl hover:-translate-y-0.5 hover:shadow-lg hover:shadow-primary/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-md transition-all duration-200 flex items-center gap-2 text-sm"
             >
               <Plus className="w-4 h-4" />
               New Transfer
@@ -302,8 +329,18 @@ export function Transfers() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
         {transferStats.map((stat, index) => {
           const Icon = stat.icon;
+          const isActive = activeTab === "transfers" && statusFilter === stat.filter;
           return (
-            <div key={index} className="bg-card rounded-2xl p-6 shadow-sm border border-border">
+            <button
+              key={index}
+              type="button"
+              onClick={() => toggleTransferStatus(stat.filter)}
+              aria-pressed={isActive}
+              aria-label={`Filter transfers by ${stat.label}`}
+              className={`group text-left w-full bg-card rounded-2xl p-6 shadow-sm border cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-xl hover:shadow-primary/25 hover:border-primary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-lg active:shadow-primary/30 ${
+                isActive ? "border-primary bg-primary/5 shadow-md shadow-primary/20" : "border-border"
+              }`}
+            >
               <div className="flex items-center gap-3 mb-3">
                 <div className={`w-10 h-10 bg-gradient-to-br ${stat.color} rounded-xl flex items-center justify-center`}>
                   <Icon className="w-5 h-5 text-white" />
@@ -311,7 +348,7 @@ export function Transfers() {
               </div>
               <p className="text-muted-foreground text-sm mb-1">{stat.label}</p>
               <p className="text-2xl font-bold text-foreground">{stat.value}</p>
-            </div>
+            </button>
           );
         })}
       </div>
@@ -320,10 +357,10 @@ export function Transfers() {
       <div className="flex items-center gap-2 bg-muted rounded-xl p-1 mb-6 w-fit">
         <button
           onClick={() => setActiveTab("transfers")}
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${
             activeTab === "transfers"
               ? "bg-primary text-white shadow-md"
-              : "text-muted-foreground hover:text-foreground"
+              : "text-muted-foreground hover:text-foreground hover:bg-background/70 hover:shadow-sm"
           }`}
         >
           <ArrowLeftRight className="w-4 h-4 inline-block mr-2" />
@@ -331,10 +368,10 @@ export function Transfers() {
         </button>
         <button
           onClick={() => setActiveTab("adjustments")}
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${
             activeTab === "adjustments"
               ? "bg-primary text-white shadow-md"
-              : "text-muted-foreground hover:text-foreground"
+              : "text-muted-foreground hover:text-foreground hover:bg-background/70 hover:shadow-sm"
           }`}
         >
           <FileText className="w-4 h-4 inline-block mr-2" />
@@ -342,10 +379,10 @@ export function Transfers() {
         </button>
         <button
           onClick={() => setActiveTab("waste")}
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${
             activeTab === "waste"
               ? "bg-primary text-white shadow-md"
-              : "text-muted-foreground hover:text-foreground"
+              : "text-muted-foreground hover:text-foreground hover:bg-background/70 hover:shadow-sm"
           }`}
         >
           <Trash2 className="w-4 h-4 inline-block mr-2" />
@@ -360,7 +397,7 @@ export function Transfers() {
             onClick={() => setWasteView("logs")}
             className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
               wasteView === "logs"
-                ? "bg-white text-foreground shadow-sm"
+                ? "bg-card text-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
@@ -370,7 +407,7 @@ export function Transfers() {
             onClick={() => setWasteView("report")}
             className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
               wasteView === "report"
-                ? "bg-white text-foreground shadow-sm"
+                ? "bg-card text-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
@@ -458,7 +495,11 @@ export function Transfers() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {filteredTransfers.map((transfer) => (
+                {transfersLoading ? (
+                  <tr><td colSpan={9}><InlineDataLoading label="Loading transfers…" /></td></tr>
+                ) : filteredTransfers.length === 0 ? (
+                  <tr><td colSpan={9} className="px-4 py-10 text-center text-muted-foreground">No transfers found.</td></tr>
+                ) : filteredTransfers.map((transfer) => (
                   <tr key={transfer.id} className="hover:bg-muted/30 transition-colors">
                     <td className="px-4 py-3">
                       <span className="font-medium text-primary text-sm">{transfer.id}</span>
@@ -535,7 +576,11 @@ export function Transfers() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {filteredWasteLogs.map((waste) => (
+                {wasteLoading ? (
+                  <tr><td colSpan={9}><InlineDataLoading label="Loading waste records…" /></td></tr>
+                ) : filteredWasteLogs.length === 0 ? (
+                  <tr><td colSpan={9} className="px-4 py-10 text-center text-muted-foreground">No waste records found.</td></tr>
+                ) : filteredWasteLogs.map((waste) => (
                   <tr key={waste.id} className="hover:bg-muted/30 transition-colors">
                     <td className="px-4 py-3">
                       <span className="font-medium text-primary text-sm">{waste.id}</span>
@@ -701,9 +746,9 @@ export function Transfers() {
                   onChange={(e) => setNewTransfer({ ...newTransfer, item: e.target.value })}
                   className="w-full px-3 py-2 bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 text-sm"
                   required
-                  disabled={availableItems.length === 0}
+                  disabled={transferReferenceDataLoading || availableItems.length === 0}
                 >
-                  <option value="">{availableItems.length === 0 ? "No available inventory items" : "Select item"}</option>
+                  <option value="">{transferReferenceDataLoading ? "Loading inventory items…" : availableItems.length === 0 ? "No available inventory items" : "Select item"}</option>
                   {availableItems.map(item => <option key={item.id} value={item.backendId}>{item.name}</option>)}
                 </select>
               </div>
@@ -802,9 +847,9 @@ export function Transfers() {
                   onChange={(e) => setNewWaste({ ...newWaste, item: e.target.value })}
                   className="w-full px-3 py-2 bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 text-sm"
                   required
-                  disabled={availableItems.length === 0}
+                  disabled={transferReferenceDataLoading || availableItems.length === 0}
                 >
-                  <option value="">{availableItems.length === 0 ? "No available inventory items" : "Select item"}</option>
+                  <option value="">{transferReferenceDataLoading ? "Loading inventory items…" : availableItems.length === 0 ? "No available inventory items" : "Select item"}</option>
                   {availableItems.map(item => <option key={item.id} value={item.backendId}>{item.name}</option>)}
                 </select>
               </div>

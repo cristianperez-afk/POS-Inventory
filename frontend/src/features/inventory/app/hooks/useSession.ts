@@ -39,12 +39,14 @@ export function SessionProvider({ children }: PropsWithChildren) {
 
   const applyUser = (user: AuthUser) => {
     setCurrentUser(user);
+    window.__POS_INVENTORY_USER__ = user;
     window.localStorage.setItem('userRole', user.role.toLowerCase());
     window.localStorage.setItem('userEmail', user.email);
   };
 
   const clearUser = () => {
     setCurrentUser(null);
+    window.__POS_INVENTORY_USER__ = null;
     window.localStorage.removeItem('userRole');
     window.localStorage.removeItem('userEmail');
   };
@@ -74,6 +76,18 @@ export function SessionProvider({ children }: PropsWithChildren) {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    const bridgedUser = window.__POS_INVENTORY_USER__ ?? null;
+    if (!bridgedUser) return;
+
+    applyUser(bridgedUser);
+    setIsRestoringSession(false);
+  }, [
+    window.__POS_INVENTORY_USER__?.id,
+    window.__POS_INVENTORY_USER__?.email,
+    window.__POS_INVENTORY_USER__?.businessId,
+  ]);
 
   const login = async (email: string, password: string) => {
     try {

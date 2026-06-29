@@ -3,12 +3,12 @@ import { Sidebar } from '../../shared/components/Sidebar';
 import { Page, type StoreBrand } from '../../shared/App';
 import type { StaffType, StoreType } from '../../auth/types/auth';
 import { X, Search, Eye, CreditCard, Printer, RotateCcw, CheckCircle, ChevronDown, Download, Users } from 'lucide-react';
-import { useOrders, Order } from '../../shared/context/OrderContext';
+import { useOrders, Order, type OrderItem } from '../../shared/context/OrderContext';
 import { ThermalReceipt } from '../../shared/components/ThermalReceipt';
 import { useStoreSettings } from '../../shared/context/StoreSettingsContext';
 import { DeleteConfirmDialog } from '../../shared/components/DeleteConfirmDialog';
 import { DateFilterControl, type DateFilterMode } from '../../shared/components/DateFilterControl';
-import { getLocalDateKey, parseLocalDateKey } from '../../shared/utils/date';
+import { formatManilaDateTime, formatManilaTime, getLocalDateKey, parseDatabaseTimestamp, parseLocalDateKey } from '../../shared/utils/date';
 
 interface OrderListProps {
   onNavigate: (page: Page) => void;
@@ -16,6 +16,7 @@ interface OrderListProps {
   isAdmin?: boolean;
   storeBrand?: StoreBrand;
   userName?: string | null;
+  userRole?: string | null;
   storeType?: StoreType;
   staffType?: StaffType;
 }
@@ -34,8 +35,113 @@ function normalizeSearchValue(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
-export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, userName, storeType, staffType }: OrderListProps) {
-  const { orders, completePayment, voidOrder, refundOrder } = useOrders();
+function formatDuration(minutes?: number) {
+  if (minutes === undefined) return '-';
+  if (minutes < 60) return `${minutes} min${minutes === 1 ? '' : 's'}`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return `${hours} hr${hours === 1 ? '' : 's'}${rest ? ` ${rest} mins` : ''}`;
+}
+
+function OrderItemDetail({ item }: { item: OrderItem }) {
+  const details = [
+    ...(item.removedIngredients ?? []).map((value) => `REMOVE: ${value}`),
+    ...(item.addedIngredients ?? []).map((value) => `ADD: ${value}`),
+    ...(item.changedIngredients ?? []).map((value) => `CHANGE: ${value}`),
+    ...(item.replacedIngredients ?? []).map((value) => `REPLACE: ${value}`),
+    ...(item.modifiers ?? []).map((value) => `OPTION: ${value}`),
+    ...(item.notes?.trim() ? [`NOTE: ${item.notes.trim()}`] : []),
+  ];
+
+  return (
+    <div className={`border-b pb-2 ${details.length > 0 ? 'rounded-lg border border-amber-200 bg-amber-50 p-2' : 'border-gray-50'}`}>
+      <div className="flex justify-between gap-3 text-sm text-gray-700">
+        <span className="flex items-center gap-2">{item.quantity}× {item.name}{details.length > 0 && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-bold uppercase text-amber-800">Modified</span>}</span>
+        <span>₱{Number(item.lineTotal ?? item.price * item.quantity).toFixed(2)}</span>
+      </div>
+      {details.map((detail, index) => <p key={`${detail}-${index}`} className="mt-1 pl-3 text-[10px] font-medium text-amber-800">{detail}</p>)}
+    </div>
+  );
+}
+
+function formatElapsed(start?: string, end?: string, duration?: number, now = Date.now()) {
+  const savedSeconds = Number(duration);
+  const startMs = start ? parseDatabaseTimestamp(start).getTime() : NaN;
+  const endMs = end ? parseDatabaseTimestamp(end).getTime() : NaN;
+  const seconds = Number.isFinite(startMs)
+    ? Math.max(0, Math.floor(((Number.isFinite(endMs) ? endMs : now) - startMs) / 1000))
+    : Number.isFinite(savedSeconds)
+    ? Math.max(0, Math.floor(savedSeconds))
+    : 0;
+  if (!Number.isFinite(seconds)) return '00:00:00';
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  return [hours, minutes, seconds % 60].map((value) => String(value).padStart(2, '0')).join(':');
+}
+
+function preparationEnd(order: Order) {
+  return order.servedAt;
+}
+
+function isFinalServedOrder(order: Order) {
+  return order.orderStatus === 'Served' || order.orderStatus === 'Completed';
+}
+
+function serveTimeStart(order: Order) {
+  const end = preparationEnd(order);
+  const endMs = end ? parseDatabaseTimestamp(end).getTime() : Date.now();
+  const candidates = [order.orderedAt, order.runningTimeStart, order.preparingStartedAt, order.createdAt];
+  return candidates.find((value) => {
+    if (!value) return false;
+    const startMs = parseDatabaseTimestamp(value).getTime();
+    return Number.isFinite(startMs) && (!Number.isFinite(endMs) || startMs <= endMs);
+  });
+}
+
+function serveTimeDisplay(order: Order, now = Date.now()) {
+  const savedSeconds = Number(order.serviceDuration ?? NaN);
+  if (isFinalServedOrder(order) && Number.isFinite(savedSeconds) && savedSeconds > 0) {
+    return formatElapsed(undefined, undefined, savedSeconds, now);
+  }
+  return formatElapsed(serveTimeStart(order), preparationEnd(order), order.serviceDuration, now);
+}
+
+function isDineInOrder(order: Order) {
+  return order.type === 'Dine-In' || order.type === 'Mixed';
+}
+
+function stayEnd(order: Order) {
+  if (!isDineInOrder(order)) return undefined;
+  return order.tableEndedAt ?? order.runningTimeEnd ?? order.completedAt ?? order.paymentAt;
+}
+
+function stayStart(order: Order) {
+  if (!isDineInOrder(order)) return undefined;
+  const end = stayEnd(order);
+  const endMs = end ? parseDatabaseTimestamp(end).getTime() : Date.now();
+  const candidates = [order.tableStartedAt, order.orderedAt, order.runningTimeStart, order.createdAt];
+  return candidates.find((value) => {
+    if (!value) return false;
+    const startMs = parseDatabaseTimestamp(value).getTime();
+    return Number.isFinite(startMs) && (!Number.isFinite(endMs) || startMs <= endMs);
+  });
+}
+
+function estimatedWaitDisplay(order: Order, _strategy: 'parallel' | 'sequential') {
+  const estimate = Number(order.estimatedPrepMinutes ?? 0);
+  if (!Number.isFinite(estimate) || estimate <= 0) return null;
+  const orderedAt = order.orderedAt ? parseDatabaseTimestamp(order.orderedAt) : null;
+  const computedReadyAt = orderedAt && !Number.isNaN(orderedAt.getTime())
+    ? new Date(orderedAt.getTime() + Math.ceil(estimate) * 60000).toISOString()
+    : order.estimatedReadyAt;
+  return {
+    minutes: Math.ceil(estimate),
+    readyAt: computedReadyAt,
+  };
+}
+
+export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, userName, userRole, storeType, staffType }: OrderListProps) {
+  const { orders, completePayment, voidOrder, refundOrder, reloadOrders } = useOrders();
   const { settings } = useStoreSettings();
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState('All');
@@ -58,9 +164,27 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
   const [restockOnRefund, setRestockOnRefund] = useState(false);
   const [restockOnVoid, setRestockOnVoid] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
+  const [clock, setClock] = useState(() => Date.now());
   const [isCompletingPayment, setIsCompletingPayment] = useState(false);
   const showTableManagementColumns = settings.enable_table_management;
+  const showEstimatedPrepTime = settings.enable_estimated_prep_time;
   const canProcessTransactions = !isAdmin && staffType === 'POS_STAFF';
+
+  useEffect(() => {
+    void reloadOrders();
+  }, [reloadOrders]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setClock(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    setSelectedOrder((current) => {
+      if (!current) return current;
+      return orders.find((order) => order.id === current.id) ?? current;
+    });
+  }, [orders]);
 
   const openModal = (order: Order, modal: ActiveModal) => {
     if (!canProcessTransactions && ['payment', 'refund', 'void'].includes(String(modal))) return;
@@ -99,7 +223,21 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
 
     try {
       await completePayment(selectedOrder.id, { cashReceived: cash, changeGiven: change, cashier: userName ?? undefined, paymentId: pId, receiptId: rId });
-      const updates = { paymentStatus: 'Paid' as const, orderStatus: 'Completed' as const, paymentId: pId, receiptId: rId, cashReceived: cash, changeGiven: change, cashier: userName ?? undefined };
+      const paidAt = new Date().toISOString();
+      const updates = {
+        paymentStatus: 'Paid' as const,
+        paymentAt: paidAt,
+        orderStatus: selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed' ? 'Completed' as const : selectedOrder.orderStatus,
+        completedAt: selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed' ? (selectedOrder.completedAt ?? paidAt) : selectedOrder.completedAt,
+        tableEndedAt: selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed' ? (selectedOrder.tableEndedAt ?? paidAt) : selectedOrder.tableEndedAt,
+        runningTimeEnd: selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed' ? (selectedOrder.runningTimeEnd ?? paidAt) : selectedOrder.runningTimeEnd,
+        isRunning: selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed' ? false : selectedOrder.isRunning,
+        paymentId: pId,
+        receiptId: rId,
+        cashReceived: cash,
+        changeGiven: change,
+        cashier: userName ?? undefined,
+      };
       setSelectedOrder(prev => prev ? { ...prev, ...updates } : null);
       setActiveModal('payment-success');
     } catch (error) {
@@ -186,7 +324,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
   const paginatedOrders = filteredOrders.slice(pageStartIndex, pageStartIndex + ORDERS_PER_PAGE);
   const visibleStart = filteredOrders.length === 0 ? 0 : pageStartIndex + 1;
   const visibleEnd = Math.min(pageStartIndex + ORDERS_PER_PAGE, filteredOrders.length);
-  const tableColumnCount = showTableManagementColumns ? 10 : 7;
+  const tableColumnCount = (showTableManagementColumns ? 13 : 10) + (showEstimatedPrepTime ? 1 : 0);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -212,13 +350,21 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
     }
   };
 
+  const getOrderStatusBadge = (status: string) => {
+    if (status === 'Completed') return 'bg-blue-50 text-blue-700 border-blue-200';
+    if (status === 'Served') return 'bg-sky-50 text-sky-700 border-sky-200';
+    if (status === 'Ready') return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+    if (status === 'Preparing') return 'bg-amber-50 text-amber-700 border-amber-200';
+    return 'bg-slate-50 text-slate-700 border-slate-200';
+  };
+
   const dineInItems = selectedOrder?.items.filter(i => i.itemType === 'dine-in') ?? [];
   const takeoutItems = selectedOrder?.items.filter(i => i.itemType === 'takeout') ?? [];
   const isMixed = selectedOrder?.type === 'Mixed';
 
   return (
     <div className="flex h-screen bg-background">
-      <Sidebar currentPage="order-list" onNavigate={onNavigate} onLogout={onLogout} isAdmin={isAdmin} storeBrand={storeBrand} userName={userName} storeType={storeType} staffType={staffType} />
+      <Sidebar currentPage="order-list" onNavigate={onNavigate} onLogout={onLogout} isAdmin={isAdmin} storeBrand={storeBrand} userName={userName} userRole={userRole} storeType={storeType} staffType={staffType} />
 
       <div className="flex-1 overflow-auto p-8">
         {/* Header */}
@@ -286,7 +432,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
         {/* Table Card */}
         <div className="bg-white rounded-xl shadow-sm border border-border overflow-hidden">
           <div className="overflow-x-auto">
-            <table className={`w-full ${showTableManagementColumns ? 'min-w-[1180px]' : 'min-w-[880px]'}`}>
+            <table className={`w-full ${showTableManagementColumns ? 'min-w-[1300px]' : 'min-w-[1000px]'}`}>
               <thead className="bg-muted/30">
                 <tr>
                   <th className="w-[13%] text-left px-5 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Order Number</th>
@@ -301,7 +447,13 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                   )}
                   <th className="w-[9%] text-right px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Total</th>
                   <th className="w-[8%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Payments</th>
+                  <th className="w-[8%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Order Status</th>
                   <th className="w-[9%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Date and Time</th>
+                  {showEstimatedPrepTime && (
+                    <th className="w-[8%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Est. Prep</th>
+                  )}
+                  <th className="w-[8%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Stay</th>
+                  <th className="w-[9%] text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Serve Time</th>
                   <th className="w-[14%] text-center px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Action</th>
                 </tr>
               </thead>
@@ -314,6 +466,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                   </tr>
                 ) : paginatedOrders.map((order) => {
                   const waitingTime = order.isQueued ? Math.floor((new Date().getTime() - new Date(`${order.date} ${order.time}`).getTime()) / 60000) : 0;
+                  const estimatedWait = estimatedWaitDisplay(order, settings.prep_time_strategy);
 
                   return (<tr key={order.id} className="hover:bg-muted/20 transition-colors">
                     <td className="px-5 py-5 text-sm font-mono text-primary whitespace-nowrap overflow-hidden text-ellipsis">
@@ -365,8 +518,29 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                       </span>
                     </td>
                     <td className="px-4 py-5">
+                      <span className={`inline-block px-2.5 py-1 rounded-full text-xs border whitespace-nowrap ${getOrderStatusBadge(order.orderStatus)}`}>
+                        {order.orderStatus}
+                      </span>
+                    </td>
+                    <td className="px-4 py-5">
                       <div className="text-xs text-gray-600 whitespace-nowrap">{order.date}</div>
                       <div className="text-xs text-gray-400 whitespace-nowrap">{order.time}</div>
+                    </td>
+                    {showEstimatedPrepTime && (
+                      <td className="px-4 py-5 text-xs text-gray-600 whitespace-nowrap">
+                        {estimatedWait ? `${estimatedWait.minutes} mins` : '-'}
+                        {estimatedWait?.readyAt && (
+                          <div className="text-xs text-gray-400">{formatManilaTime(estimatedWait.readyAt)}</div>
+                        )}
+                      </td>
+                    )}
+                    <td className="px-4 py-5 text-xs text-gray-600 whitespace-nowrap">
+                      {isDineInOrder(order)
+                        ? formatElapsed(stayStart(order), stayEnd(order), order.runningDuration, clock)
+                        : '-'}
+                    </td>
+                    <td className="px-4 py-5 text-xs text-gray-600 whitespace-nowrap">
+                      {serveTimeDisplay(order, clock)}
                     </td>
                     <td className="px-4 py-5">
                       <div className="flex items-center justify-center gap-1 whitespace-nowrap">
@@ -501,6 +675,53 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                 </div>
               </div>
 
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-muted rounded-xl p-3">
+                  <p className="text-xs text-gray-400 mb-1">Stay Time</p>
+                  <p className="text-sm text-gray-800">
+                    {selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed'
+                      ? formatElapsed(stayStart(selectedOrder), stayEnd(selectedOrder), selectedOrder.runningDuration, clock)
+                      : '-'}
+                  </p>
+                </div>
+                <div className="bg-muted rounded-xl p-3">
+                  <p className="text-xs text-gray-400 mb-1">Serve Time</p>
+                  <p className="text-sm text-gray-800">{serveTimeDisplay(selectedOrder, clock)}</p>
+                </div>
+                <div className="bg-muted rounded-xl p-3">
+                  <p className="text-xs text-gray-400 mb-1">Served At</p>
+                  <p className="text-sm text-gray-800">{selectedOrder.servedAt ? formatManilaDateTime(selectedOrder.servedAt) : '-'}</p>
+                </div>
+                <div className="bg-muted rounded-xl p-3">
+                  <p className="text-xs text-gray-400 mb-1">Payment Time</p>
+                  <p className="text-sm text-gray-800">{selectedOrder.paymentAt ? formatManilaDateTime(selectedOrder.paymentAt) : '-'}</p>
+                </div>
+                {showEstimatedPrepTime && (
+                  <div className="bg-muted rounded-xl p-3">
+                    <p className="text-xs text-gray-400 mb-1">Estimated Preparation</p>
+                    <p className="text-sm text-gray-800">
+                      {(() => {
+                        const estimatedWait = estimatedWaitDisplay(selectedOrder, settings.prep_time_strategy);
+                        if (!estimatedWait) return '-';
+                        return `${estimatedWait.minutes} mins${estimatedWait.readyAt ? `, ready around ${formatManilaTime(estimatedWait.readyAt)}` : ''}`;
+                      })()}
+                    </p>
+                  </div>
+                )}
+                <div className="bg-muted rounded-xl p-3">
+                  <p className="text-xs text-gray-400 mb-1">Preparing Start</p>
+                  <p className="text-sm text-gray-800">{selectedOrder.preparingStartedAt ? formatManilaDateTime(selectedOrder.preparingStartedAt) : '-'}</p>
+                </div>
+                <div className="bg-muted rounded-xl p-3">
+                  <p className="text-xs text-gray-400 mb-1">Ready to Serve</p>
+                  <p className="text-sm text-gray-800">{selectedOrder.readyAt ? formatManilaDateTime(selectedOrder.readyAt) : '-'}</p>
+                </div>
+                <div className="bg-muted rounded-xl p-3">
+                  <p className="text-xs text-gray-400 mb-1">Completed Time</p>
+                  <p className="text-sm text-gray-800">{selectedOrder.completedAt ? formatManilaDateTime(selectedOrder.completedAt) : '-'}</p>
+                </div>
+              </div>
+
               {/* Payment Badge */}
               <div className="flex gap-2">
                 <span className={`px-3 py-1 rounded-full text-xs font-medium ${getPaymentBadge(selectedOrder.paymentStatus)}`}>
@@ -518,10 +739,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                         <p className="text-xs text-blue-600 font-medium mb-1.5">Dine-In</p>
                         <div className="space-y-2 mb-3">
                           {dineInItems.map((item, i) => (
-                            <div key={i} className="flex justify-between text-sm text-gray-700">
-                              <span>{item.quantity}× {item.name}</span>
-                              <span>₱{(item.price * item.quantity).toFixed(2)}</span>
-                            </div>
+                            <OrderItemDetail key={i} item={item} />
                           ))}
                         </div>
                       </>
@@ -531,10 +749,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                         <p className="text-xs text-amber-600 font-medium mb-1.5">Takeout</p>
                         <div className="space-y-2">
                           {takeoutItems.map((item, i) => (
-                            <div key={i} className="flex justify-between text-sm text-gray-700">
-                              <span>{item.quantity}× {item.name}</span>
-                              <span>₱{(item.price * item.quantity).toFixed(2)}</span>
-                            </div>
+                            <OrderItemDetail key={i} item={item} />
                           ))}
                         </div>
                       </>
@@ -543,10 +758,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                 ) : (
                   <div className="space-y-2">
                     {selectedOrder.items.map((item, i) => (
-                      <div key={i} className="flex justify-between text-sm text-gray-700 border-b border-gray-50 pb-2">
-                        <span>{item.quantity}× {item.name}</span>
-                        <span>₱{(item.price * item.quantity).toFixed(2)}</span>
-                      </div>
+                      <OrderItemDetail key={i} item={item} />
                     ))}
                   </div>
                 )}
@@ -770,7 +982,14 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                 name: item.name,
                 quantity: item.quantity,
                 price: item.price,
+                lineTotal: item.lineTotal,
                 itemType: item.itemType,
+                notes: item.notes,
+                addedIngredients: item.addedIngredients,
+                removedIngredients: item.removedIngredients,
+                changedIngredients: item.changedIngredients,
+                replacedIngredients: item.replacedIngredients,
+                modifiers: item.modifiers,
               }))}
               subtotal={selectedOrder.subtotal}
               serviceFee={selectedOrder.serviceFee}
@@ -784,6 +1003,8 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
               time={selectedOrder.time}
               receiptId={selectedOrder.receiptId || currentReceiptId}
               paymentId={selectedOrder.paymentId || currentPaymentId}
+              estimatedPrepMinutes={selectedOrder.estimatedPrepMinutes}
+              estimatedReadyAt={selectedOrder.estimatedReadyAt}
               cashier={selectedOrder.cashier ?? userName ?? 'Staff'}
               storeBrand={storeBrand}
             />

@@ -20,18 +20,20 @@ const DEMO_ACCOUNT_GROUPS = [
     label: 'Restaurant Accounts',
     accounts: [
       { role: 'Admin', email: 'restaurantadmin@gmail.com', pwd: 'restaurantadmin123', color: '#007A5E' },
+      { role: 'POS Manager', email: 'posadmin@example.com', pwd: 'password123', color: '#047857' },
+      { role: 'Inventory Manager', email: 'inventoryadmin@example.com', pwd: 'password123', color: '#1d4ed8' },
       { role: 'POS Staff', email: 'resstaff@pos.com', pwd: 'resstaffpos123', color: '#0f766e' },
       { role: 'Inventory Staff', email: 'resstaff@inventory.com', pwd: 'resstaffinventory123', color: '#2563eb' },
-      { role: 'Manager', email: 'resstaff@manager.com', pwd: 'resstaffmanager123', color: '#7c3aed' },
     ],
   },
   {
     label: 'Retail Accounts',
     accounts: [
       { role: 'Admin', email: 'retailadmin@gmail.com', pwd: 'retailadmin123', color: '#005656' },
+      { role: 'POS Manager', email: 'retailposadmin@example.com', pwd: 'password123', color: '#047857' },
+      { role: 'Inventory Manager', email: 'retailinventoryadmin@example.com', pwd: 'password123', color: '#1d4ed8' },
       { role: 'POS Staff', email: 'retailstaff@pos.com', pwd: 'retailstaffpos123', color: '#0f766e' },
       { role: 'Inventory Staff', email: 'retailstaff@inventory.com', pwd: 'retailstaffinventory123', color: '#2563eb' },
-      { role: 'Manager', email: 'retailstaff@manager.com', pwd: 'retailstaffmanager123', color: '#7c3aed' },
     ],
   },
 ];
@@ -203,22 +205,22 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
 
         {/* Bottom marketing text */}
         <div className="relative z-10 text-white" style={{ animation: 'fade-up 1s ease-out' }}>
-          <h2 className="text-3xl font-bold mb-3 leading-tight">Manage Your Inventory with Ease</h2>
+          <h2 className="text-3xl font-bold mb-3 leading-tight">Inventory and POS, All in One</h2>
           <p className="text-white/80 text-base leading-relaxed mb-6">
-            Track items, manage stock levels, and streamline your retail operations with our platform.
+            Track stock, process sales, and run your store from one platform — your inventory and point of sale working together.
           </p>
           <div className="flex gap-6">
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 bg-[#00A7A5] rounded-full" />
-              <span className="text-white/70 text-sm">Real-time tracking</span>
+              <span className="text-white/70 text-sm">Real-time inventory</span>
             </div>
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 bg-[#007A5E] rounded-full" />
-              <span className="text-white/70 text-sm">Smart alerts</span>
+              <span className="text-white/70 text-sm">Fast checkout</span>
             </div>
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 bg-[#008967] rounded-full" />
-              <span className="text-white/70 text-sm">Analytics</span>
+              <span className="text-white/70 text-sm">Sales analytics</span>
             </div>
           </div>
         </div>

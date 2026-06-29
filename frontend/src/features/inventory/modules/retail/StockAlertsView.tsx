@@ -14,6 +14,7 @@ import type {
 import { categorySubcategories, CHART_COLORS } from '../../app/utils/constants';
 import { autoSortItem } from '../../app/utils/autoSortingRules';
 import { useRetailWorkspace } from '../lib/retail';
+import { InlineDataLoading } from '../shared/InlineDataLoading';
 
 
 export interface StockAlert {
@@ -28,6 +29,7 @@ export function StockAlertsView() {
   const {
     stockAlerts: alerts,
     inventory,
+    loading,
   } = useRetailWorkspace({
     enabled: true,
     loadSharedData: true,
@@ -125,7 +127,7 @@ export function StockAlertsView() {
 
       {/* Stats Cards */}
       <div className="grid grid-cols-3 gap-4 mb-6">
-        <div className="bg-white border border-border rounded-[14px] p-6">
+        <div className="bg-card border border-border rounded-[14px] p-6">
           <div className="flex items-start justify-between mb-3">
             <div>
               <p className="text-foreground text-[14px] mb-1">Available Stock</p>
@@ -137,7 +139,7 @@ export function StockAlertsView() {
           </div>
           <p className="text-foreground text-[12px]">pieces</p>
         </div>
-        <div className="bg-white border border-border rounded-[14px] p-6">
+        <div className="bg-card border border-border rounded-[14px] p-6">
           <div className="flex items-start justify-between mb-3">
             <div>
               <p className="text-foreground text-[14px] mb-1">Stock Value</p>
@@ -151,7 +153,7 @@ export function StockAlertsView() {
           </div>
           <p className="text-foreground text-[12px]">total inventory value</p>
         </div>
-        <div className="bg-white border border-border rounded-[14px] p-6">
+        <div className="bg-card border border-border rounded-[14px] p-6">
           <div className="flex items-start justify-between mb-3">
             <div>
               <p className="text-foreground text-[14px] mb-1">Categories</p>
@@ -168,11 +170,11 @@ export function StockAlertsView() {
       </div>
 
       {/* Tabs */}
-      <div className="bg-white border border-border rounded-[14px] overflow-hidden">
+      <div className="bg-card border border-border rounded-[14px] overflow-hidden">
         <div className="flex border-b border-border">
           <button
             onClick={() => setActiveTab('low-stock')}
-            className={`flex items-center gap-2 px-6 py-3 text-[16px] font-medium transition-colors relative ${
+            className={`flex items-center gap-2 px-6 py-3 text-[16px] font-medium transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-secondary/50 relative ${
               activeTab === 'low-stock'
                 ? 'bg-warning/10 text-warning'
                 : 'text-foreground hover:bg-muted'
@@ -193,7 +195,7 @@ export function StockAlertsView() {
           </button>
           <button
             onClick={() => setActiveTab('stock-control')}
-            className={`flex items-center gap-2 px-6 py-3 text-[16px] font-medium transition-colors relative ${
+            className={`flex items-center gap-2 px-6 py-3 text-[16px] font-medium transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-secondary/50 relative ${
               activeTab === 'stock-control'
                 ? 'bg-accent/10 text-secondary'
                 : 'text-foreground hover:bg-muted'
@@ -214,7 +216,7 @@ export function StockAlertsView() {
           </button>
           <button
             onClick={() => setActiveTab('bad-condition')}
-            className={`flex items-center gap-2 px-6 py-3 text-[16px] font-medium transition-colors relative ${
+            className={`flex items-center gap-2 px-6 py-3 text-[16px] font-medium transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-secondary/50 relative ${
               activeTab === 'bad-condition'
                 ? 'bg-destructive/10 text-destructive'
                 : 'text-foreground hover:bg-muted'
@@ -246,7 +248,7 @@ export function StockAlertsView() {
             <select
               value={filterCategory}
               onChange={(e) => setFilterCategory(e.target.value)}
-              className="px-3 py-1.5 border border-border rounded-[6px] text-[14px] bg-white focus:outline-none focus:border-secondary"
+              className="px-3 py-1.5 border border-border rounded-[6px] text-[14px] bg-card focus:outline-none focus:border-secondary"
             >
               {categories.map(cat => (
                 <option key={cat} value={cat}>{cat === 'all' ? 'All Categories' : cat}</option>
@@ -258,7 +260,7 @@ export function StockAlertsView() {
             <select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value as 'name' | 'quantity' | 'category')}
-              className="px-3 py-1.5 border border-border rounded-[6px] text-[14px] bg-white focus:outline-none focus:border-secondary"
+              className="px-3 py-1.5 border border-border rounded-[6px] text-[14px] bg-card focus:outline-none focus:border-secondary"
             >
               <option value="quantity">Stock Level</option>
               <option value="name">Name</option>
@@ -276,7 +278,9 @@ export function StockAlertsView() {
         <div className="p-6">
           {activeTab === 'low-stock' && (
             <div>
-              {filteredLowStockItems.length === 0 ? (
+              {loading ? (
+                <InlineDataLoading label="Loading low-stock alerts…" className="min-h-36" />
+              ) : filteredLowStockItems.length === 0 ? (
                 <div className="py-12 text-center">
                   <div className="bg-secondary/10 rounded-full size-[64px] flex items-center justify-center mb-4 mx-auto">
                     <svg className="size-8 text-secondary" fill="none" viewBox="0 0 24 24">
@@ -352,7 +356,9 @@ export function StockAlertsView() {
 
           {activeTab === 'stock-control' && (
             <div>
-              {filteredStockItems.length === 0 ? (
+              {loading ? (
+                <InlineDataLoading label="Loading stock items…" className="min-h-36" />
+              ) : filteredStockItems.length === 0 ? (
                 <div className="py-12 text-center">
                   <p className="text-foreground text-[18px] font-medium">No items found</p>
                   <p className="text-foreground text-[14px] mt-1">Try adjusting your filters</p>
@@ -362,7 +368,7 @@ export function StockAlertsView() {
                   {filteredStockItems.map(item => (
                     <div
                       key={item.id}
-                      className="flex items-center gap-4 px-4 py-4 rounded-[8px] border border-border bg-white hover:bg-muted transition-colors"
+                      className="flex items-center gap-4 px-4 py-4 rounded-[8px] border border-border bg-card hover:bg-muted transition-colors"
                     >
                       {/* Item Icon */}
                       <div className="rounded-full size-[48px] flex items-center justify-center shrink-0 bg-secondary/10">
@@ -415,7 +421,9 @@ export function StockAlertsView() {
 
           {activeTab === 'bad-condition' && (
             <div>
-              {filteredDamagedItems.length === 0 ? (
+              {loading ? (
+                <InlineDataLoading label="Loading item conditions…" className="min-h-36" />
+              ) : filteredDamagedItems.length === 0 ? (
                 <div className="py-12 text-center">
                   <div className="bg-secondary/10 rounded-full size-[64px] flex items-center justify-center mb-4 mx-auto">
                     <svg className="size-8 text-secondary" fill="none" viewBox="0 0 24 24">

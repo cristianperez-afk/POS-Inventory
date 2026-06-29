@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check, Plus } from "lucide-react";
+import { useSession } from "../../app/hooks/useSession";
 import {
   useRestaurantCategoryHierarchyQuery,
   useUpsertRestaurantCategoryHierarchyMutation,
@@ -18,6 +19,9 @@ export type PurchaseOrderProductOption = {
   category?: string;
   subCategory?: string;
   unit?: string;
+  purchaseUnit?: string;
+  baseUnit?: string;
+  conversionFactor?: number;
 };
 
 export type PurchaseOrderItemInputValue = {
@@ -28,6 +32,9 @@ export type PurchaseOrderItemInputValue = {
   category: string;
   subCategory: string;
   unit: string;
+  purchaseUnit: string;
+  baseUnit: string;
+  conversionFactor: string;
   quantity: string;
   unitPrice: string;
   isNewProduct?: boolean;
@@ -44,9 +51,46 @@ type PurchaseOrderItemInputProps = {
   disabled?: boolean;
 };
 
-const UNIT_OPTIONS = ["kg", "g", "pcs", "liter", "bottle", "pack", "box", "dozen"];
+const UNIT_OPTIONS = [
+  "kg",
+  "g",
+  "pcs",
+  "liter",
+  "milliliter",
+  "bottle",
+  "can",
+  "pack",
+  "box",
+  "bag",
+  "sack",
+  "carton",
+  "tray",
+  "dozen",
+  "gallon",
+];
 
 const normalizeSearch = (value: string | undefined) => (value || '').trim().toLowerCase();
+const preventNumberWheel = (event: React.WheelEvent<HTMLInputElement>) => {
+  event.currentTarget.blur();
+};
+
+const normalizeUnitLabel = (value: string | undefined) => {
+  const raw = (value || "").trim().toLowerCase();
+  const aliases: Record<string, string> = {
+    ml: "milliliter",
+    l: "liter",
+    cans: "can",
+    bottles: "bottle",
+    bags: "bag",
+    sacks: "sack",
+    cartons: "carton",
+    trays: "tray",
+    gallons: "gallon",
+    pcs: "pcs",
+    pc: "pcs",
+  };
+  return aliases[raw] || raw;
+};
 
 export function PurchaseOrderItemInput({
   supplierName,
@@ -57,6 +101,8 @@ export function PurchaseOrderItemInput({
   onAddItem,
   disabled = false,
 }: PurchaseOrderItemInputProps) {
+  const { currentUser } = useSession();
+  const isAdmin = currentUser?.role === "Admin";
   const [query, setQuery] = useState(value.productName);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const { data: categoryHierarchy = {} } = useRestaurantCategoryHierarchyQuery();
@@ -91,7 +137,9 @@ export function PurchaseOrderItemInput({
   const canAddItem = Boolean(
     value.productName.trim() &&
       value.quantity.trim() &&
-      value.unit.trim() &&
+      value.purchaseUnit.trim() &&
+      value.baseUnit.trim() &&
+      Number(value.conversionFactor || 0) > 0 &&
       value.unitPrice.trim() &&
       (!value.isNewProduct || value.category.trim())
   );
@@ -109,12 +157,17 @@ export function PurchaseOrderItemInput({
       category: "",
       subCategory: "",
       unit: "",
+      purchaseUnit: "",
+      baseUnit: "",
+      conversionFactor: "1",
       isNewProduct: false,
     });
   };
 
   const handleSelectExistingProduct = (product: PurchaseOrderProductOption) => {
     const supplierPrice = supplierProducts.find((item) => (item.name || '').toLowerCase() === (product.name || '').toLowerCase())?.price;
+    const purchaseUnit = normalizeUnitLabel(product.purchaseUnit || product.unit);
+    const baseUnit = normalizeUnitLabel(product.baseUnit || product.unit || purchaseUnit);
     onChange({
       ...value,
       productId: product.id,
@@ -123,7 +176,10 @@ export function PurchaseOrderItemInput({
       productName: product.name,
       category: product.category || "",
       subCategory: product.subCategory || "",
-      unit: product.unit || "",
+      unit: purchaseUnit,
+      purchaseUnit,
+      baseUnit,
+      conversionFactor: String(product.conversionFactor || 1),
       unitPrice: supplierPrice !== undefined ? supplierPrice.toString() : value.unitPrice,
       isNewProduct: false,
       unitOverride: false,
@@ -144,6 +200,9 @@ export function PurchaseOrderItemInput({
       category: "",
       subCategory: "",
       unit: "",
+      purchaseUnit: "",
+      baseUnit: "",
+      conversionFactor: "1",
       isNewProduct: true,
       unitOverride: false,
     });
@@ -168,6 +227,7 @@ export function PurchaseOrderItemInput({
       ...value,
       unitOverride: next,
       unit: nextUnit,
+      purchaseUnit: nextUnit,
     });
   };
 
@@ -189,7 +249,10 @@ export function PurchaseOrderItemInput({
 
   const handleAddSubCategory = async () => {
     const trimmed = newSubCategory.trim();
-    if (!value.category || !trimmed || subCategoryOptions.includes(trimmed)) return;
+    const exists = subCategoryOptions.some(
+      (subCategory) => subCategory.trim().toLowerCase() === trimmed.toLowerCase(),
+    );
+    if (!value.category || !trimmed || exists) return;
     const nextHierarchy = {
       ...categoryHierarchy,
       [value.category]: [...subCategoryOptions, trimmed],
@@ -277,7 +340,7 @@ export function PurchaseOrderItemInput({
               id="po-item-category"
               value={value.category}
               onChange={(e) => {
-                handleFieldChange("category", e.target.value);
+                setNewSubCategory("");
                 onChange({ ...value, category: e.target.value, subCategory: "" });
               }}
               disabled={!value.isNewProduct}
@@ -290,7 +353,7 @@ export function PurchaseOrderItemInput({
                 </option>
               ))}
             </select>
-            {value.isNewProduct && (
+            {value.isNewProduct && isAdmin && (
               <div className="flex gap-2">
                 <input
                   type="text"
@@ -332,19 +395,20 @@ export function PurchaseOrderItemInput({
                 </option>
               ))}
             </select>
-            {value.isNewProduct && value.category && (
+            {value.isNewProduct && isAdmin && (
               <div className="flex gap-2">
                 <input
                   type="text"
                   value={newSubCategory}
                   onChange={(e) => setNewSubCategory(e.target.value)}
-                  placeholder="New subcategory"
-                  className="min-w-0 flex-1 px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                  disabled={!value.category}
+                  placeholder={value.category ? "New subcategory" : "Select category first"}
+                  className="min-w-0 flex-1 px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 />
                 <button
                   type="button"
                   onClick={handleAddSubCategory}
-                  disabled={!newSubCategory.trim()}
+                  disabled={!value.category || !newSubCategory.trim()}
                   className="px-3 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
                   title="Add subcategory"
                 >
@@ -356,13 +420,15 @@ export function PurchaseOrderItemInput({
         </div>
 
         <div>
-          <label htmlFor="po-item-unit" className="block text-xs mb-1 text-foreground">
-            Unit {value.isNewProduct ? "*" : ""}
+          <label htmlFor="po-item-purchase-unit" className="block text-xs mb-1 text-foreground">
+            Purchase Unit *
           </label>
           <select
-            id="po-item-unit"
-            value={value.unit}
-            onChange={(e) => handleFieldChange("unit", e.target.value)}
+            id="po-item-purchase-unit"
+            value={value.purchaseUnit}
+            onChange={(e) =>
+              onChange({ ...value, purchaseUnit: e.target.value, unit: e.target.value })
+            }
             disabled={!value.isNewProduct && !value.unitOverride}
             className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all appearance-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
@@ -383,29 +449,76 @@ export function PurchaseOrderItemInput({
                 className="h-4 w-4 rounded border-muted-foreground text-primary focus:ring-primary"
               />
               <label htmlFor="unit-override" className="cursor-pointer">
-                Override unit
+                Override units
               </label>
             </div>
           )}
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div>
+          <label htmlFor="po-item-base-unit" className="block text-xs mb-1 text-foreground">
+            Base Unit *
+          </label>
+          <select
+            id="po-item-base-unit"
+            value={value.baseUnit}
+            onChange={(e) => handleFieldChange("baseUnit", e.target.value)}
+            disabled={!value.isNewProduct && !value.unitOverride}
+            className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all appearance-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <option value="">Select unit</option>
+            {UNIT_OPTIONS.map((unit) => (
+              <option key={unit} value={unit}>
+                {unit}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label htmlFor="po-item-conversion" className="block text-xs mb-1 text-foreground">
+            Conversion Factor *
+          </label>
+          <input
+            id="po-item-conversion"
+            type="number"
+            step="any"
+            inputMode="decimal"
+            min="0"
+            value={value.conversionFactor}
+            onWheel={preventNumberWheel}
+            onChange={(e) => handleFieldChange("conversionFactor", e.target.value)}
+            disabled={!value.isNewProduct && !value.unitOverride}
+            placeholder="1"
+            className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all disabled:opacity-50 disabled:cursor-not-allowed [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+          />
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            1 {value.purchaseUnit || "purchase unit"} = {value.conversionFactor || "?"} {value.baseUnit || "base unit"}
+          </p>
+        </div>
+
         <div>
           <label htmlFor="po-item-quantity" className="block text-xs mb-1 text-foreground">
-            Quantity *
+            Quantity Ordered *
           </label>
           <input
             id="po-item-quantity"
             type="number"
+            step="any"
+            inputMode="decimal"
             min="0"
             value={value.quantity}
+            onWheel={preventNumberWheel}
             onChange={(e) => handleFieldChange("quantity", e.target.value)}
             placeholder="0"
-            className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+            className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
           />
         </div>
+      </div>
 
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div>
           <label htmlFor="po-item-price" className="block text-xs mb-1 text-foreground">
             Unit Price (₱) *
@@ -413,12 +526,14 @@ export function PurchaseOrderItemInput({
           <input
             id="po-item-price"
             type="number"
-            step="0.01"
+            step="any"
+            inputMode="decimal"
             min="0"
             value={value.unitPrice}
+            onWheel={preventNumberWheel}
             onChange={(e) => handleFieldChange("unitPrice", e.target.value)}
             placeholder="0.00"
-            className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+            className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
           />
         </div>
       </div>

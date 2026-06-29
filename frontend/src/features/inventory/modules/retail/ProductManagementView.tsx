@@ -13,7 +13,25 @@ import {
 type ProductType = 'GENERAL' | 'THRIFT';
 
 // Units a general-merchandise item is stocked in (a sack of rice, a case of cans, etc.)
-const GENERAL_UNITS = ['pcs', 'box', 'case', 'pack', 'dozen', 'set', 'roll', 'sack', 'kg'];
+const GENERAL_UNITS = [
+  'pcs',
+  'box',
+  'case',
+  'pack',
+  'dozen',
+  'set',
+  'roll',
+  'kg',
+  'liter',
+  'milliliter',
+  'bottle',
+  'can',
+  'bag',
+  'sack',
+  'carton',
+  'tray',
+  'gallon',
+];
 
 // Thrift/apparel items are kept simple — "Size" only makes sense for clothing.
 const isThriftCategory = (category: string) => category in categorySubcategories;
@@ -83,7 +101,7 @@ export default function ProductManagementView({
   const [form, setForm] = useState<any>({});
   const [saving, setSaving] = useState(false);
 
-  const isAdmin = currentUser?.role === 'Admin' || currentUser?.role === 'Manager';
+  const isAdmin = currentUser?.role === 'Admin';
 
   const locationNameById = useMemo(
     () => new Map(locations.map((loc: any) => [loc.id, loc.name])),
@@ -250,7 +268,7 @@ export default function ProductManagementView({
           <ShieldAlert className="size-6" />
           <h2 className="text-[18px] font-bold">Admin Access Required</h2>
         </div>
-        <p className="text-[13px] text-destructive">Product Management is restricted to Admin and Manager roles.</p>
+        <p className="text-[13px] text-destructive">Product Management is restricted to Inventory Manager role.</p>
       </div>
     );
   }
@@ -274,7 +292,7 @@ export default function ProductManagementView({
       {/* Split panel */}
       <div className="grid grid-cols-[320px_1fr] gap-4 flex-1 min-h-0">
         {/* Left: item list */}
-        <div className="bg-white border border-border rounded-[14px] p-4 flex flex-col overflow-hidden">
+        <div className="bg-card border border-border rounded-[14px] p-4 flex flex-col overflow-hidden">
           <div className="mb-3 flex items-center gap-2">
             <PackageSearch className="size-5 text-secondary" />
             <h3 className="font-semibold text-foreground text-[14px]">Product Catalog</h3>
@@ -322,7 +340,7 @@ export default function ProductManagementView({
         </div>
 
         {/* Right: edit panel */}
-        <div className="bg-white border border-border rounded-[14px] p-6 overflow-y-auto">
+        <div className="bg-card border border-border rounded-[14px] p-6 overflow-y-auto">
           {!selectedProduct ? (
             <div className="flex h-full items-center justify-center">
               <div className="text-center">
@@ -360,7 +378,7 @@ export default function ProductManagementView({
                         type="button"
                         onClick={() => setForm({ ...form, productType: type, category: '', subcategory: '' })}
                         className={`text-left px-3 py-2 rounded-[8px] border text-[12px] transition-colors ${
-                          form.productType === type ? 'border-secondary bg-secondary/10' : 'border-border bg-white hover:bg-muted'
+                          form.productType === type ? 'border-secondary bg-secondary/10' : 'border-border bg-card hover:bg-muted'
                         }`}
                       >
                         <p className="font-semibold text-foreground">{title}</p>
@@ -481,3 +499,4 @@ export default function ProductManagementView({
     </div>
   );
 }
+

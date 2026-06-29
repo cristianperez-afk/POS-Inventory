@@ -18,6 +18,7 @@ import type {
   KitchenOrderStatus,
   RestaurantSettingKey,
 } from './domainTypes';
+import { getApiBaseUrl } from '../../../../auth/services/auth';
 
 export type { KitchenOrderStatus, RestaurantSettingKey } from './domainTypes';
 
@@ -33,13 +34,17 @@ declare global {
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const baseUrl = getApiBaseUrl();
   const bridgeHeaders: Record<string, string> = {};
   if (typeof window !== 'undefined' && window.__POS_INVENTORY_USER__) {
+    bridgeHeaders['x-pos-user-id'] = window.__POS_INVENTORY_USER__.id;
     bridgeHeaders['x-pos-bridge-email'] = window.__POS_INVENTORY_USER__.email;
+    bridgeHeaders['x-pos-bridge-name'] = window.__POS_INVENTORY_USER__.name;
+    bridgeHeaders['x-pos-bridge-role'] = window.__POS_INVENTORY_USER__.role;
     bridgeHeaders['x-pos-store-type'] = window.__POS_STORE_TYPE__ ?? '';
   }
 
-  const response = await fetch(path, {
+  const response = await fetch(`${baseUrl}${path}`, {
     ...options,
     credentials: 'include', // sends the HttpOnly cookie automatically
     headers: {
@@ -56,7 +61,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       : {};
     const fallbackMessage =
       response.status === 502
-        ? 'Inventory backend is not reachable. Start inventory/backend on port 3001 and check that DATABASE_URL points to the inventory database.'
+        ? 'Inventory backend is not reachable (502 from the dev proxy). Make sure the backend is running on port 3000, restart the Vite dev server if you just changed its config, and check that backend/.env DATABASE_URL points to the inventory database.'
         : `Request failed with ${response.status}`;
 
     throw new Error(error.message ?? fallbackMessage);
@@ -111,10 +116,12 @@ export function getCurrentUser() {
 
 export const getCurrentSession = getCurrentUser;
 
-export function getInventory(params?: { search?: string; itemType?: string }) {
+export function getInventory(params?: { search?: string; itemType?: string; page?: number; limit?: number }) {
   const query = new URLSearchParams();
   if (params?.search) query.set('search', params.search);
   if (params?.itemType) query.set('itemType', params.itemType);
+  if (params?.page) query.set('page', String(params.page));
+  if (params?.limit) query.set('limit', String(params.limit));
   const suffix = query.toString() ? `?${query.toString()}` : '';
   return request<PagedResponse<ApiInventoryItem>>(`/api/inventory${suffix}`).then((r) => r.data);
 }
@@ -139,6 +146,33 @@ export function deleteInventoryItem(id: string) {
   });
 }
 
+export interface CostHistoryEntry {
+  id: string;
+  quantityReceived: number;
+  unitCost: number;
+  totalCost: number;
+  dateReceived: string;
+  receiptNumber: string | null;
+  orderNumber: string | null;
+  supplierName: string | null;
+}
+
+export interface ItemCostHistory {
+  itemId: string;
+  name: string;
+  unit: string | null;
+  currentStock: number;
+  weightedAverageCost: number;
+  totalReceipts: number;
+  totalQuantityReceived: number;
+  totalCost: number;
+  entries: CostHistoryEntry[];
+}
+
+export function getItemCostHistory(id: string) {
+  return request<ItemCostHistory>(`/api/inventory/${id}/cost-history`);
+}
+
 export function getStockMovements(params?: {
   module?: BusinessModule;
   itemId?: string;
@@ -146,6 +180,8 @@ export function getStockMovements(params?: {
   type?: string;
   referenceType?: string;
   referenceId?: string;
+  page?: number;
+  limit?: number;
 }) {
   const query = new URLSearchParams();
   if (params?.module) query.set('module', params.module);
@@ -154,6 +190,8 @@ export function getStockMovements(params?: {
   if (params?.type) query.set('type', params.type);
   if (params?.referenceType) query.set('referenceType', params.referenceType);
   if (params?.referenceId) query.set('referenceId', params.referenceId);
+  if (params?.page) query.set('page', String(params.page));
+  if (params?.limit) query.set('limit', String(params.limit));
   const suffix = query.toString() ? `?${query.toString()}` : '';
   return request<PagedResponse<ApiStockMovement>>(`/api/stock-movements${suffix}`).then((r) => r.data);
 }
@@ -165,9 +203,114 @@ export function createStockMovement(data: unknown) {
   });
 }
 
-export function getRecipes(params?: { active?: boolean }) {
+// ─── Audit Trail ───────────────────────────────────────────────────────────────
+
+export interface ApiAuditLog {
+  id: string;
+  businessId: string;
+  module: BusinessModule;
+  category: string;
+  action: string;
+  entityType: string | null;
+  entityId: string | null;
+  entityName: string | null;
+  summary: string | null;
+  quantity: string | null;
+  status: string | null;
+  metadata: unknown;
+  performedById: string | null;
+  performedByName: string | null;
+  performedByEmail: string | null;
+  performedByRole: string | null;
+  createdAt: string;
+}
+
+export function getAuditLogs(params?: {
+  module?: BusinessModule;
+  category?: string;
+  performedByEmail?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+}) {
+  const query = new URLSearchParams();
+  if (params?.module) query.set('module', params.module);
+  if (params?.category) query.set('category', params.category);
+  if (params?.performedByEmail) query.set('performedByEmail', params.performedByEmail);
+  if (params?.from) query.set('from', params.from);
+  if (params?.to) query.set('to', params.to);
+  if (params?.limit) query.set('limit', String(params.limit));
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  return request<PagedResponse<ApiAuditLog>>(`/api/audit-logs${suffix}`).then((r) => r.data);
+}
+
+export interface IngredientConsumptionRow {
+  itemId: string;
+  name: string;
+  category: string | null;
+  unit: string | null;
+  totalConsumed: number;
+  movementCount: number;
+  firstConsumedAt: string | null;
+  lastConsumedAt: string | null;
+  currentStock: number | null;
+}
+
+export interface IngredientConsumptionReport {
+  from: string | null;
+  to: string | null;
+  totalIngredients: number;
+  totalQuantityConsumed: number;
+  items: IngredientConsumptionRow[];
+}
+
+export function getIngredientConsumptionReport(params?: { module?: BusinessModule; from?: string; to?: string; page?: number; limit?: number }) {
+  const query = new URLSearchParams();
+  if (params?.module) query.set('module', params.module);
+  if (params?.from) query.set('from', params.from);
+  if (params?.to) query.set('to', params.to);
+  if (params?.page) query.set('page', String(params.page));
+  if (params?.limit) query.set('limit', String(params.limit));
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  return request<IngredientConsumptionReport>(`/api/reports/ingredient-consumption${suffix}`);
+}
+
+export interface ItemsSoldRow {
+  itemId: string | null;
+  name: string;
+  category: string | null;
+  unit: string | null;
+  unitsSold: number;
+  revenue: number;
+  salesCount: number;
+  lastSoldAt: string | null;
+  currentStock: number | null;
+}
+
+export interface ItemsSoldReport {
+  from: string | null;
+  to: string | null;
+  totalItems: number;
+  totalUnitsSold: number;
+  totalRevenue: number;
+  items: ItemsSoldRow[];
+}
+
+export function getItemsSoldReport(params?: { module?: BusinessModule; from?: string; to?: string; page?: number; limit?: number }) {
+  const query = new URLSearchParams();
+  if (params?.module) query.set('module', params.module);
+  if (params?.from) query.set('from', params.from);
+  if (params?.to) query.set('to', params.to);
+  if (params?.page) query.set('page', String(params.page));
+  if (params?.limit) query.set('limit', String(params.limit));
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  return request<ItemsSoldReport>(`/api/reports/items-sold${suffix}`);
+}
+
+export function getRecipes(params?: { active?: boolean; archived?: boolean }) {
   const query = new URLSearchParams();
   if (params?.active !== undefined) query.set('active', String(params.active));
+  if (params?.archived !== undefined) query.set('archived', String(params.archived));
   const suffix = query.toString() ? `?${query.toString()}` : '';
   return request<PagedResponse<ApiRecipe>>(`/api/recipes${suffix}`).then((r) => r.data);
 }
@@ -186,9 +329,16 @@ export function updateRecipe(id: string, data: unknown) {
   });
 }
 
-export function deleteRecipe(id: string) {
-  return request<ApiRecipe>(`/api/recipes/${id}`, {
+export function deleteRecipe(id: string, permanent = false) {
+  const suffix = permanent ? '?permanent=true' : '';
+  return request<ApiRecipe>(`/api/recipes/${id}${suffix}`, {
     method: 'DELETE',
+  });
+}
+
+export function restoreRecipe(id: string) {
+  return request<ApiRecipe>(`/api/recipes/${id}/restore`, {
+    method: 'POST',
   });
 }
 
@@ -213,11 +363,16 @@ export function voidKitchenOrder(id: string, voidReason: string) {
   });
 }
 
-export function updateKitchenOrderStatus(id: string, status: KitchenOrderStatus) {
-  return request<ApiKitchenOrder>(`/api/kitchen-orders/${id}/status`, {
+export async function updateKitchenOrderStatus(id: string, status: KitchenOrderStatus) {
+  const order = await request<ApiKitchenOrder>(`/api/kitchen-orders/${id}/status`, {
     method: 'PATCH',
     body: JSON.stringify({ status }),
   });
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('pos-order-updated', { detail: { id, status } }));
+    window.localStorage.setItem('pos-order-updated-at', String(Date.now()));
+  }
+  return order;
 }
 
 export function getLocations() {
@@ -374,19 +529,36 @@ export function receivePurchaseOrder(
     condition?: string;
     notes?: string;
     expiryDate?: string;
+    expiryPeriod?: string;
+    noExpiry?: boolean;
     storageTemperature?: string;
   }[],
   notes?: string,
   module?: BusinessModule,
+  proofImages?: string[],
 ) {
   return request<ApiPurchaseOrder>(`/api/purchase-orders/${id}/receive${moduleSuffix(module)}`, {
     method: 'PATCH',
-    body: JSON.stringify({ items, notes }),
+    body: JSON.stringify({ items, notes, proofImages }),
   });
 }
 
 export function cancelPurchaseOrder(id: string, module?: BusinessModule) {
   return request<ApiPurchaseOrder>(`/api/purchase-orders/${id}/cancel${moduleSuffix(module)}`, { method: 'PATCH' });
+}
+
+export function rejectGoodsReceipt(id: string, reason: string, proofImages: string[] = [], module?: BusinessModule) {
+  return request<ApiPurchaseOrder>(`/api/purchase-orders/${id}/goods-receipt/reject${moduleSuffix(module)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ reason, proofImages }),
+  });
+}
+
+export function cancelGoodsReceipt(id: string, reason: string, proofImages: string[] = [], module?: BusinessModule) {
+  return request<ApiPurchaseOrder>(`/api/purchase-orders/${id}/goods-receipt/cancel${moduleSuffix(module)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ reason, proofImages }),
+  });
 }
 
 // ─── Transfers ───────────────────────────────────────────────────────────────
@@ -483,9 +655,10 @@ export function rejectAdjustment(id: string, reason: string, module?: BusinessMo
 
 // ─── Bundles ─────────────────────────────────────────────────────────────────
 
-export function getBundles(params?: { status?: string }) {
+export function getBundles(params?: { status?: string; archived?: boolean }) {
   const query = new URLSearchParams();
   if (params?.status) query.set('status', params.status);
+  if (params?.archived !== undefined) query.set('archived', String(params.archived));
   const suffix = query.toString() ? `?${query.toString()}` : '';
   return request<PagedResponse<ApiBundle>>(`/api/bundles${suffix}`).then((r) => r.data);
 }
@@ -516,6 +689,14 @@ export function activateBundle(id: string) {
 
 export function deactivateBundle(id: string) {
   return request<ApiBundle>(`/api/bundles/${id}/deactivate`, { method: 'PATCH' });
+}
+
+export function archiveBundle(id: string) {
+  return request<ApiBundle>(`/api/bundles/${id}/archive`, { method: 'PATCH' });
+}
+
+export function restoreBundle(id: string) {
+  return request<ApiBundle>(`/api/bundles/${id}/restore`, { method: 'POST' });
 }
 
 export function deleteBundle(id: string) {

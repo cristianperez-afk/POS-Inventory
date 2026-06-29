@@ -5,6 +5,7 @@ import {
   useDomainMutation,
   useRestaurantSettingsQuery,
 } from '../domainQueries';
+import { getManilaDateKey } from '../../../../../shared/utils/date';
 
 export const retailQueryKeys = {
   ...domainQueryKeys,
@@ -28,7 +29,7 @@ export interface RetailStockAlert {
 }
 
 export const formatDate = (value?: string | null) =>
-  value ? new Date(value).toISOString().split('T')[0] : '';
+  value ? getManilaDateKey(value) : '';
 
 export const getRetailErrorMessage = (error: unknown, fallback: string) =>
   error instanceof Error ? error.message : fallback;

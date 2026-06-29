@@ -1,0 +1,13 @@
+ALTER TYPE "DiningTableStatus" ADD VALUE IF NOT EXISTS 'PARTIALLY_OCCUPIED';
+
+ALTER TABLE "DiningTable"
+  ADD COLUMN IF NOT EXISTS "occupiedSeats" INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS "isShared" BOOLEAN NOT NULL DEFAULT false;
+
+UPDATE "DiningTable"
+SET status = 'AVAILABLE'
+WHERE status::text IN ('RESERVED', 'CLEANING');
+
+UPDATE "DiningTable"
+SET "occupiedSeats" = CASE WHEN status = 'OCCUPIED' THEN capacity ELSE 0 END
+WHERE "occupiedSeats" = 0;

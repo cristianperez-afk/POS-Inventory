@@ -49,17 +49,24 @@ function mergeCategoryHierarchy(value: unknown): CategoryHierarchy {
       ? (value as CategoryHierarchy)
       : {};
 
-  return Object.entries(custom).reduce(
+  const customEntries = Object.entries(custom).filter(([, subCategories]) =>
+    Array.isArray(subCategories),
+  );
+
+  if (customEntries.length === 0) {
+    return { ...defaultCategoryHierarchy };
+  }
+
+  return customEntries.reduce(
     (hierarchy, [category, subCategories]) => ({
       ...hierarchy,
       [category]: Array.from(
         new Set([
-          ...(hierarchy[category] || []),
-          ...(Array.isArray(subCategories) ? subCategories : []),
+          ...(Array.isArray(subCategories) ? subCategories.filter(Boolean) : []),
         ]),
       ),
     }),
-    { ...defaultCategoryHierarchy },
+    {} as CategoryHierarchy,
   );
 }
 

@@ -10,9 +10,9 @@ import {
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { Pool, PoolClient, QueryResultRow } from 'pg';
-import * as bcrypt from 'bcrypt';
-import { randomUUID } from 'crypto';
+import { Pool, PoolClient, QueryResultRow, types } from 'pg';
+import * as bcrypt from 'bcryptjs';
+import { randomInt, randomUUID } from 'crypto';
 import { AuthenticatedUser } from '../common/types';
 
 // Captures one InventoryItem stock change produced by a paid POS order so it can
@@ -32,6 +32,11 @@ type PosSaleMovement = {
   // used for a restaurant menu dish, which is sold but not itself stock-tracked.
   emitStockMovement: boolean;
   saleItem: { name: string; quantity: number; unitPrice: number; totalPrice: number } | null;
+};
+
+type InventorySyncSettings = {
+  autoDeductInventoryOnSale: boolean;
+  allowNegativeStock: boolean;
 };
 
 type ColumnInfo = {
@@ -62,7 +67,56 @@ type StoreInformation = {
   updated_at: Date | string | null;
 };
 
-type StaffType = 'POS_STAFF' | 'INVENTORY_STAFF' | 'MANAGER';
+type StaffType = 'POS_STAFF' | 'INVENTORY_STAFF';
+type StaffRole = 'STAFF' | 'POS_MANAGER' | 'INVENTORY_MANAGER';
+type ActivityModule = 'Authentication' | 'Staff Accounts' | 'Transactions' | 'Payments' | 'Void & Refund' | 'Restaurant Table Management' | 'Store Settings';
+
+type ActivityLogInput = {
+  userId?: number | null;
+  storeId?: number | null;
+  userName?: string | null;
+  userRole?: string | null;
+  module: ActivityModule | string;
+  action: string;
+  details: string;
+};
+
+type ThemeMode = 'basic' | 'advanced';
+type ThemeAppearance = 'system' | 'light' | 'dark';
+type ThemePreferences = {
+  theme_mode: ThemeMode;
+  theme_preset: string | null;
+  appearance: ThemeAppearance;
+  primary_color: string;
+  secondary_color: string;
+  sidebar_color: string;
+};
+type UserPreferences = ThemePreferences & {
+  compact_mode: boolean;
+  low_stock_alerts: boolean;
+  default_workspace: 'pos' | 'inventory' | 'reports';
+};
+type StoreThemePreferences = ThemePreferences & {
+  updated_at?: Date | string | null;
+};
+
+const DEFAULT_THEME_PREFERENCES: ThemePreferences = {
+  theme_mode: 'basic',
+  theme_preset: 'default',
+  appearance: 'light',
+  primary_color: '#008967',
+  secondary_color: '#005656',
+  sidebar_color: '#0f172a',
+};
+
+const LEGACY_STORE_ADMIN_ROLES = ['ADMIN'] as const;
+const STORE_MANAGER_ROLES = ['POS_MANAGER', 'INVENTORY_MANAGER'] as const;
+const STORE_STAFF_ROLES = ['STAFF'] as const;
+const STORE_USER_ROLES = [...STORE_STAFF_ROLES, ...STORE_MANAGER_ROLES] as const;
+const STORE_USER_ROLES_WITH_LEGACY_SQL = "'STAFF', 'POS_MANAGER', 'INVENTORY_MANAGER', 'POS_ADMIN', 'INVENTORY_ADMIN'";
+const STORE_ADMIN_ROLES_WITH_LEGACY_SQL = "'POS_MANAGER', 'INVENTORY_MANAGER', 'ADMIN'";
+
+types.setTypeParser(1114, (value: string) => value);
 
 @Injectable()
 export class DatabaseService implements OnModuleInit, OnModuleDestroy {
@@ -72,16 +126,16 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
    * more raw pg queries here. Existing methods will be migrated module by module.
    */
   private readonly pool: Pool;
+  private isPoolClosed = false;
   private schemaColumns: SchemaColumns | null = null;
 
   constructor() {
     const connectionString = process.env.DATABASE_URL;
-    const maxPoolConnections = Number(process.env.DB_POOL_MAX ?? 1);
+    const maxPoolConnections = Number(process.env.DB_POOL_MAX ?? 3);
     const poolOptions = {
-      max: Number.isFinite(maxPoolConnections) && maxPoolConnections > 0 ? maxPoolConnections : 1,
+      max: Number.isFinite(maxPoolConnections) && maxPoolConnections > 0 ? maxPoolConnections : 3,
       idleTimeoutMillis: Number(process.env.DB_POOL_IDLE_TIMEOUT_MS ?? 10000),
-      connectionTimeoutMillis: Number(process.env.DB_POOL_CONNECTION_TIMEOUT_MS ?? 10000),
-      allowExitOnIdle: true,
+      connectionTimeoutMillis: Number(process.env.DB_POOL_CONNECTION_TIMEOUT_MS ?? 20000),
     };
 
     this.pool = connectionString
@@ -101,10 +155,19 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy() {
+    if (this.isPoolClosed) {
+      return;
+    }
+
+    this.isPoolClosed = true;
     await this.pool.end();
   }
 
   async query<T extends QueryResultRow>(sql: string, params: unknown[] = []): Promise<T[]> {
+    if (this.isPoolClosed) {
+      throw new ServiceUnavailableException('PostgreSQL connection pool has already been closed. Restart the backend process.');
+    }
+
     try {
       const result = await this.pool.query<T>(sql, params);
       return result.rows;
@@ -122,6 +185,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   }
 
   async withTransaction<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {
+    if (this.isPoolClosed) {
+      throw new ServiceUnavailableException('PostgreSQL connection pool has already been closed. Restart the backend process.');
+    }
+
     let client: PoolClient;
 
     try {
@@ -164,13 +231,35 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   }
 
   private isDatabaseConnectivityError(error: unknown): boolean {
-    const databaseError = error as { code?: string };
+    const databaseError = error as { code?: string; message?: string };
     const connectionErrorCodes = new Set(['EACCES', 'ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'ECONNRESET', '28P01', '3D000', 'XX000']);
+    const message = databaseError.message ?? '';
 
-    return Boolean(databaseError.code && connectionErrorCodes.has(databaseError.code));
+    return (
+      Boolean(databaseError.code && connectionErrorCodes.has(databaseError.code)) ||
+      message.includes('timeout exceeded when trying to connect') ||
+      message.includes('Connection terminated unexpectedly')
+    );
   }
 
-  async getLoginUserByEmail(email: string): Promise<AuthenticatedUser & { password_hash: string } | null> {
+  private isStoreManagerRole(role: unknown) {
+    return role === 'POS_MANAGER' || role === 'INVENTORY_MANAGER' || role === 'POS_ADMIN' || role === 'INVENTORY_ADMIN' || role === 'ADMIN';
+  }
+
+  private isStoreAdminRole(role: unknown) {
+    return role === 'ADMIN';
+  }
+
+  private isPosManagerRole(role: unknown) {
+    return role === 'POS_MANAGER' || role === 'POS_ADMIN' || role === 'ADMIN';
+  }
+
+  private isInventoryManagerRole(role: unknown) {
+    return role === 'INVENTORY_MANAGER' || role === 'INVENTORY_ADMIN' || role === 'ADMIN';
+  }
+
+  async getLoginUserByEmail(email: string): Promise<AuthenticatedUser & { password_hash: string; void_pin?: string | null } | null> {
+    await this.ensureVoidPinHashColumn();
     const schema = await this.getSchemaColumns();
     const userColumns = this.resolveUserColumns(schema.users);
     const storeColumns = this.resolveStoreColumns(schema.stores);
@@ -190,6 +279,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const storeJoin = storeIdColumn && storeColumns.joinable ? `LEFT JOIN stores s ON s.id = u.${this.quoteIdentifier(storeIdColumn)}` : '';
     const storeIdSelect = storeIdColumn ? `u.${this.quoteIdentifier(storeIdColumn)} AS store_id` : 'NULL AS store_id';
     const staffTypeSelect = staffTypeColumn ? `u.${this.quoteIdentifier(staffTypeColumn)} AS staff_type` : 'NULL AS staff_type';
+    const voidPinSelect = userColumns.voidPinColumn ? `u.${this.quoteIdentifier(userColumns.voidPinColumn)} AS void_pin` : 'NULL AS void_pin';
 
     const rows = await this.query<{
       id: number;
@@ -202,6 +292,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       store_type: string | null;
       store_name: string | null;
       status: string | null;
+      void_pin: string | null;
     }>(
       `
         SELECT
@@ -214,7 +305,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           u.${this.quoteIdentifier(passwordColumn)} AS password_hash,
           ${storeTypeSelect},
           ${storeNameSelect},
-          ${userColumns.statusColumn ? `u.${this.quoteIdentifier(userColumns.statusColumn)} AS status` : `'ACTIVE' AS status`}
+          ${voidPinSelect},
+          ${this.userStatusSelect(userColumns)}
         FROM users u
         ${storeJoin}
         WHERE LOWER(u.email) = LOWER($1)
@@ -226,6 +318,22 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     if (rows.length === 0) {
       return null;
+    }
+
+    const user = rows[0];
+    if (user.store_type === 'RETAIL_STORE' && this.isPosManagerRole(user.role) && !user.void_pin?.trim() && userColumns.voidPinHashColumn && userColumns.voidPinColumn) {
+      const uniquePin = await this.generateUniqueRetailVoidPin(user.store_id, user.id);
+      await this.query(
+        `
+          UPDATE users
+          SET
+            ${this.quoteIdentifier(userColumns.voidPinHashColumn)} = $1,
+            ${this.quoteIdentifier(userColumns.voidPinColumn)} = $2
+          WHERE id = $3
+        `,
+        [await bcrypt.hash(uniquePin, 10), uniquePin, user.id],
+      );
+      user.void_pin = uniquePin;
     }
 
     return rows[0];
@@ -269,10 +377,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ${storeTypeSelect},
           ${storeNameSelect},
           ${userColumns.staffTypeColumn ? `u.${this.quoteIdentifier(userColumns.staffTypeColumn)} AS staff_type` : 'NULL AS staff_type'},
-          ${userColumns.statusColumn ? `u.${this.quoteIdentifier(userColumns.statusColumn)} AS status` : `'ACTIVE' AS status`}
+          ${this.userStatusSelect(userColumns)}
         FROM users u
         ${storeJoin}
-        WHERE u.${this.quoteIdentifier(userColumns.roleColumn)} = 'ADMIN'
+        WHERE u.${this.quoteIdentifier(userColumns.roleColumn)} IN (${STORE_ADMIN_ROLES_WITH_LEGACY_SQL})
         ORDER BY u.id ASC
       `,
     );
@@ -439,7 +547,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const passwordHash = await bcrypt.hash(password, 10);
 
     try {
-      return await this.withTransaction(async (client) => {
+      const savedOrder = await this.withTransaction(async (client) => {
       const storeInsertColumns: string[] = [this.quoteIdentifier(storeColumns.storeTypeColumn!)];
       const storeInsertValues: unknown[] = [this.toDatabaseStoreType(input.storeType)];
       const storeInsertPlaceholders: string[] = ['$1'];
@@ -463,7 +571,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       const storeId = storeRows[0]?.id ?? null;
 
       const userInsertColumns: string[] = [this.quoteIdentifier(userColumns.fullNameColumn!), 'email', this.quoteIdentifier(userColumns.roleColumn!), this.quoteIdentifier(userColumns.passwordColumn!)];
-      const userInsertValues: unknown[] = [input.fullName, input.email, 'ADMIN', passwordHash];
+      const userInsertValues: unknown[] = [input.fullName, input.email, 'POS_MANAGER', passwordHash];
       const userInsertPlaceholders: string[] = ['$1', '$2', '$3', '$4'];
 
       if (userColumns.storeIdColumn) {
@@ -519,7 +627,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async updateAdminAccount(input: { adminUserId: number; fullName: string; email: string; storeType: 'RESTAURANT' | 'RETAIL_STORE'; password?: string }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Admin account was not found.');
     }
 
@@ -585,7 +693,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     const admin = await this.getUserStoreScope(adminUserId);
 
-    if (admin.role !== 'ADMIN') {
+    if (!this.isStoreManagerRole(admin.role)) {
       throw new NotFoundException('Admin account was not found.');
     }
 
@@ -607,7 +715,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     const admin = await this.getUserStoreScope(adminUserId);
 
-    if (admin.role !== 'ADMIN') {
+    if (!this.isStoreManagerRole(admin.role)) {
       throw new NotFoundException('Admin account was not found.');
     }
 
@@ -638,14 +746,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     const admin = await this.getUserStoreScope(adminUserId);
 
-    if (admin.role !== 'ADMIN') {
+    if (!this.isStoreManagerRole(admin.role)) {
       throw new NotFoundException('Admin account was not found.');
     }
 
     const schema = await this.getSchemaColumns();
     const userColumns = this.resolveUserColumns(schema.users);
 
-    if (!userColumns.statusColumn || !userColumns.roleColumn) {
+    if ((!userColumns.statusColumn && !userColumns.activeColumn) || !userColumns.roleColumn) {
       throw new InternalServerErrorException('Users table is missing required status columns.');
     }
 
@@ -656,10 +764,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async listStaffForAdmin(adminUserId: number) {
     const admin = await this.getUserStoreScope(adminUserId);
 
+    if (!this.isStoreAdminRole(admin.role)) {
+      throw new ForbiddenException('Only admin accounts can manage staff accounts.');
+    }
+
     if (!admin.store_id) {
       throw new InternalServerErrorException('Admin account is not linked to a store.');
     }
 
+    await this.ensureVoidPinHashColumn();
     const schema = await this.getSchemaColumns();
     const userColumns = this.resolveUserColumns(schema.users);
     const storeColumns = this.resolveStoreColumns(schema.stores);
@@ -672,7 +785,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const storeTypeSelect = storeColumns.storeTypeColumn ? `${this.normalizedStoreTypeSql(`s.${this.quoteIdentifier(storeColumns.storeTypeColumn)}`)} AS store_type` : 'NULL AS store_type';
     const storeNameSelect = storeColumns.storeNameColumn ? `s.${this.quoteIdentifier(storeColumns.storeNameColumn)} AS store_name` : 'NULL AS store_name';
 
-    return this.query<AuthenticatedUser>(
+    const voidPinConfiguredSelect = userColumns.voidPinHashColumn ? `u.${this.quoteIdentifier(userColumns.voidPinHashColumn)} IS NOT NULL AS void_pin_configured` : 'FALSE AS void_pin_configured';
+
+    return this.query<AuthenticatedUser & { void_pin_configured?: boolean }>(
       `
         SELECT
           u.id,
@@ -683,10 +798,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ${userColumns.staffTypeColumn ? `u.${this.quoteIdentifier(userColumns.staffTypeColumn)} AS staff_type` : 'NULL AS staff_type'},
           ${storeTypeSelect},
           ${storeNameSelect},
-          ${userColumns.statusColumn ? `u.${this.quoteIdentifier(userColumns.statusColumn)} AS status` : `'ACTIVE' AS status`}
+          ${voidPinConfiguredSelect},
+          ${this.userStatusSelect(userColumns)}
         FROM users u
         ${storeJoin}
-        WHERE u.${this.quoteIdentifier(userColumns.roleColumn)} = 'STAFF'
+        WHERE u.${this.quoteIdentifier(userColumns.roleColumn)} IN (${STORE_USER_ROLES_WITH_LEGACY_SQL})
           AND u.${this.quoteIdentifier(userColumns.storeIdColumn)} = $1
         ORDER BY u.id ASC
       `,
@@ -700,13 +816,16 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     email: string;
     password: string;
     staffType: StaffType;
+    role?: StaffRole;
+    voidPin?: string | null;
   }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
-      throw new InternalServerErrorException('Only store admin accounts can create staff.');
+    if (!this.isStoreAdminRole(admin.role) || !admin.store_id) {
+      throw new ForbiddenException('Only admin accounts can create staff.');
     }
 
+    await this.ensureVoidPinHashColumn();
     const schema = await this.getSchemaColumns();
     const userColumns = this.resolveUserColumns(schema.users);
 
@@ -715,6 +834,24 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
 
     const passwordHash = await bcrypt.hash(input.password, 10);
+    const role = input.role ?? 'STAFF';
+    const staffType = this.staffTypeForRole(role, input.staffType);
+    const normalizedVoidPin = admin.store_type === 'RETAIL_STORE' && role === 'POS_MANAGER'
+      ? input.voidPin?.trim() || await this.generateUniqueRetailVoidPin(admin.store_id)
+      : null;
+    if (normalizedVoidPin) {
+      await this.assertUniqueRetailVoidPin(admin.store_id, normalizedVoidPin);
+    }
+    const voidPinHash = normalizedVoidPin
+      ? await bcrypt.hash(normalizedVoidPin, 10)
+      : null;
+    const voidPinInsertColumns = [
+      userColumns.voidPinHashColumn ? this.quoteIdentifier(userColumns.voidPinHashColumn) : null,
+      userColumns.voidPinColumn ? this.quoteIdentifier(userColumns.voidPinColumn) : null,
+    ].filter((column): column is string => !!column);
+    const voidPinInsertColumn = voidPinInsertColumns.length > 0 ? `, ${voidPinInsertColumns.join(', ')}` : '';
+    const voidPinInsertValue = voidPinInsertColumns.length > 0 ? `, ${voidPinInsertColumns.map((_, index) => `$${index + 9}`).join(', ')}` : '';
+    const voidPinConfiguredSelect = userColumns.voidPinHashColumn ? `$9::text IS NOT NULL AS void_pin_configured,` : 'FALSE AS void_pin_configured,';
 
     const rows = await this.query<AuthenticatedUser>(
       `
@@ -725,8 +862,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ${this.quoteIdentifier(userColumns.passwordColumn)},
           ${this.quoteIdentifier(userColumns.storeIdColumn)},
           ${this.quoteIdentifier(userColumns.staffTypeColumn)}
+          ${voidPinInsertColumn}
         )
-        VALUES ($1, $2, 'STAFF', $3, $4, $5)
+        VALUES ($1, $2, $6, $3, $4, $5${voidPinInsertValue})
         RETURNING
           id,
           ${this.quoteIdentifier(userColumns.fullNameColumn)} AS full_name,
@@ -734,12 +872,23 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ${this.quoteIdentifier(userColumns.roleColumn)} AS role,
           ${this.quoteIdentifier(userColumns.storeIdColumn)} AS store_id,
           ${this.quoteIdentifier(userColumns.staffTypeColumn)} AS staff_type,
-          $6::text AS store_type,
-          $7::text AS store_name,
-          ${userColumns.statusColumn ? `${this.quoteIdentifier(userColumns.statusColumn)} AS status` : `'ACTIVE' AS status`}
+          $7::text AS store_type,
+          $8::text AS store_name,
+          ${voidPinConfiguredSelect}
+          ${this.userStatusSelect(userColumns, '')}
       `,
-      [input.fullName, input.email, passwordHash, admin.store_id, input.staffType, admin.store_type, admin.store_name],
+      [input.fullName, input.email, passwordHash, admin.store_id, staffType, role, admin.store_type, admin.store_name, voidPinHash, normalizedVoidPin],
     );
+
+    await this.recordActivity({
+      userId: admin.id,
+      storeId: admin.store_id,
+      userName: admin.full_name,
+      userRole: admin.role,
+      module: 'Staff Accounts',
+      action: 'Staff Account Created',
+      details: `Created ${role.replaceAll('_', ' ')} Account\nName: ${rows[0].full_name}`,
+    });
 
     return rows[0];
   }
@@ -751,13 +900,16 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     email: string;
     password?: string;
     staffType: StaffType;
+    role?: StaffRole;
+    voidPin?: string | null;
   }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
-      throw new InternalServerErrorException('Only store admin accounts can update staff.');
+    if (!this.isStoreAdminRole(admin.role) || !admin.store_id) {
+      throw new ForbiddenException('Only admin accounts can update staff.');
     }
 
+    await this.ensureVoidPinHashColumn();
     const schema = await this.getSchemaColumns();
     const userColumns = this.resolveUserColumns(schema.users);
     const storeColumns = this.resolveStoreColumns(schema.stores);
@@ -770,8 +922,40 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       `${this.quoteIdentifier(userColumns.fullNameColumn)} = $1`,
       `email = $2`,
       `${this.quoteIdentifier(userColumns.staffTypeColumn)} = $3`,
+      `${this.quoteIdentifier(userColumns.roleColumn)} = $4`,
     ];
-    const values: unknown[] = [input.fullName, input.email, input.staffType];
+    const role = input.role ?? 'STAFF';
+    const values: unknown[] = [input.fullName, input.email, this.staffTypeForRole(role, input.staffType), role];
+
+    let normalizedVoidPin = admin.store_type === 'RETAIL_STORE' && role === 'POS_MANAGER' && input.voidPin?.trim()
+      ? input.voidPin.trim()
+      : null;
+    if (normalizedVoidPin) {
+      await this.assertUniqueRetailVoidPin(admin.store_id, normalizedVoidPin, input.staffUserId);
+    }
+    if (admin.store_type === 'RETAIL_STORE' && role === 'POS_MANAGER' && !normalizedVoidPin) {
+      if (!userColumns.voidPinHashColumn) {
+        throw new InternalServerErrorException('Users table is missing required columns for unique PIN setup.');
+      }
+
+      const voidPinSelect = userColumns.voidPinColumn ? `, ${this.quoteIdentifier(userColumns.voidPinColumn)} AS void_pin` : ', NULL AS void_pin';
+      const existingRows = await this.query<{ void_pin_hash: string | null; void_pin: string | null }>(
+        `
+          SELECT ${this.quoteIdentifier(userColumns.voidPinHashColumn)} AS void_pin_hash
+            ${voidPinSelect}
+          FROM users
+          WHERE id = $1
+            AND ${this.quoteIdentifier(userColumns.storeIdColumn)} = $2
+            AND ${this.quoteIdentifier(userColumns.roleColumn)} IN (${STORE_USER_ROLES_WITH_LEGACY_SQL})
+          LIMIT 1
+        `,
+        [input.staffUserId, admin.store_id],
+      );
+
+      if (existingRows.length > 0 && (!existingRows[0].void_pin_hash || !existingRows[0].void_pin)) {
+        normalizedVoidPin = await this.generateUniqueRetailVoidPin(admin.store_id, input.staffUserId);
+      }
+    }
 
     if (input.password?.trim()) {
       if (!userColumns.passwordColumn) {
@@ -782,6 +966,22 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       updates.push(`${this.quoteIdentifier(userColumns.passwordColumn)} = $${values.length}`);
     }
 
+    if (userColumns.voidPinHashColumn) {
+      if (role === 'POS_MANAGER' && normalizedVoidPin) {
+        values.push(await bcrypt.hash(normalizedVoidPin, 10));
+        updates.push(`${this.quoteIdentifier(userColumns.voidPinHashColumn)} = $${values.length}`);
+        if (userColumns.voidPinColumn) {
+          values.push(normalizedVoidPin);
+          updates.push(`${this.quoteIdentifier(userColumns.voidPinColumn)} = $${values.length}`);
+        }
+      } else if (role !== 'POS_MANAGER') {
+        updates.push(`${this.quoteIdentifier(userColumns.voidPinHashColumn)} = NULL`);
+        if (userColumns.voidPinColumn) {
+          updates.push(`${this.quoteIdentifier(userColumns.voidPinColumn)} = NULL`);
+        }
+      }
+    }
+
     values.push(input.staffUserId, admin.store_id);
     const staffIdParam = `$${values.length - 1}`;
     const storeIdParam = `$${values.length}`;
@@ -790,6 +990,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       const storeJoin = storeColumns.joinable ? `LEFT JOIN stores s ON s.id = u.${this.quoteIdentifier(userColumns.storeIdColumn)}` : '';
       const storeTypeSelect = storeColumns.storeTypeColumn ? `${this.normalizedStoreTypeSql(`s.${this.quoteIdentifier(storeColumns.storeTypeColumn)}`)} AS store_type` : 'NULL AS store_type';
       const storeNameSelect = storeColumns.storeNameColumn ? `s.${this.quoteIdentifier(storeColumns.storeNameColumn)} AS store_name` : 'NULL AS store_name';
+      const voidPinConfiguredSelect = userColumns.voidPinHashColumn ? `u.${this.quoteIdentifier(userColumns.voidPinHashColumn)} IS NOT NULL AS void_pin_configured` : 'FALSE AS void_pin_configured';
 
       const rows = await this.query<AuthenticatedUser>(
         `
@@ -797,7 +998,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             UPDATE users
             SET ${updates.join(', ')}
             WHERE id = ${staffIdParam}
-              AND ${this.quoteIdentifier(userColumns.roleColumn)} = 'STAFF'
+              AND ${this.quoteIdentifier(userColumns.roleColumn)} IN (${STORE_USER_ROLES_WITH_LEGACY_SQL})
               AND ${this.quoteIdentifier(userColumns.storeIdColumn)} = ${storeIdParam}
             RETURNING *
           )
@@ -810,7 +1011,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             u.${this.quoteIdentifier(userColumns.staffTypeColumn)} AS staff_type,
             ${storeTypeSelect},
             ${storeNameSelect},
-            ${userColumns.statusColumn ? `u.${this.quoteIdentifier(userColumns.statusColumn)} AS status` : `'ACTIVE' AS status`}
+            ${voidPinConfiguredSelect},
+            ${this.userStatusSelect(userColumns)}
           FROM updated u
           ${storeJoin}
           LIMIT 1
@@ -821,6 +1023,16 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       if (rows.length === 0) {
         throw new InternalServerErrorException('Staff account was not found for this store.');
       }
+
+      await this.recordActivity({
+        userId: admin.id,
+        storeId: admin.store_id,
+        userName: admin.full_name,
+        userRole: admin.role,
+        module: 'Staff Accounts',
+        action: 'Staff Account Updated',
+        details: `Updated staff account\nName: ${rows[0].full_name}\nRole: ${rows[0].role}`,
+      });
 
       return rows[0];
     } catch (error) {
@@ -843,8 +1055,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
-      throw new ForbiddenException('Only store admin accounts can remove staff for their store.');
+    if (!this.isStoreAdminRole(admin.role) || !admin.store_id) {
+      throw new ForbiddenException('Only admin accounts can remove staff for their store.');
     }
 
     const schema = await this.getSchemaColumns();
@@ -854,22 +1066,42 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       throw new InternalServerErrorException('Users table is missing required columns for staff deletion.');
     }
 
-    if (userColumns.statusColumn) {
+    if (userColumns.statusColumn || userColumns.activeColumn) {
       const rows = await this.deactivateStaffForStore(input.staffUserId, admin.store_id, userColumns);
 
       if (rows.length === 0) {
         throw new NotFoundException('Staff account was not found for this store.');
       }
 
+      await this.recordActivity({
+        userId: admin.id,
+        storeId: admin.store_id,
+        userName: admin.full_name,
+        userRole: admin.role,
+        module: 'Staff Accounts',
+        action: 'Staff Account Deactivated',
+        details: `Deactivated staff account\nUser ID: ${input.staffUserId}`,
+      });
+
       return { id: rows[0].id, status: 'INACTIVE', deactivated: true, deleted: false };
     }
 
     try {
-      const rows = await this.hardDeleteUserByRole(input.staffUserId, 'STAFF', admin.store_id, userColumns);
+      const rows = await this.hardDeleteStoreUser(input.staffUserId, admin.store_id, userColumns);
 
       if (rows.length === 0) {
         throw new NotFoundException('Staff account was not found for this store.');
       }
+
+      await this.recordActivity({
+        userId: admin.id,
+        storeId: admin.store_id,
+        userName: admin.full_name,
+        userRole: admin.role,
+        module: 'Staff Accounts',
+        action: 'Staff Account Deleted',
+        details: `Deleted staff account\nUser ID: ${input.staffUserId}`,
+      });
 
       return { id: rows[0].id, deleted: true, deactivated: false };
     } catch (error) {
@@ -892,8 +1124,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
-      throw new ForbiddenException('Only store admin accounts can remove staff for their store.');
+    if (!this.isStoreAdminRole(admin.role) || !admin.store_id) {
+      throw new ForbiddenException('Only admin accounts can remove staff for their store.');
     }
 
     const schema = await this.getSchemaColumns();
@@ -904,11 +1136,21 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
 
     try {
-      const rows = await this.hardDeleteUserByRole(input.staffUserId, 'STAFF', admin.store_id, userColumns);
+      const rows = await this.hardDeleteStoreUser(input.staffUserId, admin.store_id, userColumns);
 
       if (rows.length === 0) {
         throw new NotFoundException('Staff account was not found for this store.');
       }
+
+      await this.recordActivity({
+        userId: admin.id,
+        storeId: admin.store_id,
+        userName: admin.full_name,
+        userRole: admin.role,
+        module: 'Staff Accounts',
+        action: 'Staff Account Deleted',
+        details: `Permanently deleted staff account\nUser ID: ${input.staffUserId}`,
+      });
 
       return { id: rows[0].id, deleted: true, deactivated: false };
     } catch (error) {
@@ -927,14 +1169,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
-      throw new ForbiddenException('Only store admin accounts can activate staff for their store.');
+    if (!this.isStoreAdminRole(admin.role) || !admin.store_id) {
+      throw new ForbiddenException('Only admin accounts can activate staff for their store.');
     }
 
     const schema = await this.getSchemaColumns();
     const userColumns = this.resolveUserColumns(schema.users);
 
-    if (!userColumns.statusColumn || !userColumns.roleColumn || !userColumns.storeIdColumn) {
+    if ((!userColumns.statusColumn && !userColumns.activeColumn) || !userColumns.roleColumn || !userColumns.storeIdColumn) {
       throw new InternalServerErrorException('Users table is missing required columns for staff activation.');
     }
 
@@ -944,13 +1186,23 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       throw new NotFoundException('Staff account was not found for this store.');
     }
 
+    await this.recordActivity({
+      userId: admin.id,
+      storeId: admin.store_id,
+      userName: admin.full_name,
+      userRole: admin.role,
+      module: 'Staff Accounts',
+      action: 'Staff Account Activated',
+      details: `Activated staff account\nUser ID: ${input.staffUserId}`,
+    });
+
     return { id: rows[0].id, status: 'ACTIVE', activated: true };
   }
 
   async getStoreInformationForAdmin(adminUserId: number): Promise<StoreInformation> {
     const user = await this.getUserStoreScope(adminUserId);
 
-    if (!['ADMIN', 'STAFF'].includes(String(user.role)) || !user.store_id) {
+    if (![...LEGACY_STORE_ADMIN_ROLES, ...STORE_USER_ROLES, 'POS_ADMIN', 'INVENTORY_ADMIN'].includes(String(user.role) as any) || !user.store_id) {
       throw new InternalServerErrorException('Only store users can view store information.');
     }
 
@@ -1007,7 +1259,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   }): Promise<StoreInformation> {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can update store information.');
     }
 
@@ -1068,6 +1320,16 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       ],
     );
 
+    await this.recordActivity({
+      userId: admin.id,
+      storeId: admin.store_id,
+      userName: admin.full_name,
+      userRole: admin.role,
+      module: 'Store Settings',
+      action: 'Store Information Updated',
+      details: `Store information updated\nBusiness Name: ${rows[0].business_name}`,
+    });
+
     return rows[0];
   }
 
@@ -1101,6 +1363,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     enableRefund?: boolean;
     enableVoid?: boolean;
     enableDiscount?: boolean;
+    enableEstimatedPrepTime?: boolean;
+    prepTimeStrategy?: string;
+    customizationPrepTimeMinutes?: number;
     enableServiceCharge?: boolean;
     serviceChargeRate?: number;
     enableTax?: boolean;
@@ -1110,10 +1375,19 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     enableIngredientCustomization?: boolean;
     enableReceiptPrinting?: boolean;
     enabledPaymentMethods?: string[];
+    paymentMethodAccounts?: Record<string, unknown>;
+    autoDeductInventoryOnSale?: boolean;
+    allowNegativeStock?: boolean;
+    defaultLowStockThreshold?: number;
+    defaultInventoryUnit?: string;
+    cycleCountIntervalDays?: number;
+    autoReorderThresholdPercent?: number;
+    enableExpiryTracking?: boolean;
+    defaultMarkupPercent?: number;
   }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can update store settings.');
     }
 
@@ -1128,20 +1402,32 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           enable_refund = COALESCE($3, enable_refund),
           enable_void = COALESCE($4, enable_void),
           enable_discount = COALESCE($5, enable_discount),
-          enable_service_charge = COALESCE($6, enable_service_charge),
-          service_charge_rate = COALESCE($7, service_charge_rate),
-          service_charge_percentage = COALESCE($7, service_charge_percentage),
-          enable_tax = COALESCE($8, enable_tax),
-          tax_rate = COALESCE($9, tax_rate),
-          enable_dine_in = COALESCE($10, enable_dine_in),
-          enable_takeout = COALESCE($11, enable_takeout),
-          enable_ingredient_customization = COALESCE($12, enable_ingredient_customization),
-          enable_receipt_printing = COALESCE($13, enable_receipt_printing),
-          enabled_payment_methods = COALESCE($14, enabled_payment_methods),
-          store_type = COALESCE(store_type, $15),
+          enable_estimated_prep_time = COALESCE($6, enable_estimated_prep_time),
+          prep_time_strategy = COALESCE($7, prep_time_strategy),
+          customization_prep_time_minutes = COALESCE($8, customization_prep_time_minutes),
+          enable_service_charge = COALESCE($9, enable_service_charge),
+          service_charge_rate = COALESCE($10, service_charge_rate),
+          service_charge_percentage = COALESCE($10, service_charge_percentage),
+          enable_tax = COALESCE($11, enable_tax),
+          tax_rate = COALESCE($12, tax_rate),
+          enable_dine_in = COALESCE($13, enable_dine_in),
+          enable_takeout = COALESCE($14, enable_takeout),
+          enable_ingredient_customization = COALESCE($15, enable_ingredient_customization),
+          enable_receipt_printing = COALESCE($16, enable_receipt_printing),
+          enabled_payment_methods = COALESCE($17, enabled_payment_methods),
+          payment_method_accounts = COALESCE($18, payment_method_accounts),
+          auto_deduct_inventory_on_sale = COALESCE($19, auto_deduct_inventory_on_sale),
+          allow_negative_stock = COALESCE($20, allow_negative_stock),
+          default_low_stock_threshold = COALESCE($21, default_low_stock_threshold),
+          default_inventory_unit = COALESCE($22, default_inventory_unit),
+          cycle_count_interval_days = COALESCE($23, cycle_count_interval_days),
+          auto_reorder_threshold_percent = COALESCE($24, auto_reorder_threshold_percent),
+          enable_expiry_tracking = COALESCE($25, enable_expiry_tracking),
+          default_markup_percent = COALESCE($26, default_markup_percent),
+          store_type = COALESCE(store_type, $27),
           updated_at = CURRENT_TIMESTAMP
-        WHERE store_id = $16
-          AND (store_type = $15 OR store_type IS NULL)
+        WHERE store_id = $28
+          AND (store_type = $27 OR store_type IS NULL)
         RETURNING *
       `,
       [
@@ -1150,6 +1436,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         input.enableRefund,
         input.enableVoid,
         input.enableDiscount,
+        input.enableEstimatedPrepTime,
+        input.prepTimeStrategy === 'sequential' ? 'sequential' : input.prepTimeStrategy === 'parallel' ? 'parallel' : null,
+        input.customizationPrepTimeMinutes,
         input.enableServiceCharge,
         input.serviceChargeRate,
         input.enableTax,
@@ -1159,12 +1448,278 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         input.enableIngredientCustomization,
         input.enableReceiptPrinting,
         input.enabledPaymentMethods ?? null,
+        input.paymentMethodAccounts ? JSON.stringify(input.paymentMethodAccounts) : null,
+        input.autoDeductInventoryOnSale,
+        input.allowNegativeStock,
+        input.defaultLowStockThreshold,
+        input.defaultInventoryUnit,
+        input.cycleCountIntervalDays,
+        input.autoReorderThresholdPercent,
+        input.enableExpiryTracking,
+        input.defaultMarkupPercent,
         admin.store_type,
         admin.store_id,
       ],
     );
 
+    await this.recordActivity({
+      userId: admin.id,
+      storeId: admin.store_id,
+      userName: admin.full_name,
+      userRole: admin.role,
+      module: 'Store Settings',
+      action: 'Store Settings Updated',
+      details: `Store settings updated\nRefunds: ${rows[0].enable_refund ? 'Enabled' : 'Disabled'}\nVoids: ${rows[0].enable_void ? 'Enabled' : 'Disabled'}`,
+    });
+
     return rows[0];
+  }
+
+  async getThemePreferencesForUser(userId: number) {
+    const user = await this.getUserStoreScope(userId);
+    await this.ensureUserPreferencesSchema();
+
+    const userRows = await this.query<UserPreferences>(
+      `
+        SELECT
+          compact_mode,
+          low_stock_alerts,
+          default_workspace,
+          theme_mode,
+          theme_preset,
+          appearance,
+          primary_color,
+          secondary_color,
+          sidebar_color
+        FROM user_preferences
+        WHERE user_id = $1
+        LIMIT 1
+      `,
+      [user.id],
+    );
+
+    const storeTheme = user.store_id ? await this.getStoreThemePreferences(user.store_id, user.store_type) : null;
+    const userTheme = userRows[0] ?? null;
+    const effectiveTheme = this.normalizeThemePreferences(userTheme ?? storeTheme ?? DEFAULT_THEME_PREFERENCES);
+
+    return {
+      user_preferences: userTheme ? this.normalizeUserPreferences(userTheme) : null,
+      store_theme: storeTheme ? this.normalizeThemePreferences(storeTheme) : null,
+      effective_theme: effectiveTheme,
+      can_manage_store_theme: this.isStoreManagerRole(user.role) && Boolean(user.store_id),
+    };
+  }
+
+  async updatePersonalThemePreferences(input: {
+    userId: number;
+    preferences: Partial<UserPreferences>;
+  }) {
+    const user = await this.getUserStoreScope(input.userId);
+    await this.ensureUserPreferencesSchema();
+    const preferences = this.normalizeUserPreferences(input.preferences);
+
+    const rows = await this.query<UserPreferences>(
+      `
+        INSERT INTO user_preferences (
+          user_id,
+          compact_mode,
+          low_stock_alerts,
+          default_workspace,
+          theme_mode,
+          theme_preset,
+          appearance,
+          primary_color,
+          secondary_color,
+          sidebar_color
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        ON CONFLICT (user_id) DO UPDATE
+        SET
+          compact_mode = EXCLUDED.compact_mode,
+          low_stock_alerts = EXCLUDED.low_stock_alerts,
+          default_workspace = EXCLUDED.default_workspace,
+          theme_mode = EXCLUDED.theme_mode,
+          theme_preset = EXCLUDED.theme_preset,
+          appearance = EXCLUDED.appearance,
+          primary_color = EXCLUDED.primary_color,
+          secondary_color = EXCLUDED.secondary_color,
+          sidebar_color = EXCLUDED.sidebar_color,
+          updated_at = CURRENT_TIMESTAMP
+        RETURNING
+          compact_mode,
+          low_stock_alerts,
+          default_workspace,
+          theme_mode,
+          theme_preset,
+          appearance,
+          primary_color,
+          secondary_color,
+          sidebar_color
+      `,
+      [
+        user.id,
+        preferences.compact_mode,
+        preferences.low_stock_alerts,
+        preferences.default_workspace,
+        preferences.theme_mode,
+        preferences.theme_preset,
+        preferences.appearance,
+        preferences.primary_color,
+        preferences.secondary_color,
+        preferences.sidebar_color,
+      ],
+    );
+
+    return this.normalizeUserPreferences(rows[0]);
+  }
+
+  async clearPersonalThemePreferences(userId: number) {
+    const user = await this.getUserStoreScope(userId);
+    await this.ensureUserPreferencesSchema();
+    await this.query(`DELETE FROM user_preferences WHERE user_id = $1`, [user.id]);
+    return this.getThemePreferencesForUser(user.id);
+  }
+
+  async updateStoreThemePreferences(input: {
+    userId: number;
+    preferences: Partial<StoreThemePreferences>;
+  }) {
+    const user = await this.getUserStoreScope(input.userId);
+
+    if (!this.isStoreManagerRole(user.role) || !user.store_id) {
+      throw new ForbiddenException('Only store admin or manager accounts can update the store theme.');
+    }
+
+    await this.ensureStoreSettingsRow(user.store_id, user.store_type);
+    const preferences = this.normalizeThemePreferences(input.preferences);
+
+    const rows = await this.query<StoreThemePreferences>(
+      `
+        UPDATE store_settings
+        SET
+          theme_mode = $1,
+          theme_preset = $2,
+          appearance = $3,
+          primary_color = $4,
+          secondary_color = $5,
+          sidebar_color = $6,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE store_id = $7
+          AND (store_type = $8 OR store_type IS NULL)
+        RETURNING
+          theme_mode,
+          theme_preset,
+          appearance,
+          primary_color,
+          secondary_color,
+          sidebar_color,
+          updated_at
+      `,
+      [
+        preferences.theme_mode,
+        preferences.theme_preset,
+        preferences.appearance,
+        preferences.primary_color,
+        preferences.secondary_color,
+        preferences.sidebar_color,
+        user.store_id,
+        user.store_type,
+      ],
+    );
+
+    await this.recordActivity({
+      userId: user.id,
+      storeId: user.store_id,
+      userName: user.full_name,
+      userRole: user.role,
+      module: 'Store Settings',
+      action: 'Theme Updated',
+      details: `Store theme updated\nPreset: ${preferences.theme_preset ?? 'custom'}\nMode: ${preferences.theme_mode}`,
+    });
+
+    return this.normalizeThemePreferences(rows[0]);
+  }
+
+  async clearStoreThemePreferences(userId: number) {
+    const user = await this.getUserStoreScope(userId);
+
+    if (!this.isStoreManagerRole(user.role) || !user.store_id) {
+      throw new ForbiddenException('Only store admin or manager accounts can reset the store theme.');
+    }
+
+    await this.ensureStoreSettingsRow(user.store_id, user.store_type);
+
+    await this.query(
+      `
+        UPDATE store_settings
+        SET
+          theme_mode = $1,
+          theme_preset = $2,
+          appearance = $3,
+          primary_color = $4,
+          secondary_color = $5,
+          sidebar_color = $6,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE store_id = $7
+          AND (store_type = $8 OR store_type IS NULL)
+      `,
+      [
+        DEFAULT_THEME_PREFERENCES.theme_mode,
+        DEFAULT_THEME_PREFERENCES.theme_preset,
+        DEFAULT_THEME_PREFERENCES.appearance,
+        DEFAULT_THEME_PREFERENCES.primary_color,
+        DEFAULT_THEME_PREFERENCES.secondary_color,
+        DEFAULT_THEME_PREFERENCES.sidebar_color,
+        user.store_id,
+        user.store_type,
+      ],
+    );
+
+    await this.recordActivity({
+      userId: user.id,
+      storeId: user.store_id,
+      userName: user.full_name,
+      userRole: user.role,
+      module: 'Store Settings',
+      action: 'Theme Reset',
+      details: 'Store theme reset to default for all accounts without a personal override',
+    });
+
+    return this.getThemePreferencesForUser(user.id);
+  }
+
+  private async getInventorySyncSettingsForStore(client: PoolClient, storeId: number): Promise<InventorySyncSettings> {
+    await this.ensureStoreSettingsSchema();
+
+    const rows = await this.queryWithClient<{
+      auto_deduct_inventory_on_sale: boolean | null;
+      allow_negative_stock: boolean | null;
+    }>(
+      client,
+      `
+        SELECT auto_deduct_inventory_on_sale, allow_negative_stock
+        FROM store_settings
+        WHERE store_id = $1
+        LIMIT 1
+      `,
+      [storeId],
+    );
+
+    return {
+      autoDeductInventoryOnSale: rows[0]?.auto_deduct_inventory_on_sale ?? true,
+      allowNegativeStock: rows[0]?.allow_negative_stock ?? false,
+    };
+  }
+
+  async getDefaultLowStockThreshold(storeId: number): Promise<number> {
+    await this.ensureStoreSettingsSchema();
+
+    const rows = await this.query<{ default_low_stock_threshold: number | null }>(
+      `SELECT default_low_stock_threshold FROM store_settings WHERE store_id = $1 LIMIT 1`,
+      [storeId],
+    );
+
+    return Number(rows[0]?.default_low_stock_threshold ?? 0);
   }
 
   async listDiscountSettingsForAdmin(adminUserId: number) {
@@ -1190,7 +1745,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async createDiscountSettingForAdmin(input: { adminUserId: number; discountName: string; discountRate: number; isEnabled: boolean }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can create discount settings.');
     }
 
@@ -1203,13 +1758,23 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       [admin.store_id, input.discountName, input.discountRate, input.isEnabled],
     );
 
+    await this.recordActivity({
+      userId: admin.id,
+      storeId: admin.store_id,
+      userName: admin.full_name,
+      userRole: admin.role,
+      module: 'Store Settings',
+      action: 'Discount Settings Updated',
+      details: `Created discount setting\n${input.discountName}: ${input.discountRate}%`,
+    });
+
     return rows[0];
   }
 
   async updateDiscountSettingForAdmin(input: { adminUserId: number; discountId: number; discountName: string; discountRate: number; isEnabled: boolean }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can update discount settings.');
     }
 
@@ -1231,13 +1796,23 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       throw new NotFoundException('Discount setting was not found for this store.');
     }
 
+    await this.recordActivity({
+      userId: admin.id,
+      storeId: admin.store_id,
+      userName: admin.full_name,
+      userRole: admin.role,
+      module: 'Store Settings',
+      action: 'Discount Settings Updated',
+      details: `Updated discount setting\n${input.discountName}: ${input.discountRate}%`,
+    });
+
     return rows[0];
   }
 
   async deleteDiscountSettingForAdmin(input: { adminUserId: number; discountId: number }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can delete discount settings.');
     }
 
@@ -1255,13 +1830,23 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       throw new NotFoundException('Discount setting was not found for this store.');
     }
 
+    await this.recordActivity({
+      userId: admin.id,
+      storeId: admin.store_id,
+      userName: admin.full_name,
+      userRole: admin.role,
+      module: 'Store Settings',
+      action: 'Discount Settings Updated',
+      details: `Deleted discount setting\nDiscount ID: ${input.discountId}`,
+    });
+
     return { id: input.discountId };
   }
 
   async listCategoriesForAdmin(adminUserId: number) {
     const admin = await this.getUserStoreScope(adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can view categories.');
     }
 
@@ -1280,7 +1865,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async createCategoryForAdmin(input: { adminUserId: number; name: string; description: string | null }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id || !admin.store_type) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id || !admin.store_type) {
       throw new InternalServerErrorException('Only store admin accounts can create categories.');
     }
 
@@ -1299,7 +1884,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async updateCategoryForAdmin(input: { adminUserId: number; categoryId: number; name: string; description: string | null }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can update categories.');
     }
 
@@ -1326,7 +1911,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async deleteCategoryForAdmin(input: { adminUserId: number; categoryId: number }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can delete categories.');
     }
 
@@ -1346,7 +1931,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async listProductsForAdmin(adminUserId: number) {
     const admin = await this.getUserStoreScope(adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can view products.');
     }
 
@@ -1371,9 +1956,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             AND COALESCE(pv.is_active, TRUE) = TRUE
         ) variant_summary ON TRUE
         LEFT JOIN LATERAL (
-          SELECT MIN(FLOOR(ii.quantity_available / NULLIF(pi.quantity_required, 0))) AS available_quantity
+          SELECT MIN(FLOOR(
+            CASE
+              WHEN inv."expiryDate" IS NOT NULL AND inv."expiryDate"::date < CURRENT_DATE THEN 0
+              ELSE ii.quantity_available
+            END / NULLIF(pi.quantity_required, 0)
+          )) AS available_quantity
           FROM product_ingredients pi
           JOIN ingredients_inventory ii ON ii.id = pi.ingredient_id
+          LEFT JOIN "InventoryItem" inv ON inv.id = ii.inventory_item_id
           WHERE pi.product_id = p.id
             AND pi.is_required = TRUE
             AND COALESCE(ii.is_available, TRUE) = TRUE
@@ -1419,7 +2010,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async createProductForAdmin(input: any) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id || !admin.store_type) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id || !admin.store_type) {
       throw new InternalServerErrorException('Only store admin accounts can create products.');
     }
 
@@ -1472,7 +2063,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async updateProductForAdmin(input: any) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can update products.');
     }
 
@@ -1546,7 +2137,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async deleteProductForAdmin(input: { adminUserId: number; productId: number }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can delete products.');
     }
 
@@ -1566,7 +2157,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async listIngredientsForAdmin(adminUserId: number) {
     const admin = await this.getUserStoreScope(adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can view ingredients.');
     }
 
@@ -1584,7 +2175,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async createIngredientForAdmin(input: any) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can create ingredients.');
     }
 
@@ -1613,7 +2204,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async updateIngredientForAdmin(input: any) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can update ingredients.');
     }
 
@@ -1653,7 +2244,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async deleteIngredientForAdmin(input: { adminUserId: number; ingredientId: number }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can delete ingredients.');
     }
 
@@ -1673,7 +2264,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async listIngredientAlternativesForAdmin(adminUserId: number) {
     const admin = await this.getUserStoreScope(adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can view ingredient alternatives.');
     }
 
@@ -1705,7 +2296,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async createIngredientAlternativeForAdmin(input: any) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can create ingredient alternatives.');
     }
 
@@ -1753,7 +2344,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async updateIngredientAlternativeForAdmin(input: any) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can update ingredient alternatives.');
     }
 
@@ -1810,7 +2401,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async deleteIngredientAlternativeForAdmin(input: { adminUserId: number; alternativeId: number }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can delete ingredient alternatives.');
     }
 
@@ -1830,7 +2421,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async listInventoryDeductionsForAdmin(adminUserId: number) {
     const admin = await this.getUserStoreScope(adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can view inventory history.');
     }
 
@@ -1872,7 +2463,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async listProductIngredientsForAdmin(input: { adminUserId: number; productId: number }) {
     const admin = await this.getUserStoreScope(input.adminUserId);
 
-    if (admin.role !== 'ADMIN' || !admin.store_id) {
+    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
       throw new InternalServerErrorException('Only store admin accounts can view product ingredients.');
     }
 
@@ -1893,42 +2484,62 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  private async resolveInventoryBusinessIdForStoreScope(user: AuthenticatedUser): Promise<string | null> {
+  private async resolveInventoryBusinessIdForStoreScope(user: AuthenticatedUser, client?: PoolClient): Promise<string | null> {
     if (!user.store_type) {
       return null;
     }
 
     const module = user.store_type === 'RETAIL_STORE' ? 'RETAIL' : 'RESTAURANT';
-    const rows = await this.query<{ id: string }>(
-      `
-        SELECT b.id
-        FROM "Business" b
-        LEFT JOIN "User" matched_user
-          ON matched_user."businessId" = b.id
-         AND lower(matched_user.email) = lower($1)
-        WHERE $2::"BusinessModule" = ANY(b.modules)
-        ORDER BY
-          CASE WHEN matched_user.id IS NOT NULL THEN 0 ELSE 1 END,
-          CASE
-            WHEN $2::text = 'RESTAURANT' THEN (
-              SELECT COUNT(*)
-              FROM "Recipe" r
-              WHERE r."businessId" = b.id
-                AND COALESCE(r."isActive", TRUE) = TRUE
-                AND r."menuItemId" IS NOT NULL
-            )
-            ELSE (
-              SELECT COUNT(*)
-              FROM "InventoryItem" i
-              WHERE i."businessId" = b.id
-                AND i."itemType" = 'RETAIL_ITEM'::"InventoryItemType"
-            )
-          END DESC,
-          b."createdAt" DESC
-        LIMIT 1
-      `,
-      [user.email, module],
-    );
+    // 1. Deterministic store -> business link wins, if configured for this store and
+    // the linked business supports the store's module. This removes the guessing.
+    await this.ensureStoreInventoryLink(client);
+    if (user.store_id) {
+      const linkedSql = `SELECT b.id
+         FROM stores s
+         JOIN "Business" b ON b.id = s.inventory_business_id
+         WHERE s.id = $1 AND $2::"BusinessModule" = ANY(b.modules)
+         LIMIT 1`;
+      const linkedParams = [user.store_id, module];
+      const linked = client
+        ? await this.queryWithClient<{ id: string }>(client, linkedSql, linkedParams)
+        : await this.query<{ id: string }>(linkedSql, linkedParams);
+      if (linked[0]?.id) {
+        return linked[0].id;
+      }
+    }
+
+    // 2. Fallback heuristic: email match, then most items, then newest.
+    const sql = `
+      SELECT b.id
+      FROM "Business" b
+      LEFT JOIN "User" matched_user
+        ON matched_user."businessId" = b.id
+       AND lower(matched_user.email) = lower($1)
+      WHERE $2::"BusinessModule" = ANY(b.modules)
+      ORDER BY
+        CASE WHEN matched_user.id IS NOT NULL THEN 0 ELSE 1 END,
+        CASE
+          WHEN $2::text = 'RESTAURANT' THEN (
+            SELECT COUNT(*)
+            FROM "Recipe" r
+            WHERE r."businessId" = b.id
+              AND COALESCE(r."isActive", TRUE) = TRUE
+              AND r."menuItemId" IS NOT NULL
+          )
+          ELSE (
+            SELECT COUNT(*)
+            FROM "InventoryItem" i
+            WHERE i."businessId" = b.id
+              AND i."itemType" = 'RETAIL_ITEM'::"InventoryItemType"
+          )
+        END DESC,
+        b."createdAt" DESC
+      LIMIT 1
+    `;
+    const params = [user.email, module];
+    const rows = client
+      ? await this.queryWithClient<{ id: string }>(client, sql, params)
+      : await this.query<{ id: string }>(sql, params);
 
     return rows[0]?.id ?? null;
   }
@@ -2382,6 +2993,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       await this.syncRetailInventoryIntoPosCatalog(user);
     }
 
+    const restaurantBusinessId =
+      user.store_type === 'RESTAURANT'
+        ? await this.resolveInventoryBusinessIdForStoreScope(user)
+        : null;
+
     if (user.store_type === 'RETAIL_STORE') {
       return this.query<any>(
         `
@@ -2408,7 +3024,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             pv.stock_quantity,
             pv.low_stock_limit,
             pv.is_active,
-            pv.stock_quantity AS available_quantity
+            pv.stock_quantity AS available_quantity,
+            pv.stock_quantity AS available_orders,
+            pv.stock_quantity AS "availableOrders"
           FROM products p
           JOIN product_variants pv ON pv.product_id = p.id
           LEFT JOIN product_categories c ON c.id = p.category_id
@@ -2445,21 +3063,53 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           p.updated_at,
           c.name AS category_name,
           COALESCE(r.modifiers, '[]'::jsonb) AS modifiers,
+          r.servings,
+          r."prepTimeMinutes" AS prep_time_minutes,
           CASE
             WHEN p.store_type = 'RESTAURANT' THEN COALESCE(availability.available_quantity, 0)
             ELSE COALESCE(p.stock_quantity, 0)
-          END AS available_quantity
+          END AS available_quantity,
+          CASE
+            WHEN p.store_type = 'RESTAURANT' THEN COALESCE(availability.available_quantity, 0)
+            ELSE COALESCE(p.stock_quantity, 0)
+          END AS available_orders,
+          CASE
+            WHEN p.store_type = 'RESTAURANT' THEN COALESCE(availability.available_quantity, 0)
+            ELSE COALESCE(p.stock_quantity, 0)
+          END AS "availableOrders"
         FROM products p
         LEFT JOIN product_categories c ON c.id = p.category_id
-        LEFT JOIN "Recipe" r
-          ON r."menuItemId" = p.inventory_item_id
-         AND COALESCE(r."isActive", TRUE) = TRUE
+        LEFT JOIN LATERAL (
+          SELECT
+            recipe.modifiers,
+            recipe.servings,
+            recipe."prepTimeMinutes",
+            recipe.instructions,
+            recipe."imageUrl"
+          FROM "Recipe" recipe
+          WHERE COALESCE(recipe."isActive", TRUE) = TRUE
+            AND ($3::text IS NULL OR recipe."businessId"::text = $3::text)
+            AND (
+              recipe."menuItemId" = p.inventory_item_id
+              OR lower(trim(COALESCE(recipe.name, ''))) = lower(trim(COALESCE(p.name, '')))
+            )
+          ORDER BY
+            CASE WHEN recipe."menuItemId" = p.inventory_item_id THEN 0 ELSE 1 END,
+            recipe."updatedAt" DESC NULLS LAST
+          LIMIT 1
+        ) r ON TRUE
         LEFT JOIN "InventoryItem" menu_item
           ON menu_item.id = p.inventory_item_id
         LEFT JOIN LATERAL (
-          SELECT MIN(FLOOR(ii.quantity_available / NULLIF(pi.quantity_required, 0))) AS available_quantity
+          SELECT MIN(FLOOR(
+            CASE
+              WHEN inv."expiryDate" IS NOT NULL AND inv."expiryDate"::date < CURRENT_DATE THEN 0
+              ELSE ii.quantity_available
+            END / NULLIF(pi.quantity_required, 0)
+          )) AS available_quantity
           FROM product_ingredients pi
           JOIN ingredients_inventory ii ON ii.id = pi.ingredient_id
+          LEFT JOIN "InventoryItem" inv ON inv.id = ii.inventory_item_id
           WHERE pi.product_id = p.id
             AND pi.is_required = TRUE
             AND COALESCE(ii.is_available, TRUE) = TRUE
@@ -2470,8 +3120,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           AND COALESCE(p.is_available, TRUE) = TRUE
         ORDER BY p.name ASC
       `,
-      [user.store_id, user.store_type],
-    );
+        [user.store_id, user.store_type, restaurantBusinessId],
+      );
 
     const ingredientRows = user.store_type === 'RESTAURANT'
       ? await this.query<any>(
@@ -2487,10 +3137,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
               pi.additional_cost,
               pi.is_required,
               pi.is_removable,
-              ii.quantity_available,
+              CASE
+                WHEN inv."expiryDate" IS NOT NULL AND inv."expiryDate"::date < CURRENT_DATE THEN 0
+                ELSE ii.quantity_available
+              END AS quantity_available,
               COALESCE(ii.is_available, TRUE) AS is_available
             FROM product_ingredients pi
             LEFT JOIN ingredients_inventory ii ON ii.id = pi.ingredient_id
+            LEFT JOIN "InventoryItem" inv ON inv.id = ii.inventory_item_id
             WHERE pi.store_id = $1
             ORDER BY pi.id ASC
           `,
@@ -2535,8 +3189,13 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       ingredientsByProduct.set(Number(ingredient.product_id), list);
     }
 
-    return products.map((product) => ({
+    const modifiersByProduct = await this.withModifierStock(user.store_id, products.map((product) => product.modifiers));
+
+    return products.map((product, index) => ({
       ...product,
+      available_orders: product.available_orders ?? product.available_quantity,
+      availableOrders: product.availableOrders ?? product.available_quantity,
+      modifiers: modifiersByProduct[index],
       ingredients: ingredientsByProduct.get(Number(product.id)) ?? [],
     }));
   }
@@ -2552,6 +3211,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       await this.syncRestaurantRecipesIntoPosCatalog(user);
     }
 
+    const restaurantBusinessId =
+      user.store_type === 'RESTAURANT'
+        ? await this.resolveInventoryBusinessIdForStoreScope(user)
+        : null;
+
     const rows = await this.query<any>(
       `
         SELECT
@@ -2559,6 +3223,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           p.name AS product_name,
           p.store_id,
           p.store_type,
+          COALESCE(r.modifiers, '[]'::jsonb) AS modifiers,
+          r.servings,
+          r."prepTimeMinutes" AS prep_time_minutes,
           COALESCE(
             json_agg(
               json_build_object(
@@ -2570,11 +3237,16 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
                 'additional_cost', pi.additional_cost,
                 'is_required', pi.is_required,
                 'is_removable', pi.is_removable,
-                'quantity_available', ii.quantity_available,
+                'quantity_available',
+                  CASE
+                    WHEN inv."expiryDate" IS NOT NULL AND inv."expiryDate"::date < CURRENT_DATE THEN 0
+                    ELSE ii.quantity_available
+                  END,
                 'is_available', COALESCE(ii.is_available, TRUE),
                 'stock_status',
                   CASE
                     WHEN ii.id IS NULL THEN 'missing'
+                    WHEN inv."expiryDate" IS NOT NULL AND inv."expiryDate"::date < CURRENT_DATE THEN 'expired'
                     WHEN COALESCE(ii.is_available, TRUE) = FALSE THEN 'unavailable'
                     WHEN ii.quantity_available < pi.quantity_required THEN 'insufficient'
                     WHEN ii.quantity_available <= COALESCE(ii.low_stock_limit, 0) THEN 'low'
@@ -2586,43 +3258,646 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             '[]'::json
           ) AS ingredients
         FROM products p
+        LEFT JOIN LATERAL (
+          SELECT
+            recipe.modifiers,
+            recipe.servings,
+            recipe."prepTimeMinutes"
+          FROM "Recipe" recipe
+          WHERE COALESCE(recipe."isActive", TRUE) = TRUE
+            AND ($3::text IS NULL OR recipe."businessId"::text = $3::text)
+            AND (
+              recipe."menuItemId" = p.inventory_item_id
+              OR lower(trim(COALESCE(recipe.name, ''))) = lower(trim(COALESCE(p.name, '')))
+            )
+          ORDER BY
+            CASE WHEN recipe."menuItemId" = p.inventory_item_id THEN 0 ELSE 1 END,
+            recipe."updatedAt" DESC NULLS LAST
+          LIMIT 1
+        ) r ON TRUE
         LEFT JOIN product_ingredients pi
           ON pi.product_id = p.id
          AND pi.store_id = p.store_id
         LEFT JOIN ingredients_inventory ii
           ON ii.id = pi.ingredient_id
          AND ii.store_id = p.store_id
+        LEFT JOIN "InventoryItem" inv ON inv.id = ii.inventory_item_id
         WHERE p.id = $1
           AND p.store_id = $2
-        GROUP BY p.id, p.name, p.store_id, p.store_type
+        GROUP BY p.id, p.name, p.store_id, p.store_type, r.modifiers, r.servings, r."prepTimeMinutes"
         LIMIT 1
       `,
-      [input.productId, user.store_id],
+      [input.productId, user.store_id, restaurantBusinessId],
     );
 
     if (!rows[0]) {
       throw new NotFoundException('Product was not found for this store.');
     }
 
+    if (user.store_type === 'RESTAURANT') {
+      const recipeRows = await this.query<any>(
+        `
+          SELECT
+            pi.id,
+            pi.product_id,
+            pi.ingredient_id,
+            ii.inventory_item_id,
+            COALESCE(ii.ingredient_name, pi.ingredient_name) AS name,
+            pi.quantity_required AS quantity,
+            pi.unit,
+            pi.additional_cost,
+            pi.is_required,
+            pi.is_removable,
+            CASE
+              WHEN inv."expiryDate" IS NOT NULL AND inv."expiryDate"::date < CURRENT_DATE THEN 0
+              ELSE ii.quantity_available
+            END AS quantity_available,
+            COALESCE(ii.is_available, TRUE) AS is_available
+          FROM product_ingredients pi
+          LEFT JOIN ingredients_inventory ii
+            ON ii.id = pi.ingredient_id
+           AND ii.store_id = pi.store_id
+          LEFT JOIN "InventoryItem" inv ON inv.id = ii.inventory_item_id
+          WHERE pi.product_id = $1
+            AND pi.store_id = $2
+          ORDER BY pi.id ASC
+        `,
+        [input.productId, user.store_id],
+      );
+
+      rows[0].ingredients = recipeRows;
+    }
+
+    rows[0].modifiers = (await this.withModifierStock(user.store_id, [rows[0].modifiers]))[0];
+
     return rows[0];
+  }
+
+  private async withModifierStock(storeId: number, modifierGroups: any[][]) {
+    const itemIds = Array.from(new Set(
+      modifierGroups.flatMap((modifiers) =>
+        (Array.isArray(modifiers) ? modifiers : [])
+          .map((modifier) => modifier?.itemId)
+          .filter(Boolean),
+      ),
+    ));
+    if (itemIds.length === 0) return modifierGroups.map((modifiers) => Array.isArray(modifiers) ? modifiers : []);
+
+    const rows = await this.query<any>(
+      `
+        SELECT ii.id AS ingredient_id, ii.inventory_item_id, ii.ingredient_name, ii.quantity_available, ii.unit,
+               COALESCE(ii.is_available, TRUE) AS is_available,
+               COALESCE(inv.price, 0) AS weighted_average_cost
+        FROM ingredients_inventory ii
+        LEFT JOIN "InventoryItem" inv ON inv.id = ii.inventory_item_id
+        WHERE ii.store_id = $1
+          AND ii.inventory_item_id = ANY($2::text[])
+      `,
+      [storeId, itemIds],
+    );
+    const stockByItemId = new Map(rows.map((row) => [String(row.inventory_item_id), row]));
+
+    return modifierGroups.map((modifiers) =>
+      (Array.isArray(modifiers) ? modifiers : []).map((modifier) => {
+        const stock = stockByItemId.get(String(modifier?.itemId ?? ''));
+        const available = Boolean(stock?.is_available) && Number(stock?.quantity_available ?? 0) > 0;
+        const weightedPortionPrice = Math.round((
+          Number(stock?.weighted_average_cost ?? 0) * Number(modifier?.quantity ?? 0) + Number.EPSILON
+        ) * 100) / 100;
+        return {
+          ...modifier,
+          itemName: modifier.itemName ?? stock?.ingredient_name,
+          ingredientId: stock?.ingredient_id ? Number(stock.ingredient_id) : modifier.ingredientId,
+          quantityAvailable: stock ? Number(stock.quantity_available ?? 0) : null,
+          unit: stock?.unit ?? modifier.unit,
+          suggestedPrice: modifier?.type === 'add_on' && stock ? weightedPortionPrice : undefined,
+          priceDelta: modifier?.type === 'add_on' || modifier?.type === 'size_variant' ? Number(modifier?.priceDelta ?? 0) : 0,
+          stockStatus: modifier.itemId || modifier.requiresStock ? (available ? 'available' : 'unavailable') : 'untracked',
+        };
+      }),
+    );
+  }
+
+  async listPosIngredients(userId: number) {
+    const user = await this.getUserStoreScope(userId);
+
+    if (!user.store_id || user.store_type !== 'RESTAURANT') {
+      return [];
+    }
+
+    return this.query(
+      `
+        SELECT
+          ii.id,
+          ii.inventory_item_id,
+          ii.ingredient_name AS name,
+          CASE
+            WHEN inv."expiryDate" IS NOT NULL AND inv."expiryDate"::date < CURRENT_DATE THEN 0
+            ELSE ii.quantity_available
+          END AS quantity_available,
+          ii.unit,
+          ii.cost_per_unit,
+          ii.is_available
+        FROM ingredients_inventory ii
+        LEFT JOIN "InventoryItem" inv ON inv.id = ii.inventory_item_id
+        WHERE ii.store_id = $1
+          AND COALESCE(ii.is_available, TRUE) = TRUE
+          AND (
+            CASE
+              WHEN inv."expiryDate" IS NOT NULL AND inv."expiryDate"::date < CURRENT_DATE THEN 0
+              ELSE ii.quantity_available
+            END
+          ) > 0
+        ORDER BY ii.ingredient_name ASC
+      `,
+      [user.store_id],
+    );
+  }
+
+  private tableStatus(isShared: boolean, totalSeats: number, occupiedSeats: number) {
+    if (occupiedSeats <= 0) return 'AVAILABLE';
+    if (isShared && occupiedSeats < totalSeats) return 'PARTIALLY_OCCUPIED';
+    return 'OCCUPIED';
+  }
+
+  private async ensureDiningTableSchema(client?: PoolClient) {
+    const run = client ? this.queryWithClient.bind(this, client) : this.query.bind(this);
+    await run(`
+      DO $$
+      BEGIN
+        CREATE TYPE "DiningTableStatus" AS ENUM ('AVAILABLE', 'PARTIALLY_OCCUPIED', 'OCCUPIED');
+      EXCEPTION
+        WHEN duplicate_object THEN NULL;
+      END $$;
+    `);
+    await run(`ALTER TYPE "DiningTableStatus" ADD VALUE IF NOT EXISTS 'PARTIALLY_OCCUPIED'`);
+    await run(`
+      CREATE TABLE IF NOT EXISTS "DiningTable" (
+        id TEXT PRIMARY KEY,
+        "tableNumber" TEXT NOT NULL,
+        capacity INTEGER NOT NULL DEFAULT 1,
+        status "DiningTableStatus" NOT NULL DEFAULT 'AVAILABLE',
+        floor TEXT,
+        notes TEXT,
+        "locationId" TEXT NOT NULL REFERENCES "Location"(id) ON DELETE RESTRICT ON UPDATE CASCADE,
+        "businessId" TEXT NOT NULL REFERENCES "Business"(id) ON DELETE RESTRICT ON UPDATE CASCADE,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await run(`ALTER TABLE "DiningTable" ADD COLUMN IF NOT EXISTS "occupiedSeats" INTEGER NOT NULL DEFAULT 0`);
+    await run(`ALTER TABLE "DiningTable" ADD COLUMN IF NOT EXISTS "isShared" BOOLEAN NOT NULL DEFAULT false`);
+    await run(`UPDATE "DiningTable" SET status = 'AVAILABLE' WHERE status::text IN ('RESERVED', 'CLEANING')`);
+    await run(`CREATE UNIQUE INDEX IF NOT EXISTS "DiningTable_businessId_locationId_tableNumber_key" ON "DiningTable"("businessId", "locationId", "tableNumber")`);
+    await run(`CREATE INDEX IF NOT EXISTS "DiningTable_businessId_status_idx" ON "DiningTable"("businessId", status)`);
+    await run(`CREATE INDEX IF NOT EXISTS "DiningTable_locationId_idx" ON "DiningTable"("locationId")`);
+  }
+
+  private async getDiningScope(user: AuthenticatedUser, client?: PoolClient) {
+    const businessId = await this.resolveInventoryBusinessIdForStoreScope(user, client);
+    if (!businessId) {
+      throw new InternalServerErrorException('Store is not linked to a restaurant business.');
+    }
+
+    const locations = client
+      ? await this.queryWithClient<{ id: string }>(
+          client,
+          `SELECT id FROM "Location" WHERE "businessId" = $1 ORDER BY "createdAt" ASC LIMIT 1`,
+          [businessId],
+        )
+      : await this.query<{ id: string }>(
+          `SELECT id FROM "Location" WHERE "businessId" = $1 ORDER BY "createdAt" ASC LIMIT 1`,
+          [businessId],
+        );
+
+    if (locations[0]) return { businessId, locationId: locations[0].id };
+
+    const createSql = `
+      INSERT INTO "Location" (id, name, address, manager, phone, "businessId", "createdAt", "updatedAt")
+      VALUES ($1, 'Dining Area', '', '', '', $2, NOW(), NOW())
+      RETURNING id
+    `;
+    const created = client
+      ? await this.queryWithClient<{ id: string }>(client, createSql, [randomUUID(), businessId])
+      : await this.query<{ id: string }>(createSql, [randomUUID(), businessId]);
+    return { businessId, locationId: created[0].id };
+  }
+
+  private mapDiningTable(row: any) {
+    const totalSeats = Number(row.capacity ?? 0);
+    const occupiedSeats = Math.max(0, Math.min(totalSeats, Number(row.occupiedSeats ?? 0)));
+    const isShared = Boolean(row.isShared);
+    return {
+      id: row.id,
+      store_id: row.businessId,
+      table_name: row.tableNumber,
+      table_number: row.tableNumber,
+      total_seats: totalSeats,
+      occupied_seats: occupiedSeats,
+      available_seats: Math.max(0, totalSeats - occupiedSeats),
+      is_shared: isShared,
+      status: this.tableStatus(isShared, totalSeats, occupiedSeats),
+      created_at: row.createdAt,
+      updated_at: row.updatedAt,
+    };
+  }
+
+  async listDiningTables(userId: number) {
+    await this.ensureDiningTableSchema();
+    const user = await this.getUserStoreScope(userId);
+    const scope = await this.getDiningScope(user);
+    const rows = await this.query<any>(
+      `
+        SELECT *
+        FROM "DiningTable"
+        WHERE "businessId" = $1 AND "locationId" = $2
+        ORDER BY "tableNumber" ASC
+      `,
+      [scope.businessId, scope.locationId],
+    );
+    return rows.map((row) => this.mapDiningTable(row));
+  }
+
+  async createDiningTable(input: { userId: number; tableNumber: string; totalSeats: number; isShared: boolean }) {
+    await this.ensureDiningTableSchema();
+    const user = await this.getUserStoreScope(input.userId);
+    const scope = await this.getDiningScope(user);
+    const totalSeats = Math.max(1, Math.floor(Number(input.totalSeats) || 1));
+    const rows = await this.query<any>(
+      `
+        INSERT INTO "DiningTable" (
+          id, "tableNumber", capacity, "occupiedSeats", "isShared", status, "locationId", "businessId", "createdAt", "updatedAt"
+        )
+        VALUES ($1, $2, $3, 0, $4, 'AVAILABLE', $5, $6, NOW(), NOW())
+        RETURNING *
+      `,
+      [randomUUID(), input.tableNumber.trim(), totalSeats, input.isShared, scope.locationId, scope.businessId],
+    );
+    const table = this.mapDiningTable(rows[0]);
+    await this.recordActivity({
+      userId: user.id,
+      storeId: user.store_id,
+      userName: user.full_name,
+      userRole: user.role,
+      module: 'Restaurant Table Management',
+      action: 'Table Created',
+      details: `Created Table ${table.table_number}\nSeats: ${table.total_seats}`,
+    });
+    return table;
+  }
+
+  async updateDiningTable(input: { userId: number; tableId: string; tableNumber: string; totalSeats: number; isShared: boolean }) {
+    await this.ensureDiningTableSchema();
+    const user = await this.getUserStoreScope(input.userId);
+    const scope = await this.getDiningScope(user);
+    const totalSeats = Math.max(1, Math.floor(Number(input.totalSeats) || 1));
+    const currentRows = await this.query<any>(
+      `SELECT * FROM "DiningTable" WHERE id = $1 AND "businessId" = $2 AND "locationId" = $3 LIMIT 1`,
+      [input.tableId, scope.businessId, scope.locationId],
+    );
+    if (!currentRows[0]) throw new NotFoundException('Table not found.');
+
+    const occupiedSeats = Math.min(Number(currentRows[0].occupiedSeats ?? 0), totalSeats);
+    const status = this.tableStatus(input.isShared, totalSeats, occupiedSeats);
+    const rows = await this.query<any>(
+      `
+        UPDATE "DiningTable"
+        SET "tableNumber" = $1, capacity = $2, "occupiedSeats" = $3, "isShared" = $4, status = $5::"DiningTableStatus", "updatedAt" = NOW()
+        WHERE id = $6 AND "businessId" = $7 AND "locationId" = $8
+        RETURNING *
+      `,
+      [input.tableNumber.trim(), totalSeats, occupiedSeats, input.isShared, status, input.tableId, scope.businessId, scope.locationId],
+    );
+    const table = this.mapDiningTable(rows[0]);
+    await this.recordActivity({
+      userId: user.id,
+      storeId: user.store_id,
+      userName: user.full_name,
+      userRole: user.role,
+      module: 'Restaurant Table Management',
+      action: 'Table Settings Updated',
+      details: `Updated Table ${table.table_number}\nSeats: ${table.total_seats}`,
+    });
+    return table;
+  }
+
+  async deleteDiningTable(input: { userId: number; tableId: string }) {
+    await this.ensureDiningTableSchema();
+    const user = await this.getUserStoreScope(input.userId);
+    const scope = await this.getDiningScope(user);
+    return this.withTransaction(async (client) => {
+      const tableRows = await this.queryWithClient<any>(
+        client,
+        `SELECT id FROM "DiningTable" WHERE id = $1 AND "businessId" = $2 AND "locationId" = $3 LIMIT 1`,
+        [input.tableId, scope.businessId, scope.locationId],
+      );
+      if (!tableRows[0]) throw new NotFoundException('Table not found.');
+
+      await this.queryWithClient(client, `UPDATE "KitchenOrder" SET "tableId" = NULL WHERE "tableId" = $1`, [input.tableId]);
+      await this.queryWithClient(client, `DELETE FROM "DiningTable" WHERE id = $1`, [input.tableId]);
+      await this.recordActivity({
+        userId: user.id,
+        storeId: user.store_id,
+        userName: user.full_name,
+        userRole: user.role,
+        module: 'Restaurant Table Management',
+        action: 'Table Deleted',
+        details: `Deleted table\nTable ID: ${input.tableId}`,
+      });
+      return { ok: true };
+    });
+  }
+
+  async setDiningTableOccupancy(input: { userId: number; tableId: string; occupiedSeats: number }) {
+    await this.ensureDiningTableSchema();
+    const user = await this.getUserStoreScope(input.userId);
+    const scope = await this.getDiningScope(user);
+    return this.withTransaction(async (client) => {
+      const currentRows = await this.queryWithClient<any>(
+        client,
+        `SELECT * FROM "DiningTable" WHERE id = $1 AND "businessId" = $2 AND "locationId" = $3 FOR UPDATE`,
+        [input.tableId, scope.businessId, scope.locationId],
+      );
+      const table = currentRows[0];
+      if (!table) throw new NotFoundException('Table not found.');
+
+      const totalSeats = Number(table.capacity ?? 0);
+      const isShared = Boolean(table.isShared);
+      const previousOccupiedSeats = Math.max(0, Number(table.occupiedSeats ?? 0));
+      const occupiedSeats = Math.max(0, Math.min(totalSeats, Math.floor(Number(input.occupiedSeats) || 0)));
+
+      if (occupiedSeats < previousOccupiedSeats) {
+        const tableLabel = `Table ${table.tableNumber}`;
+        const unpaidRows = await this.queryWithClient<{ id: number }>(
+          client,
+          `
+            SELECT o.id
+            FROM orders o
+            WHERE o.store_id = $1
+              AND COALESCE(o.order_status, '') <> 'COMPLETED'
+              AND COALESCE(UPPER(o.payment_status), '') IN ('NOT_PAID', 'UNPAID', 'PENDING')
+              AND o.table_name IS NOT NULL
+              AND EXISTS (
+                SELECT 1
+                FROM regexp_split_to_table(o.table_name, '\\s*\\+\\s*') AS table_label
+                WHERE LOWER(TRIM(table_label)) = LOWER($2)
+              )
+            LIMIT 1
+          `,
+          [user.store_id, tableLabel],
+        );
+
+        if (unpaidRows[0]) {
+          throw new BadRequestException('Cannot release a table with an unpaid or pending Pay Later order.');
+        }
+      }
+
+      const status = this.tableStatus(isShared, totalSeats, occupiedSeats);
+      const rows = await this.queryWithClient<any>(
+        client,
+        `
+          UPDATE "DiningTable"
+          SET "occupiedSeats" = $1, status = $2::"DiningTableStatus", "updatedAt" = NOW()
+          WHERE id = $3 AND "businessId" = $4 AND "locationId" = $5
+          RETURNING *
+        `,
+        [occupiedSeats, status, input.tableId, scope.businessId, scope.locationId],
+      );
+      if (status === 'AVAILABLE') {
+        await this.stopRunningTimersForReleasedTable(client, user.store_id!, `Table ${table.tableNumber}`);
+      }
+      await this.recordActivity({
+        userId: user.id,
+        storeId: user.store_id,
+        userName: user.full_name,
+        userRole: user.role,
+        module: 'Restaurant Table Management',
+        action: occupiedSeats > 0 ? 'Table Occupied' : 'Table Released',
+        details: occupiedSeats > 0
+          ? `Table ${table.tableNumber} occupied\nSeats: ${occupiedSeats}`
+          : `Table ${table.tableNumber} released`,
+      });
+      return this.mapDiningTable(rows[0]);
+    });
+  }
+
+  private tableNumberFromName(tableName: string | null | undefined) {
+    return String(tableName ?? '').match(/Table\s+([^+]+)/i)?.[1]?.trim() ?? null;
+  }
+
+  private async occupyDiningTable(client: PoolClient, user: AuthenticatedUser, tableName: string | null | undefined, partySize: number) {
+    const tableNumber = this.tableNumberFromName(tableName);
+    if (!tableNumber || partySize <= 0) return;
+    const scope = await this.getDiningScope(user, client);
+    const rows = await this.queryWithClient<any>(
+      client,
+      `SELECT * FROM "DiningTable" WHERE "businessId" = $1 AND "locationId" = $2 AND "tableNumber" = $3 FOR UPDATE`,
+      [scope.businessId, scope.locationId, tableNumber],
+    );
+    const table = rows[0];
+    if (!table) throw new NotFoundException('Selected table was not found.');
+
+    const totalSeats = Number(table.capacity ?? 0);
+    const occupiedSeats = Number(table.occupiedSeats ?? 0);
+    const isShared = Boolean(table.isShared);
+    if ((!isShared && table.status !== 'AVAILABLE') || (isShared && totalSeats - occupiedSeats < partySize)) {
+      throw new BadRequestException('Selected table no longer has enough available seats.');
+    }
+
+    const nextOccupied = isShared ? occupiedSeats + partySize : partySize;
+    const status = this.tableStatus(isShared, totalSeats, nextOccupied);
+    await this.queryWithClient(
+      client,
+      `UPDATE "DiningTable" SET "occupiedSeats" = $1, status = $2::"DiningTableStatus", "updatedAt" = NOW() WHERE id = $3`,
+      [nextOccupied, status, table.id],
+    );
+  }
+
+  private async releaseDiningTable(client: PoolClient, user: AuthenticatedUser, tableName: string | null | undefined, partySize: number) {
+    const tableNumber = this.tableNumberFromName(tableName);
+    if (!tableNumber) return;
+    const scope = await this.getDiningScope(user, client);
+    const rows = await this.queryWithClient<any>(
+      client,
+      `SELECT * FROM "DiningTable" WHERE "businessId" = $1 AND "locationId" = $2 AND "tableNumber" = $3 FOR UPDATE`,
+      [scope.businessId, scope.locationId, tableNumber],
+    );
+    const table = rows[0];
+    if (!table) return;
+
+    const totalSeats = Number(table.capacity ?? 0);
+    const isShared = Boolean(table.isShared);
+    const nextOccupied = isShared ? Math.max(0, Number(table.occupiedSeats ?? 0) - Math.max(1, partySize)) : 0;
+    const status = this.tableStatus(isShared, totalSeats, nextOccupied);
+    await this.queryWithClient(
+      client,
+      `UPDATE "DiningTable" SET "occupiedSeats" = $1, status = $2::"DiningTableStatus", "updatedAt" = NOW() WHERE id = $3`,
+      [nextOccupied, status, table.id],
+    );
+    if (status === 'AVAILABLE') {
+      await this.stopRunningTimersForReleasedTable(client, user.store_id!, `Table ${table.tableNumber}`);
+    }
+  }
+
+  /** Finalizes active paid dine-in timers when their table is released. */
+  private async stopRunningTimersForReleasedTable(client: PoolClient, storeId: number, tableLabel: string) {
+    await this.queryWithClient(
+      client,
+      `
+        UPDATE orders
+        SET running_time_end = NOW(),
+            running_duration = GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (
+              NOW() - COALESCE(
+                CASE WHEN ordered_at <= NOW() THEN ordered_at END,
+                CASE WHEN running_time_start <= NOW() THEN running_time_start END,
+                CASE WHEN preparing_started_at <= NOW() THEN preparing_started_at END,
+                created_at,
+                NOW()
+              )
+            )))::BIGINT),
+            table_ended_at = COALESCE(table_ended_at, NOW()),
+            completed_at = COALESCE(completed_at, NOW()),
+            order_status = CASE WHEN order_status IN ('PENDING', 'PREPARING', 'READY', 'SERVED') THEN 'COMPLETED' ELSE order_status END,
+            is_running = FALSE
+        WHERE store_id = $1
+          AND order_type IN ('DINE_IN', 'MIXED')
+          AND UPPER(COALESCE(payment_status, '')) = 'PAID'
+          AND COALESCE(is_running, FALSE) = TRUE
+          AND COALESCE(ordered_at, running_time_start) IS NOT NULL
+          AND EXISTS (
+            SELECT 1
+            FROM regexp_split_to_table(COALESCE(table_name, ''), '\\s*\\+\\s*') AS table_name_part
+            WHERE LOWER(TRIM(table_name_part)) = LOWER($2)
+          )
+      `,
+      [storeId, tableLabel],
+    );
+  }
+
+  /** Idempotently freezes a timer. Durations are persisted as elapsed seconds. */
+  private async stopOrderRunningTimer(client: PoolClient, orderId: number) {
+    await this.queryWithClient(
+      client,
+      `
+        UPDATE orders
+        SET running_time_end = NOW(),
+            running_duration = GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (
+              NOW() - COALESCE(
+                CASE WHEN ordered_at <= NOW() THEN ordered_at END,
+                CASE WHEN running_time_start <= NOW() THEN running_time_start END,
+                CASE WHEN preparing_started_at <= NOW() THEN preparing_started_at END,
+                created_at,
+                NOW()
+              )
+            )))::BIGINT),
+            is_running = FALSE
+        WHERE id = $1
+          AND COALESCE(is_running, FALSE) = TRUE
+          AND COALESCE(ordered_at, running_time_start) IS NOT NULL
+      `,
+      [orderId],
+    );
+  }
+
+  /**
+   * Handles orders created before the timer feature and table changes made in
+   * a different restaurant screen. A timer can never remain active after its
+   * terminal order state, or after a paid dine-in table is already available.
+   */
+  private async reconcileRestaurantRunningTimers(user: AuthenticatedUser) {
+    if (!user.store_id || user.store_type !== 'RESTAURANT') return;
+
+    await this.ensureDiningTableSchema();
+    const scope = await this.getDiningScope(user);
+    await this.query(
+      `
+        UPDATE orders o
+        SET running_time_end = NOW(),
+            running_duration = GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (
+              NOW() - COALESCE(
+                CASE WHEN o.ordered_at <= NOW() THEN o.ordered_at END,
+                CASE WHEN o.running_time_start <= NOW() THEN o.running_time_start END,
+                CASE WHEN o.preparing_started_at <= NOW() THEN o.preparing_started_at END,
+                o.created_at,
+                NOW()
+              )
+            )))::BIGINT),
+            table_ended_at = CASE WHEN o.order_type IN ('DINE_IN', 'MIXED') THEN COALESCE(o.table_ended_at, NOW()) ELSE o.table_ended_at END,
+            completed_at = CASE WHEN o.order_type IN ('DINE_IN', 'MIXED') THEN COALESCE(o.completed_at, NOW()) ELSE o.completed_at END,
+            order_status = CASE
+              WHEN o.order_type IN ('DINE_IN', 'MIXED') AND o.order_status IN ('PENDING', 'PREPARING', 'READY', 'SERVED') THEN 'COMPLETED'
+              ELSE o.order_status
+            END,
+            is_running = FALSE
+        WHERE o.store_id = $1
+          AND o.order_type <> 'RETAIL'
+          AND COALESCE(o.is_running, FALSE) = TRUE
+          AND COALESCE(o.ordered_at, o.running_time_start) IS NOT NULL
+          AND (
+            -- Takeout has no table stay: serving or completion ends it.
+            (o.order_type = 'TAKEOUT' AND o.order_status IN ('SERVED', 'COMPLETED', 'CANCELLED'))
+            -- An explicitly completed dine-in lifecycle is final as well.
+            OR (o.order_type IN ('DINE_IN', 'MIXED') AND o.order_status IN ('COMPLETED', 'CANCELLED'))
+            -- Pay Now remains active only while its assigned table is occupied.
+            OR (
+              o.order_type IN ('DINE_IN', 'MIXED')
+              AND UPPER(COALESCE(o.payment_status, '')) = 'PAID'
+              AND EXISTS (
+                SELECT 1
+                FROM "DiningTable" table_row
+                WHERE table_row."businessId" = $2
+                  AND table_row."locationId" = $3
+                  AND table_row.status = 'AVAILABLE'::"DiningTableStatus"
+                  AND EXISTS (
+                    SELECT 1
+                    FROM regexp_split_to_table(COALESCE(o.table_name, ''), '\\s*\\+\\s*') AS table_name_part
+                    WHERE LOWER(TRIM(table_name_part)) = LOWER('Table ' || table_row."tableNumber")
+                  )
+              )
+            )
+          )
+      `,
+      [user.store_id, scope.businessId, scope.locationId],
+    );
   }
 
   async createPaidPosOrder(input: any) {
     await this.ensurePosOrderSchema();
+    if (input.tableName && !String(input.tableName).toLowerCase().startsWith('queue')) {
+      await this.ensureDiningTableSchema();
+    }
     const user = await this.getUserStoreScope(input.userId);
 
     if (!user.store_id || !user.store_type) {
       throw new InternalServerErrorException('User account is not linked to a store.');
     }
-    if (user.role === 'ADMIN') {
-      throw new ForbiddenException('Admin accounts can only view orders and receipts. Payment processing is restricted to POS staff.');
+    if (this.isInventoryManagerRole(user.role)) {
+      throw new ForbiddenException('Inventory Manager accounts can only view inventory workflows. Payment processing is restricted to POS Manager or POS Staff accounts.');
     }
 
     try {
-      return await this.withTransaction(async (client) => {
+      const savedOrder = await this.withTransaction(async (client) => {
         const isPaid = Boolean(input.payment);
-        const orderStatus = input.orderStatus ?? (isPaid ? 'COMPLETED' : 'PENDING');
+        const orderType = input.orderType ?? (user.store_type === 'RETAIL_STORE' ? 'RETAIL' : 'TAKEOUT');
+        const hasDiningTable = Boolean(input.tableName && !String(input.tableName).toLowerCase().startsWith('queue'));
+        const isDineInOrder = ['DINE_IN', 'MIXED'].includes(orderType);
+        const isRestaurantOrder = user.store_type === 'RESTAURANT' && orderType !== 'RETAIL';
+        // A pay-now dine-in order remains active while the table/stay lifecycle is open.
+        const isPaidDineIn = isPaid && ['DINE_IN', 'MIXED'].includes(orderType) && hasDiningTable;
+        const orderStatus = input.orderStatus ?? (isRestaurantOrder ? 'PENDING' : (isPaid && !isPaidDineIn ? 'COMPLETED' : 'PENDING'));
         const paymentStatus = input.paymentStatus ?? (isPaid ? 'PAID' : 'NOT_PAID');
+        const confirmedAt = new Date();
+        const estimatedPrepMinutes = Number(input.estimatedPrepMinutes ?? input.estimated_prep_minutes);
+        const estimatedReadyAt = Number.isFinite(estimatedPrepMinutes) && estimatedPrepMinutes > 0
+          ? new Date(confirmedAt.getTime() + estimatedPrepMinutes * 60000)
+          : null;
+        const shouldStartPreparationAtConfirmation = isRestaurantOrder;
+        const shouldStartStayAtConfirmation = isRestaurantOrder && isDineInOrder;
+        const runningTimeStart = isRestaurantOrder ? confirmedAt : null;
+        const stopsOnConfirmation =
+          (orderType === 'TAKEOUT' && ['SERVED', 'COMPLETED'].includes(orderStatus)) ||
+          (['DINE_IN', 'MIXED'].includes(orderType) && orderStatus === 'COMPLETED');
+        const runningTimeEnd = isRestaurantOrder && stopsOnConfirmation ? runningTimeStart : null;
         const orderNumber = await this.createUniqueOrderNumber(client, input.orderNumber);
         const partySize = Number(input.partySize ?? input.party_size ?? input.requiredSeats ?? 0);
         const orderRows = await this.queryWithClient<{ id: number }>(
@@ -2631,9 +3906,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             INSERT INTO orders (
               store_id, cashier_id, order_number, customer_name, order_type, table_name,
               party_size, subtotal, discount_amount, discount_type, tax_amount, service_charge,
-              total_amount, order_status, payment_status, completed_at
+              total_amount, order_status, payment_status, ordered_at, payment_at, completed_at,
+              table_started_at, preparing_started_at, ready_at, service_started_at, served_at, service_duration,
+              running_time_start, running_time_end, running_duration, is_running, estimated_prep_minutes, estimated_ready_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)
             RETURNING id
           `,
           [
@@ -2641,7 +3918,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             user.id,
             orderNumber,
             input.customerName ?? null,
-            input.orderType ?? (user.store_type === 'RETAIL_STORE' ? 'RETAIL' : 'TAKEOUT'),
+            orderType,
             input.tableName ?? null,
             Number.isFinite(partySize) && partySize > 0 ? partySize : null,
             input.subtotal ?? 0,
@@ -2652,21 +3929,42 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             input.total ?? 0,
             orderStatus,
             paymentStatus,
-            isPaid ? new Date() : null,
+            isRestaurantOrder ? confirmedAt : null,
+            isPaid ? confirmedAt : null,
+            // A dine-in Pay Now order is paid at confirmation but is not
+            // completed while its table remains occupied. Its completion time
+            // (and running timer end) are set only when that table is released.
+            orderStatus === 'COMPLETED' ? confirmedAt : null,
+            shouldStartStayAtConfirmation ? confirmedAt : null,
+            shouldStartPreparationAtConfirmation ? confirmedAt : null,
+            ['READY', 'SERVED', 'COMPLETED'].includes(orderStatus) ? confirmedAt : null,
+            shouldStartPreparationAtConfirmation ? confirmedAt : null,
+            orderStatus === 'SERVED' ? confirmedAt : null,
+            stopsOnConfirmation ? 0 : null,
+            runningTimeStart,
+            runningTimeEnd,
+            runningTimeEnd ? 0 : null,
+            Boolean(isRestaurantOrder && !stopsOnConfirmation),
+            Number.isFinite(estimatedPrepMinutes) ? estimatedPrepMinutes : null,
+            estimatedReadyAt,
           ],
         );
         const orderId = orderRows[0].id;
         const inventorySaleMovements: PosSaleMovement[] = [];
+        const inventorySyncSettings = await this.getInventorySyncSettingsForStore(client, user.store_id!);
 
       for (const item of input.items ?? []) {
+        if (isRestaurantOrder) {
+          await this.validateRestaurantModifiers(client, user.store_id!, item);
+        }
         const itemRows = await this.queryWithClient<{ id: number }>(
           client,
           `
             INSERT INTO order_items (
               order_id, product_id, variant_id, product_name, category_name, size, color,
-              quantity, unit_price, line_total, item_type, notes
+              quantity, unit_price, line_total, item_type, notes, prep_time_minutes, customization_prep_minutes
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
             RETURNING id
           `,
           [
@@ -2679,23 +3977,27 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             item.color ?? null,
             item.quantity ?? 1,
             item.price ?? 0,
-            (item.price ?? 0) * (item.quantity ?? 1),
+            item.lineTotal ?? ((item.price ?? 0) * (item.quantity ?? 1)),
             item.orderType ?? null,
             item.notes ?? null,
+            Number.isFinite(Number(item.prepTimeMinutes ?? item.prep_time_minutes)) ? Number(item.prepTimeMinutes ?? item.prep_time_minutes) : null,
+            Number.isFinite(Number(item.customizationPrepMinutes ?? item.customization_prep_minutes)) ? Number(item.customizationPrepMinutes ?? item.customization_prep_minutes) : 0,
           ],
         );
         const orderItemId = itemRows[0].id;
 
-        if (isPaid) {
+        if (inventorySyncSettings.autoDeductInventoryOnSale) {
           if (user.store_type === 'RETAIL_STORE') {
-            await this.deductRetailProduct(client, user.store_id!, orderId, orderItemId, item, item.productId ?? item.id, item.variantId ?? item.variant_id, item.quantity ?? 1, inventorySaleMovements);
+            await this.deductRetailProduct(client, user.store_id!, orderId, orderItemId, item, item.productId ?? item.id, item.variantId ?? item.variant_id, item.quantity ?? 1, inventorySaleMovements, inventorySyncSettings);
           } else {
-            await this.deductRestaurantIngredients(client, user.store_id!, orderId, orderItemId, item, inventorySaleMovements);
+            await this.deductRestaurantIngredients(client, user.store_id!, orderId, orderItemId, item, inventorySaleMovements, inventorySyncSettings);
           }
+        } else if (user.store_type === 'RESTAURANT') {
+          await this.recordRestaurantIngredientCustomizations(client, user.store_id!, orderItemId, item);
         }
       }
 
-      if (isPaid) {
+      if (inventorySyncSettings.autoDeductInventoryOnSale) {
         await this.writeInventorySaleRecords(client, { user, orderNumber, input, movements: inventorySaleMovements });
       }
 
@@ -2724,8 +4026,33 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         );
       }
 
+      if (input.tableName && !String(input.tableName).toLowerCase().startsWith('queue') && orderStatus !== 'COMPLETED') {
+        await this.occupyDiningTable(client, user, input.tableName, Number.isFinite(partySize) ? partySize : 0);
+      }
+
         return { id: orderId, order_number: orderNumber };
       });
+      await this.recordActivity({
+        userId: user.id,
+        storeId: user.store_id,
+        userName: user.full_name,
+        userRole: user.role,
+        module: 'Transactions',
+        action: 'Order Created',
+        details: `Created Order #${savedOrder.order_number}`,
+      });
+      if (input.payment) {
+        await this.recordActivity({
+          userId: user.id,
+          storeId: user.store_id,
+          userName: user.full_name,
+          userRole: user.role,
+          module: 'Payments',
+          action: 'Payment Processed',
+          details: `${input.payment.method ?? 'Cash'} Payment\nAmount: ${Number(input.total ?? 0).toFixed(2)}`,
+        });
+      }
+      return savedOrder;
     } catch (error) {
       this.handleDatabaseWriteError(error, 'Unable to save order.');
     }
@@ -2740,9 +4067,18 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     const rows = await this.query<{ next_order_number: string | number }>(
       `
-        SELECT COALESCE(MAX(NULLIF(regexp_replace(order_number, '\\D', '', 'g'), '')::BIGINT), 100000) + 1 AS next_order_number
-        FROM orders
-        WHERE store_id = $1
+        SELECT COALESCE(MAX(order_number), 100000) + 1 AS next_order_number
+        FROM (
+          SELECT NULLIF(regexp_replace(order_number, '\\D', '', 'g'), '')::BIGINT AS order_number
+          FROM orders
+          WHERE store_id = $1
+
+          UNION ALL
+
+          SELECT NULLIF(regexp_replace("transactionNumber", '\\D', '', 'g'), '')::BIGINT AS order_number
+          FROM "Sale"
+          WHERE "transactionNumber" LIKE 'POS-%'
+        ) used_numbers
       `,
       [user.store_id],
     );
@@ -2752,6 +4088,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
   async updatePosOrder(input: any) {
     await this.ensurePosOrderSchema();
+    if (input.tableName !== undefined || input.orderStatus === 'COMPLETED' || Boolean(input.payment)) {
+      await this.ensureDiningTableSchema();
+    }
     const user = await this.getUserStoreScope(input.userId);
 
     if (!user.store_id || !user.store_type) {
@@ -2762,8 +4101,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       input.paymentStatus === 'PAID' ||
       input.paymentStatus === 'VOIDED' ||
       input.paymentStatus === 'REFUNDED';
-    if (user.role === 'ADMIN' && isRestrictedTransactionUpdate) {
-      throw new ForbiddenException('Admin accounts can only view orders and receipts. Payment, refund, and void processing is restricted to POS staff.');
+    if (this.isInventoryManagerRole(user.role) && isRestrictedTransactionUpdate) {
+      throw new ForbiddenException('Inventory Manager accounts can only view inventory workflows. Payment, refund, and void processing is restricted to POS Manager or POS Staff accounts.');
     }
 
     const updates: string[] = [];
@@ -2779,7 +4118,12 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     if (input.orderStatus !== undefined) addUpdate('order_status', input.orderStatus);
     if (input.paymentStatus !== undefined) addUpdate('payment_status', input.paymentStatus);
     if (isPaymentUpdate && input.paymentStatus === undefined) addUpdate('payment_status', 'PAID');
+    if (isPaymentUpdate || input.paymentStatus === 'PAID') addUpdate('payment_at', new Date());
+    if (input.orderStatus === 'PREPARING') addUpdate('preparing_started_at', new Date());
+    if (input.orderStatus === 'READY') addUpdate('ready_at', new Date());
+    if (input.orderStatus === 'SERVED') addUpdate('served_at', new Date());
     if (input.orderStatus === 'COMPLETED') addUpdate('completed_at', new Date());
+    if (input.orderStatus === 'COMPLETED') addUpdate('table_ended_at', new Date());
 
     if (updates.length === 0 && !isPaymentUpdate) {
       throw new BadRequestException('No order updates were provided.');
@@ -2801,9 +4145,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
       // Capture the payment status before the update so a void/refund only restocks
       // when the order was actually paid (and so a repeated void is a no-op).
-      const priorRows = await this.queryWithClient<{ payment_status: string | null }>(
+      const priorRows = await this.queryWithClient<{ payment_status: string | null; table_name: string | null; party_size: string | number | null; order_type: string | null }>(
         client,
-        `SELECT payment_status FROM orders WHERE store_id = $1 AND order_number = $2 LIMIT 1`,
+        `SELECT payment_status, table_name, party_size, order_type FROM orders WHERE store_id = $1 AND order_number = $2 LIMIT 1`,
         [user.store_id, input.orderNumber],
       );
       const priorPaymentStatus = priorRows[0]?.payment_status ?? null;
@@ -2844,6 +4188,126 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         return updatedRows;
       }
 
+      const orderType = String(priorRows[0]?.order_type ?? '').toUpperCase();
+      const nextStatus = String(input.orderStatus ?? '').toUpperCase();
+
+      if (nextStatus === 'PREPARING') {
+        await this.queryWithClient(
+          client,
+          `UPDATE orders
+           SET preparing_started_at = COALESCE(preparing_started_at, NOW()),
+               ordered_at = COALESCE(ordered_at, running_time_start, preparing_started_at, created_at, NOW()),
+               service_started_at = COALESCE(service_started_at, ordered_at, running_time_start, preparing_started_at, created_at, NOW()),
+               running_time_start = COALESCE(running_time_start, ordered_at, preparing_started_at, created_at, NOW()),
+               table_started_at = CASE WHEN order_type IN ('DINE_IN', 'MIXED') THEN COALESCE(table_started_at, ordered_at, running_time_start, preparing_started_at, created_at, NOW()) ELSE table_started_at END,
+               is_running = CASE WHEN running_time_end IS NULL THEN TRUE ELSE is_running END
+           WHERE id = $1`,
+          [updatedRows[0].id],
+        );
+      }
+      if (nextStatus === 'READY') {
+        await this.queryWithClient(
+          client,
+          `UPDATE orders
+           SET ready_at = COALESCE(ready_at, NOW())
+           WHERE id = $1`,
+          [updatedRows[0].id],
+        );
+      }
+      if (nextStatus === 'SERVED') {
+        await this.queryWithClient(
+          client,
+          `UPDATE orders
+           SET served_at = COALESCE(served_at, NOW()),
+               ordered_at = COALESCE(ordered_at, running_time_start, preparing_started_at, created_at, NOW()),
+               order_status = CASE WHEN order_type = 'TAKEOUT' THEN 'COMPLETED' ELSE order_status END,
+               completed_at = CASE WHEN order_type = 'TAKEOUT' THEN COALESCE(completed_at, NOW()) ELSE completed_at END,
+               service_duration = GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (
+                 COALESCE(served_at, NOW())
+                 - COALESCE(
+                   CASE WHEN ordered_at <= COALESCE(served_at, NOW()) THEN ordered_at END,
+                   CASE WHEN running_time_start <= COALESCE(served_at, NOW()) THEN running_time_start END,
+                   CASE WHEN preparing_started_at <= COALESCE(served_at, NOW()) THEN preparing_started_at END,
+                   created_at,
+                   COALESCE(served_at, NOW())
+                 )
+               )))::BIGINT)
+           WHERE id = $1`,
+          [updatedRows[0].id],
+        );
+      }
+
+      // A queued dine-in has no customer at a table yet. Its timer starts once
+      // it is assigned to an actual table and that table becomes occupied.
+      const priorTableName = String(priorRows[0]?.table_name ?? '');
+      const isActualTable = (tableName: string) => Boolean(tableName) && !tableName.toLowerCase().startsWith('queue');
+      if (
+        ['DINE_IN', 'MIXED'].includes(orderType) &&
+        input.tableName !== undefined &&
+        isActualTable(String(input.tableName)) &&
+        !isActualTable(priorTableName) &&
+        !['COMPLETED', 'CANCELLED'].includes(nextStatus)
+      ) {
+        await this.queryWithClient(
+          client,
+          `
+            UPDATE orders
+            SET ordered_at = COALESCE(ordered_at, running_time_start, preparing_started_at, created_at, NOW()),
+                running_time_start = COALESCE(running_time_start, ordered_at, preparing_started_at, created_at, NOW()),
+                table_started_at = COALESCE(table_started_at, ordered_at, running_time_start, preparing_started_at, created_at, NOW()),
+                preparing_started_at = COALESCE(preparing_started_at, ordered_at, running_time_start, created_at, NOW()),
+                service_started_at = COALESCE(service_started_at, ordered_at, running_time_start, preparing_started_at, created_at, NOW()),
+                is_running = CASE WHEN running_time_start IS NULL THEN TRUE ELSE is_running END
+            WHERE id = $1
+              AND running_time_start IS NULL
+              AND running_time_end IS NULL
+          `,
+          [updatedRows[0].id],
+        );
+      }
+      const paymentCompletedNow =
+        (isPaymentUpdate || String(input.paymentStatus ?? '').toUpperCase() === 'PAID') &&
+        String(priorPaymentStatus ?? '').toUpperCase() !== 'PAID';
+      const shouldStopRunningTimer =
+        (orderType === 'TAKEOUT' && ['SERVED', 'COMPLETED'].includes(nextStatus)) ||
+        (['DINE_IN', 'MIXED'].includes(orderType) && paymentCompletedNow) ||
+        (['DINE_IN', 'MIXED'].includes(orderType) && String(priorPaymentStatus ?? '').toUpperCase() === 'PAID' && nextStatus === 'COMPLETED') ||
+        // Cancellation is also a terminal lifecycle event; it never pauses a timer.
+        nextStatus === 'CANCELLED';
+      if (shouldStopRunningTimer) {
+        await this.stopOrderRunningTimer(client, updatedRows[0].id);
+        await this.queryWithClient(
+          client,
+          `
+            UPDATE orders
+            SET table_ended_at = CASE WHEN order_type IN ('DINE_IN', 'MIXED') THEN COALESCE(table_ended_at, NOW()) ELSE table_ended_at END,
+                order_status = CASE
+                  WHEN order_type IN ('DINE_IN', 'MIXED') AND $2::boolean THEN 'COMPLETED'
+                  ELSE order_status
+                END,
+                completed_at = CASE
+                  WHEN order_type IN ('DINE_IN', 'MIXED') AND $2::boolean THEN COALESCE(completed_at, NOW())
+                  ELSE completed_at
+                END,
+                service_duration = CASE
+                  WHEN order_type = 'TAKEOUT'
+                    THEN COALESCE(service_duration, GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (
+                      NOW() - COALESCE(
+                        CASE WHEN ordered_at <= NOW() THEN ordered_at END,
+                        CASE WHEN running_time_start <= NOW() THEN running_time_start END,
+                        CASE WHEN preparing_started_at <= NOW() THEN preparing_started_at END,
+                        created_at,
+                        NOW()
+                      )
+                    )))::BIGINT))
+                  ELSE service_duration
+                END
+            WHERE id = $1
+          `,
+          [updatedRows[0].id, paymentCompletedNow],
+        );
+      }
+
       if (isPaymentUpdate) {
         const order = updatedRows[0];
         const paymentNumber = await this.createUniquePaymentNumber(client, input.payment.paymentNumber ?? `PAY-${order.order_number}`);
@@ -2868,10 +4332,21 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ],
         );
 
-        // Deferred payment (e.g. dine-in / open tab paid later): deduct stock and
-        // mirror into the inventory "Sale"/"StockMovement" tables, just like a paid-
-        // at-creation order. Guarded so it never double-deducts.
-        await this.applyInventoryForPaidPosOrder(client, user, order, input.payment);
+        // Inventory is reserved/deducted when the order is confirmed. Payment only
+        // records settlement and must not replay deduction for Pay Later orders.
+      }
+
+      const nextTableName = input.tableName ?? priorRows[0]?.table_name ?? null;
+      const nextPartySize = Number(input.partySize ?? priorRows[0]?.party_size ?? 0);
+      if (input.tableName && !String(input.tableName).toLowerCase().startsWith('queue') && input.orderStatus !== 'COMPLETED') {
+        await this.occupyDiningTable(client, user, input.tableName, Number.isFinite(nextPartySize) ? nextPartySize : 0);
+      }
+      const hasDiningTable = Boolean(nextTableName && !String(nextTableName).toLowerCase().startsWith('queue'));
+      if (hasDiningTable && input.orderStatus === 'COMPLETED' && !isPaymentUpdate && priorPaymentStatus !== 'PAID') {
+        throw new BadRequestException('Cannot release a Pay Later table before payment is completed.');
+      }
+      if (input.orderStatus === 'COMPLETED') {
+        await this.releaseDiningTable(client, user, nextTableName, Number.isFinite(nextPartySize) ? nextPartySize : 0);
       }
 
       // Void/refund of a paid order: return the deducted stock and reflect it on the
@@ -2912,6 +4387,48 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       throw new NotFoundException('Order not found.');
     }
 
+    if (input.payment) {
+      await this.recordActivity({
+        userId: user.id,
+        storeId: user.store_id,
+        userName: user.full_name,
+        userRole: user.role,
+        module: 'Payments',
+        action: 'Payment Processed',
+        details: `${input.payment.method ?? 'Cash'} Payment\nAmount: ${Number(input.payment.amountPaid ?? rows[0].total_amount ?? 0).toFixed(2)}\nOrder #${rows[0].order_number}`,
+      });
+    } else if (String(input.paymentStatus ?? '').toUpperCase() === 'REFUNDED' || String(input.paymentStatus ?? '').toUpperCase() === 'PARTIALLY_REFUNDED') {
+      await this.recordActivity({
+        userId: user.id,
+        storeId: user.store_id,
+        userName: user.full_name,
+        userRole: user.role,
+        module: 'Void & Refund',
+        action: 'Refund Processed',
+        details: `Refund processed\nOrder #${rows[0].order_number}\nReason: ${input.refundReason ?? input.reason ?? 'Customer request'}`,
+      });
+    } else if (String(input.paymentStatus ?? '').toUpperCase() === 'VOIDED') {
+      await this.recordActivity({
+        userId: user.id,
+        storeId: user.store_id,
+        userName: user.full_name,
+        userRole: user.role,
+        module: 'Void & Refund',
+        action: 'Void Approved',
+        details: `Voided Order #${rows[0].order_number}\nReason: ${input.voidReason ?? input.reason ?? 'No reason provided'}`,
+      });
+    } else if (input.orderStatus) {
+      await this.recordActivity({
+        userId: user.id,
+        storeId: user.store_id,
+        userName: user.full_name,
+        userRole: user.role,
+        module: 'Transactions',
+        action: `Order ${String(input.orderStatus).charAt(0).toUpperCase()}${String(input.orderStatus).slice(1).toLowerCase()}`,
+        details: `Order #${rows[0].order_number} status changed to ${input.orderStatus}`,
+      });
+    }
+
     return rows[0];
   }
 
@@ -2922,6 +4439,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     if (!user.store_id || !user.store_type) {
       throw new InternalServerErrorException('User account is not linked to a store.');
     }
+
+    await this.reconcileRestaurantRunningTimers(user);
 
     return this.query<any>(
       `
@@ -2940,8 +4459,30 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           o.total_amount,
           o.order_status,
           o.payment_status,
+          COALESCE(o.ordered_at, o.running_time_start, o.preparing_started_at, o.created_at) AS ordered_at,
           o.created_at,
           o.completed_at,
+          o.payment_at,
+          o.preparing_started_at,
+          o.ready_at,
+          o.service_started_at,
+          o.served_at,
+          o.service_duration,
+          COALESCE(o.table_started_at, CASE WHEN o.order_type IN ('DINE_IN', 'MIXED') THEN COALESCE(o.ordered_at, o.running_time_start, o.preparing_started_at, o.created_at) END) AS table_started_at,
+          COALESCE(
+            o.table_ended_at,
+            CASE
+              WHEN o.order_type IN ('DINE_IN', 'MIXED')
+                AND (o.running_time_end IS NOT NULL OR o.order_status IN ('COMPLETED', 'CANCELLED'))
+              THEN COALESCE(o.running_time_end, o.completed_at, o.payment_at, o.updated_at)
+            END
+          ) AS table_ended_at,
+          o.running_time_start,
+          o.running_time_end,
+          o.running_duration,
+          o.is_running,
+          o.estimated_prep_minutes,
+          o.estimated_ready_at,
           p.payment_number,
           p.payment_method,
           p.amount_paid,
@@ -2962,7 +4503,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
                 'line_total', oi.line_total,
                 'image_url', COALESCE(pv.image_url, prod.image_url),
                 'item_type', oi.item_type,
-                'notes', oi.notes
+                'notes', oi.notes,
+                'prep_time_minutes', oi.prep_time_minutes,
+                'customization_prep_minutes', oi.customization_prep_minutes,
+                'added_ingredients', COALESCE(customizations.added, '[]'::json),
+                'removed_ingredients', COALESCE(customizations.removed, '[]'::json),
+                'changed_ingredients', COALESCE(customizations.changed, '[]'::json),
+                'replaced_ingredients', COALESCE(customizations.replaced, '[]'::json),
+                'modifiers', COALESCE(customizations.modifiers, '[]'::json)
               )
               ORDER BY oi.id ASC
             ) FILTER (WHERE oi.id IS NOT NULL),
@@ -2973,6 +4521,28 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         LEFT JOIN users cashier_user ON cashier_user.id = o.cashier_id
         LEFT JOIN users payment_user ON payment_user.id = p.processed_by
         LEFT JOIN order_items oi ON oi.order_id = o.id
+        LEFT JOIN LATERAL (
+          SELECT
+            COALESCE(json_agg(DISTINCT CONCAT(
+              COALESCE(oic.notes, oic.replacement_ingredient_name, oic.original_ingredient_name, 'Add-on'),
+              CASE WHEN oic.new_quantity IS NOT NULL THEN CONCAT(' ', oic.new_quantity::text, COALESCE(CONCAT(' ', oic.unit), '')) ELSE '' END
+            )) FILTER (WHERE oic.customization_type IN ('ADD', 'EXTRA')), '[]'::json) AS added,
+            COALESCE(json_agg(DISTINCT COALESCE(oic.original_ingredient_name, oic.notes)) FILTER (WHERE oic.customization_type = 'REMOVE'), '[]'::json) AS removed,
+            COALESCE(json_agg(DISTINCT COALESCE(oic.notes, CONCAT(
+              COALESCE(oic.original_ingredient_name, 'Ingredient'), ': ',
+              COALESCE(oic.original_quantity::text, '0'), COALESCE(CONCAT(' ', oic.unit), ''), ' -> ',
+              COALESCE(oic.new_quantity::text, '0'), COALESCE(CONCAT(' ', oic.unit), '')
+            ))) FILTER (WHERE oic.customization_type IN ('CHANGE_QUANTITY', 'QUANTITY_CHANGE')), '[]'::json) AS changed,
+            COALESCE(json_agg(DISTINCT CONCAT(
+              COALESCE(oic.original_ingredient_name, 'Ingredient'), ' -> ',
+              COALESCE(oic.replacement_ingredient_name, 'Replacement')
+            )) FILTER (WHERE oic.customization_type = 'REPLACE'), '[]'::json) AS replaced,
+            COALESCE(json_agg(DISTINCT oic.notes) FILTER (
+              WHERE oic.customization_type = 'NOTE' AND oic.notes IS NOT NULL
+            ), '[]'::json) AS modifiers
+          FROM order_item_customizations oic
+          WHERE oic.order_item_id = oi.id
+        ) customizations ON TRUE
         LEFT JOIN products prod ON prod.id = oi.product_id
         LEFT JOIN product_variants pv ON pv.id = oi.variant_id
         WHERE o.store_id = $1
@@ -3047,6 +4617,283 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  private async recordRestaurantInstructionModifiers(client: PoolClient, storeId: number, orderItemId: number, item: any) {
+    const modifiers = Array.isArray(item.modifiers) ? item.modifiers : [];
+    for (const modifier of modifiers) {
+      if (!['note', 'size_variant'].includes(String(modifier?.type ?? '').toLowerCase())) continue;
+      const label = String(modifier?.name ?? '').trim();
+      if (!label) continue;
+      await this.queryWithClient(
+        client,
+        `
+          INSERT INTO order_item_customizations (
+            store_id, order_item_id, customization_type, notes,
+            original_quantity, new_quantity, additional_cost
+          )
+          VALUES ($1, $2, 'NOTE', $3, 0, 0, $4)
+        `,
+        [storeId, orderItemId, label, Number(modifier.priceDelta ?? 0)],
+      );
+    }
+  }
+
+  private async validateRestaurantModifiers(client: PoolClient, storeId: number, item: any) {
+    const selectedModifiers = Array.isArray(item.modifiers) ? item.modifiers : [];
+    const submittedIngredients = Array.isArray(item.ingredients) ? item.ingredients : [];
+    const hasSubmittedAddOn = submittedIngredients.some((ingredient: any) =>
+      String(ingredient.customization_type ?? ingredient.customizationType ?? '').toUpperCase() === 'ADD',
+    );
+    const hasSubmittedBasicAdjustment = submittedIngredients.some((ingredient: any) => {
+      const type = String(ingredient.customization_type ?? ingredient.customizationType ?? '').toUpperCase();
+      return ingredient.removed === true || type === 'REMOVE' || type === 'CHANGE_QUANTITY' || type === 'QUANTITY_CHANGE';
+    });
+    if (selectedModifiers.length === 0) {
+      if (hasSubmittedAddOn) throw new BadRequestException('An add-on selection is required for added ingredients.');
+      if (hasSubmittedBasicAdjustment) throw new BadRequestException('A configured modifier is required for ingredient adjustments.');
+      return;
+    }
+    const productId = Number(item.productId ?? item.id ?? 0);
+    if (!Number.isFinite(productId) || productId <= 0) {
+      throw new BadRequestException('A valid menu item is required for modifiers.');
+    }
+
+    const rows = await this.queryWithClient<{ modifiers: any[]; product_price: string | number }>(
+      client,
+      `
+        SELECT COALESCE(recipe.modifiers, '[]'::jsonb) AS modifiers,
+               product.price AS product_price
+        FROM products product
+        LEFT JOIN "InventoryItem" menu_item ON menu_item.id = product.inventory_item_id
+        LEFT JOIN LATERAL (
+          SELECT configured.modifiers
+          FROM "Recipe" configured
+          WHERE COALESCE(configured."isActive", TRUE) = TRUE
+            AND (menu_item."businessId" IS NULL OR configured."businessId" = menu_item."businessId")
+            AND (
+              configured."menuItemId" = product.inventory_item_id
+              OR lower(trim(COALESCE(configured.name, ''))) = lower(trim(COALESCE(product.name, '')))
+            )
+          ORDER BY CASE WHEN configured."menuItemId" = product.inventory_item_id THEN 0 ELSE 1 END,
+                   configured."updatedAt" DESC NULLS LAST
+          LIMIT 1
+        ) recipe ON TRUE
+        WHERE product.id = $1 AND product.store_id = $2
+        LIMIT 1
+      `,
+      [productId, storeId],
+    );
+    const configuredModifiers = Array.isArray(rows[0]?.modifiers) ? rows[0].modifiers : [];
+    const configuredById = new Map(configuredModifiers.map((modifier: any) => [String(modifier.id), modifier]));
+    const sameNumber = (left: unknown, right: unknown) => Math.abs(Number(left ?? 0) - Number(right ?? 0)) < 0.000001;
+    const selectedIds = new Set<string>();
+    const approvedAddOnIngredientIds = new Set<number>();
+    const approvedAdjustmentIngredientIds = new Set<number>();
+    const configuredBasePrice = Number(rows[0]?.product_price ?? 0);
+    let configuredSurchargePerItem = 0;
+    const configuredSelectedSizeVariants = selectedModifiers
+      .map((selected: any) => configuredById.get(String(selected?.id ?? '')))
+      .filter((modifier: any) => modifier?.type === 'size_variant');
+    if (configuredSelectedSizeVariants.length > 1) {
+      throw new BadRequestException('Only one size variant may be selected for a menu item.');
+    }
+    const selectedSizeVariant: any = configuredSelectedSizeVariants[0];
+    const selectedSizeMultiplier = selectedSizeVariant ? Number(selectedSizeVariant.sizeMultiplier ?? 1) : 1;
+    if (!Number.isFinite(selectedSizeMultiplier) || selectedSizeMultiplier <= 0) {
+      throw new BadRequestException('The selected size has an invalid BOM multiplier.');
+    }
+    const explicitlyAdjustedIngredientIds = new Set<number>();
+
+    if (!sameNumber(item.price, configuredBasePrice)) {
+      throw new BadRequestException('The menu item price changed. Please refresh the order and try again.');
+    }
+
+    for (const selected of selectedModifiers) {
+      const selectedId = String(selected?.id ?? '');
+      if (!selectedId || selectedIds.has(selectedId)) {
+        throw new BadRequestException('Duplicate or invalid modifier selection.');
+      }
+      selectedIds.add(selectedId);
+      const configured: any = configuredById.get(selectedId);
+      if (!configured) {
+        throw new BadRequestException(`Modifier ${String(selected?.name ?? '') || 'selection'} is not allowed for this menu item.`);
+      }
+      if (String(selected.name ?? '') !== String(configured.name ?? '')) {
+        throw new BadRequestException('A modifier label does not match the configured recipe option.');
+      }
+      if (String(configured.type ?? 'note') !== String(selected.type ?? 'note')) {
+        throw new BadRequestException(`Modifier ${configured.name ?? selected.name} has an invalid behavior.`);
+      }
+      if (configured.type === 'size_variant'
+        && (!sameNumber(selected.sizeMultiplier, configured.sizeMultiplier)
+          || !sameNumber(selected.sellingPrice, configured.sellingPrice))) {
+        throw new BadRequestException(`Size variant ${configured.name ?? selected.name} does not match its configured multiplier or selling price.`);
+      }
+      const selectedCount = configured.type === 'add_on' ? Number(selected.selectedQuantity ?? 1) : 1;
+      const configuredPrice = configured.type === 'add_on' || configured.type === 'size_variant'
+        ? Number(configured.priceDelta ?? 0)
+        : 0;
+      if (!sameNumber(selected.priceDeltaPercent, configured.priceDeltaPercent)) {
+        throw new BadRequestException(`Modifier ${configured.name ?? selected.name} has an invalid percentage price.`);
+      }
+      if (configured.type !== 'add_on') {
+        if (!sameNumber(selected.priceDelta, configuredPrice)) {
+          throw new BadRequestException(`Modifier ${configured.name ?? selected.name} has an invalid price.`);
+        }
+        configuredSurchargePerItem += (
+          configuredPrice
+          + configuredBasePrice * (Number(configured.priceDeltaPercent ?? 0) / 100)
+        ) * selectedCount;
+      }
+      if (configured.type === 'add_on') {
+        const selectedQuantity = Number(selected.selectedQuantity ?? 1);
+        const maximum = Number(configured.maxQuantity);
+        if (!Number.isInteger(maximum) || maximum <= 0) {
+          throw new BadRequestException(`${configured.name ?? 'Add-on'} does not have a configured maximum count.`);
+        }
+        if (!Number.isInteger(selectedQuantity) || selectedQuantity < 1 || selectedQuantity > maximum) {
+          throw new BadRequestException(`${configured.name ?? 'Add-on'} allows a maximum of ${maximum}.`);
+        }
+        if (!configured.itemId || String(selected.itemId ?? '') !== String(configured.itemId)) {
+          throw new BadRequestException(`${configured.name ?? 'Add-on'} is not linked to the configured inventory item.`);
+        }
+        if (!sameNumber(selected.quantity, configured.quantity) || String(selected.unit ?? '') !== String(configured.unit ?? '')) {
+          throw new BadRequestException(`${configured.name ?? 'Add-on'} has an invalid portion.`);
+        }
+
+        const inventoryRows = await this.queryWithClient<{ id: number; weighted_average_cost: string | number }>(
+          client,
+          `
+            SELECT ii.id, COALESCE(inv.price, 0) AS weighted_average_cost
+            FROM ingredients_inventory ii
+            LEFT JOIN "InventoryItem" inv ON inv.id = ii.inventory_item_id
+            WHERE ii.store_id = $1 AND ii.inventory_item_id = $2
+            LIMIT 1
+          `,
+          [storeId, configured.itemId],
+        );
+        const ingredientId = Number(inventoryRows[0]?.id ?? 0);
+        approvedAddOnIngredientIds.add(ingredientId);
+        if (!sameNumber(selected.priceDelta, configured.priceDelta)) {
+          throw new BadRequestException(`${configured.name ?? 'Add-on'} has an invalid configured price.`);
+        }
+        configuredSurchargePerItem += (
+          Number(configured.priceDelta ?? 0)
+          + configuredBasePrice * (Number(configured.priceDeltaPercent ?? 0) / 100)
+        ) * selectedCount;
+        const expectedPortion = Number(configured.quantity ?? 0) * selectedQuantity;
+        const expectedAdditionalCost = Number(configured.priceDelta ?? 0) * selectedQuantity;
+        const submittedIngredient = submittedIngredients.find((ingredient: any) =>
+          String(ingredient.customization_type ?? ingredient.customizationType ?? '').toUpperCase() === 'ADD'
+          && Number(ingredient.replacement_ingredient_id ?? ingredient.replacementIngredientId ?? ingredient.ingredient_id ?? ingredient.ingredientId ?? 0) === ingredientId,
+        );
+        if (!ingredientId || !submittedIngredient) {
+          throw new BadRequestException(`${configured.name ?? 'Add-on'} is missing its configured inventory deduction.`);
+        }
+        if (!sameNumber(submittedIngredient.quantity, expectedPortion)
+          || String(submittedIngredient.unit ?? '') !== String(configured.unit ?? '')
+          || !sameNumber(submittedIngredient.additional_price ?? submittedIngredient.additionalCost, expectedAdditionalCost)) {
+          throw new BadRequestException(`${configured.name ?? 'Add-on'} does not match its configured portion or price.`);
+        }
+      } else if (configured.type === 'remove' || configured.type === 'ingredient_level' || configured.type === 'less') {
+        if (!configured.itemId || String(selected.itemId ?? '') !== String(configured.itemId)) {
+          throw new BadRequestException(`${configured.name ?? 'Ingredient adjustment'} is not linked to the configured recipe ingredient.`);
+        }
+        const inventoryRows = await this.queryWithClient<{ id: number; quantity_required: string | number | null }>(
+          client,
+          `SELECT ii.id, pi.quantity_required
+           FROM ingredients_inventory ii
+           LEFT JOIN product_ingredients pi
+             ON pi.store_id = ii.store_id AND pi.product_id = $3 AND pi.ingredient_id = ii.id
+           WHERE ii.store_id = $1 AND ii.inventory_item_id = $2
+           LIMIT 1`,
+          [storeId, configured.itemId, productId],
+        );
+        const ingredientId = Number(inventoryRows[0]?.id ?? 0);
+        approvedAdjustmentIngredientIds.add(ingredientId);
+        explicitlyAdjustedIngredientIds.add(ingredientId);
+        const submittedIngredient = submittedIngredients.find((ingredient: any) =>
+          Number(ingredient.ingredient_id ?? ingredient.ingredientId ?? 0) === ingredientId,
+        );
+        if (!ingredientId || !submittedIngredient) {
+          throw new BadRequestException(`${configured.name ?? 'Ingredient adjustment'} does not match a basic recipe ingredient.`);
+        }
+        const originalQuantity = Number(submittedIngredient.original_quantity ?? submittedIngredient.originalQuantity ?? 0);
+        const submittedQuantity = Number(submittedIngredient.quantity ?? 0);
+        const configuredOriginalQuantity = Number(inventoryRows[0]?.quantity_required ?? originalQuantity);
+        const isIngredientLevel = configured.type === 'ingredient_level' || configured.type === 'less';
+        const levelPercent = configured.type === 'less' ? 50 : Number(configured.levelPercent ?? 100);
+        const exactSizeQuantity = selectedSizeVariant?.ingredientQuantities?.[String(configured.itemId ?? '')];
+        const configuredVariantQuantity = exactSizeQuantity != null && Number.isFinite(Number(exactSizeQuantity))
+          ? Number(exactSizeQuantity)
+          : configuredOriginalQuantity * selectedSizeMultiplier;
+        const validAdjustment = isIngredientLevel
+          ? originalQuantity > 0
+            && sameNumber(originalQuantity, configuredOriginalQuantity)
+            && levelPercent >= 0 && levelPercent <= 100
+            && sameNumber(submittedQuantity, configuredVariantQuantity * (levelPercent / 100))
+          : submittedIngredient.removed === true || submittedQuantity <= 0;
+        if (!validAdjustment) {
+          throw new BadRequestException(`${configured.name ?? 'Ingredient adjustment'} does not match its configured action.`);
+        }
+      }
+    }
+
+    if (selectedSizeVariant) {
+      const baseIngredients = await this.queryWithClient<{ ingredient_id: number; inventory_item_id: string | null; quantity_required: string | number }>(
+        client,
+        `SELECT pi.ingredient_id, ii.inventory_item_id, pi.quantity_required
+         FROM product_ingredients pi
+         JOIN ingredients_inventory ii ON ii.id = pi.ingredient_id AND ii.store_id = pi.store_id
+         WHERE pi.store_id = $1 AND pi.product_id = $2 AND pi.ingredient_id IS NOT NULL`,
+        [storeId, productId],
+      );
+      for (const baseIngredient of baseIngredients) {
+        const ingredientId = Number(baseIngredient.ingredient_id);
+        approvedAdjustmentIngredientIds.add(ingredientId);
+        if (explicitlyAdjustedIngredientIds.has(ingredientId)) continue;
+        const submittedIngredient = submittedIngredients.find((ingredient: any) =>
+          Number(ingredient.ingredient_id ?? ingredient.ingredientId ?? 0) === ingredientId,
+        );
+        if (!submittedIngredient) {
+          throw new BadRequestException(`${selectedSizeVariant.name ?? 'Size variant'} is missing a recipe ingredient.`);
+        }
+        const originalQuantity = Number(submittedIngredient.original_quantity ?? submittedIngredient.originalQuantity ?? 0);
+        const configuredOriginalQuantity = Number(baseIngredient.quantity_required ?? 0);
+        const exactSizeQuantity = selectedSizeVariant.ingredientQuantities?.[String(baseIngredient.inventory_item_id ?? '')];
+        const configuredVariantQuantity = exactSizeQuantity != null && Number.isFinite(Number(exactSizeQuantity))
+          ? Number(exactSizeQuantity)
+          : configuredOriginalQuantity * selectedSizeMultiplier;
+        if (!sameNumber(originalQuantity, configuredOriginalQuantity)
+          || !sameNumber(submittedIngredient.quantity, configuredVariantQuantity)) {
+          throw new BadRequestException(`${selectedSizeVariant.name ?? 'Size variant'} does not match its configured ingredient quantities.`);
+        }
+      }
+    }
+
+    const unauthorizedAddOn = submittedIngredients.find((ingredient: any) => {
+      if (String(ingredient.customization_type ?? ingredient.customizationType ?? '').toUpperCase() !== 'ADD') return false;
+      const ingredientId = Number(ingredient.replacement_ingredient_id ?? ingredient.replacementIngredientId ?? ingredient.ingredient_id ?? ingredient.ingredientId ?? 0);
+      return !approvedAddOnIngredientIds.has(ingredientId);
+    });
+    if (unauthorizedAddOn) {
+      throw new BadRequestException('An add-on is not approved for this menu item.');
+    }
+    const unauthorizedAdjustment = submittedIngredients.find((ingredient: any) => {
+      const type = String(ingredient.customization_type ?? ingredient.customizationType ?? '').toUpperCase();
+      const adjusted = ingredient.removed === true || type === 'REMOVE' || type === 'CHANGE_QUANTITY' || type === 'QUANTITY_CHANGE';
+      const ingredientId = Number(ingredient.ingredient_id ?? ingredient.ingredientId ?? 0);
+      return adjusted && !approvedAdjustmentIngredientIds.has(ingredientId);
+    });
+    if (unauthorizedAdjustment) {
+      throw new BadRequestException('An ingredient adjustment is not approved for this menu item.');
+    }
+    const itemQuantity = Number(item.quantity ?? 1);
+    const expectedLineTotal = (configuredBasePrice + configuredSurchargePerItem) * itemQuantity;
+    if (!Number.isFinite(itemQuantity) || itemQuantity <= 0 || !sameNumber(item.lineTotal, expectedLineTotal)) {
+      throw new BadRequestException('The modified item total is invalid. Please review the order again.');
+    }
+  }
+
   private async replaceProductVariants(client: PoolClient, productId: number, variants: any[]) {
     await this.queryWithClient(
       client,
@@ -3093,7 +4940,18 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return `${String(productId).padStart(8, '0')}${String(index + 1).padStart(4, '0')}`;
   }
 
-  private async deductRetailProduct(client: PoolClient, storeId: number, orderId: number, orderItemId: number, item: any, productId: number, variantId: number, quantity: number, movements: PosSaleMovement[]) {
+  private async deductRetailProduct(
+    client: PoolClient,
+    storeId: number,
+    orderId: number,
+    orderItemId: number,
+    item: any,
+    productId: number,
+    variantId: number,
+    quantity: number,
+    movements: PosSaleMovement[],
+    inventorySyncSettings: InventorySyncSettings,
+  ) {
     const variantRows = await this.queryWithClient<{ stock_quantity: number; product_id: number; size: string | null; color: string | null; inventory_item_id: string | null }>(
       client,
       `
@@ -3114,7 +4972,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       throw new NotFoundException('Product variant was not found for this store.');
     }
 
-    if (Number(variant.stock_quantity ?? 0) < quantity) {
+    if (!inventorySyncSettings.allowNegativeStock && Number(variant.stock_quantity ?? 0) < quantity) {
       throw new BadRequestException('Not enough variant stock for this order.');
     }
 
@@ -3196,9 +5054,131 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  private async deductRestaurantIngredients(client: PoolClient, storeId: number, orderId: number, orderItemId: number, item: any, movements: PosSaleMovement[]) {
-    const itemQuantity = Number(item.quantity ?? 1);
+  private async resolveProductIngredientId(
+    client: PoolClient,
+    storeId: number,
+    productId: number | null,
+    productIngredientId: number | null,
+    originalIngredientId: number | null,
+  ) {
+    if (!productId) return null;
+
+    if (productIngredientId) {
+      const rows = await this.queryWithClient<{ id: number }>(
+        client,
+        `
+          SELECT id
+          FROM product_ingredients
+          WHERE id = $1
+            AND store_id = $2
+            AND product_id = $3
+          LIMIT 1
+        `,
+        [productIngredientId, storeId, productId],
+      );
+      if (rows[0]?.id) return rows[0].id;
+    }
+
+    if (!originalIngredientId) return null;
+
+    const linkedRows = await this.queryWithClient<{ id: number }>(
+      client,
+      `
+        SELECT id
+        FROM product_ingredients
+        WHERE store_id = $1
+          AND product_id = $2
+          AND ingredient_id = $3
+        LIMIT 1
+      `,
+      [storeId, productId, originalIngredientId],
+    );
+    return linkedRows[0]?.id ?? null;
+  }
+
+  private async recordRestaurantIngredientCustomizations(client: PoolClient, storeId: number, orderItemId: number, item: any) {
     const ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
+    const finiteNumberOrNull = (value: unknown) => {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    };
+
+    for (const ingredient of ingredients) {
+      const originalId = finiteNumberOrNull(ingredient.ingredient_id ?? ingredient.ingredientId);
+      const replacementId = finiteNumberOrNull(ingredient.replacement_ingredient_id ?? ingredient.replacementIngredientId);
+      const productIngredientId = await this.resolveProductIngredientId(
+        client,
+        storeId,
+        finiteNumberOrNull(item.productId ?? item.id),
+        finiteNumberOrNull(ingredient.product_ingredient_id ?? ingredient.productIngredientId ?? (originalId ? ingredient.id : null)),
+        originalId,
+      );
+
+      const removed = ingredient.removed === true || Number(ingredient.quantity ?? 0) <= 0;
+      const originalQuantity = Number(ingredient.original_quantity ?? ingredient.originalQuantity ?? ingredient.quantity ?? 0);
+      const ingredientQuantity = Number(ingredient.quantity ?? 0);
+      const additionalCost = Number(ingredient.additional_price ?? ingredient.additionalCost ?? 0);
+      const customizationType = ingredient.customization_type ?? ingredient.customizationType ?? null;
+      const isAddedIngredient = ['ADD', 'EXTRA'].includes(String(customizationType ?? '').toUpperCase());
+      const persistedOriginalId = isAddedIngredient ? null : originalId;
+      const persistedReplacementId = isAddedIngredient ? (replacementId ?? originalId) : replacementId;
+      const persistedProductIngredientId = isAddedIngredient ? null : productIngredientId;
+      const hasCustomization = Boolean(
+        customizationType ||
+          removed ||
+          replacementId ||
+          additionalCost !== 0 ||
+          (Number.isFinite(originalQuantity) && Number.isFinite(ingredientQuantity) && ingredientQuantity !== originalQuantity),
+      );
+
+      if (!hasCustomization || (!originalId && !replacementId && !productIngredientId)) {
+        continue;
+      }
+
+      await this.queryWithClient(
+        client,
+        `
+          INSERT INTO order_item_customizations (
+            store_id, order_item_id, product_ingredient_id, original_ingredient_id,
+            replacement_ingredient_id, customization_type, original_ingredient_name,
+            replacement_ingredient_name, original_quantity, new_quantity, unit,
+            additional_cost, notes
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        `,
+        [
+          storeId,
+          orderItemId,
+          persistedProductIngredientId,
+          persistedOriginalId,
+          persistedReplacementId,
+          customizationType ?? (removed ? 'REMOVE' : replacementId ? 'REPLACE' : 'CHANGE_QUANTITY'),
+          ingredient.original_name ?? ingredient.name ?? null,
+          ingredient.replacement_name ?? null,
+          Number.isFinite(originalQuantity) ? originalQuantity : null,
+          Number.isFinite(ingredientQuantity) ? ingredientQuantity : 0,
+          ingredient.unit ?? null,
+          additionalCost,
+          ingredient.notes ?? null,
+        ],
+      );
+    }
+    await this.recordRestaurantInstructionModifiers(client, storeId, orderItemId, item);
+  }
+
+  private async deductRestaurantIngredients(
+    client: PoolClient,
+    storeId: number,
+    orderId: number,
+    orderItemId: number,
+    item: any,
+    movements: PosSaleMovement[],
+    inventorySyncSettings: InventorySyncSettings,
+    options: { recordCustomizations?: boolean } = {},
+  ) {
+    const itemQuantity = Number(item.quantity ?? 1);
+    const shouldRecordCustomizations = options.recordCustomizations !== false;
+    let ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
     const finiteNumberOrNull = (value: unknown) => {
       const parsed = Number(value);
       return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
@@ -3247,10 +5227,37 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
+    if (ingredients.length === 0 && dishProductId) {
+      ingredients = await this.queryWithClient<any>(
+        client,
+        `
+          SELECT
+            pi.id AS product_ingredient_id,
+            pi.ingredient_id,
+            COALESCE(ii.ingredient_name, pi.ingredient_name) AS name,
+            pi.quantity_required AS quantity,
+            pi.quantity_required AS original_quantity,
+            pi.unit
+          FROM product_ingredients pi
+          LEFT JOIN ingredients_inventory ii ON ii.id = pi.ingredient_id
+          WHERE pi.store_id = $1
+            AND pi.product_id = $2
+          ORDER BY pi.id ASC
+        `,
+        [storeId, dishProductId],
+      );
+    }
+
     for (const ingredient of ingredients) {
       const originalId = finiteNumberOrNull(ingredient.ingredient_id ?? ingredient.ingredientId);
       const replacementId = finiteNumberOrNull(ingredient.replacement_ingredient_id ?? ingredient.replacementIngredientId);
-      const productIngredientId = finiteNumberOrNull(ingredient.product_ingredient_id ?? ingredient.productIngredientId ?? (originalId ? ingredient.id : null));
+      const productIngredientId = await this.resolveProductIngredientId(
+        client,
+        storeId,
+        finiteNumberOrNull(item.productId ?? item.id),
+        finiteNumberOrNull(ingredient.product_ingredient_id ?? ingredient.productIngredientId ?? (originalId ? ingredient.id : null)),
+        originalId,
+      );
       const ingredientId = replacementId ?? originalId;
       const removed = ingredient.removed === true || Number(ingredient.quantity ?? 0) <= 0;
       const quantity = removed ? 0 : Number(ingredient.quantity ?? ingredient.quantity_required ?? 0) * itemQuantity;
@@ -3258,6 +5265,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       const ingredientQuantity = Number(ingredient.quantity ?? 0);
       const additionalCost = Number(ingredient.additional_price ?? ingredient.additionalCost ?? 0);
       const customizationType = ingredient.customization_type ?? ingredient.customizationType ?? null;
+      const isAddedIngredient = ['ADD', 'EXTRA'].includes(String(customizationType ?? '').toUpperCase());
+      const persistedOriginalId = isAddedIngredient ? null : originalId;
+      const persistedReplacementId = isAddedIngredient ? (replacementId ?? originalId) : replacementId;
+      const persistedProductIngredientId = isAddedIngredient ? null : productIngredientId;
       const hasCustomization = Boolean(
         customizationType ||
           removed ||
@@ -3270,7 +5281,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
 
-      if (hasCustomization) {
+      if (shouldRecordCustomizations && hasCustomization) {
         await this.queryWithClient(
           client,
           `
@@ -3285,9 +5296,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           [
             storeId,
             orderItemId,
-            productIngredientId,
-            originalId,
-            replacementId,
+            persistedProductIngredientId,
+            persistedOriginalId,
+            persistedReplacementId,
             customizationType ?? (removed ? 'REMOVE' : replacementId ? 'REPLACE' : 'CHANGE_QUANTITY'),
             ingredient.original_name ?? ingredient.name ?? null,
             ingredient.replacement_name ?? null,
@@ -3304,14 +5315,20 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
 
-      const inventoryRows = await this.queryWithClient<{ quantity_available: string | number; unit: string; inventory_item_id: string | null }>(
+      const inventoryRows = await this.queryWithClient<{
+        quantity_available: string | number;
+        unit: string;
+        inventory_item_id: string | null;
+        expiryDate: Date | string | null;
+      }>(
         client,
         `
-          SELECT quantity_available, unit, inventory_item_id
-          FROM ingredients_inventory
-          WHERE id = $1
-            AND store_id = $2
-          FOR UPDATE
+          SELECT ii.quantity_available, ii.unit, ii.inventory_item_id, inv."expiryDate"
+          FROM ingredients_inventory ii
+          LEFT JOIN "InventoryItem" inv ON inv.id = ii.inventory_item_id
+          WHERE ii.id = $1
+            AND ii.store_id = $2
+          FOR UPDATE OF ii
         `,
         [ingredientId, storeId],
       );
@@ -3321,7 +5338,17 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         throw new NotFoundException('Ingredient was not found for this store.');
       }
 
-      if (Number(inventory.quantity_available ?? 0) < quantity) {
+      const expiryDate = inventory.expiryDate ? new Date(inventory.expiryDate) : null;
+      if (expiryDate && !Number.isNaN(expiryDate.getTime())) {
+        expiryDate.setHours(0, 0, 0, 0);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        if (expiryDate < today) {
+          throw new BadRequestException('Ingredient inventory for this order is expired.');
+        }
+      }
+
+      if (!inventorySyncSettings.allowNegativeStock && Number(inventory.quantity_available ?? 0) < quantity) {
         throw new BadRequestException('Not enough ingredient inventory for this order.');
       }
 
@@ -3346,7 +5373,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         const inv = invRows[0];
         if (inv) {
           const previousQuantity = Number(inv.quantity ?? 0);
-          const newQuantity = Math.max(previousQuantity - quantity, 0);
+          const nextQuantity = previousQuantity - quantity;
+          const newQuantity = inventorySyncSettings.allowNegativeStock ? nextQuantity : Math.max(nextQuantity, 0);
           await this.queryWithClient(
             client,
             `
@@ -3387,13 +5415,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         [storeId, orderId, orderItemId, ingredientId, item.productId ?? item.id ?? null, quantity, ingredient.unit ?? inventory.unit],
       );
     }
+    if (shouldRecordCustomizations) {
+      await this.recordRestaurantInstructionModifiers(client, storeId, orderItemId, item);
+    }
   }
 
   // Deducts stock and writes the inventory Sale/StockMovement records for an order
   // that is being paid AFTER creation (the deferred-payment path in updatePosOrder).
   // Items/ingredients aren't in the payment request, so they are loaded from the DB.
-  // Restaurant deductions use the product's standard recipe (per-order ingredient
-  // customizations made on an unpaid order are not persisted, so cannot be replayed).
+  // Restaurant deductions replay saved per-item customizations over the default recipe.
   // Idempotent: skips entirely if this order was already mirrored into "Sale".
   private async applyInventoryForPaidPosOrder(
     client: PoolClient,
@@ -3411,6 +5441,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       [order.order_number],
     );
     if (alreadyMirrored[0]?.exists) {
+      return;
+    }
+
+    const inventorySyncSettings = await this.getInventorySyncSettingsForStore(client, user.store_id);
+    if (!inventorySyncSettings.autoDeductInventoryOnSale) {
       return;
     }
 
@@ -3434,13 +5469,112 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           oi.variant_id,
           Number(oi.quantity ?? 1),
           movements,
+          inventorySyncSettings,
         );
       } else {
-        const ingredients = await this.queryWithClient<{ ingredient_id: number; quantity: string | number; unit: string | null }>(
+        const ingredients = await this.queryWithClient<{
+          product_ingredient_id: number;
+          ingredient_id: number;
+          ingredient_name: string;
+          quantity: string | number;
+          unit: string | null;
+        }>(
           client,
-          `SELECT ingredient_id, quantity_required AS quantity, unit FROM product_ingredients WHERE product_id = $1 AND store_id = $2`,
+          `
+            SELECT id AS product_ingredient_id, ingredient_id, ingredient_name, quantity_required AS quantity, unit
+            FROM product_ingredients
+            WHERE product_id = $1
+              AND store_id = $2
+          `,
           [oi.product_id, user.store_id],
         );
+        const customizations = await this.queryWithClient<{
+          product_ingredient_id: number | null;
+          original_ingredient_id: number | null;
+          replacement_ingredient_id: number | null;
+          customization_type: string;
+          original_ingredient_name: string | null;
+          replacement_ingredient_name: string | null;
+          original_quantity: string | number | null;
+          new_quantity: string | number | null;
+          unit: string | null;
+          additional_cost: string | number | null;
+          notes: string | null;
+        }>(
+          client,
+          `
+            SELECT product_ingredient_id, original_ingredient_id, replacement_ingredient_id,
+                   customization_type, original_ingredient_name, replacement_ingredient_name,
+                   original_quantity, new_quantity, unit, additional_cost, notes
+            FROM order_item_customizations
+            WHERE order_item_id = $1
+          `,
+          [oi.id],
+        );
+        const customizedIngredients: any[] = ingredients.map((ingredient) => ({
+          product_ingredient_id: ingredient.product_ingredient_id,
+          ingredient_id: ingredient.ingredient_id,
+          name: ingredient.ingredient_name,
+          quantity: Number(ingredient.quantity ?? 0),
+          original_quantity: Number(ingredient.quantity ?? 0),
+          unit: ingredient.unit,
+        }));
+
+        for (const customization of customizations) {
+          const type = String(customization.customization_type ?? '').toUpperCase();
+          const matchIndex = customizedIngredients.findIndex((ingredient) =>
+            (customization.product_ingredient_id && Number(ingredient.product_ingredient_id) === Number(customization.product_ingredient_id)) ||
+            (customization.original_ingredient_id && Number(ingredient.ingredient_id) === Number(customization.original_ingredient_id)),
+          );
+          const newQuantity = Number(customization.new_quantity ?? 0);
+
+          if (type === 'REMOVE' && matchIndex >= 0) {
+            customizedIngredients[matchIndex] = {
+              ...customizedIngredients[matchIndex],
+              removed: true,
+              quantity: 0,
+              customization_type: 'REMOVE',
+              notes: customization.notes ?? undefined,
+            };
+            continue;
+          }
+
+          if (type === 'REPLACE' && matchIndex >= 0) {
+            customizedIngredients[matchIndex] = {
+              ...customizedIngredients[matchIndex],
+              replacement_ingredient_id: customization.replacement_ingredient_id,
+              replacement_name: customization.replacement_ingredient_name,
+              quantity: Number.isFinite(newQuantity) && newQuantity > 0 ? newQuantity : customizedIngredients[matchIndex].quantity,
+              customization_type: 'REPLACE',
+              notes: customization.notes ?? undefined,
+            };
+            continue;
+          }
+
+          if ((type === 'CHANGE_QUANTITY' || type === 'QUANTITY_CHANGE') && matchIndex >= 0) {
+            customizedIngredients[matchIndex] = {
+              ...customizedIngredients[matchIndex],
+              quantity: Number.isFinite(newQuantity) ? Math.max(0, newQuantity) : customizedIngredients[matchIndex].quantity,
+              customization_type: 'CHANGE_QUANTITY',
+              notes: customization.notes ?? undefined,
+            };
+            continue;
+          }
+
+          if ((type === 'ADD' || type === 'EXTRA') && customization.replacement_ingredient_id) {
+            customizedIngredients.push({
+              product_ingredient_id: null,
+              ingredient_id: customization.replacement_ingredient_id,
+              name: customization.replacement_ingredient_name ?? 'Added ingredient',
+              quantity: Number.isFinite(newQuantity) && newQuantity > 0 ? newQuantity : 1,
+              original_quantity: 0,
+              unit: customization.unit,
+              customization_type: 'ADD',
+              additional_price: Number(customization.additional_cost ?? 0),
+              notes: customization.notes ?? undefined,
+            });
+          }
+        }
         await this.deductRestaurantIngredients(
           client,
           user.store_id,
@@ -3451,9 +5585,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             name: oi.product_name,
             price: Number(oi.unit_price ?? 0),
             quantity: Number(oi.quantity ?? 1),
-            ingredients: ingredients.map((g) => ({ ingredient_id: g.ingredient_id, quantity: Number(g.quantity ?? 0), unit: g.unit })),
+            ingredients: customizedIngredients,
           },
           movements,
+          inventorySyncSettings,
+          { recordCustomizations: false },
         );
       }
     }
@@ -3648,6 +5784,22 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const paymentMethod = input.payment?.method ?? 'Cash';
     const amountPaid = Number(input.payment?.amountPaid ?? total);
     const change = Number(input.payment?.changeAmount ?? 0);
+    const transactionNumber = `POS-${orderNumber}`;
+    const existingSale = await this.queryWithClient<{ id: string }>(
+      client,
+      `
+        SELECT id
+        FROM "Sale"
+        WHERE "businessId" = $1
+          AND "transactionNumber" = $2
+        LIMIT 1
+      `,
+      [businessId, transactionNumber],
+    );
+
+    if (existingSale.length > 0) {
+      return;
+    }
 
     const saleId = randomUUID();
     await this.queryWithClient(
@@ -3662,7 +5814,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       `,
       [
         saleId,
-        `POS-${orderNumber}`,
+        transactionNumber,
         locationId,
         Number(input.subtotal ?? 0),
         Number(input.discount ?? 0),
@@ -3732,14 +5884,24 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
   private async createUniqueOrderNumber(client: PoolClient, requestedOrderNumber: unknown) {
     await client.query('LOCK TABLE orders IN SHARE ROW EXCLUSIVE MODE');
+    await client.query('LOCK TABLE "Sale" IN SHARE ROW EXCLUSIVE MODE');
 
     const requestedDigits = String(requestedOrderNumber ?? '').replace(/\D/g, '');
     const requestedNumeric = requestedDigits ? Number(requestedDigits) : null;
     const maxRows = await this.queryWithClient<{ max_order_number: string | number | null }>(
       client,
       `
-        SELECT COALESCE(MAX(NULLIF(regexp_replace(order_number, '\\D', '', 'g'), '')::BIGINT), 100000) AS max_order_number
-        FROM orders
+        SELECT COALESCE(MAX(order_number), 100000) AS max_order_number
+        FROM (
+          SELECT NULLIF(regexp_replace(order_number, '\\D', '', 'g'), '')::BIGINT AS order_number
+          FROM orders
+
+          UNION ALL
+
+          SELECT NULLIF(regexp_replace("transactionNumber", '\\D', '', 'g'), '')::BIGINT AS order_number
+          FROM "Sale"
+          WHERE "transactionNumber" LIKE 'POS-%'
+        ) used_numbers
       `,
     );
     const maxOrderNumber = Number(maxRows[0]?.max_order_number ?? 100000);
@@ -3756,6 +5918,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           SELECT id
           FROM orders
           WHERE regexp_replace(order_number, '\\D', '', 'g') = $1
+          UNION ALL
+          SELECT 1 AS id
+          FROM "Sale"
+          WHERE "transactionNumber" = CONCAT('POS-', $1::text)
           LIMIT 1
         `,
         [candidateText],
@@ -3858,6 +6024,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           enable_refund,
           enable_void,
           enable_discount,
+          enable_estimated_prep_time,
+          prep_time_strategy,
+          customization_prep_time_minutes,
           enable_service_charge,
           service_charge_rate,
           service_charge_percentage,
@@ -3867,14 +6036,32 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           enable_takeout,
           enable_ingredient_customization,
           enable_receipt_printing,
-          enabled_payment_methods
+          enabled_payment_methods,
+          payment_method_accounts,
+          auto_deduct_inventory_on_sale,
+          allow_negative_stock,
+          default_low_stock_threshold,
+          default_inventory_unit,
+          cycle_count_interval_days,
+          auto_reorder_threshold_percent,
+          enable_expiry_tracking,
+          default_markup_percent
         )
-        VALUES ($1, $2, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, 0, 0, TRUE, 0, TRUE, TRUE, TRUE, TRUE, ARRAY['Cash', 'GCash', 'Maya', 'Bank Transfer']::TEXT[])
+        VALUES ($1, $2, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, 'parallel', 2, TRUE, 0, 0, TRUE, 0, TRUE, TRUE, TRUE, TRUE, ARRAY['Cash', 'GCash', 'Maya', 'Bank Transfer']::TEXT[], '{}'::JSONB, TRUE, FALSE, 3, 'unit', 30, 20, FALSE, 30)
         ON CONFLICT (store_id) DO UPDATE
         SET store_type = COALESCE(store_settings.store_type, EXCLUDED.store_type),
             service_charge_rate = COALESCE(store_settings.service_charge_rate, store_settings.service_charge_percentage, 0),
             service_charge_percentage = COALESCE(store_settings.service_charge_percentage, store_settings.service_charge_rate, 0),
             enabled_payment_methods = COALESCE(store_settings.enabled_payment_methods, EXCLUDED.enabled_payment_methods),
+            payment_method_accounts = COALESCE(store_settings.payment_method_accounts, EXCLUDED.payment_method_accounts),
+            auto_deduct_inventory_on_sale = COALESCE(store_settings.auto_deduct_inventory_on_sale, EXCLUDED.auto_deduct_inventory_on_sale),
+            allow_negative_stock = COALESCE(store_settings.allow_negative_stock, EXCLUDED.allow_negative_stock),
+            default_low_stock_threshold = COALESCE(store_settings.default_low_stock_threshold, EXCLUDED.default_low_stock_threshold),
+            default_inventory_unit = COALESCE(store_settings.default_inventory_unit, EXCLUDED.default_inventory_unit),
+            cycle_count_interval_days = COALESCE(store_settings.cycle_count_interval_days, EXCLUDED.cycle_count_interval_days),
+            auto_reorder_threshold_percent = COALESCE(store_settings.auto_reorder_threshold_percent, EXCLUDED.auto_reorder_threshold_percent),
+            enable_expiry_tracking = COALESCE(store_settings.enable_expiry_tracking, EXCLUDED.enable_expiry_tracking),
+            default_markup_percent = COALESCE(store_settings.default_markup_percent, EXCLUDED.default_markup_percent),
             updated_at = CURRENT_TIMESTAMP
       `,
       [storeId, storeType],
@@ -3891,6 +6078,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ADD COLUMN IF NOT EXISTS enable_refund BOOLEAN DEFAULT TRUE,
           ADD COLUMN IF NOT EXISTS enable_void BOOLEAN DEFAULT TRUE,
           ADD COLUMN IF NOT EXISTS enable_discount BOOLEAN DEFAULT TRUE,
+          ADD COLUMN IF NOT EXISTS enable_estimated_prep_time BOOLEAN DEFAULT TRUE,
+          ADD COLUMN IF NOT EXISTS prep_time_strategy VARCHAR(20) DEFAULT 'parallel',
+          ADD COLUMN IF NOT EXISTS customization_prep_time_minutes INT DEFAULT 2,
           ADD COLUMN IF NOT EXISTS enable_service_charge BOOLEAN DEFAULT TRUE,
           ADD COLUMN IF NOT EXISTS service_charge_rate DECIMAL(5,2) DEFAULT 0,
           ADD COLUMN IF NOT EXISTS service_charge_percentage DECIMAL(5,2) DEFAULT 0,
@@ -3901,6 +6091,21 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ADD COLUMN IF NOT EXISTS enable_ingredient_customization BOOLEAN DEFAULT TRUE,
           ADD COLUMN IF NOT EXISTS enable_receipt_printing BOOLEAN DEFAULT TRUE,
           ADD COLUMN IF NOT EXISTS enabled_payment_methods TEXT[] DEFAULT ARRAY['Cash', 'GCash', 'Maya', 'Bank Transfer'],
+          ADD COLUMN IF NOT EXISTS payment_method_accounts JSONB DEFAULT '{}'::JSONB,
+          ADD COLUMN IF NOT EXISTS auto_deduct_inventory_on_sale BOOLEAN DEFAULT TRUE,
+          ADD COLUMN IF NOT EXISTS allow_negative_stock BOOLEAN DEFAULT FALSE,
+          ADD COLUMN IF NOT EXISTS default_low_stock_threshold INTEGER DEFAULT 3,
+          ADD COLUMN IF NOT EXISTS default_inventory_unit VARCHAR(50) DEFAULT 'unit',
+          ADD COLUMN IF NOT EXISTS cycle_count_interval_days INTEGER DEFAULT 30,
+          ADD COLUMN IF NOT EXISTS auto_reorder_threshold_percent DECIMAL(5,2) DEFAULT 20,
+          ADD COLUMN IF NOT EXISTS enable_expiry_tracking BOOLEAN DEFAULT FALSE,
+          ADD COLUMN IF NOT EXISTS default_markup_percent DECIMAL(5,2) DEFAULT 30,
+          ADD COLUMN IF NOT EXISTS theme_mode VARCHAR(20) DEFAULT 'basic',
+          ADD COLUMN IF NOT EXISTS theme_preset VARCHAR(50) DEFAULT 'default',
+          ADD COLUMN IF NOT EXISTS appearance VARCHAR(20) DEFAULT 'light',
+          ADD COLUMN IF NOT EXISTS primary_color VARCHAR(20) DEFAULT '#008967',
+          ADD COLUMN IF NOT EXISTS secondary_color VARCHAR(20) DEFAULT '#005656',
+          ADD COLUMN IF NOT EXISTS sidebar_color VARCHAR(20) DEFAULT '#0f172a',
           ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       `,
@@ -3919,13 +6124,278 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  private async ensureUserPreferencesSchema() {
+    await this.query(
+      `
+        CREATE TABLE IF NOT EXISTS user_preferences (
+          user_id BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+          compact_mode BOOLEAN NOT NULL DEFAULT FALSE,
+          low_stock_alerts BOOLEAN NOT NULL DEFAULT TRUE,
+          default_workspace VARCHAR(20) NOT NULL DEFAULT 'pos',
+          theme_mode VARCHAR(20) NOT NULL DEFAULT 'basic',
+          theme_preset VARCHAR(50) DEFAULT 'default',
+          appearance VARCHAR(20) NOT NULL DEFAULT 'light',
+          primary_color VARCHAR(20) NOT NULL DEFAULT '#008967',
+          secondary_color VARCHAR(20) NOT NULL DEFAULT '#005656',
+          sidebar_color VARCHAR(20) NOT NULL DEFAULT '#0f172a',
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `,
+    );
+  }
+
+  private async getStoreThemePreferences(storeId: number, storeType: string | null): Promise<StoreThemePreferences | null> {
+    await this.ensureStoreSettingsRow(storeId, storeType);
+
+    const rows = await this.query<StoreThemePreferences>(
+      `
+        SELECT
+          theme_mode,
+          theme_preset,
+          appearance,
+          primary_color,
+          secondary_color,
+          sidebar_color,
+          updated_at
+        FROM store_settings
+        WHERE store_id = $1
+          AND (store_type = $2 OR store_type IS NULL)
+        LIMIT 1
+      `,
+      [storeId, storeType],
+    );
+
+    return rows[0] ?? null;
+  }
+
+  private normalizeUserPreferences(input: Partial<UserPreferences> | null | undefined): UserPreferences {
+    const theme = this.normalizeThemePreferences(input);
+
+    return {
+      compact_mode: Boolean(input?.compact_mode ?? false),
+      low_stock_alerts: input?.low_stock_alerts === undefined || input?.low_stock_alerts === null ? true : Boolean(input.low_stock_alerts),
+      default_workspace: input?.default_workspace === 'inventory' || input?.default_workspace === 'reports' ? input.default_workspace : 'pos',
+      ...theme,
+    };
+  }
+
+  private normalizeThemePreferences(input: Partial<ThemePreferences> | null | undefined): ThemePreferences {
+    return {
+      theme_mode: input?.theme_mode === 'advanced' ? 'advanced' : 'basic',
+      theme_preset: typeof input?.theme_preset === 'string' && input.theme_preset.trim() ? input.theme_preset : DEFAULT_THEME_PREFERENCES.theme_preset,
+      appearance: input?.appearance === 'system' || input?.appearance === 'dark' ? input.appearance : 'light',
+      primary_color: this.normalizeHexColor(input?.primary_color, DEFAULT_THEME_PREFERENCES.primary_color),
+      secondary_color: this.normalizeHexColor(input?.secondary_color, DEFAULT_THEME_PREFERENCES.secondary_color),
+      sidebar_color: this.normalizeHexColor(input?.sidebar_color, DEFAULT_THEME_PREFERENCES.sidebar_color),
+    };
+  }
+
+  private normalizeHexColor(value: unknown, fallback: string) {
+    return typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value) ? value : fallback;
+  }
+
   private async ensurePosOrderSchema() {
     await this.query(
       `
-        ALTER TABLE orders
-          ADD COLUMN IF NOT EXISTS party_size INT
+        CREATE TABLE IF NOT EXISTS ingredients_inventory (
+          id BIGSERIAL PRIMARY KEY,
+          store_id BIGINT REFERENCES stores(id) ON DELETE CASCADE,
+          ingredient_name VARCHAR(150) NOT NULL,
+          quantity_available DECIMAL(12,3) NOT NULL DEFAULT 0,
+          unit VARCHAR(50) NOT NULL DEFAULT 'pcs',
+          low_stock_limit DECIMAL(12,3) DEFAULT 0,
+          cost_per_unit DECIMAL(10,2) DEFAULT 0,
+          is_available BOOLEAN DEFAULT TRUE,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
       `,
     );
+    await this.query(
+      `
+        CREATE TABLE IF NOT EXISTS product_ingredients (
+          id BIGSERIAL PRIMARY KEY,
+          store_id BIGINT REFERENCES stores(id) ON DELETE CASCADE,
+          product_id BIGINT REFERENCES products(id) ON DELETE CASCADE,
+          ingredient_id BIGINT REFERENCES ingredients_inventory(id) ON DELETE SET NULL,
+          ingredient_name VARCHAR(150) NOT NULL,
+          quantity_required DECIMAL(10,3) DEFAULT 0,
+          default_quantity DECIMAL(10,2) NOT NULL DEFAULT 0,
+          unit VARCHAR(50) NOT NULL DEFAULT 'pcs',
+          additional_cost DECIMAL(10,2) DEFAULT 0,
+          is_required BOOLEAN DEFAULT TRUE,
+          is_removable BOOLEAN DEFAULT TRUE,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `,
+    );
+    await this.query(
+      `
+        CREATE TABLE IF NOT EXISTS ingredient_alternatives (
+          id BIGSERIAL PRIMARY KEY,
+          store_id BIGINT REFERENCES stores(id) ON DELETE CASCADE,
+          product_ingredient_id BIGINT REFERENCES product_ingredients(id) ON DELETE CASCADE,
+          parent_ingredient_id BIGINT REFERENCES ingredients_inventory(id) ON DELETE CASCADE,
+          alternative_ingredient_id BIGINT REFERENCES ingredients_inventory(id) ON DELETE CASCADE,
+          alternative_name VARCHAR(150) NOT NULL DEFAULT '',
+          default_quantity DECIMAL(10,2),
+          unit VARCHAR(50),
+          additional_cost DECIMAL(10,2) DEFAULT 0,
+          is_available BOOLEAN DEFAULT TRUE,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `,
+    );
+    await this.query(
+      `
+        ALTER TABLE product_ingredients
+          ADD COLUMN IF NOT EXISTS ingredient_id BIGINT,
+          ADD COLUMN IF NOT EXISTS quantity_required DECIMAL(10,3) DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS default_quantity DECIMAL(10,2) DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS unit VARCHAR(50) DEFAULT 'pcs',
+          ADD COLUMN IF NOT EXISTS additional_cost DECIMAL(10,2) DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS is_required BOOLEAN DEFAULT TRUE,
+          ADD COLUMN IF NOT EXISTS is_removable BOOLEAN DEFAULT TRUE,
+          ADD COLUMN IF NOT EXISTS recipe_ingredient_id TEXT
+      `,
+    );
+    await this.query(
+      `
+        ALTER TABLE orders
+          ADD COLUMN IF NOT EXISTS party_size INT,
+          ADD COLUMN IF NOT EXISTS table_name VARCHAR(50),
+          ADD COLUMN IF NOT EXISTS subtotal DECIMAL(10,2) DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS discount_amount DECIMAL(10,2) DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS discount_type VARCHAR(100),
+          ADD COLUMN IF NOT EXISTS tax_amount DECIMAL(10,2) DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS service_charge DECIMAL(10,2) DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS total_amount DECIMAL(10,2) DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS ordered_at TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS payment_at TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS preparing_started_at TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS ready_at TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS service_started_at TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS served_at TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS service_duration BIGINT,
+          ADD COLUMN IF NOT EXISTS estimated_prep_minutes INT,
+          ADD COLUMN IF NOT EXISTS estimated_ready_at TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS table_started_at TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS table_ended_at TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS running_time_start TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS running_time_end TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS running_duration BIGINT,
+          ADD COLUMN IF NOT EXISTS is_running BOOLEAN NOT NULL DEFAULT FALSE,
+          ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      `,
+    );
+    await this.query(
+      `
+        UPDATE orders
+        SET ordered_at = COALESCE(running_time_start, preparing_started_at, created_at)
+        WHERE ordered_at IS NULL
+          AND order_type <> 'RETAIL'
+          AND COALESCE(running_time_start, preparing_started_at, created_at) IS NOT NULL
+      `,
+    );
+    await this.query(
+      `
+        ALTER TABLE order_items
+          ADD COLUMN IF NOT EXISTS variant_id BIGINT,
+          ADD COLUMN IF NOT EXISTS category_name VARCHAR(100),
+          ADD COLUMN IF NOT EXISTS size VARCHAR(50),
+          ADD COLUMN IF NOT EXISTS color VARCHAR(50),
+          ADD COLUMN IF NOT EXISTS item_type VARCHAR(50),
+          ADD COLUMN IF NOT EXISTS notes TEXT,
+          ADD COLUMN IF NOT EXISTS prep_time_minutes INT,
+          ADD COLUMN IF NOT EXISTS customization_prep_minutes INT DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      `,
+    );
+    await this.query(
+      `
+        CREATE TABLE IF NOT EXISTS order_item_customizations (
+          id BIGSERIAL PRIMARY KEY,
+          store_id BIGINT REFERENCES stores(id) ON DELETE CASCADE,
+          order_item_id BIGINT REFERENCES order_items(id) ON DELETE CASCADE,
+          product_ingredient_id BIGINT REFERENCES product_ingredients(id) ON DELETE SET NULL,
+          ingredient_alternative_id BIGINT REFERENCES ingredient_alternatives(id) ON DELETE SET NULL,
+          original_ingredient_id BIGINT REFERENCES ingredients_inventory(id) ON DELETE SET NULL,
+          replacement_ingredient_id BIGINT REFERENCES ingredients_inventory(id) ON DELETE SET NULL,
+          customization_type VARCHAR(50) NOT NULL,
+          original_ingredient_name VARCHAR(150),
+          replacement_ingredient_name VARCHAR(150),
+          original_quantity DECIMAL(10,2),
+          new_quantity DECIMAL(10,2),
+          unit VARCHAR(50),
+          additional_cost DECIMAL(10,2) DEFAULT 0,
+          notes TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `,
+    );
+    await this.query(
+      `
+        ALTER TABLE order_item_customizations
+          ADD COLUMN IF NOT EXISTS store_id BIGINT,
+          ADD COLUMN IF NOT EXISTS product_ingredient_id BIGINT,
+          ADD COLUMN IF NOT EXISTS ingredient_alternative_id BIGINT,
+          ADD COLUMN IF NOT EXISTS original_ingredient_id BIGINT,
+          ADD COLUMN IF NOT EXISTS replacement_ingredient_id BIGINT,
+          ADD COLUMN IF NOT EXISTS original_ingredient_name VARCHAR(150),
+          ADD COLUMN IF NOT EXISTS replacement_ingredient_name VARCHAR(150),
+          ADD COLUMN IF NOT EXISTS original_quantity DECIMAL(10,2),
+          ADD COLUMN IF NOT EXISTS new_quantity DECIMAL(10,2),
+          ADD COLUMN IF NOT EXISTS unit VARCHAR(50),
+          ADD COLUMN IF NOT EXISTS additional_cost DECIMAL(10,2) DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS notes TEXT,
+          ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      `,
+    );
+    await this.query(`ALTER TABLE order_item_customizations ALTER COLUMN product_ingredient_id DROP NOT NULL`);
+    await this.query(`ALTER TABLE order_item_customizations ALTER COLUMN ingredient_alternative_id DROP NOT NULL`);
+    await this.query(`ALTER TABLE order_item_customizations ALTER COLUMN original_ingredient_id DROP NOT NULL`);
+    await this.query(`ALTER TABLE order_item_customizations ALTER COLUMN replacement_ingredient_id DROP NOT NULL`);
+    await this.query(
+      `
+        DO $$
+        DECLARE constraint_row RECORD;
+        BEGIN
+          FOR constraint_row IN
+            SELECT conname
+            FROM pg_constraint
+            WHERE conrelid = 'order_item_customizations'::regclass
+              AND contype = 'c'
+              AND pg_get_constraintdef(oid) ILIKE '%customization_type%'
+          LOOP
+            EXECUTE format('ALTER TABLE order_item_customizations DROP CONSTRAINT %I', constraint_row.conname);
+          END LOOP;
+          EXECUTE $constraint$
+            ALTER TABLE order_item_customizations
+            ADD CONSTRAINT order_item_customizations_type_check
+            CHECK (customization_type IN (
+              'REMOVE', 'ADD', 'EXTRA', 'CHANGE_QUANTITY', 'QUANTITY_CHANGE',
+              'REPLACE', 'NOTE', 'SPECIAL_INSTRUCTION'
+            ))
+          $constraint$;
+        END $$
+      `,
+    );
+  }
+
+  // Optional deterministic link from a POS store to a specific inventory Business.
+  // When set, it overrides the email/most-items heuristic used to resolve which
+  // business backs a store's POS catalog and sales.
+  private async ensureStoreInventoryLink(client?: PoolClient) {
+    const sql = `ALTER TABLE stores ADD COLUMN IF NOT EXISTS inventory_business_id TEXT`;
+    if (client) {
+      await this.queryWithClient(client, sql);
+    } else {
+      await this.query(sql);
+    }
   }
 
   private async ensureDefaultDiscountSettings(storeId: number) {
@@ -3993,6 +6463,129 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return rows[0];
   }
 
+  async listActivityLogsForUser(input: {
+    userId: number;
+    dateFrom?: string;
+    dateTo?: string;
+    actorUserId?: number;
+    module?: string;
+    action?: string;
+    search?: string;
+  }) {
+    const requester = await this.getUserStoreScope(input.userId);
+    const role = String(requester.role ?? '');
+    const canViewAll = role === 'SUPERADMIN';
+    const canViewStore = role === 'ADMIN' || role === 'POS_MANAGER' || role === 'POS_ADMIN';
+
+    if (!canViewAll && (!canViewStore || !requester.store_id || !['RESTAURANT', 'RETAIL_STORE'].includes(String(requester.store_type)))) {
+      throw new ForbiddenException('Only Superadmin, Store Admin, and POS Manager accounts can view activity logs.');
+    }
+
+    await this.ensureActivityLogSchema();
+
+    const conditions: string[] = [];
+    const values: unknown[] = [];
+    const addValue = (value: unknown) => {
+      values.push(value);
+      return `$${values.length}`;
+    };
+
+    if (!canViewAll) {
+      conditions.push(`store_id = ${addValue(requester.store_id)}`);
+    }
+    if (input.dateFrom?.trim()) {
+      conditions.push(`created_at >= (${addValue(input.dateFrom.trim())}::date::timestamp - INTERVAL '8 hours')`);
+    }
+    if (input.dateTo?.trim()) {
+      conditions.push(`created_at < (${addValue(input.dateTo.trim())}::date::timestamp + INTERVAL '1 day' - INTERVAL '8 hours')`);
+    }
+    if (Number.isFinite(input.actorUserId) && Number(input.actorUserId) > 0) {
+      conditions.push(`user_id = ${addValue(Number(input.actorUserId))}`);
+    }
+    if (input.module?.trim()) {
+      conditions.push(`module = ${addValue(input.module.trim())}`);
+    }
+    if (input.action?.trim()) {
+      conditions.push(`action = ${addValue(input.action.trim())}`);
+    }
+    if (input.search?.trim()) {
+      const param = addValue(`%${input.search.trim()}%`);
+      conditions.push(`(user_name ILIKE ${param} OR user_role ILIKE ${param} OR module ILIKE ${param} OR action ILIKE ${param} OR details ILIKE ${param})`);
+    }
+
+    const whereSql = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    return this.query(
+      `
+        SELECT id, store_id, user_id, user_name, user_role, module, action, details, to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at
+        FROM activity_logs
+        ${whereSql}
+        ORDER BY created_at DESC, id DESC
+        LIMIT 500
+      `,
+      values,
+    );
+  }
+
+  async recordActivityForUser(userId: number, module: ActivityModule | string, action: string, details: string) {
+    try {
+      const user = await this.getUserStoreScope(userId);
+      await this.recordActivity({
+        userId: user.id,
+        storeId: user.store_id,
+        userName: user.full_name,
+        userRole: user.role,
+        module,
+        action,
+        details,
+      });
+    } catch {
+      return;
+    }
+  }
+
+  async recordActivity(input: ActivityLogInput) {
+    try {
+      await this.ensureActivityLogSchema();
+      await this.query(
+        `
+          INSERT INTO activity_logs (store_id, user_id, user_name, user_role, module, action, details, created_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+        `,
+        [
+          input.storeId ?? null,
+          input.userId ?? null,
+          input.userName ?? 'System',
+          input.userRole ?? 'System',
+          input.module,
+          input.action,
+          input.details,
+        ],
+      );
+    } catch {
+      return;
+    }
+  }
+
+  private async ensureActivityLogSchema() {
+    await this.query(`
+      CREATE TABLE IF NOT EXISTS activity_logs (
+        id BIGSERIAL PRIMARY KEY,
+        store_id BIGINT NULL,
+        user_id BIGINT NULL,
+        user_name TEXT NOT NULL,
+        user_role TEXT NOT NULL,
+        module TEXT NOT NULL,
+        action TEXT NOT NULL,
+        details TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+      )
+    `);
+    await this.query(`ALTER TABLE activity_logs ALTER COLUMN created_at SET DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')`);
+    await this.query(`CREATE INDEX IF NOT EXISTS activity_logs_store_created_idx ON activity_logs(store_id, created_at DESC)`);
+    await this.query(`CREATE INDEX IF NOT EXISTS activity_logs_user_created_idx ON activity_logs(user_id, created_at DESC)`);
+    await this.query(`CREATE INDEX IF NOT EXISTS activity_logs_module_idx ON activity_logs(module)`);
+  }
+
   private async getSchemaColumns(): Promise<SchemaColumns> {
     if (this.schemaColumns) {
       return this.schemaColumns;
@@ -4026,16 +6619,275 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       storeIdColumn: pick(['store_id']),
       staffTypeColumn: pick(['staff_type']),
       passwordColumn: pick(['hashed_password', 'password_hash', 'password']),
+      voidPinHashColumn: pick(['void_pin_hash']),
+      voidPinColumn: pick(['void_pin']),
       statusColumn: pick(['status']),
+      activeColumn: pick(['is_active']),
     };
   }
 
-  private activeUsersWhereClause(userColumns: { statusColumn: string | null }, alias = 'u') {
-    if (!userColumns.statusColumn) {
-      return '';
+  private async ensureVoidPinHashColumn() {
+    await this.query(`
+      ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS void_pin_hash TEXT,
+      ADD COLUMN IF NOT EXISTS void_pin TEXT
+    `);
+    this.schemaColumns = null;
+  }
+
+  private async assertUniqueRetailVoidPin(storeId: number | null, voidPin: string, excludeUserId?: number) {
+    if (!storeId) {
+      throw new BadRequestException('Store scope is required for Unique PIN setup.');
     }
 
-    return ` AND COALESCE(${alias}.${this.quoteIdentifier(userColumns.statusColumn)}, 'ACTIVE') = 'ACTIVE'`;
+    const schema = await this.getSchemaColumns();
+    const userColumns = this.resolveUserColumns(schema.users);
+    if (!userColumns.roleColumn || !userColumns.storeIdColumn || !userColumns.voidPinHashColumn) {
+      throw new InternalServerErrorException('Users table is missing required columns for Unique PIN setup.');
+    }
+
+    const values: unknown[] = [storeId];
+    const excludeSql = excludeUserId ? 'AND id <> $2' : '';
+    if (excludeUserId) values.push(excludeUserId);
+
+    const voidPinSelect = userColumns.voidPinColumn ? `, ${this.quoteIdentifier(userColumns.voidPinColumn)} AS void_pin` : ', NULL AS void_pin';
+    const rows = await this.query<{ void_pin_hash: string | null; void_pin: string | null }>(
+      `
+        SELECT ${this.quoteIdentifier(userColumns.voidPinHashColumn)} AS void_pin_hash
+          ${voidPinSelect}
+        FROM users
+        WHERE ${this.quoteIdentifier(userColumns.storeIdColumn)} = $1
+          AND ${this.quoteIdentifier(userColumns.roleColumn)} IN ('POS_MANAGER', 'POS_ADMIN')
+          AND (${this.quoteIdentifier(userColumns.voidPinHashColumn)} IS NOT NULL${userColumns.voidPinColumn ? ` OR ${this.quoteIdentifier(userColumns.voidPinColumn)} IS NOT NULL` : ''})
+          ${excludeSql}
+      `,
+      values,
+    );
+
+    for (const row of rows) {
+      if (row.void_pin === voidPin || (row.void_pin_hash && await bcrypt.compare(voidPin, row.void_pin_hash))) {
+        throw new ConflictException('This Unique PIN is already assigned to another retail POS manager.');
+      }
+    }
+  }
+
+  private async generateUniqueRetailVoidPin(storeId: number | null, excludeUserId?: number) {
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const pin = String(randomInt(100000, 1000000));
+      try {
+        await this.assertUniqueRetailVoidPin(storeId, pin, excludeUserId);
+        return pin;
+      } catch (error) {
+        if (error instanceof ConflictException) {
+          continue;
+        }
+
+        throw error;
+      }
+    }
+
+    throw new ConflictException('Unable to generate a unique retail manager PIN. Please try again.');
+  }
+
+  async verifyRetailVoidPin(input: { userId: number; voidPin: string }) {
+    const requester = await this.getUserStoreScope(input.userId);
+    if (requester.store_type !== 'RETAIL_STORE' || !requester.store_id) {
+      throw new ForbiddenException('Unique PIN authorization is only available for retail stores.');
+    }
+    if (!input.voidPin?.trim()) {
+      throw new BadRequestException('Unique PIN is required.');
+    }
+
+    await this.ensureVoidPinHashColumn();
+    const schema = await this.getSchemaColumns();
+    const userColumns = this.resolveUserColumns(schema.users);
+    if (!userColumns.fullNameColumn || !userColumns.roleColumn || !userColumns.storeIdColumn || !userColumns.voidPinHashColumn) {
+      throw new InternalServerErrorException('Users table is missing required columns for Unique PIN authorization.');
+    }
+
+    const rows = await this.query<{ id: number; full_name: string; email: string; role: string; void_pin_hash: string }>(
+      `
+        SELECT
+          id,
+          ${this.quoteIdentifier(userColumns.fullNameColumn)} AS full_name,
+          email,
+          ${this.quoteIdentifier(userColumns.roleColumn)} AS role,
+          ${this.quoteIdentifier(userColumns.voidPinHashColumn)} AS void_pin_hash
+        FROM users u
+        WHERE ${this.quoteIdentifier(userColumns.storeIdColumn)} = $1
+          AND ${this.quoteIdentifier(userColumns.roleColumn)} IN ('POS_MANAGER', 'POS_ADMIN')
+          AND ${this.quoteIdentifier(userColumns.voidPinHashColumn)} IS NOT NULL
+          ${this.activeUsersWhereClause(userColumns)}
+      `,
+      [requester.store_id],
+    );
+
+    for (const row of rows) {
+      if (await bcrypt.compare(input.voidPin.trim(), row.void_pin_hash)) {
+        await this.recordActivity({
+          userId: requester.id,
+          storeId: requester.store_id,
+          userName: requester.full_name,
+          userRole: requester.role,
+          module: 'Void & Refund',
+          action: 'Void Approved',
+          details: `Retail cart void authorized\nManager: ${row.full_name}`,
+        });
+
+        return {
+          authorized: true,
+          manager: {
+            id: row.id,
+            full_name: row.full_name,
+            email: row.email,
+            role: row.role,
+          },
+        };
+      }
+    }
+
+    throw new ForbiddenException('Invalid retail POS manager Unique PIN.');
+  }
+
+  async getRetailManagerProfile(userId: number) {
+    const requester = await this.getUserStoreScope(userId);
+    if (requester.store_type !== 'RETAIL_STORE' || !requester.store_id) {
+      throw new ForbiddenException('Retail manager profile is only available for retail stores.');
+    }
+    if (!this.isPosManagerRole(requester.role)) {
+      throw new ForbiddenException('Only retail POS managers can view this profile.');
+    }
+
+    await this.ensureVoidPinHashColumn();
+    const schema = await this.getSchemaColumns();
+    const userColumns = this.resolveUserColumns(schema.users);
+    const storeColumns = this.resolveStoreColumns(schema.stores);
+
+    if (!userColumns.fullNameColumn || !userColumns.roleColumn || !userColumns.storeIdColumn || !userColumns.staffTypeColumn) {
+      throw new InternalServerErrorException('Users table is missing required columns for manager profile.');
+    }
+    if (!userColumns.voidPinHashColumn || !userColumns.voidPinColumn) {
+      throw new InternalServerErrorException('Users table is missing required columns for Unique PIN display.');
+    }
+
+    const storeJoin = storeColumns.joinable ? `LEFT JOIN stores s ON s.id = u.${this.quoteIdentifier(userColumns.storeIdColumn)}` : '';
+    const storeTypeSelect = storeColumns.storeTypeColumn ? `${this.normalizedStoreTypeSql(`s.${this.quoteIdentifier(storeColumns.storeTypeColumn)}`)} AS store_type` : '$2::text AS store_type';
+    const storeNameSelect = storeColumns.storeNameColumn ? `s.${this.quoteIdentifier(storeColumns.storeNameColumn)} AS store_name` : '$3::text AS store_name';
+    const voidPinSelect = userColumns.voidPinColumn ? `u.${this.quoteIdentifier(userColumns.voidPinColumn)} AS void_pin` : 'NULL AS void_pin';
+    const voidPinConfiguredSelect = userColumns.voidPinHashColumn ? `u.${this.quoteIdentifier(userColumns.voidPinHashColumn)} IS NOT NULL AS void_pin_configured` : 'FALSE AS void_pin_configured';
+
+    const rows = await this.query<AuthenticatedUser & { void_pin: string | null; void_pin_configured: boolean }>(
+      `
+        SELECT
+          u.id,
+          u.${this.quoteIdentifier(userColumns.fullNameColumn)} AS full_name,
+          u.email,
+          u.${this.quoteIdentifier(userColumns.roleColumn)} AS role,
+          u.${this.quoteIdentifier(userColumns.storeIdColumn)} AS store_id,
+          u.${this.quoteIdentifier(userColumns.staffTypeColumn)} AS staff_type,
+          ${storeTypeSelect},
+          ${storeNameSelect},
+          ${voidPinSelect},
+          ${voidPinConfiguredSelect},
+          ${this.userStatusSelect(userColumns)}
+        FROM users u
+        ${storeJoin}
+        WHERE u.id = $1
+          AND u.${this.quoteIdentifier(userColumns.storeIdColumn)} = $4
+        LIMIT 1
+      `,
+      [userId, requester.store_type, requester.store_name, requester.store_id],
+    );
+
+    if (rows.length === 0) {
+      throw new NotFoundException('Retail manager profile was not found.');
+    }
+
+    if (!rows[0].void_pin?.trim()) {
+      const uniquePin = await this.generateUniqueRetailVoidPin(requester.store_id, userId);
+      await this.query(
+        `
+          UPDATE users
+          SET
+            ${this.quoteIdentifier(userColumns.voidPinHashColumn)} = $1,
+            ${this.quoteIdentifier(userColumns.voidPinColumn)} = $2
+          WHERE id = $3
+            AND ${this.quoteIdentifier(userColumns.storeIdColumn)} = $4
+        `,
+        [await bcrypt.hash(uniquePin, 10), uniquePin, userId, requester.store_id],
+      );
+      rows[0].void_pin = uniquePin;
+      rows[0].void_pin_configured = true;
+    }
+
+    return rows[0];
+  }
+
+  async generateRetailManagerUniquePin(userId: number) {
+    const requester = await this.getUserStoreScope(userId);
+    if (requester.store_type !== 'RETAIL_STORE' || !requester.store_id) {
+      throw new ForbiddenException('Unique PIN generation is only available for retail stores.');
+    }
+    if (!this.isPosManagerRole(requester.role)) {
+      throw new ForbiddenException('Only retail POS managers can generate a Unique PIN.');
+    }
+
+    await this.ensureVoidPinHashColumn();
+    const schema = await this.getSchemaColumns();
+    const userColumns = this.resolveUserColumns(schema.users);
+    if (!userColumns.voidPinHashColumn || !userColumns.voidPinColumn || !userColumns.storeIdColumn) {
+      throw new InternalServerErrorException('Users table is missing required columns for Unique PIN generation.');
+    }
+
+    const uniquePin = await this.generateUniqueRetailVoidPin(requester.store_id, userId);
+    await this.query(
+      `
+        UPDATE users
+        SET
+          ${this.quoteIdentifier(userColumns.voidPinHashColumn)} = $1,
+          ${this.quoteIdentifier(userColumns.voidPinColumn)} = $2
+        WHERE id = $3
+          AND ${this.quoteIdentifier(userColumns.storeIdColumn)} = $4
+      `,
+      [await bcrypt.hash(uniquePin, 10), uniquePin, userId, requester.store_id],
+    );
+
+    return {
+      id: userId,
+      void_pin: uniquePin,
+      void_pin_configured: true,
+    };
+  }
+
+  private userStatusSelect(userColumns: { statusColumn: string | null; activeColumn?: string | null }, alias = 'u') {
+    const prefix = alias ? `${alias}.` : '';
+    if (userColumns.statusColumn) {
+      return `${prefix}${this.quoteIdentifier(userColumns.statusColumn)} AS status`;
+    }
+    if (userColumns.activeColumn) {
+      return `CASE WHEN COALESCE(${prefix}${this.quoteIdentifier(userColumns.activeColumn)}, TRUE) THEN 'ACTIVE' ELSE 'INACTIVE' END AS status`;
+    }
+    return `'ACTIVE' AS status`;
+  }
+
+  private activeUsersWhereClause(userColumns: { statusColumn: string | null; activeColumn?: string | null }, alias = 'u') {
+    if (userColumns.statusColumn) {
+      return ` AND COALESCE(${alias}.${this.quoteIdentifier(userColumns.statusColumn)}, 'ACTIVE') = 'ACTIVE'`;
+    }
+    if (userColumns.activeColumn) {
+      return ` AND COALESCE(${alias}.${this.quoteIdentifier(userColumns.activeColumn)}, TRUE) = TRUE`;
+    }
+    return '';
+  }
+
+  private userActiveUpdateAssignment(userColumns: { statusColumn: string | null; activeColumn?: string | null }, active: boolean) {
+    if (userColumns.statusColumn) {
+      return `${this.quoteIdentifier(userColumns.statusColumn)} = '${active ? 'ACTIVE' : 'INACTIVE'}'`;
+    }
+    if (userColumns.activeColumn) {
+      return `${this.quoteIdentifier(userColumns.activeColumn)} = ${active ? 'TRUE' : 'FALSE'}`;
+    }
+    return null;
   }
 
   private async deactivateAdminAndStoreStaff(
@@ -4043,11 +6895,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     storeId: number | null,
     userColumns: ReturnType<DatabaseService['resolveUserColumns']>,
   ) {
-    if (!userColumns.statusColumn || !userColumns.roleColumn) {
+    const activeAssignment = this.userActiveUpdateAssignment(userColumns, false);
+    if (!activeAssignment || !userColumns.roleColumn) {
       throw new InternalServerErrorException('Users table is missing required status columns.');
     }
 
-    const statusColumn = this.quoteIdentifier(userColumns.statusColumn);
     const roleColumn = this.quoteIdentifier(userColumns.roleColumn);
 
     if (storeId && userColumns.storeIdColumn) {
@@ -4055,10 +6907,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       const rows = await this.query<{ id: number }>(
         `
           UPDATE users
-          SET ${statusColumn} = 'INACTIVE'
+          SET ${activeAssignment}
           WHERE (
-            (id = $1 AND ${roleColumn} = 'ADMIN')
-            OR (${roleColumn} = 'STAFF' AND ${storeIdColumn} = $2)
+            (id = $1 AND ${roleColumn} IN (${STORE_ADMIN_ROLES_WITH_LEGACY_SQL}))
+            OR (${roleColumn} IN (${STORE_USER_ROLES_WITH_LEGACY_SQL}) AND ${storeIdColumn} = $2)
           )
           RETURNING id
         `,
@@ -4075,9 +6927,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const rows = await this.query<{ id: number }>(
       `
         UPDATE users
-        SET ${statusColumn} = 'INACTIVE'
+        SET ${activeAssignment}
         WHERE id = $1
-          AND ${roleColumn} = 'ADMIN'
+          AND ${roleColumn} IN (${STORE_ADMIN_ROLES_WITH_LEGACY_SQL})
         RETURNING id
       `,
       [adminUserId],
@@ -4095,11 +6947,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     storeId: number | null,
     userColumns: ReturnType<DatabaseService['resolveUserColumns']>,
   ) {
-    if (!userColumns.statusColumn || !userColumns.roleColumn) {
+    const activeAssignment = this.userActiveUpdateAssignment(userColumns, true);
+    if (!activeAssignment || !userColumns.roleColumn) {
       throw new InternalServerErrorException('Users table is missing required status columns.');
     }
 
-    const statusColumn = this.quoteIdentifier(userColumns.statusColumn);
     const roleColumn = this.quoteIdentifier(userColumns.roleColumn);
 
     if (storeId && userColumns.storeIdColumn) {
@@ -4107,10 +6959,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       const rows = await this.query<{ id: number }>(
         `
           UPDATE users
-          SET ${statusColumn} = 'ACTIVE'
+          SET ${activeAssignment}
           WHERE (
-            (id = $1 AND ${roleColumn} = 'ADMIN')
-            OR (${roleColumn} = 'STAFF' AND ${storeIdColumn} = $2)
+            (id = $1 AND ${roleColumn} IN (${STORE_ADMIN_ROLES_WITH_LEGACY_SQL}))
+            OR (${roleColumn} IN (${STORE_USER_ROLES_WITH_LEGACY_SQL}) AND ${storeIdColumn} = $2)
           )
           RETURNING id
         `,
@@ -4127,9 +6979,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const rows = await this.query<{ id: number }>(
       `
         UPDATE users
-        SET ${statusColumn} = 'ACTIVE'
+        SET ${activeAssignment}
         WHERE id = $1
-          AND ${roleColumn} = 'ADMIN'
+          AND ${roleColumn} IN (${STORE_ADMIN_ROLES_WITH_LEGACY_SQL})
         RETURNING id
       `,
       [adminUserId],
@@ -4147,20 +6999,20 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     storeId: number,
     userColumns: ReturnType<DatabaseService['resolveUserColumns']>,
   ) {
-    if (!userColumns.statusColumn || !userColumns.roleColumn || !userColumns.storeIdColumn) {
+    const activeAssignment = this.userActiveUpdateAssignment(userColumns, false);
+    if (!activeAssignment || !userColumns.roleColumn || !userColumns.storeIdColumn) {
       return [];
     }
 
-    const statusColumn = this.quoteIdentifier(userColumns.statusColumn);
     const roleColumn = this.quoteIdentifier(userColumns.roleColumn);
     const storeIdColumn = this.quoteIdentifier(userColumns.storeIdColumn);
 
     return this.query<{ id: number }>(
       `
         UPDATE users
-        SET ${statusColumn} = 'INACTIVE'
+        SET ${activeAssignment}
         WHERE id = $1
-          AND ${roleColumn} = 'STAFF'
+          AND ${roleColumn} IN (${STORE_USER_ROLES_WITH_LEGACY_SQL})
           AND ${storeIdColumn} = $2
         RETURNING id
       `,
@@ -4173,20 +7025,20 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     storeId: number,
     userColumns: ReturnType<DatabaseService['resolveUserColumns']>,
   ) {
-    if (!userColumns.statusColumn || !userColumns.roleColumn || !userColumns.storeIdColumn) {
+    const activeAssignment = this.userActiveUpdateAssignment(userColumns, true);
+    if (!activeAssignment || !userColumns.roleColumn || !userColumns.storeIdColumn) {
       return [];
     }
 
-    const statusColumn = this.quoteIdentifier(userColumns.statusColumn);
     const roleColumn = this.quoteIdentifier(userColumns.roleColumn);
     const storeIdColumn = this.quoteIdentifier(userColumns.storeIdColumn);
 
     return this.query<{ id: number }>(
       `
         UPDATE users
-        SET ${statusColumn} = 'ACTIVE'
+        SET ${activeAssignment}
         WHERE id = $1
-          AND ${roleColumn} = 'STAFF'
+          AND ${roleColumn} IN (${STORE_USER_ROLES_WITH_LEGACY_SQL})
           AND ${storeIdColumn} = $2
         RETURNING id
       `,
@@ -4231,6 +7083,37 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  private async hardDeleteStoreUser(
+    userId: number,
+    storeId: number,
+    userColumns: ReturnType<DatabaseService['resolveUserColumns']>,
+  ) {
+    if (!userColumns.roleColumn || !userColumns.storeIdColumn) {
+      throw new InternalServerErrorException('Store user deletion requires role and store columns.');
+    }
+
+    try {
+      return await this.query<{ id: number }>(
+        `
+          DELETE FROM users
+          WHERE id = $1
+            AND ${this.quoteIdentifier(userColumns.roleColumn)} IN (${STORE_USER_ROLES_WITH_LEGACY_SQL})
+            AND ${this.quoteIdentifier(userColumns.storeIdColumn)} = $2
+          RETURNING id
+        `,
+        [userId, storeId],
+      );
+    } catch (error) {
+      this.handleDatabaseWriteError(error, 'Unable to remove user account.');
+    }
+  }
+
+  private staffTypeForRole(role: StaffRole, staffType: StaffType): StaffType {
+    if (role === 'POS_MANAGER') return 'POS_STAFF';
+    if (role === 'INVENTORY_MANAGER') return 'INVENTORY_STAFF';
+    return staffType;
+  }
+
   private resolveStoreColumns(columns: Set<string>) {
     const pick = (candidates: string[]) => candidates.find((candidate) => columns.has(candidate.toLowerCase())) ?? null;
 
@@ -4263,8 +7146,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const databaseError = error as { code?: string; detail?: string; message?: string };
 
     if (databaseError.code === '23503') {
+      const isUserAccountWrite = /account|staff|admin|user/i.test(fallbackMessage);
+      if (!isUserAccountWrite) {
+        throw new ConflictException(
+          `${fallbackMessage} One of the selected records is no longer linked to the current store data. Please refresh the POS menu and try again.`,
+        );
+      }
+
       throw new ConflictException(
-        'This account is linked to other records and cannot be permanently deleted. Run backend/sql/add-user-is-active.sql to enable deactivation instead.',
+        'This account is linked to other records and cannot be permanently deleted. Use Deactivate instead; if deactivation is unavailable, run backend/sql/add-user-is-active.sql first.',
       );
     }
 
@@ -4280,7 +7170,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       throw new InternalServerErrorException(databaseError.detail ?? databaseError.message ?? fallbackMessage);
     }
 
-    throw error;
+    if (databaseError.message) {
+      throw new InternalServerErrorException(`${fallbackMessage} ${databaseError.message}`);
+    }
+
+    throw new InternalServerErrorException(fallbackMessage);
   }
 
   private generateTemporaryPassword() {

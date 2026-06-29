@@ -1,7 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { DatabaseService } from '../../../shared/database/database.service';
 
-type StaffType = 'POS_STAFF' | 'INVENTORY_STAFF' | 'MANAGER';
+type StaffType = 'POS_STAFF' | 'INVENTORY_STAFF';
+type StaffRole = 'STAFF' | 'POS_MANAGER' | 'INVENTORY_MANAGER';
 
 @Injectable()
 export class AdminService {
@@ -17,6 +18,8 @@ export class AdminService {
     email: string;
     password: string;
     staffType: StaffType;
+    role?: StaffRole;
+    voidPin?: string | null;
   }) {
     return this.databaseService.createStaffAccount(input);
   }
@@ -28,8 +31,22 @@ export class AdminService {
     email: string;
     password?: string;
     staffType: StaffType;
+    role?: StaffRole;
+    voidPin?: string | null;
   }) {
     return this.databaseService.updateStaffAccountForAdmin(input);
+  }
+
+  verifyRetailVoidPin(input: { userId: number; voidPin: string }) {
+    return this.databaseService.verifyRetailVoidPin(input);
+  }
+
+  getRetailManagerProfile(userId: number) {
+    return this.databaseService.getRetailManagerProfile(userId);
+  }
+
+  generateRetailManagerUniquePin(userId: number) {
+    return this.databaseService.generateRetailManagerUniquePin(userId);
   }
 
   deleteStaff(input: { adminUserId: number; staffUserId: number }) {
@@ -78,6 +95,9 @@ export class AdminService {
     enableRefund?: boolean;
     enableVoid?: boolean;
     enableDiscount?: boolean;
+    enableEstimatedPrepTime?: boolean;
+    prepTimeStrategy?: string;
+    customizationPrepTimeMinutes?: number;
     enableServiceCharge?: boolean;
     serviceChargeRate?: number;
     enableTax?: boolean;
@@ -87,8 +107,37 @@ export class AdminService {
     enableIngredientCustomization?: boolean;
     enableReceiptPrinting?: boolean;
     enabledPaymentMethods?: string[];
+    paymentMethodAccounts?: Record<string, unknown>;
+    autoDeductInventoryOnSale?: boolean;
+    allowNegativeStock?: boolean;
+    defaultLowStockThreshold?: number;
+    defaultInventoryUnit?: string;
+    cycleCountIntervalDays?: number;
+    autoReorderThresholdPercent?: number;
+    enableExpiryTracking?: boolean;
+    defaultMarkupPercent?: number;
   }) {
     return this.databaseService.updateStoreSettingsForAdmin(input);
+  }
+
+  getThemePreferences(userId: number) {
+    return this.databaseService.getThemePreferencesForUser(userId);
+  }
+
+  updatePersonalThemePreferences(input: { userId: number; preferences: Record<string, unknown> }) {
+    return this.databaseService.updatePersonalThemePreferences(input);
+  }
+
+  clearPersonalThemePreferences(userId: number) {
+    return this.databaseService.clearPersonalThemePreferences(userId);
+  }
+
+  updateStoreThemePreferences(input: { userId: number; preferences: Record<string, unknown> }) {
+    return this.databaseService.updateStoreThemePreferences(input);
+  }
+
+  clearStoreThemePreferences(userId: number) {
+    return this.databaseService.clearStoreThemePreferences(userId);
   }
 
   listDiscountSettings(adminUserId: number) {
@@ -105,6 +154,23 @@ export class AdminService {
 
   deleteDiscountSetting(input: { adminUserId: number; discountId: number }) {
     return this.databaseService.deleteDiscountSettingForAdmin(input);
+  }
+
+  listActivityLogs(input: {
+    userId: number;
+    dateFrom?: string;
+    dateTo?: string;
+    actorUserId?: number;
+    module?: string;
+    action?: string;
+    search?: string;
+  }) {
+    return this.databaseService.listActivityLogsForUser(input);
+  }
+
+  async recordActivityLog(input: { userId: number; module: string; action: string; details: string }) {
+    await this.databaseService.recordActivityForUser(input.userId, input.module, input.action, input.details);
+    return { ok: true };
   }
 
   listPosProducts(userId: number) {
@@ -125,5 +191,25 @@ export class AdminService {
 
   listPosOrders(userId: number) {
     return this.databaseService.listPosOrders(userId);
+  }
+
+  listDiningTables(userId: number) {
+    return this.databaseService.listDiningTables(userId);
+  }
+
+  createDiningTable(input: { userId: number; tableNumber: string; totalSeats: number; isShared: boolean }) {
+    return this.databaseService.createDiningTable(input);
+  }
+
+  updateDiningTable(input: { userId: number; tableId: string; tableNumber: string; totalSeats: number; isShared: boolean }) {
+    return this.databaseService.updateDiningTable(input);
+  }
+
+  deleteDiningTable(input: { userId: number; tableId: string }) {
+    return this.databaseService.deleteDiningTable(input);
+  }
+
+  setDiningTableOccupancy(input: { userId: number; tableId: string; occupiedSeats: number }) {
+    return this.databaseService.setDiningTableOccupancy(input);
   }
 }

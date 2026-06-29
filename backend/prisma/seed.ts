@@ -1,11 +1,18 @@
 import 'dotenv/config';
-import * as bcrypt from 'bcrypt';
+import * as bcrypt from 'bcryptjs';
 import { PrismaClient } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 
 const prisma = new PrismaClient({
   adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
 } as any);
+
+const daysFromNow = (days: number) => {
+  const date = new Date();
+  date.setUTCHours(0, 0, 0, 0);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date;
+};
 
 async function main() {
   const adminPasswordHash = await bcrypt.hash('admin123', 12);
@@ -566,15 +573,15 @@ async function main() {
 
   await prisma.user.upsert({
     where: { email: 'manager@restaurant.com' },
-    update: { name: 'Floor Manager', role: 'Manager', status: 'Active', passwordHash: staffPasswordHash, businessId: restaurantBusiness.id },
-    create: { name: 'Floor Manager', email: 'manager@restaurant.com', role: 'Manager', status: 'Active', passwordHash: staffPasswordHash, businessId: restaurantBusiness.id },
+    update: { name: 'Inventory Manager', role: 'Admin', status: 'Active', passwordHash: staffPasswordHash, businessId: restaurantBusiness.id },
+    create: { name: 'Inventory Manager', email: 'manager@restaurant.com', role: 'Admin', status: 'Active', passwordHash: staffPasswordHash, businessId: restaurantBusiness.id },
   });
 
   // ─── Restaurant-Only: More Ingredients ───────────────────────────────────
   const restTomatoes = await prisma.inventoryItem.upsert({
     where: { businessId_sku: { businessId: restaurantBusiness.id, sku: 'REST2-ING-003' } },
-    update: { name: 'Tomatoes', itemType: 'INGREDIENT', category: 'Vegetables > Nightshades', quantity: 10, price: 60, unit: 'kg', minStock: 2, reorderPoint: 4, expiryDate: new Date('2026-06-18T00:00:00.000Z'), storageTemperature: 'Chilled', locationId: restColdStorage.id },
-    create: { name: 'Tomatoes', itemType: 'INGREDIENT', sku: 'REST2-ING-003', category: 'Vegetables > Nightshades', quantity: 10, price: 60, unit: 'kg', minStock: 2, reorderPoint: 4, expiryDate: new Date('2026-06-18T00:00:00.000Z'), storageTemperature: 'Chilled', locationId: restColdStorage.id, businessId: restaurantBusiness.id },
+    update: { name: 'Tomatoes', itemType: 'INGREDIENT', category: 'Vegetables > Nightshades', quantity: 10, price: 60, unit: 'kg', minStock: 2, reorderPoint: 4, expiryDate: daysFromNow(7), storageTemperature: 'Chilled', locationId: restColdStorage.id },
+    create: { name: 'Tomatoes', itemType: 'INGREDIENT', sku: 'REST2-ING-003', category: 'Vegetables > Nightshades', quantity: 10, price: 60, unit: 'kg', minStock: 2, reorderPoint: 4, expiryDate: daysFromNow(7), storageTemperature: 'Chilled', locationId: restColdStorage.id, businessId: restaurantBusiness.id },
   });
 
   const restOnions = await prisma.inventoryItem.upsert({
@@ -591,8 +598,8 @@ async function main() {
 
   const restPorkBelly = await prisma.inventoryItem.upsert({
     where: { businessId_sku: { businessId: restaurantBusiness.id, sku: 'REST2-ING-006' } },
-    update: { name: 'Pork Belly', itemType: 'INGREDIENT', category: 'Meat > Pork', quantity: 12, price: 250, unit: 'kg', minStock: 3, reorderPoint: 5, expiryDate: new Date('2026-06-15T00:00:00.000Z'), storageTemperature: 'Frozen', locationId: restColdStorage.id },
-    create: { name: 'Pork Belly', itemType: 'INGREDIENT', sku: 'REST2-ING-006', category: 'Meat > Pork', quantity: 12, price: 250, unit: 'kg', minStock: 3, reorderPoint: 5, expiryDate: new Date('2026-06-15T00:00:00.000Z'), storageTemperature: 'Frozen', locationId: restColdStorage.id, businessId: restaurantBusiness.id },
+    update: { name: 'Pork Belly', itemType: 'INGREDIENT', category: 'Meat > Pork', quantity: 12, price: 250, unit: 'kg', minStock: 3, reorderPoint: 5, expiryDate: daysFromNow(30), storageTemperature: 'Frozen', locationId: restColdStorage.id },
+    create: { name: 'Pork Belly', itemType: 'INGREDIENT', sku: 'REST2-ING-006', category: 'Meat > Pork', quantity: 12, price: 250, unit: 'kg', minStock: 3, reorderPoint: 5, expiryDate: daysFromNow(30), storageTemperature: 'Frozen', locationId: restColdStorage.id, businessId: restaurantBusiness.id },
   });
 
   const restSoySauce = await prisma.inventoryItem.upsert({
@@ -609,8 +616,8 @@ async function main() {
 
   const restShrimp = await prisma.inventoryItem.upsert({
     where: { businessId_sku: { businessId: restaurantBusiness.id, sku: 'REST2-ING-009' } },
-    update: { name: 'Tiger Shrimp', itemType: 'INGREDIENT', category: 'Seafood > Crustaceans', quantity: 5, price: 380, unit: 'kg', minStock: 1, reorderPoint: 2, expiryDate: new Date('2026-06-14T00:00:00.000Z'), storageTemperature: 'Frozen', locationId: restColdStorage.id },
-    create: { name: 'Tiger Shrimp', itemType: 'INGREDIENT', sku: 'REST2-ING-009', category: 'Seafood > Crustaceans', quantity: 5, price: 380, unit: 'kg', minStock: 1, reorderPoint: 2, expiryDate: new Date('2026-06-14T00:00:00.000Z'), storageTemperature: 'Frozen', locationId: restColdStorage.id, businessId: restaurantBusiness.id },
+    update: { name: 'Tiger Shrimp', itemType: 'INGREDIENT', category: 'Seafood > Crustaceans', quantity: 5, price: 380, unit: 'kg', minStock: 1, reorderPoint: 2, expiryDate: daysFromNow(30), storageTemperature: 'Frozen', locationId: restColdStorage.id },
+    create: { name: 'Tiger Shrimp', itemType: 'INGREDIENT', sku: 'REST2-ING-009', category: 'Seafood > Crustaceans', quantity: 5, price: 380, unit: 'kg', minStock: 1, reorderPoint: 2, expiryDate: daysFromNow(30), storageTemperature: 'Frozen', locationId: restColdStorage.id, businessId: restaurantBusiness.id },
   });
 
   const restTamarind = await prisma.inventoryItem.upsert({
@@ -621,8 +628,8 @@ async function main() {
 
   const restEggs = await prisma.inventoryItem.upsert({
     where: { businessId_sku: { businessId: restaurantBusiness.id, sku: 'REST2-ING-011' } },
-    update: { name: 'Eggs', itemType: 'INGREDIENT', category: 'Dairy > Eggs', quantity: 120, price: 8, unit: 'pcs', minStock: 24, reorderPoint: 48, expiryDate: new Date('2026-06-22T00:00:00.000Z'), storageTemperature: 'Chilled', locationId: restColdStorage.id },
-    create: { name: 'Eggs', itemType: 'INGREDIENT', sku: 'REST2-ING-011', category: 'Dairy > Eggs', quantity: 120, price: 8, unit: 'pcs', minStock: 24, reorderPoint: 48, expiryDate: new Date('2026-06-22T00:00:00.000Z'), storageTemperature: 'Chilled', locationId: restColdStorage.id, businessId: restaurantBusiness.id },
+    update: { name: 'Eggs', itemType: 'INGREDIENT', category: 'Dairy > Eggs', quantity: 120, price: 8, unit: 'pcs', minStock: 24, reorderPoint: 48, expiryDate: daysFromNow(14), storageTemperature: 'Chilled', locationId: restColdStorage.id },
+    create: { name: 'Eggs', itemType: 'INGREDIENT', sku: 'REST2-ING-011', category: 'Dairy > Eggs', quantity: 120, price: 8, unit: 'pcs', minStock: 24, reorderPoint: 48, expiryDate: daysFromNow(14), storageTemperature: 'Chilled', locationId: restColdStorage.id, businessId: restaurantBusiness.id },
   });
 
   const restCondensedMilk = await prisma.inventoryItem.upsert({
@@ -751,19 +758,19 @@ async function main() {
     { number: 'T01', capacity: 2, status: 'AVAILABLE', floor: 'Ground Floor' },
     { number: 'T02', capacity: 4, status: 'OCCUPIED',  floor: 'Ground Floor' },
     { number: 'T03', capacity: 4, status: 'AVAILABLE', floor: 'Ground Floor' },
-    { number: 'T04', capacity: 6, status: 'RESERVED',  floor: 'Ground Floor' },
+    { number: 'T04', capacity: 6, status: 'AVAILABLE', floor: 'Ground Floor' },
     { number: 'T05', capacity: 2, status: 'AVAILABLE', floor: 'Ground Floor' },
     { number: 'T06', capacity: 4, status: 'OCCUPIED',  floor: 'Ground Floor' },
     { number: 'T07', capacity: 8, status: 'AVAILABLE', floor: '2nd Floor' },
-    { number: 'T08', capacity: 4, status: 'CLEANING',  floor: '2nd Floor' },
+    { number: 'T08', capacity: 4, status: 'AVAILABLE', floor: '2nd Floor' },
     { number: 'T09', capacity: 2, status: 'AVAILABLE', floor: '2nd Floor' },
     { number: 'T10', capacity: 6, status: 'AVAILABLE', floor: '2nd Floor' },
   ];
   for (const t of tableData) {
     await prisma.diningTable.upsert({
       where: { businessId_locationId_tableNumber: { businessId: restaurantBusiness.id, locationId: diningArea.id, tableNumber: t.number } },
-      update: { capacity: t.capacity, status: t.status as any, floor: t.floor },
-      create: { tableNumber: t.number, capacity: t.capacity, status: t.status as any, floor: t.floor, locationId: diningArea.id, businessId: restaurantBusiness.id },
+      update: { capacity: t.capacity, occupiedSeats: t.status === 'OCCUPIED' ? t.capacity : 0, isShared: false, status: t.status as any, floor: t.floor },
+      create: { tableNumber: t.number, capacity: t.capacity, occupiedSeats: t.status === 'OCCUPIED' ? t.capacity : 0, isShared: false, status: t.status as any, floor: t.floor, locationId: diningArea.id, businessId: restaurantBusiness.id },
     });
   }
 

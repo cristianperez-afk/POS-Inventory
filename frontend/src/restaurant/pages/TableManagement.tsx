@@ -7,6 +7,7 @@ import { useOrders, Order } from '../../shared/context/OrderContext';
 import { useTables } from '../../shared/context/TableContext';
 import { TableAssignmentNotification } from '../../shared/components/TableAssignmentNotification';
 import { DeleteConfirmDialog } from '../../shared/components/DeleteConfirmDialog';
+import { formatManilaFullDateTime, formatManilaTime } from '../../shared/utils/date';
 
 interface TableManagementProps {
   onNavigate: (page: Page) => void;
@@ -19,7 +20,7 @@ interface TableManagementProps {
 }
 
 export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand, userName, storeType, staffType }: TableManagementProps) {
-  const { orders, updateOrder, queuedOrders, removeFromQueue, completeTableOrder } = useOrders();
+  const { orders, queuedOrders, removeFromQueue, completeTableOrder } = useOrders();
   const {
     tables: contextTables,
     setTableStatus,
@@ -28,6 +29,7 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
     addTable,
     deleteTable,
     updateTable,
+    setTableOccupancy,
     queueHistory,
     tableHistory,
     assignmentNotification,
@@ -36,22 +38,24 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
     skipQueueCustomer,
     getTableHistory,
   } = useTables();
-  const [selectedTableId, setSelectedTableId] = useState<number | null>(null);
+  const [selectedTableId, setSelectedTableId] = useState<string | null>(null);
   const [tables, setTables] = useState(contextTables);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingTable, setEditingTable] = useState<any>(null);
   const [editTableNumber, setEditTableNumber] = useState('');
   const [editSeats, setEditSeats] = useState('');
+  const [editIsShared, setEditIsShared] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<number | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [newTableNumber, setNewTableNumber] = useState('');
   const [newTableSeats, setNewTableSeats] = useState('');
+  const [newTableIsShared, setNewTableIsShared] = useState(false);
   const [deletingTable, setDeletingTable] = useState<any>(null);
   const [removingQueuedOrder, setRemovingQueuedOrder] = useState<(typeof queuedOrders)[number] | null>(null);
   const [assigningQueuedOrderId, setAssigningQueuedOrderId] = useState<string | null>(null);
   const [showQueueHistory, setShowQueueHistory] = useState(false);
   const [showTableHistory, setShowTableHistory] = useState(false);
-  const [selectedTableForHistory, setSelectedTableForHistory] = useState<number | null>(null);
+  const [selectedTableForHistory, setSelectedTableForHistory] = useState<string | null>(null);
 
   // Sync with context tables
   useEffect(() => {
@@ -76,8 +80,8 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
   const getBestAvailableTableForQueuedOrder = (order: (typeof queuedOrders)[number]) => {
     const requiredSeats = order.requiredSeats || order.partySize || 0;
     return [...tables]
-      .filter(table => table.status === 'available' && table.seats >= requiredSeats)
-      .sort((a, b) => a.seats - b.seats || a.number - b.number)[0];
+      .filter(table => table.isShared ? table.availableSeats >= requiredSeats : table.status === 'available' && table.seats >= requiredSeats)
+      .sort((a, b) => (a.isShared ? a.availableSeats : a.seats) - (b.isShared ? b.availableSeats : b.seats) || Number(a.number) - Number(b.number))[0];
   };
 
   const handleSeatQueuedOrder = async (order: (typeof queuedOrders)[number]) => {
@@ -103,21 +107,40 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
     }
   };
 
-  const handleStatusChange = async (tableNumber: number, newStatus: 'available' | 'occupied' | 'reserved' | 'maintenance') => {
+  const isPaidOrder = (order?: Order) => order?.paymentStatus === 'Paid';
+
+  const canManuallyReleaseTable = (table: typeof tables[number]) => {
+    const order = getTableOrder(table);
+    return isPaidOrder(order);
+  };
+
+  const releasePaidTableOrder = async (table: typeof tables[number]) => {
+    const order = getTableOrder(table);
+    if (!order || !isPaidOrder(order)) {
+      alert('Cannot release table: Pay Later orders must be paid first.');
+      return;
+    }
+
+    try {
+      await completeTableOrder(order.id);
+      setSelectedTableId(null);
+      setOpenMenuId(null);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Unable to release table.');
+    }
+  };
+
+  const handleStatusChange = async (tableNumber: string, newStatus: 'available' | 'occupied' | 'partially_occupied') => {
     // Check if table has an active order
     const table = tables.find(t => t.number === tableNumber);
     if (table?.orderId && newStatus !== 'occupied') {
       const order = orders.find(o => o.id === table.orderId);
-      if (newStatus === 'available' && order?.paymentStatus === 'Paid') {
-        try {
-          await completeTableOrder(table.orderId);
-        } catch (error) {
-          alert(error instanceof Error ? error.message : 'Unable to release table.');
-        }
+      if (newStatus === 'available' && isPaidOrder(order)) {
+        await releasePaidTableOrder(table);
         return;
       }
 
-      alert('Cannot change status: Table has an active order. Only paid orders can be manually released to available.');
+      alert('Cannot change status: Pay Later orders must be paid before the table can be released.');
       return;
     }
 
@@ -127,18 +150,8 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
       return;
     }
 
-    // Update table status through context
-    if (newStatus !== 'occupied') {
-      setTableStatus(tableNumber, newStatus);
-    }
-  };
-
-  const handlePaymentComplete = (tableId: number) => {
-    const table = tables.find(t => t.id === tableId);
-    if (table?.orderId) {
-      // Update order to paid status
-      updateOrder(table.orderId, { paymentStatus: 'Paid', orderStatus: 'Completed' });
-      setSelectedTableId(null);
+    if (newStatus === 'available') {
+      await setTableStatus(tableNumber, newStatus);
     }
   };
 
@@ -150,9 +163,8 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
   const getTableColor = (status: string) => {
     switch (status) {
       case 'available': return 'bg-gradient-to-br from-green-400 to-green-600';
+      case 'partially_occupied': return 'bg-gradient-to-br from-yellow-400 to-yellow-600';
       case 'occupied': return 'bg-gradient-to-br from-orange-400 to-orange-600';
-      case 'reserved': return 'bg-gradient-to-br from-blue-400 to-blue-600';
-      case 'maintenance': return 'bg-gradient-to-br from-gray-400 to-gray-600';
       default: return 'bg-gradient-to-br from-gray-400 to-gray-600';
     }
   };
@@ -179,25 +191,15 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
           surface: 'linear-gradient(145deg, #fff9f4 0%, #fff2e8 100%)',
           frame: '#f7d5bf',
         };
-      case 'reserved':
+      case 'partially_occupied':
         return {
-          accent: '#3b82f6',
-          accentSoft: 'rgba(59, 130, 246, 0.16)',
-          border: 'rgba(59, 130, 246, 0.72)',
-          glow: 'rgba(59, 130, 246, 0.22)',
-          label: 'text-blue-700',
-          surface: 'linear-gradient(145deg, #f7fbff 0%, #edf5ff 100%)',
-          frame: '#c9dbfb',
-        };
-      case 'maintenance':
-        return {
-          accent: '#6b7280',
-          accentSoft: 'rgba(107, 114, 128, 0.18)',
-          border: 'rgba(107, 114, 128, 0.72)',
-          glow: 'rgba(107, 114, 128, 0.18)',
-          label: 'text-gray-700',
-          surface: 'linear-gradient(145deg, #fbfbfc 0%, #eef1f4 100%)',
-          frame: '#d8dee5',
+          accent: '#eab308',
+          accentSoft: 'rgba(234, 179, 8, 0.16)',
+          border: 'rgba(234, 179, 8, 0.72)',
+          glow: 'rgba(234, 179, 8, 0.22)',
+          label: 'text-yellow-700',
+          surface: 'linear-gradient(145deg, #fffdf2 0%, #fef7d2 100%)',
+          frame: '#f3df8b',
         };
       default:
         return {
@@ -356,17 +358,18 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
     setEditingTable(table);
     setEditTableNumber(String(table.number));
     setEditSeats(String(table.seats));
+    setEditIsShared(Boolean(table.isShared));
     setShowEditModal(true);
     setOpenMenuId(null);
   };
 
-  const handleSaveEdit = () => {
+  const handleSaveEdit = async () => {
     if (!editingTable) return;
 
-    const newNumber = parseInt(editTableNumber);
+    const newNumber = editTableNumber.trim();
     const newSeats = parseInt(editSeats);
 
-    if (isNaN(newNumber) || newNumber < 1) {
+    if (!newNumber) {
       alert('Please enter a valid table number');
       return;
     }
@@ -376,7 +379,7 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
     }
 
     // Use context function to update
-    const success = updateTable(editingTable.id, newNumber, newSeats);
+    const success = await updateTable(editingTable.id, newNumber, newSeats, editIsShared);
 
     if (!success) {
       alert(`Table ${newNumber} already exists. Please choose a different number.`);
@@ -387,11 +390,11 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
     setEditingTable(null);
   };
 
-  const handleAddTable = () => {
-    const tableNumber = parseInt(newTableNumber);
+  const handleAddTable = async () => {
+    const tableNumber = newTableNumber.trim();
     const seats = parseInt(newTableSeats);
 
-    if (isNaN(tableNumber) || tableNumber < 1) {
+    if (!tableNumber) {
       alert('Please enter a valid table number');
       return;
     }
@@ -400,7 +403,7 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
       return;
     }
 
-    const success = addTable(tableNumber, seats);
+    const success = await addTable(tableNumber, seats, newTableIsShared);
 
     if (!success) {
       alert(`Table ${tableNumber} already exists. Please choose a different number.`);
@@ -410,6 +413,7 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
     // Clear form and close modal
     setNewTableNumber('');
     setNewTableSeats('');
+    setNewTableIsShared(false);
     setShowAddModal(false);
   };
 
@@ -418,13 +422,43 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
     setOpenMenuId(null);
   };
 
-  const handleConfirmDelete = () => {
+  const handleManualOccupy = async (table: typeof tables[number]) => {
+    const occupiedSeats = table.isShared ? Math.max(1, table.occupiedSeats || 1) : table.seats;
+    const success = await setTableOccupancy(table.id, occupiedSeats);
+    if (!success) alert('Unable to update table occupancy.');
+    setOpenMenuId(null);
+  };
+
+  const handleSharedSeatCountChange = async (table: typeof tables[number], value: string) => {
+    const occupiedSeats = Math.max(0, Math.min(table.seats, Number(value) || 0));
+    const order = getTableOrder(table);
+    if (occupiedSeats < table.occupiedSeats && order && !isPaidOrder(order)) {
+      alert('Cannot reduce seats: Pay Later orders must be paid first.');
+      return;
+    }
+    const success = await setTableOccupancy(table.id, occupiedSeats);
+    if (!success) alert('Unable to update seated persons.');
+  };
+
+  const handleManualRelease = async (table: typeof tables[number]) => {
+    const order = getTableOrder(table);
+    if (order) {
+      await releasePaidTableOrder(table);
+      return;
+    }
+
+    const success = await setTableOccupancy(table.id, 0);
+    if (!success) alert('Unable to release table.');
+    setOpenMenuId(null);
+  };
+
+  const handleConfirmDelete = async () => {
     if (!deletingTable) return;
 
-    const success = deleteTable(deletingTable.id);
+    const success = await deleteTable(deletingTable.id);
 
     if (!success) {
-      alert('Cannot delete table with an active order. Please complete the order first.');
+      alert('Unable to delete table.');
       setDeletingTable(null);
       return;
     }
@@ -495,7 +529,7 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
               <div className="grid grid-cols-1 min-[420px]:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4 mb-6">
                 {tables.map(table => {
                   const order = getTableOrder(table);
-                  const isPaidOccupiedTable = table.status === 'occupied' && order?.paymentStatus === 'Paid';
+                  const isPaidOccupiedTable = table.status !== 'available' && canManuallyReleaseTable(table);
                   const theme = getTableTheme(table.status);
                   const rectangular = table.seats > 4;
                   const chairs = getChairLayout(table.seats, rectangular);
@@ -561,9 +595,19 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
                           <p className="text-[13px] font-semibold text-slate-800">Table {table.number}</p>
                           <div className="flex items-center gap-1 text-xs text-gray-500 mt-1">
                             <Users className="w-3 h-3" />
-                            <span>{table.seats} seats</span>
+                            <span>{table.occupiedSeats}/{table.seats} occupied</span>
                           </div>
                         </div>
+                      </div>
+                      <div className="relative z-10 flex flex-wrap gap-1">
+                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                          table.isShared ? 'bg-teal-50 text-teal-700 ring-1 ring-teal-200' : 'bg-slate-100 text-slate-600 ring-1 ring-slate-200'
+                        }`}>
+                          {table.isShared ? 'Shared Table' : 'By Table'}
+                        </span>
+                        <span className="rounded-full bg-slate-50 px-2 py-0.5 text-[10px] font-medium text-slate-600 ring-1 ring-slate-200">
+                          {table.availableSeats} seats left
+                        </span>
                       </div>
 
                       <button
@@ -627,32 +671,60 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
                           style={{ backgroundColor: theme.accent }}
                         />
                         <select
-                          value={table.status}
-                          onChange={(e) => {
-                            e.stopPropagation();
-                            handleStatusChange(table.number, e.target.value as any);
+                          value={table.occupiedSeats > 0 ? 'occupied' : 'available'}
+                          onChange={(event) => {
+                            if (event.target.value === 'occupied') {
+                              void handleManualOccupy(table);
+                            } else {
+                              void handleManualRelease(table);
+                            }
                           }}
-                          className={`w-full appearance-none px-7 pr-8 py-1.5 rounded-xl text-[13px] font-medium border focus:outline-none focus:ring-2 focus:ring-primary transition-colors ${
+                          className={`w-full appearance-none px-7 pr-8 py-1.5 rounded-xl text-[13px] font-medium border focus:outline-none focus:ring-2 focus:ring-primary ${
                             table.status === 'available' ? 'border-green-200 bg-green-50/70 text-green-700' :
-                            table.status === 'occupied' ? `border-orange-200 bg-orange-50/80 text-orange-700 ${isPaidOccupiedTable ? 'cursor-pointer' : 'cursor-not-allowed'}` :
-                            table.status === 'reserved' ? 'border-blue-200 bg-blue-50/80 text-blue-700' :
+                            table.status === 'partially_occupied' ? 'border-yellow-200 bg-yellow-50/80 text-yellow-700' :
+                            table.status === 'occupied' ? 'border-orange-200 bg-orange-50/80 text-orange-700' :
                             'border-gray-200 bg-gray-50 text-gray-700'
                           }`}
-                          disabled={table.status === 'occupied' && !isPaidOccupiedTable}
                         >
                           <option value="available">Available</option>
-                          <option value="occupied">Occupied</option>
-                          <option value="reserved" disabled={table.status === 'occupied'}>Reserved</option>
-                          <option value="maintenance" disabled={table.status === 'occupied'}>Maintenance</option>
+                          <option value="occupied">{table.status === 'partially_occupied' ? 'Partially Occupied' : 'Occupied'}</option>
                         </select>
+                        <span className="pointer-events-none absolute right-3 top-1/2 z-10 -translate-y-1/2 text-gray-400">
+                          <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                            <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.168l3.71-3.938a.75.75 0 1 1 1.08 1.04l-4.25 4.5a.75.75 0 0 1-1.08 0l-4.25-4.5a.75.75 0 0 1 .02-1.06Z" clipRule="evenodd" />
+                          </svg>
+                        </span>
                       </div>
+                      <div className="relative z-10 text-[10px] text-gray-500">
+                        {table.isShared
+                          ? `${table.occupiedSeats} ${table.occupiedSeats === 1 ? 'person' : 'persons'} seated, ${table.availableSeats} open`
+                          : table.status === 'occupied' ? 'Table in use' : 'Table open'}
+                      </div>
+                      {table.isShared && (
+                        <label className="relative z-10 flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-600">
+                          <span>Persons seated</span>
+                          <input
+                            type="number"
+                            min="0"
+                            max={table.seats}
+                            value={table.occupiedSeats}
+                            onChange={(event) => void handleSharedSeatCountChange(table, event.target.value)}
+                            className="w-14 rounded border border-slate-200 px-1.5 py-0.5 text-right text-[11px] focus:outline-none focus:ring-1 focus:ring-primary"
+                          />
+                        </label>
+                      )}
 
                       {/* Show order info if occupied */}
                       {order && (
                         <div className="relative z-10 w-full text-center text-[10px] text-gray-500 -mt-1">
-                          {order.paymentStatus === 'Paid' && table.status === 'occupied' && (
+                          {order.paymentStatus === 'Paid' && table.status !== 'available' && (
                             <div className="mb-1 inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-emerald-700 ring-1 ring-emerald-200">
                               Already Paid - Set Available
+                            </div>
+                          )}
+                          {order.paymentStatus !== 'Paid' && table.status !== 'available' && (
+                            <div className="mb-1 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-700 ring-1 ring-amber-200">
+                              Pay Later - Release after payment
                             </div>
                           )}
                           <p className="font-medium truncate">{order.customer}</p>
@@ -662,6 +734,14 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
                             <p className="text-gray-400">—</p>
                           )}
                         </div>
+                      )}
+                      {isPaidOccupiedTable && (
+                        <button
+                          onClick={() => void handleStatusChange(table.number, 'available')}
+                          className="relative z-10 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700"
+                        >
+                          Release Table
+                        </button>
                       )}
                     </div>
                   );
@@ -701,12 +781,18 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
                         <span>₱{selectedOrder.amountNumber.toFixed(2)}</span>
                       </div>
                     </div>
-                    <button
-                      onClick={() => handlePaymentComplete(selectedTableId)}
-                      className="w-full bg-green-500 hover:bg-green-600 text-white py-2 rounded-lg transition-colors"
-                    >
-                      Mark as Paid & Free Table
-                    </button>
+                    {selectedOrder.paymentStatus === 'Paid' ? (
+                      <button
+                        onClick={() => selectedTable && void releasePaidTableOrder(selectedTable)}
+                        className="w-full bg-green-500 hover:bg-green-600 text-white py-2 rounded-lg transition-colors"
+                      >
+                        Mark Table Available
+                      </button>
+                    ) : (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                        Pay Later order. Complete payment before this table can be released.
+                      </div>
+                    )}
                   </div>
                 ) : null;
               })()}
@@ -733,22 +819,23 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white font-bold text-sm shadow-md">
+                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-yellow-400 to-yellow-600 flex items-center justify-center text-white font-bold text-sm shadow-md">
                       #
                     </div>
                     <div>
-                      <p className="text-sm font-medium text-gray-800">Reserved</p>
-                      <p className="text-xs text-gray-500">Booked</p>
+                      <p className="text-sm font-medium text-gray-800">Partially Occupied</p>
+                      <p className="text-xs text-gray-500">Shared seats open</p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-gray-400 to-gray-600 flex items-center justify-center text-white font-bold text-sm shadow-md">
-                      #
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-gray-800">Maintenance</p>
-                      <p className="text-xs text-gray-500">Out of service</p>
-                    </div>
+                </div>
+                <div className="mt-4 grid gap-2 text-xs text-gray-600 sm:grid-cols-2">
+                  <div className="rounded-lg border border-teal-200 bg-teal-50 px-3 py-2">
+                    <strong className="text-teal-800">Shared Table</strong>
+                    <p>Occupied by seats. Shows occupied persons and seats left.</p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                    <strong className="text-slate-800">By Table</strong>
+                    <p>One group occupies the table even if seats are still open.</p>
                   </div>
                 </div>
               </div>
@@ -873,10 +960,9 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
                   Table Number
                 </label>
                 <input
-                  type="number"
+                  type="text"
                   value={editTableNumber}
                   onChange={(e) => setEditTableNumber(e.target.value)}
-                  min="1"
                   className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
                   placeholder="Enter table number"
                 />
@@ -900,11 +986,20 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
                 <p className="text-xs text-gray-500 mt-1">Maximum capacity for this table</p>
               </div>
 
+              <label className="flex items-center gap-3 rounded-lg border border-gray-200 p-3 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={editIsShared}
+                  onChange={(e) => setEditIsShared(e.target.checked)}
+                  className="h-4 w-4"
+                />
+                Shared Table?
+              </label>
+
               {/* Info Note */}
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
                 <p className="text-xs text-blue-800">
-                  <strong>Note:</strong> Table status can be changed using the dropdown on the table card.
-                  This dialog is for editing table number and seating capacity.
+                  <strong>Note:</strong> Status is updated by dine-in orders and payments.
                 </p>
               </div>
             </div>
@@ -965,13 +1060,12 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
               {/* Table Number Input */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Table Number <span className="text-red-500">*</span>
+                  Table Name / Number <span className="text-red-500">*</span>
                 </label>
                 <input
-                  type="number"
+                  type="text"
                   value={newTableNumber}
                   onChange={(e) => setNewTableNumber(e.target.value)}
-                  min="1"
                   className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
                   placeholder="Enter table number"
                   autoFocus
@@ -996,11 +1090,20 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
                 <p className="text-xs text-gray-500 mt-1">Maximum 20 seats</p>
               </div>
 
+              <label className="flex items-center gap-3 rounded-lg border border-gray-200 p-3 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={newTableIsShared}
+                  onChange={(e) => setNewTableIsShared(e.target.checked)}
+                  className="h-4 w-4"
+                />
+                Shared Table?
+              </label>
+
               {/* Info Note */}
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
                 <p className="text-xs text-blue-800">
-                  <strong>Info:</strong> New tables are automatically set to "Available" status.
-                  You can change the status later using the dropdown on the table card.
+                  <strong>Info:</strong> New tables are automatically set to Available.
                 </p>
               </div>
             </div>
@@ -1101,9 +1204,9 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
                       <div className="grid grid-cols-2 gap-2 text-sm text-muted-foreground">
                         <p><strong>Party Size:</strong> {entry.partySize} people</p>
                         <p><strong>Required Seats:</strong> {entry.requiredSeats}</p>
-                        <p><strong>Queue Time:</strong> {new Date(entry.queueTime).toLocaleTimeString()}</p>
+                        <p><strong>Queue Time:</strong> {formatManilaTime(entry.queueTime)}</p>
                         {entry.timeAssigned && (
-                          <p><strong>Time Assigned:</strong> {new Date(entry.timeAssigned).toLocaleTimeString()}</p>
+                          <p><strong>Time Assigned:</strong> {formatManilaTime(entry.timeAssigned)}</p>
                         )}
                         {entry.assignedTables && entry.assignedTables.length > 0 && (
                           <p><strong>Assigned Tables:</strong> {entry.assignedTables.map(t => `#${t}`).join(', ')}</p>
@@ -1152,9 +1255,9 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
                         <div className="grid grid-cols-2 gap-2 text-sm text-muted-foreground">
                           <p><strong>Party Size:</strong> {entry.partySize} people</p>
                           <p><strong>Total Amount:</strong> ₱{entry.totalAmount.toFixed(2)}</p>
-                          <p><strong>Time Occupied:</strong> {new Date(entry.timeOccupied).toLocaleString()}</p>
+                          <p><strong>Time Occupied:</strong> {formatManilaFullDateTime(entry.timeOccupied)}</p>
                           {entry.timeReleased && (
-                            <p><strong>Time Released:</strong> {new Date(entry.timeReleased).toLocaleString()}</p>
+                            <p><strong>Time Released:</strong> {formatManilaFullDateTime(entry.timeReleased)}</p>
                           )}
                         </div>
                       </div>

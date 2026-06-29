@@ -1,10 +1,12 @@
 import { createContext, useContext, useEffect, useState, useRef, ReactNode } from 'react';
 import { getApiBaseUrl } from '../../auth/services/auth';
 import type { AuthenticatedUser } from '../../auth/types/auth';
-import { getLocalDateKey } from '../../shared/utils/date';
+import { getLocalDateKey, getManilaTime, parseDatabaseTimestamp } from '../../shared/utils/date';
 
 export interface OrderItem {
   id?: number;
+  variantId?: number;
+  code?: string;
   name: string;
   category: string;
   size?: string;
@@ -307,7 +309,7 @@ export function useOrders() {
 }
 
 function mapDatabaseRetailOrder(row: any): Order {
-  const createdAt = row.created_at ? new Date(row.created_at) : new Date();
+  const createdAt = row.created_at ? parseDatabaseTimestamp(row.created_at) : new Date();
   const items = Array.isArray(row.items) ? row.items : [];
 
   return {
@@ -332,7 +334,7 @@ function mapDatabaseRetailOrder(row: any): Order {
       row.payment_method === 'PayMaya' ? 'PayMaya' :
       'Cash',
     date: getLocalDateKey(createdAt),
-    time: createdAt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+    time: getManilaTime(createdAt),
     items: items.map((item: any) => ({
       id: item.id !== undefined && item.id !== null ? Number(item.id) : undefined,
       name: item.product_name,

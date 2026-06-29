@@ -1,6 +1,5 @@
 export type UserRole =
   | 'Admin'
-  | 'Manager'
   | 'Staff'
   | 'Cashier'
   | 'KitchenStaff'
@@ -12,6 +11,7 @@ export interface ApiActor {
   id: string;
   name: string;
   email?: string;
+  role?: UserRole;
 }
 
 export interface ApiLocation {
@@ -48,14 +48,19 @@ export interface ApiInventoryItem {
   costPrice?: number | null;
   imageUrl?: string | null;
   unit?: string | null;
+  purchaseUnit?: string | null;
+  baseUnit?: string | null;
+  conversionFactor?: number | null;
   minStock?: number | null;
   maxStock?: number | null;
   reorderPoint?: number | null;
   expiryDate?: string | null;
+  expiryPeriod?: string | null;
   storageTemperature?: string | null;
   dateAdded: string;
   locationId: string;
   location?: ApiLocation;
+  isActive?: boolean;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -93,6 +98,9 @@ export interface ApiPurchaseOrderItem {
   rejectedQty: number;
   unitPrice: number;
   totalPrice: number;
+  purchaseUnit?: string | null;
+  baseUnit?: string | null;
+  conversionFactor?: number | null;
 }
 
 export interface ApiPurchaseOrder {
@@ -122,6 +130,7 @@ export interface ApiGoodsReceiptItem {
   purchaseOrderItem?: ApiPurchaseOrderItem;
   inventoryItemId?: string | null;
   inventoryItem?: ApiInventoryItem | null;
+  category?: string | null;
   receivedQty: number;
   rejectedQty: number;
   condition?: 'Excellent' | 'Good' | 'Fair' | 'Damaged' | null;
@@ -134,8 +143,11 @@ export interface ApiGoodsReceipt {
   purchaseOrderId: string;
   purchaseOrder?: ApiPurchaseOrder;
   module: BusinessModule;
+  status?: 'RECEIVED' | 'REJECTED' | 'CANCELLED';
   receivedBy?: ApiActor | null;
   notes?: string | null;
+  actionReason?: string | null;
+  proofImages?: string[];
   items: ApiGoodsReceiptItem[];
   createdAt: string;
 }
@@ -256,6 +268,7 @@ export interface ApiBundle {
   createdBy?: ApiActor | null;
   approvedBy?: ApiActor | null;
   approvedAt?: string | null;
+  archivedAt?: string | null;
   items: ApiBundleItem[];
   createdAt: string;
   updatedAt?: string;
@@ -269,6 +282,9 @@ export interface ApiRecipeIngredient {
   unit?: string | null;
   unitCost?: number | null;
   totalCost?: number | null;
+  physicalStock?: number;
+  usableStock?: number;
+  stockStatus?: 'available' | 'low' | 'insufficient' | 'expired' | 'missing';
 }
 
 export interface ApiRecipe {
@@ -282,6 +298,7 @@ export interface ApiRecipe {
   targetFoodCost?: number | null;
   sellingPrice?: number | null;
   isActive: boolean;
+  archivedAt?: string | null;
   imageUrl?: string | null;
   isVegetarian: boolean;
   isVegan: boolean;
@@ -293,6 +310,16 @@ export interface ApiRecipe {
   menuItemId?: string | null;
   menuItem?: ApiInventoryItem | null;
   ingredients: ApiRecipeIngredient[];
+  modifiers?: Record<string, unknown>[];
+  sizeVariants?: Array<{
+    id: string;
+    name: string;
+    sizeMultiplier: number;
+    sellingPrice: number;
+    ingredientQuantities: Record<string, number>;
+    priceDelta?: number;
+  }>;
+  availableOrders: number;
   createdAt: string;
   updatedAt?: string;
 }
@@ -301,14 +328,39 @@ export type KitchenOrderStatus =
   | 'PENDING'
   | 'PREPARING'
   | 'READY'
+  | 'SERVED'
   | 'COMPLETED'
-  | 'VOIDED';
+  | 'VOIDED'
+  | 'CANCELLED';
+
+export interface ApiKitchenOrderItem {
+  id: string | number;
+  name: string;
+  quantity: number;
+  price?: number;
+  prepTimeMinutes?: number;
+  ingredients?: string[];
+  replacedIngredients?: string[];
+  notes?: string | null;
+  addedIngredients?: string[];
+  removedIngredients?: string[];
+  changedIngredients?: string[];
+  modifiers?: string[];
+  specialInstructions?: string[];
+}
 
 export interface ApiKitchenOrder {
   id: string;
+  orderNumber?: string | null;
   receiptNo: string;
+  customerName?: string | null;
+  orderType?: string | null;
+  tableNumber?: string | null;
+  itemCount?: number | null;
   quantity: number;
   status: KitchenOrderStatus;
+  paymentStatus?: string | null;
+  totalAmount?: number | string | null;
   notes?: string | null;
   voidReason?: string | null;
   voidedAt?: string | null;
@@ -320,9 +372,27 @@ export interface ApiKitchenOrder {
   table?: { id: string; tableNumber: string } | null;
   saleId?: string | null;
   sale?: { id: string; transactionNumber: string } | null;
+  items?: ApiKitchenOrderItem[];
   completedBy?: ApiActor | null;
+  orderedAt?: string | null;
   createdAt: string;
   updatedAt?: string;
+  paymentAt?: string | null;
+  preparingStartedAt?: string | null;
+  readyAt?: string | null;
+  servedAt?: string | null;
+  serviceDuration?: number | string | null;
+  estimatedPrepMinutes?: number | string | null;
+  estimatedReadyAt?: string | null;
+  completedAt?: string | null;
+  tableStartedAt?: string | null;
+  tableEndedAt?: string | null;
+  stayStartedAt?: string | null;
+  stayEndedAt?: string | null;
+  runningTimeStart?: string | null;
+  runningTimeEnd?: string | null;
+  runningDuration?: number | string | null;
+  isRunning?: boolean | null;
 }
 
 export interface ApiCategory {
@@ -336,7 +406,8 @@ export interface ApiCategory {
 export type RestaurantSettingKey =
   | 'CATEGORY_HIERARCHY'
   | 'STORAGE_TEMPERATURE_OPTIONS'
-  | 'PRODUCT_MERGE_METADATA';
+  | 'PRODUCT_MERGE_METADATA'
+  | 'GOODS_RECEIVED_QUALITY_CRITERIA';
 
 export interface ApiRestaurantSetting {
   key: RestaurantSettingKey;

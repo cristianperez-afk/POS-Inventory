@@ -1,3 +1,5 @@
+import { getManilaDateKey } from '../../../../shared/utils/date';
+
 // Types
 export interface Supplier {
   id: string;
@@ -22,6 +24,7 @@ export interface InventoryItem {
   dateAdded: string;
   location: string;
   isActive?: boolean;
+  isRecent?: boolean;
 }
 
 export interface PurchaseOrder {
@@ -73,7 +76,7 @@ export interface User {
   id: string;
   name: string;
   email: string;
-  role: 'Admin' | 'Manager' | 'Staff';
+  role: 'Admin' | 'Staff';
   status: 'Active' | 'Inactive';
   lastLogin: string;
 }
@@ -623,7 +626,7 @@ export function generateAdjustments(): Adjustment[] {
       items: [
         { itemId: '78', name: 'Cargo Pants', quantityChange: 2, location: 'Warehouse' }
       ],
-      createdBy: 'Manager User',
+      createdBy: 'Inventory Manager',
       status: 'Approved'
     },
     {
@@ -684,7 +687,7 @@ export function generateUsers(): User[] {
       id: '2',
       name: 'Juan Dela Cruz',
       email: 'juan@retaildemo.com',
-      role: 'Manager',
+      role: 'Admin',
       status: 'Active',
       lastLogin: '2026-06-01 14:20'
     },
@@ -692,7 +695,7 @@ export function generateUsers(): User[] {
       id: '3',
       name: 'Maria Santos',
       email: 'maria@retaildemo.com',
-      role: 'Manager',
+      role: 'Admin',
       status: 'Active',
       lastLogin: '2026-06-01 16:45'
     },
@@ -1004,7 +1007,7 @@ export function generateSales(): Sale[] {
     const daysAgo = Math.floor(Math.random() * 30);
     const saleDate = new Date();
     saleDate.setDate(saleDate.getDate() - daysAgo);
-    const dateStr = saleDate.toISOString().split('T')[0];
+    const dateStr = getManilaDateKey(saleDate);
     const timeStr = `${String(Math.floor(Math.random() * 12) + 9).padStart(2, '0')}:${String(Math.floor(Math.random() * 60)).padStart(2, '0')}`;
 
     sales.push({

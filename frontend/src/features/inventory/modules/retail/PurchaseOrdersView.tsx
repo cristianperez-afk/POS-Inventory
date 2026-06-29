@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { Plus, X, Search, Package, ShoppingCart, CheckCircle, XCircle, Clock, Eye, Users, Trash2 } from 'lucide-react';
 import {
+  useArchiveRetailSupplierMutation,
   useApproveRetailPurchaseOrderMutation,
   useCancelRetailPurchaseOrderMutation,
   useCreateRetailPurchaseOrderMutation,
@@ -11,11 +12,21 @@ import {
   useRetailLocationsQuery,
   useRetailPurchaseOrderRecordsQuery,
   useRetailSuppliersQuery,
+  useRestoreRetailSupplierMutation,
   useSaveRetailInventoryMutation,
   useSubmitRetailPurchaseOrderMutation,
+  useUpdateRetailSupplierMutation,
 } from '../lib/retail';
 import { categorySubcategories, generalMerchandiseSubcategories } from '../../app/utils/constants';
 import { SuppliersManager, type NormalizedSupplier } from '../shared/suppliers/SuppliersManager';
+import {
+  EXPECTED_DELIVERY_TIME_WINDOW_LABEL,
+  formatExpectedDelivery,
+  getExpectedDeliveryTimeWindowError,
+  getDeliveryDelayLabel,
+  isPurchaseOrderDelayed,
+} from '../lib/purchaseOrderDelivery';
+import { getManilaDateKey } from '../../../../shared/utils/date';
 
 const STATUS_LABEL: Record<string, string> = {
   DRAFT: 'Draft',
@@ -26,10 +37,10 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 const STATUS_CLASS: Record<string, string> = {
-  DRAFT: 'bg-[#f3f4f6] text-[#6b7280]',
+  DRAFT: 'bg-muted text-muted-foreground',
   SUBMITTED: 'bg-[#fff4e6] text-[#FFA500]',
-  APPROVED: 'bg-[#E0F2F2] text-[#007A5E]',
-  RECEIVED: 'bg-[#E0F5F1] text-[#008967]',
+  APPROVED: 'bg-primary/10 text-primary',
+  RECEIVED: 'bg-primary/10 text-primary',
   CANCELLED: 'bg-[#ffe2e2] text-[#E7000B]',
 };
 
@@ -61,7 +72,25 @@ type POItemDraft = {
 };
 
 // Units a general-merchandise buyer orders in (a mall buys cases/boxes, not bales).
-const GENERAL_UNITS = ['pcs', 'box', 'case', 'pack', 'dozen', 'set', 'roll', 'kg'];
+const GENERAL_UNITS = [
+  'pcs',
+  'box',
+  'case',
+  'pack',
+  'dozen',
+  'set',
+  'roll',
+  'kg',
+  'liter',
+  'milliliter',
+  'bottle',
+  'can',
+  'bag',
+  'sack',
+  'carton',
+  'tray',
+  'gallon',
+];
 // Thrift suppliers sell sealed bales or sacks.
 const THRIFT_UNITS = ['bale', 'sack', 'bundle'];
 
@@ -94,8 +123,10 @@ export default function PurchaseOrdersView({
 }: {
   currentUser: { email: string; role: string } | null;
 }) {
+  const isAdmin = currentUser?.role === 'Admin';
   const ordersQuery = useRetailPurchaseOrderRecordsQuery();
   const suppliersQuery = useRetailSuppliersQuery();
+  const archivedSuppliersQuery = useRetailSuppliersQuery({ isActive: false, enabled: isAdmin });
   const inventoryQuery = useRetailInventoryRecordsQuery();
   const locationsQuery = useRetailLocationsQuery();
   const createPurchaseOrderMutation = useCreateRetailPurchaseOrderMutation();
@@ -104,9 +135,13 @@ export default function PurchaseOrdersView({
   const rejectPurchaseOrderMutation = useRejectRetailPurchaseOrderMutation();
   const cancelPurchaseOrderMutation = useCancelRetailPurchaseOrderMutation();
   const createSupplierMutation = useCreateRetailSupplierMutation();
+  const updateSupplierMutation = useUpdateRetailSupplierMutation();
+  const archiveSupplierMutation = useArchiveRetailSupplierMutation();
+  const restoreSupplierMutation = useRestoreRetailSupplierMutation();
   const saveInventoryMutation = useSaveRetailInventoryMutation();
   const orders = ordersQuery.data ?? [];
   const suppliers = suppliersQuery.data ?? [];
+  const archivedSuppliers = archivedSuppliersQuery.data ?? [];
   const inventory = inventoryQuery.data ?? [];
   const locations = locationsQuery.data ?? [];
   const loading = ordersQuery.isLoading || suppliersQuery.isLoading || inventoryQuery.isLoading;
@@ -119,6 +154,12 @@ export default function PurchaseOrdersView({
   const [selectedPOForAction, setSelectedPOForAction] = useState<string | null>(null);
   const [rejectionRemarks, setRejectionRemarks] = useState('');
   const [saving, setSaving] = useState(false);
+  const [now, setNow] = useState(() => new Date());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const [poForm, setPOForm] = useState({
     supplierId: '' as string | undefined,
@@ -249,6 +290,11 @@ export default function PurchaseOrdersView({
       toast.error('Create a location before ordering a new item');
       return;
     }
+    const deliveryTimeError = getExpectedDeliveryTimeWindowError(poForm.expectedDelivery);
+    if (deliveryTimeError) {
+      toast.error(deliveryTimeError);
+      return;
+    }
     setSaving(true);
     try {
       // New items (not linked to existing inventory) are registered as inventory
@@ -355,9 +401,25 @@ export default function PurchaseOrdersView({
     }
   };
 
-  const filteredOrders = orders.filter(o => filterStatus === 'all' || o.status === filterStatus);
+  const filteredOrders = orders.filter(o =>
+    filterStatus === 'all'
+      ? true
+      : filterStatus === 'pending'
+        ? ['DRAFT', 'SUBMITTED'].includes(o.status)
+        : o.status === filterStatus,
+  );
   const submittedPOs = orders.filter(o => o.status === 'SUBMITTED');
-  const isAdmin = currentUser?.role === 'Admin' || currentUser?.role === 'Manager';
+
+  const getDeliveryDelayBadge = (order: { expectedDelivery?: string | null; status: string }) => {
+    if (!isPurchaseOrderDelayed(order.expectedDelivery, order.status, now)) return null;
+    const delayLabel = getDeliveryDelayLabel(order.expectedDelivery, now);
+
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full border border-[#DC2626] bg-[#FEE2E2] px-2 py-1 text-[11px] font-semibold text-[#991B1B]">
+        Delayed: {delayLabel}
+      </span>
+    );
+  };
 
   const stats = {
     total: orders.length,
@@ -366,21 +428,31 @@ export default function PurchaseOrdersView({
     received: orders.filter(o => o.status === 'RECEIVED').length,
   };
 
+  // Stat cards toggle the status filter that drives the orders list; clicking the
+  // active card (or Total Orders) clears it back to "all".
+  const toggleFilterStatus = (status: string) => {
+    setFilterStatus((current) => (current === status ? 'all' : status));
+  };
+  const statCardClass = (active: boolean) =>
+    `text-left w-full bg-white rounded-[14px] p-4 border shadow-sm cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-lg hover:border-[#007A5E]/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#007A5E]/40 active:translate-y-0 active:shadow-md ${
+      active ? 'border-[#007A5E] bg-[#007A5E]/5 shadow-md' : 'border-[rgba(0,0,0,0.1)]'
+    }`;
+
   if (loading) {
-    return <div className="flex items-center justify-center h-64 text-[#6b7280]">Loading purchase orders…</div>;
+    return <div className="flex items-center justify-center h-64 text-muted-foreground">Loading purchase orders…</div>;
   }
 
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h2 className="text-[30px] font-bold text-[#323B42]">Purchase Orders</h2>
-          <p className="text-[#323B42] text-[14px] mt-1">Create POs and register new items</p>
+          <h2 className="text-[30px] font-bold text-foreground">Purchase Orders</h2>
+          <p className="text-foreground text-[14px] mt-1">Create POs and register new items</p>
         </div>
-        <div className="flex gap-3">
-          <button
-            onClick={() => setShowSuppliersModal(true)}
-            className="bg-white border border-[rgba(0,0,0,0.1)] text-[#323B42] px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-[#F8FAFB] transition-colors"
+          <div className="flex gap-3">
+            <button
+              onClick={() => setShowSuppliersModal(true)}
+            className="bg-card border border-[rgba(0,0,0,0.1)] text-foreground px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-background hover:-translate-y-0.5 hover:shadow-md hover:border-primary/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 active:translate-y-0 active:shadow-sm transition-all duration-200"
           >
             <Users className="size-4" />
             View Suppliers
@@ -396,10 +468,10 @@ export default function PurchaseOrdersView({
                 {submittedPOs.length}
               </span>
             </button>
-          )}
-          <button
-            onClick={() => setShowNewPOModal(true)}
-            className="bg-[#007A5E] text-white px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-[#008967] transition-colors"
+            )}
+            <button
+              onClick={() => setShowNewPOModal(true)}
+            className="bg-primary text-white px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-primary/90 hover:-translate-y-0.5 hover:shadow-md hover:shadow-primary/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-sm transition-all duration-200"
           >
             <Plus className="size-4" />
             New Purchase Order
@@ -410,39 +482,39 @@ export default function PurchaseOrdersView({
       {/* New PO Modal */}
       {showNewPOModal && (
         <div className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-[#f8fafb] rounded-[12px] p-6 max-w-[512px] w-full max-h-[90vh] overflow-y-auto border border-[rgba(50,59,66,0.15)] shadow-[0px_10px_15px_-3px_rgba(0,0,0,0.1),0px_4px_6px_-4px_rgba(0,0,0,0.1)]">
+          <div className="bg-background rounded-[12px] p-6 max-w-[512px] w-full max-h-[90vh] overflow-y-auto border border-[rgba(50,59,66,0.15)] shadow-[0px_10px_15px_-3px_rgba(0,0,0,0.1),0px_4px_6px_-4px_rgba(0,0,0,0.1)]">
             <div className="flex items-start justify-between mb-2">
               <div>
-                <h3 className="text-[18px] font-semibold text-[#003534]">Create Purchase Order</h3>
-                <p className="text-[14px] text-[#323b42] mt-1">Create a new purchase order for product deliveries</p>
+                <h3 className="text-[18px] font-semibold text-foreground">Create Purchase Order</h3>
+                <p className="text-[14px] text-foreground mt-1">Create a new purchase order for product deliveries</p>
               </div>
               <button onClick={() => setShowNewPOModal(false)} className="p-2 hover:bg-[rgba(0,0,0,0.05)] rounded-[6px] transition-colors opacity-70">
-                <X className="size-4 text-[#323B42]" />
+                <X className="size-4 text-foreground" />
               </button>
             </div>
 
             <div className="space-y-4 mt-6">
               <div className="relative">
-                <label className="block text-[12px] font-medium text-[#323b42] mb-2">Supplier <span className="text-[#E7000B]">*</span></label>
+                <label className="block text-[12px] font-medium text-foreground mb-2">Supplier <span className="text-[#E7000B]">*</span></label>
                 <input
                   type="text"
                   value={poForm.supplierName}
                   onChange={(e) => { setPOForm({ ...poForm, supplierName: e.target.value, supplierId: undefined }); setShowSupplierDropdown(true); }}
                   onFocus={() => setShowSupplierDropdown(true)}
                   onBlur={() => setTimeout(() => setShowSupplierDropdown(false), 300)}
-                  className="w-full px-[12.8px] py-[8.8px] bg-white border-[0.8px] border-transparent rounded-[10px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+                  className="w-full px-[12.8px] py-[8.8px] bg-card border-[0.8px] border-transparent rounded-[10px] text-[14px] focus:outline-none focus:border-primary"
                   placeholder="Select supplier"
                 />
                 {showSupplierDropdown && filteredSuppliers.length > 0 && (
-                  <div className="absolute z-10 w-full mt-1 bg-white border border-[rgba(50,59,66,0.15)] rounded-[10px] shadow-lg max-h-[240px] overflow-y-auto">
+                  <div className="absolute z-10 w-full mt-1 bg-card border border-[rgba(50,59,66,0.15)] rounded-[10px] shadow-lg max-h-[240px] overflow-y-auto">
                     {filteredSuppliers.map((s: any) => (
                       <div
                         key={s.id}
                         onMouseDown={(e) => { e.preventDefault(); setPOForm({ ...poForm, supplierId: s.id, supplierName: s.name }); setShowSupplierDropdown(false); }}
-                        className="px-4 py-3 hover:bg-[#f8fafb] cursor-pointer border-b border-[rgba(50,59,66,0.1)] last:border-b-0"
+                        className="px-4 py-3 hover:bg-background cursor-pointer border-b border-[rgba(50,59,66,0.1)] last:border-b-0"
                       >
-                        <p className="text-[14px] font-medium text-[#323b42]">{s.name}</p>
-                        <p className="text-[12px] text-[#6b7280] mt-0.5">{s.category} • {s.contactPerson}</p>
+                        <p className="text-[14px] font-medium text-foreground">{s.name}</p>
+                        <p className="text-[12px] text-muted-foreground mt-0.5">{s.category} • {s.contactPerson}</p>
                       </div>
                     ))}
                   </div>
@@ -450,11 +522,11 @@ export default function PurchaseOrdersView({
               </div>
 
               <div>
-                <label className="block text-[12px] font-medium text-[#323b42] mb-2">Payment Method *</label>
+                <label className="block text-[12px] font-medium text-foreground mb-2">Payment Method *</label>
                 <select
                   value={poForm.paymentMethod}
                   onChange={(e) => setPOForm({ ...poForm, paymentMethod: e.target.value })}
-                  className="w-full px-[12.8px] py-[8.8px] bg-white border-[0.8px] border-transparent rounded-[10px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+                  className="w-full px-[12.8px] py-[8.8px] bg-card border-[0.8px] border-transparent rounded-[10px] text-[14px] focus:outline-none focus:border-primary"
                 >
                   <option value="Cash">Cash</option>
                   <option value="GCash">GCash</option>
@@ -466,34 +538,37 @@ export default function PurchaseOrdersView({
 
               {poForm.paymentMethod === 'Credit Terms' && (
                 <div>
-                  <label className="block text-[12px] font-medium text-[#323b42] mb-2">Payment Terms</label>
+                  <label className="block text-[12px] font-medium text-foreground mb-2">Payment Terms</label>
                   <input
                     type="text"
                     value={poForm.paymentTerms}
                     onChange={(e) => setPOForm({ ...poForm, paymentTerms: e.target.value })}
-                    className="w-full px-[12.8px] py-[8.8px] bg-white border-[0.8px] border-transparent rounded-[10px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+                    className="w-full px-[12.8px] py-[8.8px] bg-card border-[0.8px] border-transparent rounded-[10px] text-[14px] focus:outline-none focus:border-primary"
                     placeholder="e.g., Net 30 days"
                   />
                 </div>
               )}
 
               <div>
-                <label className="block text-[12px] font-medium text-[#323b42] mb-2">Expected Delivery Date</label>
+                <label className="block text-[12px] font-medium text-foreground mb-2">Expected Delivery Date and Time</label>
                 <input
-                  type="date"
+                  type="datetime-local"
                   value={poForm.expectedDelivery}
                   onChange={(e) => setPOForm({ ...poForm, expectedDelivery: e.target.value })}
-                  className="w-full px-[12.8px] py-[8.8px] bg-white border-[0.8px] border-transparent rounded-[10px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+                  className="w-full px-[12.8px] py-[8.8px] bg-card border-[0.8px] border-transparent rounded-[10px] text-[14px] focus:outline-none focus:border-primary"
                 />
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Delivery time must be between {EXPECTED_DELIVERY_TIME_WINDOW_LABEL}.
+                </p>
               </div>
 
               <div>
-                <label className="block text-[12px] font-medium text-[#323b42] mb-2">Notes</label>
+                <label className="block text-[12px] font-medium text-foreground mb-2">Notes</label>
                 <input
                   type="text"
                   value={poForm.notes}
                   onChange={(e) => setPOForm({ ...poForm, notes: e.target.value })}
-                  className="w-full px-[12.8px] py-[8.8px] bg-white border-[0.8px] border-transparent rounded-[10px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+                  className="w-full px-[12.8px] py-[8.8px] bg-card border-[0.8px] border-transparent rounded-[10px] text-[14px] focus:outline-none focus:border-primary"
                   placeholder="Additional notes or requirements"
                 />
               </div>
@@ -501,44 +576,44 @@ export default function PurchaseOrdersView({
 
             <div className="mt-6">
               <div className="flex items-center justify-between mb-3">
-                <label className="text-[16px] font-semibold text-[#323b42]">Order Items</label>
-                <button onClick={() => setShowNewItemModal(true)} className="px-[10.8px] py-[0.8px] h-[32px] bg-[#f8fafb] border-[0.8px] border-[rgba(50,59,66,0.15)] text-[#323b42] rounded-[10px] text-[14px] font-medium flex items-center gap-[6px] hover:bg-[#e9ecef] transition-colors">
+                <label className="text-[16px] font-semibold text-foreground">Order Items</label>
+                <button onClick={() => setShowNewItemModal(true)} className="px-[10.8px] py-[0.8px] h-[32px] bg-background border-[0.8px] border-[rgba(50,59,66,0.15)] text-foreground rounded-[10px] text-[14px] font-medium flex items-center gap-[6px] hover:bg-muted transition-colors">
                   <Plus className="size-4" />
                   Add Item
                 </button>
               </div>
 
               {poForm.items.length === 0 ? (
-                <div className="bg-[#f9fafb] border-[0.8px] border-[rgba(50,59,66,0.15)] rounded-[12px] p-6 text-center">
-                  <p className="text-[14px] text-[#323B42]">No items added yet</p>
+                <div className="bg-muted border-[0.8px] border-[rgba(50,59,66,0.15)] rounded-[12px] p-6 text-center">
+                  <p className="text-[14px] text-foreground">No items added yet</p>
                 </div>
               ) : (
                 <div className="space-y-3">
                   {poForm.items.map((item, idx) => (
-                    <div key={idx} className="bg-[#f9fafb] border-[0.8px] border-[rgba(50,59,66,0.15)] rounded-[12px] p-4">
+                    <div key={idx} className="bg-muted border-[0.8px] border-[rgba(50,59,66,0.15)] rounded-[12px] p-4">
                       <div className="flex items-center justify-between mb-3">
                         <div className="flex-1">
                           <div className="flex items-center gap-2">
-                            <p className="text-[14px] font-semibold text-[#364153]">{item.name}</p>
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${item.productType === 'THRIFT' ? 'bg-[#fdf0e6] text-[#b45309]' : 'bg-[#E0F5F1] text-[#008967]'}`}>
+                            <p className="text-[14px] font-semibold text-foreground">{item.name}</p>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${item.productType === 'THRIFT' ? 'bg-[#fdf0e6] text-[#b45309]' : 'bg-primary/10 text-primary'}`}>
                               {item.productType === 'THRIFT' ? 'Thrift Bale' : 'General'}
                             </span>
                           </div>
                           {(item.category || item.subcategory) && (
-                            <p className="text-[12px] text-[#6b7280] mt-1">
+                            <p className="text-[12px] text-muted-foreground mt-1">
                               {[item.category, item.subcategory].filter(Boolean).join(' › ')}
                               {item.sku && <span className="ml-2">• SKU: {item.sku}</span>}
-                              {item.isNew && <span className="ml-2 text-[11px] text-[#007a5e]">(new item)</span>}
+                              {item.isNew && <span className="ml-2 text-[11px] text-primary">(new item)</span>}
                             </p>
                           )}
                           {item.estimatedWeight && item.estimatedWeight > 0 && (
-                            <p className="text-[12px] text-[#6b7280] mt-1">Est. Weight: {item.estimatedWeight} kg</p>
+                            <p className="text-[12px] text-muted-foreground mt-1">Est. Weight: {item.estimatedWeight} kg</p>
                           )}
                           {item.sellingPrice && item.sellingPrice > 0 && (
-                            <p className="text-[12px] text-[#6b7280] mt-1">
+                            <p className="text-[12px] text-muted-foreground mt-1">
                               Retail: ₱{item.sellingPrice.toLocaleString()} / {item.unit ?? 'pcs'}
                               {item.sellingPrice > item.unitPrice && (
-                                <span className="ml-1 text-[#008967]">(+{Math.round(((item.sellingPrice - item.unitPrice) / item.unitPrice) * 100)}% margin)</span>
+                                <span className="ml-1 text-primary">(+{Math.round(((item.sellingPrice - item.unitPrice) / item.unitPrice) * 100)}% margin)</span>
                               )}
                             </p>
                           )}
@@ -549,8 +624,8 @@ export default function PurchaseOrdersView({
                       </div>
                       <div className="border-t border-[rgba(50,59,66,0.15)] pt-3">
                         <div className="flex items-center justify-between">
-                          <span className="text-[12px] text-[#6b7280]">{item.quantity} {item.unit ?? (item.productType === 'THRIFT' ? 'bale' : 'pcs')} × ₱{item.unitPrice.toLocaleString()}</span>
-                          <span className="text-[14px] font-semibold text-[#007a5e]">₱{(item.quantity * item.unitPrice).toLocaleString()}</span>
+                          <span className="text-[12px] text-muted-foreground">{item.quantity} {item.unit ?? (item.productType === 'THRIFT' ? 'bale' : 'pcs')} × ₱{item.unitPrice.toLocaleString()}</span>
+                          <span className="text-[14px] font-semibold text-primary">₱{(item.quantity * item.unitPrice).toLocaleString()}</span>
                         </div>
                       </div>
                     </div>
@@ -559,18 +634,18 @@ export default function PurchaseOrdersView({
               )}
             </div>
 
-            <div className="mt-3 bg-[#f3f4f6] rounded-[12px] p-3 flex justify-between items-center">
-              <span className="text-[16px] font-semibold text-[#323b42]">Total Order Cost:</span>
-              <span className="text-[20px] font-bold text-[#007a5e]">
+            <div className="mt-3 bg-muted rounded-[12px] p-3 flex justify-between items-center">
+              <span className="text-[16px] font-semibold text-foreground">Total Order Cost:</span>
+              <span className="text-[20px] font-bold text-primary">
                 ₱{poForm.items.reduce((sum, i) => sum + i.quantity * i.unitPrice, 0).toLocaleString()}
               </span>
             </div>
 
             <div className="flex gap-2 justify-end mt-4">
-              <button onClick={() => setShowNewPOModal(false)} className="px-[16.8px] py-[8.8px] h-[36px] bg-[#f8fafb] border-[0.8px] border-[rgba(50,59,66,0.15)] rounded-[10px] text-[14px] font-medium text-[#323b42] hover:bg-[#e9ecef] transition-colors">
+              <button onClick={() => setShowNewPOModal(false)} className="px-[16.8px] py-[8.8px] h-[36px] bg-background border-[0.8px] border-[rgba(50,59,66,0.15)] rounded-[10px] text-[14px] font-medium text-foreground hover:bg-muted transition-colors">
                 Cancel
               </button>
-              <button onClick={handleCreatePO} disabled={saving || !poForm.supplierId || poForm.items.length === 0} className="px-4 py-2 h-[36px] bg-[#007a5e] text-white rounded-[10px] text-[14px] font-medium hover:bg-[#008967] transition-colors disabled:opacity-60">
+              <button onClick={handleCreatePO} disabled={saving || !poForm.supplierId || poForm.items.length === 0} className="px-4 py-2 h-[36px] bg-primary text-white rounded-[10px] text-[14px] font-medium hover:bg-primary/90 transition-colors disabled:opacity-60">
                 {saving ? 'Creating…' : 'Create Order'}
               </button>
             </div>
@@ -581,13 +656,13 @@ export default function PurchaseOrdersView({
       {/* New Item Modal */}
       {showNewItemModal && (
         <div className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white rounded-[14px] p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <h3 className="text-[24px] font-bold text-[#323B42] mb-1">Add Item to Purchase Order</h3>
-            <p className="text-[14px] text-[#6b7280] mb-6">Order brand-new general merchandise or sealed ukay-ukay/thrift bales.</p>
+          <div className="bg-card rounded-[14px] p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <h3 className="text-[24px] font-bold text-foreground mb-1">Add Item to Purchase Order</h3>
+            <p className="text-[14px] text-muted-foreground mb-6">Order brand-new general merchandise or sealed ukay-ukay/thrift bales.</p>
             <div className="space-y-4">
               {/* Product type — general merchandise vs. thrift bale drive different fields */}
               <div>
-                <label className="block text-[14px] font-medium text-[#323B42] mb-2">Product Type *</label>
+                <label className="block text-[14px] font-medium text-foreground mb-2">Product Type *</label>
                 <div className="grid grid-cols-2 gap-3">
                   {([
                     { type: 'GENERAL' as POProductType, title: 'General Merchandise', desc: 'Brand-new goods sold per unit', defUnit: 'pcs' },
@@ -599,19 +674,19 @@ export default function PurchaseOrdersView({
                       onClick={() => setNewItemForm({ ...newItemForm, productType: type, unit: defUnit, category: '', subcategory: '', newCategory: '', newSubcategory: '' })}
                       className={`text-left px-4 py-3 rounded-[10px] border transition-colors ${
                         newItemForm.productType === type
-                          ? 'border-[#007A5E] bg-[#E0F5F1]'
-                          : 'border-[rgba(0,0,0,0.1)] bg-white hover:bg-[#F8FAFB]'
+                          ? 'border-primary bg-primary/10'
+                          : 'border-[rgba(0,0,0,0.1)] bg-card hover:bg-background'
                       }`}
                     >
-                      <p className="text-[14px] font-semibold text-[#323B42]">{title}</p>
-                      <p className="text-[12px] text-[#6b7280] mt-0.5">{desc}</p>
+                      <p className="text-[14px] font-semibold text-foreground">{title}</p>
+                      <p className="text-[12px] text-muted-foreground mt-0.5">{desc}</p>
                     </button>
                   ))}
                 </div>
               </div>
 
               <div>
-                <label className="block text-[14px] font-medium text-[#323B42] mb-2">Link to Existing Inventory Item (optional)</label>
+                <label className="block text-[14px] font-medium text-foreground mb-2">Link to Existing Inventory Item (optional)</label>
                 <select
                   value={newItemForm.inventoryItemId}
                   onChange={(e) => {
@@ -633,7 +708,7 @@ export default function PurchaseOrdersView({
                       condition: (linked?.condition as string) ?? newItemForm.condition,
                     });
                   }}
-                  className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+                  className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary"
                 >
                   <option value="">— No link (new item) —</option>
                   {inventory.map((item: any) => (
@@ -645,21 +720,21 @@ export default function PurchaseOrdersView({
               {/* Name — bale type (autocomplete) for thrift, plain name + SKU for general */}
               {isThrift ? (
                 <div className="relative">
-                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">Bale Type *</label>
+                  <label className="block text-[14px] font-medium text-foreground mb-2">Bale Type *</label>
                   <input
                     type="text"
                     value={newItemForm.baleType}
                     onChange={(e) => { setNewItemForm({ ...newItemForm, baleType: e.target.value }); setShowBaleTypeDropdown(true); }}
                     onFocus={() => setShowBaleTypeDropdown(true)}
                     onBlur={() => setTimeout(() => setShowBaleTypeDropdown(false), 300)}
-                    className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]"
+                    className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary"
                     placeholder="e.g., Mixed Clothing, Premium Denim, Ladies Tops"
                   />
                   {showBaleTypeDropdown && filteredBaleTypes.length > 0 && newItemForm.baleType && (
-                    <div className="absolute z-10 w-full mt-1 bg-white border border-[rgba(0,0,0,0.1)] rounded-[8px] shadow-lg max-h-[240px] overflow-y-auto">
+                    <div className="absolute z-10 w-full mt-1 bg-card border border-[rgba(0,0,0,0.1)] rounded-[8px] shadow-lg max-h-[240px] overflow-y-auto">
                       {filteredBaleTypes.map((type, index) => (
-                        <div key={index} onMouseDown={(e) => { e.preventDefault(); setNewItemForm({ ...newItemForm, baleType: type }); setShowBaleTypeDropdown(false); }} className="px-4 py-2.5 hover:bg-[#F8FAFB] cursor-pointer border-b border-[rgba(0,0,0,0.05)] last:border-b-0">
-                          <p className="text-[14px] text-[#323B42]">{type}</p>
+                        <div key={index} onMouseDown={(e) => { e.preventDefault(); setNewItemForm({ ...newItemForm, baleType: type }); setShowBaleTypeDropdown(false); }} className="px-4 py-2.5 hover:bg-background cursor-pointer border-b border-[rgba(0,0,0,0.05)] last:border-b-0">
+                          <p className="text-[14px] text-foreground">{type}</p>
                         </div>
                       ))}
                     </div>
@@ -668,24 +743,24 @@ export default function PurchaseOrdersView({
               ) : (
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-[14px] font-medium text-[#323B42] mb-2">Product Name *</label>
+                    <label className="block text-[14px] font-medium text-foreground mb-2">Product Name *</label>
                     <input
                       type="text"
                       value={newItemForm.name}
                       onChange={(e) => setNewItemForm({ ...newItemForm, name: e.target.value })}
                       disabled={!!newItemForm.inventoryItemId}
-                      className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E] disabled:bg-[#F8FAFB] disabled:text-[#6b7280]"
+                      className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary disabled:bg-background disabled:text-muted-foreground"
                       placeholder="e.g., Cotton Crew Socks 3-pack"
                     />
                   </div>
                   <div>
-                    <label className="block text-[14px] font-medium text-[#323B42] mb-2">SKU / Barcode (optional)</label>
+                    <label className="block text-[14px] font-medium text-foreground mb-2">SKU / Barcode (optional)</label>
                     <input
                       type="text"
                       value={newItemForm.sku}
                       onChange={(e) => setNewItemForm({ ...newItemForm, sku: e.target.value })}
                       disabled={!!newItemForm.inventoryItemId}
-                      className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E] disabled:bg-[#F8FAFB] disabled:text-[#6b7280]"
+                      className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary disabled:bg-background disabled:text-muted-foreground"
                       placeholder="e.g., SKU-00123"
                     />
                   </div>
@@ -695,14 +770,14 @@ export default function PurchaseOrdersView({
               {/* Category & Subcategory — required for new items (used to file the new inventory record) */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">
+                  <label className="block text-[14px] font-medium text-foreground mb-2">
                     Category {!newItemForm.inventoryItemId && <span className="text-[#E7000B]">*</span>}
                   </label>
                   <select
                     value={newItemForm.category}
                     onChange={(e) => setNewItemForm({ ...newItemForm, category: e.target.value, subcategory: '', newSubcategory: '' })}
                     disabled={!!newItemForm.inventoryItemId || !!newItemForm.newCategory.trim()}
-                    className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E] disabled:bg-[#F8FAFB] disabled:text-[#6b7280]"
+                    className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary disabled:bg-background disabled:text-muted-foreground"
                   >
                     <option value="">Select category</option>
                     {Object.keys(itemCategoryMap).map((cat) => (
@@ -715,18 +790,18 @@ export default function PurchaseOrdersView({
                       value={newItemForm.newCategory}
                       onChange={(e) => setNewItemForm({ ...newItemForm, newCategory: e.target.value, subcategory: '' })}
                       disabled={!!newItemForm.category}
-                      className="w-full mt-2 px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E] disabled:bg-[#F8FAFB] disabled:text-[#6b7280]"
+                      className="w-full mt-2 px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary disabled:bg-background disabled:text-muted-foreground"
                       placeholder={newItemForm.category ? 'Using selected category' : '…or type a new category'}
                     />
                   )}
                 </div>
                 <div>
-                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">Subcategory</label>
+                  <label className="block text-[14px] font-medium text-foreground mb-2">Subcategory</label>
                   <select
                     value={newItemForm.subcategory}
                     onChange={(e) => setNewItemForm({ ...newItemForm, subcategory: e.target.value })}
                     disabled={!!newItemForm.inventoryItemId || !newItemForm.category || !!newItemForm.newSubcategory.trim()}
-                    className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E] disabled:bg-[#F8FAFB] disabled:text-[#6b7280]"
+                    className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary disabled:bg-background disabled:text-muted-foreground"
                   >
                     <option value="">Select subcategory</option>
                     {(itemCategoryMap[newItemForm.category] ?? []).map((sub: string) => (
@@ -739,7 +814,7 @@ export default function PurchaseOrdersView({
                       value={newItemForm.newSubcategory}
                       onChange={(e) => setNewItemForm({ ...newItemForm, newSubcategory: e.target.value })}
                       disabled={!!newItemForm.subcategory}
-                      className="w-full mt-2 px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E] disabled:bg-[#F8FAFB] disabled:text-[#6b7280]"
+                      className="w-full mt-2 px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary disabled:bg-background disabled:text-muted-foreground"
                       placeholder={newItemForm.subcategory ? 'Using selected subcategory' : '…or type a new subcategory'}
                     />
                   )}
@@ -751,12 +826,12 @@ export default function PurchaseOrdersView({
                 <>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-[14px] font-medium text-[#323B42] mb-2">Target Customer</label>
+                      <label className="block text-[14px] font-medium text-foreground mb-2">Target Customer</label>
                       <select
                         value={newItemForm.targetCustomer}
                         onChange={(e) => setNewItemForm({ ...newItemForm, targetCustomer: e.target.value as 'Male' | 'Female' | 'Unisex' })}
                         disabled={!!newItemForm.inventoryItemId}
-                        className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E] disabled:bg-[#F8FAFB] disabled:text-[#6b7280]"
+                        className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary disabled:bg-background disabled:text-muted-foreground"
                       >
                         <option value="Male">Male</option>
                         <option value="Female">Female</option>
@@ -764,13 +839,13 @@ export default function PurchaseOrdersView({
                       </select>
                     </div>
                     <div>
-                      <label className="block text-[14px] font-medium text-[#323B42] mb-2">Size</label>
+                      <label className="block text-[14px] font-medium text-foreground mb-2">Size</label>
                       <input
                         type="text"
                         value={newItemForm.size}
                         onChange={(e) => setNewItemForm({ ...newItemForm, size: e.target.value })}
                         disabled={!!newItemForm.inventoryItemId}
-                        className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E] disabled:bg-[#F8FAFB] disabled:text-[#6b7280]"
+                        className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary disabled:bg-background disabled:text-muted-foreground"
                         placeholder="e.g., M, L, XL, Mixed"
                       />
                     </div>
@@ -778,12 +853,12 @@ export default function PurchaseOrdersView({
 
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-[14px] font-medium text-[#323B42] mb-2">Estimated Weight (kg)</label>
-                      <input type="number" min="0" step="0.1" value={newItemForm.estimatedWeight || ''} onChange={(e) => setNewItemForm({ ...newItemForm, estimatedWeight: parseFloat(e.target.value) || 0 })} className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]" placeholder="Weight in kg" />
+                      <label className="block text-[14px] font-medium text-foreground mb-2">Estimated Weight (kg)</label>
+                      <input type="number" min="0" step="0.1" value={newItemForm.estimatedWeight || ''} onChange={(e) => setNewItemForm({ ...newItemForm, estimatedWeight: parseFloat(e.target.value) || 0 })} className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary" placeholder="Weight in kg" />
                     </div>
                     <div>
-                      <label className="block text-[14px] font-medium text-[#323B42] mb-2">Grade / Condition</label>
-                      <select value={newItemForm.condition} onChange={(e) => setNewItemForm({ ...newItemForm, condition: e.target.value })} className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]">
+                      <label className="block text-[14px] font-medium text-foreground mb-2">Grade / Condition</label>
+                      <select value={newItemForm.condition} onChange={(e) => setNewItemForm({ ...newItemForm, condition: e.target.value })} className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary">
                         <option value="Excellent">Excellent (Grade A)</option>
                         <option value="Good">Good (Grade B)</option>
                         <option value="Fair">Fair (Grade C)</option>
@@ -794,11 +869,11 @@ export default function PurchaseOrdersView({
 
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-[14px] font-medium text-[#323B42] mb-2">Est. Sellable Pieces per Bale</label>
-                      <input type="number" min="0" value={newItemForm.expectedPieces || ''} onChange={(e) => setNewItemForm({ ...newItemForm, expectedPieces: parseInt(e.target.value) || 0 })} className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]" placeholder="Wearable pieces you expect to sell" />
+                      <label className="block text-[14px] font-medium text-foreground mb-2">Est. Sellable Pieces per Bale</label>
+                      <input type="number" min="0" value={newItemForm.expectedPieces || ''} onChange={(e) => setNewItemForm({ ...newItemForm, expectedPieces: parseInt(e.target.value) || 0 })} className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary" placeholder="Wearable pieces you expect to sell" />
                     </div>
                     <div className="flex items-end">
-                      <p className="text-[12px] text-[#6b7280] pb-2.5">Used only to check the bale will recover its cost — not saved on the item.</p>
+                      <p className="text-[12px] text-muted-foreground pb-2.5">Used only to check the bale will recover its cost — not saved on the item.</p>
                     </div>
                   </div>
                 </>
@@ -806,12 +881,12 @@ export default function PurchaseOrdersView({
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">Quantity *</label>
-                  <input type="number" min="1" value={newItemForm.quantity || ''} onChange={(e) => setNewItemForm({ ...newItemForm, quantity: parseInt(e.target.value) || 0 })} className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]" placeholder="How many to order" />
+                  <label className="block text-[14px] font-medium text-foreground mb-2">Quantity *</label>
+                  <input type="number" min="1" value={newItemForm.quantity || ''} onChange={(e) => setNewItemForm({ ...newItemForm, quantity: parseInt(e.target.value) || 0 })} className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary" placeholder="How many to order" />
                 </div>
                 <div>
-                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">Unit of Measure</label>
-                  <select value={newItemForm.unit} onChange={(e) => setNewItemForm({ ...newItemForm, unit: e.target.value })} className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]">
+                  <label className="block text-[14px] font-medium text-foreground mb-2">Unit of Measure</label>
+                  <select value={newItemForm.unit} onChange={(e) => setNewItemForm({ ...newItemForm, unit: e.target.value })} className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary">
                     {itemUnitOptions.map((u) => (
                       <option key={u} value={u}>{u}</option>
                     ))}
@@ -821,12 +896,12 @@ export default function PurchaseOrdersView({
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">Unit Cost (₱) *</label>
-                  <input type="number" min="0" step="0.01" value={newItemForm.unitPrice || ''} onChange={(e) => setNewItemForm({ ...newItemForm, unitPrice: parseFloat(e.target.value) || 0 })} className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E]" placeholder="What you pay the supplier" />
+                  <label className="block text-[14px] font-medium text-foreground mb-2">Unit Cost (₱) *</label>
+                  <input type="number" min="0" step="0.01" value={newItemForm.unitPrice || ''} onChange={(e) => setNewItemForm({ ...newItemForm, unitPrice: parseFloat(e.target.value) || 0 })} className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary" placeholder="What you pay the supplier" />
                 </div>
                 <div>
-                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">
-                    Retail Price (₱) {isThrift && <span className="text-[12px] text-[#6b7280] font-normal">(per sorted piece)</span>}
+                  <label className="block text-[14px] font-medium text-foreground mb-2">
+                    Retail Price (₱) {isThrift && <span className="text-[12px] text-muted-foreground font-normal">(per sorted piece)</span>}
                   </label>
                   <input
                     type="number"
@@ -835,7 +910,7 @@ export default function PurchaseOrdersView({
                     value={newItemForm.sellingPrice || ''}
                     onChange={(e) => setNewItemForm({ ...newItemForm, sellingPrice: parseFloat(e.target.value) || 0 })}
                     disabled={!!newItemForm.inventoryItemId}
-                    className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E] disabled:bg-[#F8FAFB] disabled:text-[#6b7280]"
+                    className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary disabled:bg-background disabled:text-muted-foreground"
                     placeholder="What you sell it for"
                   />
                 </div>
@@ -844,14 +919,14 @@ export default function PurchaseOrdersView({
               {/* Reorder point only matters for re-stockable general merchandise, not one-off bales */}
               {!isThrift && (
                 <div>
-                  <label className="block text-[14px] font-medium text-[#323B42] mb-2">Reorder Point (optional)</label>
+                  <label className="block text-[14px] font-medium text-foreground mb-2">Reorder Point (optional)</label>
                   <input
                     type="number"
                     min="0"
                     value={newItemForm.reorderPoint || ''}
                     onChange={(e) => setNewItemForm({ ...newItemForm, reorderPoint: parseFloat(e.target.value) || 0 })}
                     disabled={!!newItemForm.inventoryItemId}
-                    className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E] disabled:bg-[#F8FAFB] disabled:text-[#6b7280]"
+                    className="w-full px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary disabled:bg-background disabled:text-muted-foreground"
                     placeholder="Stock level that triggers a re-order"
                   />
                 </div>
@@ -881,7 +956,7 @@ export default function PurchaseOrdersView({
                 )
               ) : (
                 newItemForm.sellingPrice > 0 && newItemForm.unitPrice > 0 && newItemForm.sellingPrice > newItemForm.unitPrice && (
-                  <div className="bg-[#E0F5F1] rounded-[8px] px-4 py-2 text-[13px] text-[#008967]">
+                  <div className="bg-primary/10 rounded-[8px] px-4 py-2 text-[13px] text-primary">
                     Margin: ₱{(newItemForm.sellingPrice - newItemForm.unitPrice).toLocaleString()} per unit
                     {' '}(+{Math.round(((newItemForm.sellingPrice - newItemForm.unitPrice) / newItemForm.unitPrice) * 100)}%)
                   </div>
@@ -889,8 +964,8 @@ export default function PurchaseOrdersView({
               )}
             </div>
             <div className="flex gap-3 mt-6">
-              <button onClick={() => setShowNewItemModal(false)} className="flex-1 px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] font-medium text-[#323B42] hover:bg-[#F8FAFB] transition-colors">Cancel</button>
-              <button onClick={handleAddItemToPO} disabled={!canAddItem} className="flex-1 px-4 py-2 bg-[#007A5E] text-white rounded-[8px] text-[14px] font-medium hover:bg-[#008967] transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Add to Order</button>
+              <button onClick={() => setShowNewItemModal(false)} className="flex-1 px-4 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] font-medium text-foreground hover:bg-background transition-colors">Cancel</button>
+              <button onClick={handleAddItemToPO} disabled={!canAddItem} className="flex-1 px-4 py-2 bg-primary text-white rounded-[8px] text-[14px] font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Add to Order</button>
             </div>
           </div>
         </div>
@@ -901,6 +976,7 @@ export default function PurchaseOrdersView({
         open={showSuppliersModal}
         onClose={() => setShowSuppliersModal(false)}
         suppliers={suppliers as NormalizedSupplier[]}
+        archivedSuppliers={archivedSuppliers as NormalizedSupplier[]}
         fields={[
           { key: 'name', label: 'Name', required: true, placeholder: 'Supplier name' },
           { key: 'contactPerson', label: 'Contact Person', placeholder: 'Contact name' },
@@ -912,6 +988,22 @@ export default function PurchaseOrdersView({
         onCreate={async (payload) => {
           await createSupplierMutation.mutateAsync(payload);
         }}
+        onUpdate={async (id, payload) => {
+          await updateSupplierMutation.mutateAsync({ id, data: payload });
+          setPOForm((current) =>
+            current.supplierId === id ? { ...current, supplierName: payload.name } : current
+          );
+        }}
+        onArchive={async (id) => {
+          await archiveSupplierMutation.mutateAsync(id);
+          setPOForm((current) =>
+            current.supplierId === id ? { ...current, supplierId: undefined, supplierName: '' } : current
+          );
+        }}
+        onRestore={async (id) => {
+          await restoreSupplierMutation.mutateAsync(id);
+        }}
+        canManage={isAdmin}
         onSelectSupplier={(s) => {
           setPOForm({ ...poForm, supplierId: s.id, supplierName: s.name });
           setShowSuppliersModal(false);
@@ -922,18 +1014,27 @@ export default function PurchaseOrdersView({
 
       {/* Stats */}
       <div className="grid grid-cols-4 gap-4 mb-6">
-        <div className="bg-white border border-[rgba(0,0,0,0.1)] rounded-[14px] p-4"><p className="text-[#323B42] text-[12px] mb-1">Total Orders</p><p className="text-[#323B42] text-[24px] font-bold">{stats.total}</p></div>
-        <div className="bg-white border border-[rgba(0,0,0,0.1)] rounded-[14px] p-4"><p className="text-[#323B42] text-[12px] mb-1">Pending</p><p className="text-[#FFA500] text-[24px] font-bold">{stats.pending}</p></div>
-        <div className="bg-white border border-[rgba(0,0,0,0.1)] rounded-[14px] p-4"><p className="text-[#323B42] text-[12px] mb-1">Approved</p><p className="text-[#007A5E] text-[24px] font-bold">{stats.approved}</p></div>
-        <div className="bg-white border border-[rgba(0,0,0,0.1)] rounded-[14px] p-4"><p className="text-[#323B42] text-[12px] mb-1">Received</p><p className="text-[#008967] text-[24px] font-bold">{stats.received}</p></div>
+        <button type="button" onClick={() => toggleFilterStatus('all')} aria-pressed={filterStatus === 'all'} aria-label="Show all orders" className={statCardClass(filterStatus === 'all')}>
+          <p className="text-[#323B42] text-[12px] mb-1">Total Orders</p><p className="text-[#323B42] text-[24px] font-bold">{stats.total}</p>
+        </button>
+        <button type="button" onClick={() => toggleFilterStatus('pending')} aria-pressed={filterStatus === 'pending'} aria-label="Filter by pending" className={statCardClass(filterStatus === 'pending')}>
+          <p className="text-[#323B42] text-[12px] mb-1">Pending</p><p className="text-[#FFA500] text-[24px] font-bold">{stats.pending}</p>
+        </button>
+        <button type="button" onClick={() => toggleFilterStatus('APPROVED')} aria-pressed={filterStatus === 'APPROVED'} aria-label="Filter by approved" className={statCardClass(filterStatus === 'APPROVED')}>
+          <p className="text-[#323B42] text-[12px] mb-1">Approved</p><p className="text-[#007A5E] text-[24px] font-bold">{stats.approved}</p>
+        </button>
+        <button type="button" onClick={() => toggleFilterStatus('RECEIVED')} aria-pressed={filterStatus === 'RECEIVED'} aria-label="Filter by received" className={statCardClass(filterStatus === 'RECEIVED')}>
+          <p className="text-[#323B42] text-[12px] mb-1">Received</p><p className="text-[#008967] text-[24px] font-bold">{stats.received}</p>
+        </button>
       </div>
 
       {/* Filter */}
-      <div className="bg-white border border-[rgba(0,0,0,0.1)] rounded-[14px] mb-4 p-4">
+      <div className="bg-card border border-[rgba(0,0,0,0.1)] rounded-[14px] mb-4 p-4">
         <div className="flex items-center gap-2">
-          <label className="text-[14px] text-[#323B42] font-medium">Status:</label>
-          <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className="px-3 py-1.5 border border-[rgba(0,0,0,0.1)] rounded-[6px] text-[14px] bg-white focus:outline-none focus:border-[#007A5E]">
+          <label className="text-[14px] text-foreground font-medium">Status:</label>
+          <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className="px-3 py-1.5 border border-[rgba(0,0,0,0.1)] rounded-[6px] text-[14px] bg-card focus:outline-none focus:border-primary">
             <option value="all">All Orders</option>
+            <option value="pending">Pending</option>
             <option value="DRAFT">Draft</option>
             <option value="SUBMITTED">Submitted</option>
             <option value="APPROVED">Approved</option>
@@ -946,35 +1047,37 @@ export default function PurchaseOrdersView({
       {/* Orders List */}
       <div className="space-y-4">
         {filteredOrders.length === 0 && (
-          <div className="text-center py-12 text-[#6b7280]">No purchase orders found.</div>
+          <div className="text-center py-12 text-muted-foreground">No purchase orders found.</div>
         )}
         {filteredOrders.map((order: any) => (
-          <div key={order.id} className="bg-white border border-[rgba(0,0,0,0.1)] rounded-[14px] p-6">
+          <div key={order.id} className="bg-card border border-[rgba(0,0,0,0.1)] rounded-[14px] p-6">
             <div className="flex items-start justify-between mb-4">
               <div>
                 <div className="flex items-center gap-3 mb-2">
-                  <h3 className="text-[18px] font-semibold text-[#323B42]">{order.orderNumber}</h3>
-                  <span className={`px-2 py-1 rounded text-[12px] font-semibold ${STATUS_CLASS[order.status] ?? 'bg-[#f3f4f6] text-[#6b7280]'}`}>
+                  <h3 className="text-[18px] font-semibold text-foreground">{order.orderNumber}</h3>
+                  <span className={`px-2 py-1 rounded text-[12px] font-semibold ${STATUS_CLASS[order.status] ?? 'bg-muted text-muted-foreground'}`}>
                     {STATUS_LABEL[order.status] ?? order.status}
                   </span>
+                  {getDeliveryDelayBadge(order)}
                 </div>
-                <p className="text-[14px] text-[#323B42]">Supplier: <span className="font-medium">{order.supplier?.name ?? '—'}</span></p>
-                <p className="text-[14px] text-[#323B42]">Date: {new Date(order.createdAt).toLocaleDateString()}</p>
-                {order.paymentMethod && <p className="text-[14px] text-[#323B42]">Payment: {order.paymentMethod}</p>}
+                <p className="text-[14px] text-foreground">Supplier: <span className="font-medium">{order.supplier?.name ?? '—'}</span></p>
+                <p className="text-[14px] text-foreground">Date: {getManilaDateKey(order.createdAt)}</p>
+                <p className="text-[14px] text-foreground">Expected Delivery: {formatExpectedDelivery(order.expectedDelivery)}</p>
+                {order.paymentMethod && <p className="text-[14px] text-foreground">Payment: {order.paymentMethod}</p>}
               </div>
               <div className="text-right">
-                <p className="text-[24px] font-bold text-[#323B42]">₱{order.totalAmount.toLocaleString()}</p>
-                <p className="text-[12px] text-[#323B42]">Total Amount</p>
+                <p className="text-[24px] font-bold text-foreground">₱{order.totalAmount.toLocaleString()}</p>
+                <p className="text-[12px] text-foreground">Total Amount</p>
               </div>
             </div>
 
             <div className="border-t border-[rgba(0,0,0,0.1)] pt-4 mb-4">
-              <p className="text-[14px] font-medium text-[#323B42] mb-2">Items:</p>
+              <p className="text-[14px] font-medium text-foreground mb-2">Items:</p>
               <div className="space-y-2">
                 {order.items?.map((item: any) => (
                   <div key={item.id} className="flex items-center justify-between text-[13px]">
-                    <span className="text-[#323B42]">{item.name}</span>
-                    <span className="text-[#323B42]">
+                    <span className="text-foreground">{item.name}</span>
+                    <span className="text-foreground">
                       {item.quantity} × ₱{item.unitPrice} = <span className="font-medium">₱{item.totalPrice.toLocaleString()}</span>
                     </span>
                   </div>
@@ -985,13 +1088,13 @@ export default function PurchaseOrdersView({
             {/* Action buttons */}
             <div className="flex gap-2 border-t border-[rgba(0,0,0,0.1)] pt-4">
               {order.status === 'DRAFT' && (
-                <button onClick={() => handleSubmitPO(order.id)} className="px-4 py-1.5 bg-[#007A5E] text-white rounded-[6px] text-[13px] font-medium hover:bg-[#008967]">
+                <button onClick={() => handleSubmitPO(order.id)} className="px-4 py-1.5 bg-primary text-white rounded-[6px] text-[13px] font-medium hover:bg-primary/90">
                   Submit for Approval
                 </button>
               )}
               {order.status === 'SUBMITTED' && isAdmin && (
                 <>
-                  <button onClick={() => handleApprovePO(order.id)} className="px-4 py-1.5 bg-[#00A63E] text-white rounded-[6px] text-[13px] font-medium hover:bg-[#008F35] flex items-center gap-1">
+                  <button onClick={() => handleApprovePO(order.id)} className="px-4 py-1.5 bg-primary text-white rounded-[6px] text-[13px] font-medium hover:bg-primary/90 flex items-center gap-1">
                     <CheckCircle className="size-3.5" /> Approve
                   </button>
                   <button onClick={() => setSelectedPOForAction(order.id)} className="px-4 py-1.5 border border-[#E7000B] text-[#E7000B] rounded-[6px] text-[13px] font-medium hover:bg-[#ffe2e2] flex items-center gap-1">
@@ -1000,7 +1103,7 @@ export default function PurchaseOrdersView({
                 </>
               )}
               {['DRAFT', 'SUBMITTED', 'APPROVED'].includes(order.status) && (
-                <button onClick={() => handleCancelPO(order.id)} className="px-4 py-1.5 bg-[#f3f4f6] text-[#6b7280] rounded-[6px] text-[13px] font-medium hover:bg-[#e5e7eb]">
+                <button onClick={() => handleCancelPO(order.id)} className="px-4 py-1.5 bg-muted text-muted-foreground rounded-[6px] text-[13px] font-medium hover:bg-muted">
                   Cancel
                 </button>
               )}
@@ -1009,11 +1112,11 @@ export default function PurchaseOrdersView({
             {/* Rejection form inline */}
             {selectedPOForAction === order.id && (
               <div className="mt-4 border-t border-[rgba(0,0,0,0.1)] pt-4">
-                <label className="block text-[14px] font-medium text-[#323B42] mb-2">Rejection Remarks <span className="text-[#E7000B]">*</span></label>
-                <textarea value={rejectionRemarks} onChange={(e) => setRejectionRemarks(e.target.value)} placeholder="Provide reason for rejection..." className="w-full px-3 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E] mb-3 resize-none" rows={2} />
+                <label className="block text-[14px] font-medium text-foreground mb-2">Rejection Remarks <span className="text-[#E7000B]">*</span></label>
+                <textarea value={rejectionRemarks} onChange={(e) => setRejectionRemarks(e.target.value)} placeholder="Provide reason for rejection..." className="w-full px-3 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary mb-3 resize-none" rows={2} />
                 <div className="flex gap-2">
                   <button onClick={() => handleRejectPO(order.id)} className="flex-1 bg-[#E7000B] text-white px-4 py-2 rounded-[8px] text-[14px] font-medium hover:bg-[#D10000]">Confirm Rejection</button>
-                  <button onClick={() => { setSelectedPOForAction(null); setRejectionRemarks(''); }} className="flex-1 bg-[#F8FAFB] text-[#323B42] px-4 py-2 rounded-[8px] text-[14px] font-medium hover:bg-[#E5E7EB]">Cancel</button>
+                  <button onClick={() => { setSelectedPOForAction(null); setRejectionRemarks(''); }} className="flex-1 bg-background text-foreground px-4 py-2 rounded-[8px] text-[14px] font-medium hover:bg-muted">Cancel</button>
                 </div>
               </div>
             )}
@@ -1024,57 +1127,59 @@ export default function PurchaseOrdersView({
       {/* Pending Approvals Modal */}
       {showPendingApprovalsModal && (
         <div className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white rounded-[14px] p-6 max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+          <div className="bg-card rounded-[14px] p-6 max-w-4xl w-full max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
               <div>
-                <h3 className="text-[24px] font-bold text-[#323B42]">Pending Purchase Order Approvals</h3>
-                <p className="text-[14px] text-[#6b7280] mt-1">Review and approve or reject submitted POs</p>
+                <h3 className="text-[24px] font-bold text-foreground">Pending Purchase Order Approvals</h3>
+                <p className="text-[14px] text-muted-foreground mt-1">Review and approve or reject submitted POs</p>
               </div>
-              <button onClick={() => { setShowPendingApprovalsModal(false); setSelectedPOForAction(null); setRejectionRemarks(''); }} className="text-[#6b7280] hover:text-[#323B42]"><X className="size-6" /></button>
+              <button onClick={() => { setShowPendingApprovalsModal(false); setSelectedPOForAction(null); setRejectionRemarks(''); }} className="text-muted-foreground hover:text-foreground"><X className="size-6" /></button>
             </div>
             {submittedPOs.length === 0 ? (
-              <div className="text-center py-12"><CheckCircle className="size-16 text-[#00A63E] mx-auto mb-4" /><p className="text-[#323B42] text-[16px] font-medium">No pending approvals</p></div>
+              <div className="text-center py-12"><CheckCircle className="size-16 text-primary mx-auto mb-4" /><p className="text-foreground text-[16px] font-medium">No pending approvals</p></div>
             ) : (
               <div className="space-y-4">
                 {submittedPOs.map((po: any) => (
                   <div key={po.id} className="border border-[rgba(0,0,0,0.1)] rounded-[12px] p-4">
                     <div className="flex items-start justify-between mb-3">
                       <div>
-                        <h4 className="text-[18px] font-semibold text-[#323B42]">{po.orderNumber}</h4>
-                        <p className="text-[14px] text-[#6b7280]">Supplier: {po.supplier?.name ?? '—'}</p>
-                        <p className="text-[14px] text-[#6b7280]">Date: {new Date(po.createdAt).toLocaleDateString()}</p>
+                        <h4 className="text-[18px] font-semibold text-foreground">{po.orderNumber}</h4>
+                        <p className="text-[14px] text-muted-foreground">Supplier: {po.supplier?.name ?? '—'}</p>
+                        <p className="text-[14px] text-muted-foreground">Date: {getManilaDateKey(po.createdAt)}</p>
+                        <p className="text-[14px] text-muted-foreground">Expected Delivery: {formatExpectedDelivery(po.expectedDelivery)}</p>
+                        <div className="mt-2">{getDeliveryDelayBadge(po)}</div>
                       </div>
                       <div className="text-right">
-                        <p className="text-[20px] font-bold text-[#007A5E]">₱{po.totalAmount.toLocaleString()}</p>
+                        <p className="text-[20px] font-bold text-primary">₱{po.totalAmount.toLocaleString()}</p>
                         <span className="px-2 py-1 rounded-full text-[11px] font-medium bg-[#fff4e6] text-[#FFA500]">Submitted</span>
                       </div>
                     </div>
                     <div className="mb-3">
-                      <p className="text-[14px] font-medium text-[#323B42] mb-2">Items:</p>
+                      <p className="text-[14px] font-medium text-foreground mb-2">Items:</p>
                       <div className="space-y-1">
                         {po.items?.map((item: any) => (
-                          <div key={item.id} className="flex items-center justify-between text-[13px] bg-[#F8FAFB] px-3 py-2 rounded-[6px]">
-                            <span className="text-[#323B42]">{item.name}</span>
-                            <span className="text-[#323B42]">{item.quantity} × ₱{item.unitPrice} = <span className="font-medium">₱{item.totalPrice.toLocaleString()}</span></span>
+                          <div key={item.id} className="flex items-center justify-between text-[13px] bg-background px-3 py-2 rounded-[6px]">
+                            <span className="text-foreground">{item.name}</span>
+                            <span className="text-foreground">{item.quantity} × ₱{item.unitPrice} = <span className="font-medium">₱{item.totalPrice.toLocaleString()}</span></span>
                           </div>
                         ))}
                       </div>
                     </div>
                     {selectedPOForAction === po.id ? (
                       <div className="mt-4 border-t border-[rgba(0,0,0,0.1)] pt-4">
-                        <label className="block text-[14px] font-medium text-[#323B42] mb-2">Rejection Remarks <span className="text-[#E7000B]">*</span></label>
-                        <textarea value={rejectionRemarks} onChange={(e) => setRejectionRemarks(e.target.value)} placeholder="Provide reason for rejection..." className="w-full px-3 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-[#007A5E] mb-3 resize-none" rows={3} />
+                        <label className="block text-[14px] font-medium text-foreground mb-2">Rejection Remarks <span className="text-[#E7000B]">*</span></label>
+                        <textarea value={rejectionRemarks} onChange={(e) => setRejectionRemarks(e.target.value)} placeholder="Provide reason for rejection..." className="w-full px-3 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary mb-3 resize-none" rows={3} />
                         <div className="flex gap-2">
                           <button onClick={() => handleRejectPO(po.id)} className="flex-1 bg-[#E7000B] text-white px-4 py-2 rounded-[8px] text-[14px] font-medium hover:bg-[#D10000]">Confirm Rejection</button>
-                          <button onClick={() => { setSelectedPOForAction(null); setRejectionRemarks(''); }} className="flex-1 bg-[#F8FAFB] text-[#323B42] px-4 py-2 rounded-[8px] text-[14px] font-medium hover:bg-[#E5E7EB]">Cancel</button>
+                          <button onClick={() => { setSelectedPOForAction(null); setRejectionRemarks(''); }} className="flex-1 bg-background text-foreground px-4 py-2 rounded-[8px] text-[14px] font-medium hover:bg-muted">Cancel</button>
                         </div>
                       </div>
                     ) : (
                       <div className="flex gap-2 mt-3">
-                        <button onClick={() => handleApprovePO(po.id)} className="flex-1 bg-[#00A63E] text-white px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center justify-center gap-2 hover:bg-[#008F35]">
+                        <button onClick={() => handleApprovePO(po.id)} className="flex-1 bg-primary text-white px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center justify-center gap-2 hover:bg-primary/90">
                           <CheckCircle className="size-4" /> Approve
                         </button>
-                        <button onClick={() => setSelectedPOForAction(po.id)} className="flex-1 bg-white border border-[#E7000B] text-[#E7000B] px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center justify-center gap-2 hover:bg-[#ffe2e2]">
+                        <button onClick={() => setSelectedPOForAction(po.id)} className="flex-1 bg-card border border-[#E7000B] text-[#E7000B] px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center justify-center gap-2 hover:bg-[#ffe2e2]">
                           <XCircle className="size-4" /> Reject
                         </button>
                       </div>
@@ -1091,3 +1196,4 @@ export default function PurchaseOrdersView({
 }
 
 // Products Received View
+

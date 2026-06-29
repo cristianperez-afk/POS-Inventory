@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { AuthenticatedUser } from '../../shared/common/types';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -12,6 +12,11 @@ export class PosController {
   @Get('pos/menu')
   getMenu(@CurrentUser() user: AuthenticatedUser) {
     return this.posService.getMenu(user.id);
+  }
+
+  @Get('pos/ingredients')
+  getIngredients(@Query('user_id') userId: string) {
+    return this.posService.getIngredients(Number(userId));
   }
 
   @Get('products/:id/recipe')

@@ -1,6 +1,6 @@
 require('dotenv').config();
 
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const { Pool } = require('pg');
 
 const demoAccounts = [
@@ -13,6 +13,10 @@ const demoAccounts = [
   ['retailstaff@pos.com', 'retailstaffpos123'],
   ['retailstaff@inventory.com', 'retailstaffinventory123'],
   ['retailstaff@manager.com', 'retailstaffmanager123'],
+  ['posadmin@example.com', 'password123'],
+  ['inventoryadmin@example.com', 'password123'],
+  ['retailposadmin@example.com', 'password123'],
+  ['retailinventoryadmin@example.com', 'password123'],
 ];
 
 const pool = new Pool({

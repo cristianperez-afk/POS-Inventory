@@ -1,6 +1,6 @@
 import { forwardRef } from 'react';
 import type { StoreBrand } from '../App';
-import { getLocalDateKey } from '../utils/date';
+import { formatManilaTime, getLocalDateKey, getManilaTime } from '../utils/date';
 import { getStoreLogoForWhiteBackground } from '../utils/defaultStoreLogo';
 import { calculateVatBreakdown, VAT_RATE } from '../utils/vat';
 
@@ -9,6 +9,30 @@ interface ReceiptItem {
   quantity: number;
   price: number;
   itemType?: 'dine-in' | 'takeout';
+  lineTotal?: number;
+  notes?: string;
+  addedIngredients?: string[];
+  removedIngredients?: string[];
+  changedIngredients?: string[];
+  replacedIngredients?: string[];
+  modifiers?: string[];
+}
+
+function receiptItemTotal(item: ReceiptItem) {
+  return Number.isFinite(Number(item.lineTotal)) ? Number(item.lineTotal) : item.price * item.quantity;
+}
+
+function ReceiptItemDetails({ item }: { item: ReceiptItem }) {
+  const details = [
+    ...(item.removedIngredients ?? []).map((value) => `REMOVE: ${value}`),
+    ...(item.addedIngredients ?? []).map((value) => `ADD: ${value}`),
+    ...(item.changedIngredients ?? []).map((value) => `CHANGE: ${value}`),
+    ...(item.replacedIngredients ?? []).map((value) => `REPLACE: ${value}`),
+    ...(item.modifiers ?? []).map((value) => `OPTION: ${value}`),
+    ...(item.notes?.trim() ? [`NOTE: ${item.notes.trim()}`] : []),
+  ];
+
+  return <>{details.map((detail, index) => <p key={`${detail}-${index}`} className="pl-3 text-[10px] text-gray-500">{detail}</p>)}</>;
 }
 
 interface ThermalReceiptProps {
@@ -30,6 +54,9 @@ interface ThermalReceiptProps {
   receiptId?: string;
   paymentId?: string;
   cashier?: string;
+  staffName?: string;
+  estimatedPrepMinutes?: number;
+  estimatedReadyAt?: string;
   storeBrand?: StoreBrand;
 }
 
@@ -53,12 +80,15 @@ export const ThermalReceipt = forwardRef<HTMLDivElement, ThermalReceiptProps>(
       receiptId,
       paymentId,
       cashier,
+      staffName,
+      estimatedPrepMinutes,
+      estimatedReadyAt,
       storeBrand,
     },
     ref
   ) => {
     const currentDate = date || getLocalDateKey();
-    const currentTime = time || new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    const currentTime = time || getManilaTime();
     const vatBreakdown = calculateVatBreakdown(total);
     const receiptLogo = getStoreLogoForWhiteBackground(storeBrand?.logo, 'RESTAURANT');
 
@@ -125,10 +155,10 @@ export const ThermalReceipt = forwardRef<HTMLDivElement, ThermalReceiptProps>(
             <span className="text-gray-500">Type:</span>
             <span>{orderType}</span>
           </div>
-          {cashier && (
+          {(cashier || staffName) && (
             <div className="flex justify-between">
               <span className="text-gray-500">Staff:</span>
-              <span>{cashier}</span>
+              <span>{cashier || staffName}</span>
             </div>
           )}
           {table && table !== '-' && table !== '—' && (
@@ -136,6 +166,20 @@ export const ThermalReceipt = forwardRef<HTMLDivElement, ThermalReceiptProps>(
               <span className="text-gray-500">Table:</span>
               <span>{table}</span>
             </div>
+          )}
+          {estimatedPrepMinutes !== undefined && estimatedPrepMinutes > 0 && (
+            <>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Est. Prep:</span>
+                <span>{estimatedPrepMinutes} mins</span>
+              </div>
+              {estimatedReadyAt && (
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Ready Around:</span>
+                <span>{formatManilaTime(estimatedReadyAt)}</span>
+                </div>
+              )}
+            </>
           )}
         </div>
 
@@ -148,14 +192,14 @@ export const ThermalReceipt = forwardRef<HTMLDivElement, ThermalReceiptProps>(
               <>
                 <p className="text-xs text-center text-gray-600 mb-1.5" style={{ fontWeight: 700 }}>— DINE-IN —</p>
                 {dineInItems.map((item, i) => (
-                  <div key={i} className="flex justify-between text-xs mb-1">
-                    <span>{item.quantity}x {item.name}</span>
-                    <span>₱{(item.price * item.quantity).toFixed(2)}</span>
+                  <div key={i} className="mb-1.5 text-xs">
+                    <div className="flex justify-between"><span>{item.quantity}x {item.name}</span><span>₱{receiptItemTotal(item).toFixed(2)}</span></div>
+                    <ReceiptItemDetails item={item} />
                   </div>
                 ))}
                 <div className="flex justify-between text-xs text-gray-500 mb-2">
                   <span>Subtotal (Dine-In)</span>
-                  <span>₱{dineInItems.reduce((s, i) => s + i.price * i.quantity, 0).toFixed(2)}</span>
+                  <span>₱{dineInItems.reduce((sum, item) => sum + receiptItemTotal(item), 0).toFixed(2)}</span>
                 </div>
               </>
             )}
@@ -163,23 +207,23 @@ export const ThermalReceipt = forwardRef<HTMLDivElement, ThermalReceiptProps>(
               <>
                 <p className="text-xs text-center text-gray-600 mb-1.5" style={{ fontWeight: 700 }}>— TAKEOUT —</p>
                 {takeoutItems.map((item, i) => (
-                  <div key={i} className="flex justify-between text-xs mb-1">
-                    <span>{item.quantity}x {item.name}</span>
-                    <span>₱{(item.price * item.quantity).toFixed(2)}</span>
+                  <div key={i} className="mb-1.5 text-xs">
+                    <div className="flex justify-between"><span>{item.quantity}x {item.name}</span><span>₱{receiptItemTotal(item).toFixed(2)}</span></div>
+                    <ReceiptItemDetails item={item} />
                   </div>
                 ))}
                 <div className="flex justify-between text-xs text-gray-500 mb-2">
                   <span>Subtotal (Takeout)</span>
-                  <span>₱{takeoutItems.reduce((s, i) => s + i.price * i.quantity, 0).toFixed(2)}</span>
+                  <span>₱{takeoutItems.reduce((sum, item) => sum + receiptItemTotal(item), 0).toFixed(2)}</span>
                 </div>
               </>
             )}
           </>
         ) : (
           items.map((item, i) => (
-            <div key={i} className="flex justify-between text-xs mb-1">
-              <span>{item.quantity}x {item.name}</span>
-              <span>₱{(item.price * item.quantity).toFixed(2)}</span>
+            <div key={i} className="mb-1.5 text-xs">
+              <div className="flex justify-between"><span>{item.quantity}x {item.name}</span><span>₱{receiptItemTotal(item).toFixed(2)}</span></div>
+              <ReceiptItemDetails item={item} />
             </div>
           ))
         )}

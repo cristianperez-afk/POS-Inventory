@@ -1,7 +1,10 @@
 import {
+  useCancelRetailGoodsReceiptMutation,
   useReceiveRetailPurchaseOrderMutation,
+  useRejectRetailGoodsReceiptMutation,
   useRetailPurchaseOrderRecordsQuery,
 } from '../lib/retail';
+import { useGoodsReceiptsQuery } from '../lib/domainQueries';
 import { autoSortItem } from '../../app/utils/autoSortingRules';
 import type {
   NormalizedLine,
@@ -9,17 +12,20 @@ import type {
   ReceiptRecord,
   ResolvedReceivingConfig,
 } from '../shared/receiving/GoodsReceived';
+import { getManilaDateKey } from '../../../../shared/utils/date';
 
 // Maps the retail purchase-order data onto the shared Goods Received contract.
 export function useRetailReceivingConfig(): ResolvedReceivingConfig {
   const approvedQuery = useRetailPurchaseOrderRecordsQuery({ status: 'APPROVED' });
   const partialQuery = useRetailPurchaseOrderRecordsQuery({ status: 'PARTIALLY_RECEIVED' });
-  const receivedQuery = useRetailPurchaseOrderRecordsQuery({ status: 'RECEIVED' });
+  const goodsReceiptsQuery = useGoodsReceiptsQuery({ module: 'RETAIL' });
   const receiveMutation = useReceiveRetailPurchaseOrderMutation();
+  const rejectMutation = useRejectRetailGoodsReceiptMutation();
+  const cancelMutation = useCancelRetailGoodsReceiptMutation();
 
   const approved = approvedQuery.data ?? [];
   const partial = partialQuery.data ?? [];
-  const received = receivedQuery.data ?? [];
+  const receipts = goodsReceiptsQuery.data ?? [];
 
   const pending: PendingReceipt[] = [...approved, ...partial].map((po) => ({
     id: po.id,
@@ -39,23 +45,34 @@ export function useRetailReceivingConfig(): ResolvedReceivingConfig {
       .filter((line: NormalizedLine) => line.orderedQty > 0),
   }));
 
-  const history: ReceiptRecord[] = received.map((po) => {
-    const lines = (po.items ?? []).map((item: any) => ({
-      name: item.name,
-      orderedQty: item.quantity,
+  const history: ReceiptRecord[] = receipts.map((receipt: any) => {
+    const lines = (receipt.items ?? []).map((item: any) => ({
+      name: item.purchaseOrderItem?.name ?? item.inventoryItem?.name ?? 'Item',
+      orderedQty: item.purchaseOrderItem?.quantity ?? item.receivedQty + item.rejectedQty,
       acceptedQty: item.receivedQty,
       rejectedQty: item.rejectedQty,
     }));
     const totalAccepted = lines.reduce((s, l) => s + l.acceptedQty, 0);
     const totalRejected = lines.reduce((s, l) => s + l.rejectedQty, 0);
+    const status =
+      receipt.status === 'REJECTED'
+        ? 'Rejected'
+        : receipt.status === 'CANCELLED'
+          ? 'Cancelled'
+          : totalRejected > 0
+            ? 'Partially Accepted'
+            : 'Fully Accepted';
     return {
-      id: po.id,
-      orderNumber: po.orderNumber,
-      supplier: po.supplier?.name ?? '',
-      receivedDate: po.receivedAt ? new Date(po.receivedAt).toLocaleDateString() : '',
-      receivedAt: po.receivedAt ?? undefined,
-      receivedBy: po.receivedBy?.name ?? '',
-      status: totalRejected > 0 ? 'Partially Accepted' : 'Fully Accepted',
+      id: receipt.id,
+      orderNumber: receipt.receiptNumber,
+      purchaseOrderNumber: receipt.purchaseOrder?.orderNumber ?? receipt.purchaseOrderId,
+      supplier: receipt.purchaseOrder?.supplier?.name ?? '',
+      receivedDate: receipt.createdAt ? getManilaDateKey(receipt.createdAt) : '',
+      receivedAt: receipt.createdAt ?? undefined,
+      receivedBy: receipt.receivedBy?.name ?? receipt.receivedBy?.email ?? '',
+      status,
+      actionReason: receipt.actionReason ?? receipt.notes ?? null,
+      proofImages: receipt.proofImages ?? [],
       totalAccepted,
       totalRejected,
       lines,
@@ -67,7 +84,7 @@ export function useRetailReceivingConfig(): ResolvedReceivingConfig {
       title: 'Products Received',
       subtitle: 'Inspect and log received inventory shipments',
     },
-    loading: approvedQuery.isLoading || partialQuery.isLoading || receivedQuery.isLoading,
+    loading: approvedQuery.isLoading || partialQuery.isLoading || goodsReceiptsQuery.isLoading,
 
     pending,
     history,
@@ -84,24 +101,24 @@ export function useRetailReceivingConfig(): ResolvedReceivingConfig {
       const autoSort = autoSortItem(line.name, draft.fields.inspectionNotes ?? '');
       return (
         <div className="mt-1 mb-1 flex items-center gap-2 flex-wrap">
-          <span className="text-[11px] text-[#6b7280]">Auto-Sort:</span>
+          <span className="text-[11px] text-muted-foreground">Auto-Sort:</span>
           <span
             className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${
               autoSort.confidence === 'high'
-                ? 'bg-[#E0F5F1] text-[#008967]'
+                ? 'bg-primary/10 text-primary'
                 : autoSort.confidence === 'medium'
                   ? 'bg-[#fef3c6] text-[#92400e]'
-                  : 'bg-[#e9ecef] text-[#6b7280]'
+                  : 'bg-muted text-muted-foreground'
             }`}
           >
             {autoSort.category}
           </span>
-          <span className="text-[11px] text-[#6b7280]">→</span>
-          <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-[#e9ecef] text-[#323B42]">
+          <span className="text-[11px] text-muted-foreground">→</span>
+          <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-muted text-foreground">
             {autoSort.targetCustomer}
           </span>
-          <span className="text-[11px] text-[#6b7280]">→</span>
-          <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-[#e9ecef] text-[#323B42]">
+          <span className="text-[11px] text-muted-foreground">→</span>
+          <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-muted text-foreground">
             {autoSort.subcategory}
           </span>
           {autoSort.confidence === 'low' && (
@@ -119,11 +136,25 @@ export function useRetailReceivingConfig(): ResolvedReceivingConfig {
       notes: draft.fields.inspectionNotes?.trim() || undefined,
     }),
 
-    receive: async (poId, items) => {
-      await receiveMutation.mutateAsync({ id: poId, items });
+    receive: async (poId, items, proofImages = []) => {
+      await receiveMutation.mutateAsync({ id: poId, items, proofImages });
+    },
+
+    quickAction: async (poId, action, reason, proofImages) => {
+      if (action === 'reject') {
+        await rejectMutation.mutateAsync({ id: poId, reason, proofImages });
+        return;
+      }
+      await cancelMutation.mutateAsync({ id: poId, reason, proofImages });
     },
 
     historyStatusClass: (status) =>
-      status === 'Fully Accepted' ? 'bg-[#E0F5F1] text-[#008967]' : 'bg-[#E0F2F2] text-[#007A5E]',
+      status === 'Fully Accepted'
+        ? 'bg-primary/10 text-primary'
+        : status === 'Rejected'
+          ? 'bg-[#ffe2e2] text-[#991B1B]'
+          : status === 'Cancelled'
+            ? 'bg-muted text-foreground'
+            : 'bg-primary/10 text-primary',
   };
 }

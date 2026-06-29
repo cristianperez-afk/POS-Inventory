@@ -8,12 +8,15 @@ import { useQuery } from '@tanstack/react-query';
 import {
   approvePurchaseOrder,
   cancelPurchaseOrder,
+  cancelGoodsReceipt,
   createPurchaseOrder,
   createSupplier,
   getPurchaseOrder,
   receivePurchaseOrder,
+  rejectGoodsReceipt,
   rejectPurchaseOrder,
   submitPurchaseOrder,
+  updateSupplier,
 } from '../../../app/api/client';
 import {
   domainQueryKeys,
@@ -146,10 +149,11 @@ export function useRetailGoodsReceiptsQuery<
 }
 
 export function useRetailSuppliersQuery<TData = ApiSupplier[]>(
-  params?: { isActive?: boolean },
+  params?: { isActive?: boolean; enabled?: boolean },
   select?: (items: ApiSupplier[]) => TData,
 ) {
-  return useSuppliersQuery({ module: 'RETAIL', ...params }, {
+  return useSuppliersQuery({ module: 'RETAIL', isActive: params?.isActive ?? true }, {
+    enabled: params?.enabled,
     select: (items) => mapItems(items, mapRetailSupplierRecord, select),
   });
 }
@@ -197,6 +201,7 @@ export function useReceiveRetailPurchaseOrderMutation() {
       id,
       items,
       notes,
+      proofImages,
     }: {
       id: string;
       items: {
@@ -206,10 +211,13 @@ export function useReceiveRetailPurchaseOrderMutation() {
         condition?: string;
         notes?: string;
         expiryDate?: string;
+        expiryPeriod?: string;
+        noExpiry?: boolean;
         storageTemperature?: string;
       }[];
       notes?: string;
-    }) => receivePurchaseOrder(id, items, notes, 'RETAIL'),
+      proofImages?: string[];
+    }) => receivePurchaseOrder(id, items, notes, 'RETAIL', proofImages),
     [
       retailQueryKeys.purchaseOrders,
       retailQueryKeys.inventory,
@@ -218,9 +226,47 @@ export function useReceiveRetailPurchaseOrderMutation() {
   );
 }
 
+export function useRejectRetailGoodsReceiptMutation() {
+  return useRetailMutation(
+    ({ id, reason, proofImages }: { id: string; reason: string; proofImages?: string[] }) =>
+      rejectGoodsReceipt(id, reason, proofImages, 'RETAIL'),
+    [retailQueryKeys.purchaseOrders, retailQueryKeys.goodsReceipts],
+  );
+}
+
+export function useCancelRetailGoodsReceiptMutation() {
+  return useRetailMutation(
+    ({ id, reason, proofImages }: { id: string; reason: string; proofImages?: string[] }) =>
+      cancelGoodsReceipt(id, reason, proofImages, 'RETAIL'),
+    [retailQueryKeys.purchaseOrders, retailQueryKeys.goodsReceipts],
+  );
+}
+
 export function useCreateRetailSupplierMutation() {
   return useRetailMutation(
     (data: Record<string, unknown>) => createSupplier({ ...data, module: 'RETAIL' }),
     [retailQueryKeys.suppliers],
+  );
+}
+
+export function useUpdateRetailSupplierMutation() {
+  return useRetailMutation(
+    ({ id, data }: { id: string; data: Record<string, unknown> }) =>
+      updateSupplier(id, data, 'RETAIL'),
+    [retailQueryKeys.suppliers, retailQueryKeys.purchaseOrders],
+  );
+}
+
+export function useArchiveRetailSupplierMutation() {
+  return useRetailMutation(
+    (id: string) => updateSupplier(id, { isActive: false }, 'RETAIL'),
+    [retailQueryKeys.suppliers, retailQueryKeys.purchaseOrders],
+  );
+}
+
+export function useRestoreRetailSupplierMutation() {
+  return useRetailMutation(
+    (id: string) => updateSupplier(id, { isActive: true }, 'RETAIL'),
+    [retailQueryKeys.suppliers, retailQueryKeys.purchaseOrders],
   );
 }

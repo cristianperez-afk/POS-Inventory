@@ -1,5 +1,5 @@
--- Allows the merged POS + Inventory app to create POS staff, Inventory staff,
--- and Manager accounts from the single POS admin screen.
+-- Allows the merged POS + Inventory app to create POS staff and Inventory staff
+-- from the single POS Manager screen. Generic Manager is no longer supported.
 --
 -- Run this only if your users.staff_type column has an older CHECK constraint
 -- that only accepts POS_STAFF.
@@ -24,6 +24,10 @@ BEGIN
   END IF;
 END $$;
 
+UPDATE users
+SET staff_type = 'INVENTORY_STAFF'
+WHERE staff_type = 'MANAGER';
+
 ALTER TABLE users
   ADD CONSTRAINT users_staff_type_check
-  CHECK (staff_type IS NULL OR staff_type IN ('POS_STAFF', 'INVENTORY_STAFF', 'MANAGER'));
+  CHECK (staff_type IS NULL OR staff_type IN ('POS_STAFF', 'INVENTORY_STAFF'));

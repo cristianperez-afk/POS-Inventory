@@ -2,12 +2,13 @@ import { useState } from 'react';
 import { Sidebar } from '../../shared/components/Sidebar';
 import { Page, type StoreBrand } from '../../shared/App';
 import type { StaffType, StoreType } from '../../auth/types/auth';
-import { X, Search, Eye, Receipt, RotateCcw, Printer, XCircle } from 'lucide-react';
+import { X, Search, Eye, Receipt, RotateCcw, Printer } from 'lucide-react';
 import { useOrders, Order } from '../context/RetailOrderContext';
 import { ThermalReceipt } from './RetailThermalReceipt';
 import { useStoreSettings } from '../../shared/context/StoreSettingsContext';
 import { DateFilterControl, type DateFilterMode } from '../../shared/components/DateFilterControl';
 import { getLocalDateKey, parseLocalDateKey } from '../../shared/utils/date';
+import { useAppAlert } from '../../shared/components/AppAlertProvider';
 
 interface RetailOrderListProps {
   onNavigate: (page: Page) => void;
@@ -15,6 +16,7 @@ interface RetailOrderListProps {
   isAdmin?: boolean;
   storeBrand?: StoreBrand;
   userName?: string | null;
+  userRole?: string | null;
   storeType?: StoreType;
   staffType?: StaffType;
 }
@@ -23,9 +25,10 @@ function normalizeSearchValue(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
-export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, userName, storeType = 'RETAIL_STORE', staffType }: RetailOrderListProps) {
-  const { orders, refundOrderItems, voidTransaction } = useOrders();
+export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, userName, userRole, storeType = 'RETAIL_STORE', staffType }: RetailOrderListProps) {
+  const { orders, refundOrderItems } = useOrders();
   const { settings } = useStoreSettings();
+  const { showAlert } = useAppAlert();
   const [searchTerm, setSearchTerm] = useState('');
   const [paymentFilter, setPaymentFilter] = useState('All');
   const [dateFilter, setDateFilter] = useState('');
@@ -37,9 +40,6 @@ export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBr
   const [orderToRefund, setOrderToRefund] = useState<Order | null>(null);
   const [selectedRefundItems, setSelectedRefundItems] = useState<{ [key: number]: boolean }>({});
   const [refundReason, setRefundReason] = useState('');
-  const [showVoidModal, setShowVoidModal] = useState(false);
-  const [orderToVoid, setOrderToVoid] = useState<Order | null>(null);
-  const [voidReason, setVoidReason] = useState('');
   const canProcessTransactions = !isAdmin && staffType === 'POS_STAFF';
 
   const getTransactionNumber = (order: Order) => {
@@ -144,9 +144,18 @@ export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBr
     // Must have at least one item selected
     if (selectedIndices.length === 0) return;
 
+    const refundAmount = selectedIndices.reduce((total, index) => {
+      const item = orderToRefund.items[index];
+      return total + (item ? item.price * item.quantity : 0);
+    }, 0);
+
     try {
       // Refund selected items (persists + restocks them in the backend)
       await refundOrderItems(orderToRefund.id, selectedIndices, refundReason || 'Customer request');
+      showAlert(
+        `${selectedIndices.length} item(s) returned and refunded successfully. Refund amount: PHP ${refundAmount.toFixed(2)}.`,
+        'Return/Refund Successful',
+      );
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Unable to process refund.');
       return;
@@ -158,34 +167,9 @@ export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBr
     setRefundReason('');
   };
 
-  const handleVoidClick = (order: Order) => {
-    if (!canProcessTransactions) return;
-    if (!settings.enable_void) return;
-    setOrderToVoid(order);
-    setVoidReason('');
-    setShowVoidModal(true);
-  };
-
-  const handleVoidConfirm = async () => {
-    if (!canProcessTransactions) return;
-    if (!settings.enable_void) return;
-    if (!orderToVoid || !voidReason.trim()) return;
-
-    try {
-      await voidTransaction(orderToVoid.id, voidReason, 'Cashier');
-    } catch (error) {
-      alert(error instanceof Error ? error.message : 'Unable to void transaction.');
-      return;
-    }
-
-    setShowVoidModal(false);
-    setOrderToVoid(null);
-    setVoidReason('');
-  };
-
   return (
     <div className="flex h-screen bg-background">
-      <Sidebar currentPage="retail-transactions" onNavigate={onNavigate} onLogout={onLogout} isAdmin={isAdmin} storeType={storeType} staffType={staffType} storeBrand={storeBrand} userName={userName} />
+      <Sidebar currentPage="retail-transactions" onNavigate={onNavigate} onLogout={onLogout} isAdmin={isAdmin} storeType={storeType} staffType={staffType} storeBrand={storeBrand} userName={userName} userRole={userRole} />
 
       <div className="flex-1 overflow-auto p-8">
         <div className="mb-6">
@@ -301,20 +285,10 @@ export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBr
                             <button
                               onClick={() => handleRefundClick(order)}
                               className="inline-flex items-center gap-1 px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                              title="Refund"
+                              title="Return/Refund"
                             >
                               <RotateCcw className="w-3.5 h-3.5" />
-                              Refund
-                            </button>
-                          )}
-                          {canProcessTransactions && settings.enable_void && order.paymentStatus === 'Paid' && (
-                            <button
-                              onClick={() => handleVoidClick(order)}
-                              className="inline-flex items-center gap-1 px-2 py-1 text-xs text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
-                              title="Void Transaction"
-                            >
-                              <XCircle className="w-3.5 h-3.5" />
-                              Void
+                              Return/Refund
                             </button>
                           )}
                         </div>
@@ -526,12 +500,12 @@ export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBr
         </div>
       )}
 
-      {/* Refund Modal */}
+      {/* Return/Refund Modal */}
       {showRefundModal && orderToRefund && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
             <div className="flex justify-between items-center p-5 border-b border-border">
-              <h2 className="text-lg text-primary">Process Refund</h2>
+              <h2 className="text-lg text-primary">Process Return/Refund</h2>
               <button
                 onClick={() => {
                   setShowRefundModal(false);
@@ -552,7 +526,7 @@ export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBr
               </div>
 
               <p className="text-sm text-muted-foreground mb-3">
-                Select items to refund (leave empty to refund all remaining items):
+                Select paid items the customer is returning. Selected items will be added back to inventory after a successful refund.
               </p>
 
               <div className="space-y-2 mb-4">
@@ -562,7 +536,7 @@ export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBr
                       <div key={index} className="flex items-start gap-3 p-3 border border-red-200 bg-red-50 rounded-lg opacity-60">
                         <div className="flex-1">
                           <p className="text-sm font-medium line-through text-red-600">{item.name}</p>
-                          <span className="text-xs bg-red-600 text-white px-2 py-0.5 rounded-full">Already Refunded</span>
+                          <span className="text-xs bg-red-600 text-white px-2 py-0.5 rounded-full">Already Returned/Refunded</span>
                         </div>
                       </div>
                     );
@@ -598,11 +572,11 @@ export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBr
               </div>
 
               <div className="mb-4">
-                <label className="block text-sm font-medium mb-2">Refund Reason</label>
+                <label className="block text-sm font-medium mb-2">Return/Refund Reason</label>
                 <textarea
                   value={refundReason}
                   onChange={(e) => setRefundReason(e.target.value)}
-                  placeholder="Enter reason for refund (e.g., Defective item, Wrong size, Customer request)"
+                  placeholder="Enter reason for return/refund (e.g., Defective item, Wrong size, Customer request)"
                   className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary resize-none"
                   rows={3}
                 />
@@ -626,9 +600,9 @@ export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBr
                     const selectedCount = Object.values(selectedRefundItems).filter(Boolean).length;
 
                     if (selectedCount === 0) {
-                      return <><strong>Notice:</strong> Please select at least one item to refund.</>;
+                      return <><strong>Notice:</strong> Please select at least one item to return/refund.</>;
                     } else {
-                      return <><strong>Warning:</strong> This action cannot be undone. {selectedCount} item(s) will be refunded.</>;
+                      return <><strong>Warning:</strong> This action cannot be undone. {selectedCount} item(s) will be returned to inventory and refunded.</>;
                     }
                   })()}
                 </p>
@@ -652,7 +626,7 @@ export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBr
                 disabled={Object.values(selectedRefundItems).filter(Boolean).length === 0}
                 className="flex-1 px-4 py-2.5 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-sm font-medium disabled:bg-gray-300 disabled:cursor-not-allowed disabled:hover:bg-gray-300"
               >
-                Confirm Refund
+                Confirm Return/Refund
               </button>
             </div>
           </div>
@@ -711,80 +685,6 @@ export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBr
         </div>
       )}
 
-      {/* Void Modal */}
-      {showVoidModal && orderToVoid && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl w-full max-w-md overflow-hidden flex flex-col">
-            <div className="flex justify-between items-center p-5 border-b border-border">
-              <h2 className="text-lg text-primary">Void Transaction</h2>
-              <button
-                onClick={() => {
-                  setShowVoidModal(false);
-                  setOrderToVoid(null);
-                  setVoidReason('');
-                }}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="p-5">
-              <div className="bg-muted rounded-lg p-3 mb-4">
-                <p className="text-sm"><strong>Transaction #:</strong> {getTransactionNumber(orderToVoid)}</p>
-                <p className="text-sm"><strong>Customer:</strong> {orderToVoid.customer || 'Walk-in Customer'}</p>
-                <p className="text-sm"><strong>Amount:</strong> ₱{orderToVoid.amountNumber.toFixed(2)}</p>
-                <p className="text-sm"><strong>Date:</strong> {orderToVoid.date}</p>
-              </div>
-
-              <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 mb-4">
-                <p className="text-sm text-purple-800">
-                  <strong>Warning:</strong> Voiding this transaction will mark it as cancelled and exclude it from sales reports. This action cannot be undone.
-                </p>
-              </div>
-
-              <div className="mb-4">
-                <label className="block text-sm font-medium mb-2">Void Reason <span className="text-red-600">*</span></label>
-                <textarea
-                  value={voidReason}
-                  onChange={(e) => setVoidReason(e.target.value)}
-                  placeholder="Enter reason for voiding (e.g., Cashier error, Training transaction, Duplicate entry)"
-                  className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary resize-none"
-                  rows={3}
-                />
-              </div>
-
-              {!voidReason.trim() && (
-                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-2 mb-4">
-                  <p className="text-xs text-yellow-800">
-                    <strong>Notice:</strong> Void reason is required.
-                  </p>
-                </div>
-              )}
-            </div>
-
-            <div className="p-5 border-t border-border flex gap-3">
-              <button
-                onClick={() => {
-                  setShowVoidModal(false);
-                  setOrderToVoid(null);
-                  setVoidReason('');
-                }}
-                className="flex-1 px-4 py-2.5 border border-border rounded-lg hover:bg-muted transition-colors text-sm"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleVoidConfirm}
-                disabled={!voidReason.trim()}
-                className="flex-1 px-4 py-2.5 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-sm font-medium disabled:bg-gray-300 disabled:cursor-not-allowed disabled:hover:bg-gray-300"
-              >
-                Confirm Void
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

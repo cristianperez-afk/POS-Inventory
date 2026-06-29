@@ -33,6 +33,13 @@ export function Receipt({ onNavigate, currentOrder, onLogout, storeBrand, userNa
                   quantity: item.quantity,
                   price: item.price,
                   itemType: item.itemType || item.orderType,
+                  lineTotal: item.lineTotal,
+                  notes: item.notes,
+                  addedIngredients: item.addedIngredients,
+                  removedIngredients: item.removedIngredients,
+                  changedIngredients: item.changedIngredients,
+                  replacedIngredients: item.replacedIngredients,
+                  modifiers: item.modifiers,
                 }))}
                 subtotal={currentOrder?.subtotal || 0}
                 serviceFee={currentOrder?.serviceFee || 0}
@@ -46,6 +53,8 @@ export function Receipt({ onNavigate, currentOrder, onLogout, storeBrand, userNa
                 time={currentOrder?.time}
                 receiptId={currentOrder?.receiptId}
                 paymentId={currentOrder?.paymentId}
+                estimatedPrepMinutes={currentOrder?.estimatedPrepMinutes}
+                estimatedReadyAt={currentOrder?.estimatedReadyAt}
                 cashier={currentOrder?.cashier ?? userName ?? 'Staff'}
                 storeBrand={storeBrand}
               />

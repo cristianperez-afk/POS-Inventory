@@ -1,7 +1,14 @@
+import { useEffect, useMemo, useState } from 'react';
+import type { WheelEvent } from 'react';
+import { Pencil, Plus, Settings, Trash2, X } from 'lucide-react';
 import {
+  useCancelRestaurantGoodsReceiptMutation,
   useReceiveRestaurantPurchaseOrderMutation,
+  useRejectRestaurantGoodsReceiptMutation,
   useRestaurantGoodsRecordsQuery,
+  useRestaurantSettings,
   useRestaurantStorageTemperatureOptionsQuery,
+  useUpsertRestaurantSettingMutation,
 } from '../lib/restaurant';
 import { getStorageTemperatureOptions } from '../lib/inventoryLogic';
 import type {
@@ -12,7 +19,18 @@ import type {
   ResolvedReceivingConfig,
 } from '../shared/receiving/GoodsReceived';
 
-const INSPECTION_CRITERIA = [
+type QualityCriterion = { key: string; label: string };
+
+const QUALITY_CRITERIA_STORAGE_KEY = 'restaurant-goods-received-quality-criteria';
+
+const compareItemNames = (left: string, right: string) =>
+  left.trim().localeCompare(right.trim(), undefined, { sensitivity: 'base', numeric: true });
+
+const preventNumberWheel = (event: WheelEvent<HTMLInputElement>) => {
+  event.currentTarget.blur();
+};
+
+const DEFAULT_INSPECTION_CRITERIA: QualityCriterion[] = [
   { key: 'appearance', label: 'Appearance & Freshness' },
   { key: 'quantity', label: 'Quantity Verification' },
   { key: 'temperature', label: 'Temperature Control' },
@@ -20,10 +38,62 @@ const INSPECTION_CRITERIA = [
   { key: 'packaging', label: 'Packaging Integrity' },
 ] as const;
 
+const EXPIRY_PERIOD_OPTIONS = [
+  '',
+  'Early Morning',
+  'Morning',
+  'Afternoon',
+  'Evening',
+  'Midnight',
+];
+
 type ScoreEntry = { passed: string; total: string; remarks: string };
 
-const defaultScores = (orderedQty: number): Record<string, ScoreEntry> =>
-  INSPECTION_CRITERIA.reduce(
+const createCriterionKey = (label: string, existing: QualityCriterion[]) => {
+  const base = label
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'criterion';
+  let key = base;
+  let index = 2;
+  while (existing.some((criterion) => criterion.key === key)) {
+    key = `${base}-${index}`;
+    index += 1;
+  }
+  return key;
+};
+
+const loadQualityCriteria = (): QualityCriterion[] => {
+  if (typeof window === 'undefined') return DEFAULT_INSPECTION_CRITERIA;
+  try {
+    const stored = window.localStorage.getItem(QUALITY_CRITERIA_STORAGE_KEY);
+    if (stored === null) return DEFAULT_INSPECTION_CRITERIA;
+    const parsed = JSON.parse(stored) as QualityCriterion[];
+    const clean = parsed
+      .map((criterion) => ({
+        key: String(criterion?.key ?? '').trim(),
+        label: String(criterion?.label ?? '').trim(),
+      }))
+      .filter((criterion) => criterion.key && criterion.label);
+    return clean;
+  } catch {
+    return DEFAULT_INSPECTION_CRITERIA;
+  }
+};
+
+const normalizeQualityCriteria = (value: unknown): QualityCriterion[] | null => {
+  if (!Array.isArray(value)) return null;
+  return value
+    .map((criterion) => ({
+      key: String(criterion?.key ?? '').trim(),
+      label: String(criterion?.label ?? '').trim(),
+    }))
+    .filter((criterion) => criterion.key && criterion.label);
+};
+
+const defaultScores = (orderedQty: number, criteria: QualityCriterion[]): Record<string, ScoreEntry> =>
+  criteria.reduce(
     (acc, c) => ({
       ...acc,
       [c.key]: { passed: String(orderedQty), total: String(orderedQty), remarks: '' },
@@ -31,12 +101,165 @@ const defaultScores = (orderedQty: number): Record<string, ScoreEntry> =>
     {} as Record<string, ScoreEntry>,
   );
 
+function CriteriaManager({
+  criteria,
+  onChange,
+}: {
+  criteria: QualityCriterion[];
+  onChange: (criteria: QualityCriterion[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [draftLabel, setDraftLabel] = useState('');
+  const [editingKey, setEditingKey] = useState<string | null>(null);
+
+  const resetDraft = () => {
+    setDraftLabel('');
+    setEditingKey(null);
+  };
+
+  const saveCriterion = () => {
+    const label = draftLabel.trim();
+    if (!label) return;
+
+    if (editingKey) {
+      onChange(criteria.map((criterion) => (criterion.key === editingKey ? { ...criterion, label } : criterion)));
+    } else {
+      onChange([...criteria, { key: createCriterionKey(label, criteria), label }]);
+    }
+    resetDraft();
+  };
+
+  const startEdit = (criterion: QualityCriterion) => {
+    setEditingKey(criterion.key);
+    setDraftLabel(criterion.label);
+  };
+
+  const removeCriterion = (key: string) => {
+    onChange(criteria.filter((criterion) => criterion.key !== key));
+    if (editingKey === key) resetDraft();
+  };
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="group inline-flex items-center gap-2 rounded-[8px] border border-[rgba(0,0,0,0.1)] bg-card px-3 py-2 text-[13px] font-medium text-foreground shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/60 hover:bg-background hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 active:translate-y-0 active:shadow-sm"
+      >
+        <Settings className="size-4 text-primary transition-transform duration-200 group-hover:rotate-45" />
+        Manage Criteria
+      </button>
+
+      {open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm">
+          <div className="w-full max-w-2xl rounded-[14px] bg-card p-6 shadow-xl">
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-[22px] font-bold text-foreground">Quality Criteria</h3>
+                <p className="mt-1 text-[13px] text-muted-foreground">Used for new Goods Received quality checks.</p>
+              </div>
+              <button type="button" onClick={() => setOpen(false)} className="rounded p-2 hover:bg-background">
+                <X className="size-5 text-foreground" />
+              </button>
+            </div>
+
+            <div className="mb-5 flex gap-2">
+              <input
+                type="text"
+                value={draftLabel}
+                onChange={(event) => setDraftLabel(event.target.value)}
+                placeholder="Criteria name"
+                className="flex-1 rounded-[8px] border border-[rgba(0,0,0,0.1)] px-3 py-2 text-[14px] focus:border-primary focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={saveCriterion}
+                className="inline-flex items-center gap-2 rounded-[8px] bg-primary px-4 py-2 text-[13px] font-medium text-white hover:bg-primary/90"
+              >
+                <Plus className="size-4" />
+                {editingKey ? 'Save' : 'Add'}
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              {criteria.length === 0 ? (
+                <div className="rounded-[10px] border border-dashed border-[rgba(0,0,0,0.16)] p-5 text-center text-[14px] text-muted-foreground">
+                  No quality criteria yet.
+                </div>
+              ) : (
+                criteria.map((criterion) => (
+                  <div
+                    key={criterion.key}
+                    className="flex items-center justify-between gap-3 rounded-[10px] border border-[rgba(0,0,0,0.1)] p-3"
+                  >
+                    <p className="text-[14px] font-medium text-foreground">{criterion.label}</p>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => startEdit(criterion)}
+                        className="rounded p-2 text-primary hover:bg-primary/15"
+                        aria-label={`Edit ${criterion.label}`}
+                      >
+                        <Pencil className="size-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeCriterion(criterion.key)}
+                        className="rounded p-2 text-[#E7000B] hover:bg-[#ffe2e2]"
+                        aria-label={`Remove ${criterion.label}`}
+                      >
+                        <Trash2 className="size-4" />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 // Maps the restaurant goods-records data onto the shared Goods Received contract.
 export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
   const goodsQuery = useRestaurantGoodsRecordsQuery() as { data?: any[]; isLoading: boolean };
   const receiveMutation = useReceiveRestaurantPurchaseOrderMutation();
+  const rejectMutation = useRejectRestaurantGoodsReceiptMutation();
+  const cancelMutation = useCancelRestaurantGoodsReceiptMutation();
+  const settingsQuery = useRestaurantSettings();
+  const saveSettingsMutation = useUpsertRestaurantSettingMutation();
   const { data: storageTemperatureOptions = getStorageTemperatureOptions() } =
     useRestaurantStorageTemperatureOptionsQuery();
+  const [qualityCriteria, setQualityCriteria] = useState<QualityCriterion[]>(loadQualityCriteria);
+
+  useEffect(() => {
+    window.localStorage.setItem(QUALITY_CRITERIA_STORAGE_KEY, JSON.stringify(qualityCriteria));
+  }, [qualityCriteria]);
+
+  useEffect(() => {
+    if (!settingsQuery.data) return;
+    const settingValue = settingsQuery.data.find((setting) => setting.key === 'GOODS_RECEIVED_QUALITY_CRITERIA')?.value;
+    const storedCriteria = normalizeQualityCriteria(settingValue);
+    if (storedCriteria) {
+      setQualityCriteria(storedCriteria);
+    }
+  }, [settingsQuery.data]);
+
+  const handleQualityCriteriaChange = (nextCriteria: QualityCriterion[]) => {
+    setQualityCriteria(nextCriteria);
+    window.localStorage.setItem(QUALITY_CRITERIA_STORAGE_KEY, JSON.stringify(nextCriteria));
+    saveSettingsMutation.mutate({
+      key: 'GOODS_RECEIVED_QUALITY_CRITERIA',
+      value: nextCriteria,
+    });
+  };
+
+  const initialScores = useMemo(
+    () => (orderedQty: number) => defaultScores(orderedQty, qualityCriteria),
+    [qualityCriteria],
+  );
 
   const records = goodsQuery.data ?? [];
   const pendingRecords = records.filter((g) => g.status === 'pending');
@@ -47,6 +270,7 @@ export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
     orderNumber: g.id,
     supplier: g.supplier ?? '',
     status: 'APPROVED',
+    expectedDelivery: g.expectedDelivery ?? null,
     total: g.totalValue ?? 0,
     items: (g.receivedItems ?? [])
       .filter((ri: any) => ri.backendItemId)
@@ -56,27 +280,34 @@ export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
         orderedQty: ri.quantity,
         unitPrice: ri.unitPrice ?? 0,
         meta: { unit: ri.unit },
-      })),
+      }))
+      .sort((left, right) => compareItemNames(left.name, right.name) || left.id.localeCompare(right.id)),
   }));
 
   // Keep the original record around so the details modal can show rich QC data.
   const receivedById = new Map<string, any>();
   const history: ReceiptRecord[] = receivedRecords.map((g) => {
     receivedById.set(g.id, g);
-    const lines = (g.receivedItems ?? []).map((ri: any) => ({
-      name: ri.productName,
-      orderedQty: ri.quantity,
-      acceptedQty: ri.acceptedQuantity ?? ri.quantity,
-      rejectedQty: ri.rejectedQuantity ?? 0,
-    }));
+    const lines = (g.receivedItems ?? [])
+      .map((ri: any) => ({
+        name: ri.productName,
+        orderedQty: ri.quantity,
+        acceptedQty: ri.acceptedQuantity ?? ri.quantity,
+        rejectedQty: ri.rejectedQuantity ?? 0,
+      }))
+      .sort((left: { name: string }, right: { name: string }) => compareItemNames(left.name, right.name));
     return {
       id: g.id,
       orderNumber: g.id,
+      purchaseOrderNumber: g.poNumber ?? g.poId,
       supplier: g.supplier ?? '',
       receivedDate: g.receivedDate ?? '',
-      receivedAt: g.receivedDate ?? undefined,
+      receivedAt: g.receivedAt ?? g.receivedDate ?? undefined,
+      expectedDelivery: g.expectedDelivery ?? null,
       receivedBy: g.receivedBy ?? '',
       status: g.status,
+      actionReason: g.actionReason ?? null,
+      proofImages: g.proofImages ?? [],
       totalAccepted: lines.reduce((s: number, l: { acceptedQty: number }) => s + l.acceptedQty, 0),
       totalRejected: lines.reduce((s: number, l: { rejectedQty: number }) => s + l.rejectedQty, 0),
       lines,
@@ -89,26 +320,32 @@ export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
       subtitle: 'Inspect and verify incoming inventory shipments',
     },
     loading: goodsQuery.isLoading,
+    headerActions: <CriteriaManager criteria={qualityCriteria} onChange={handleQualityCriteriaChange} />,
 
     pending,
     history,
 
     lineFields: [
       { key: 'expiryDate', type: 'date', label: 'Expiry date' },
+      { key: 'expiryPeriod', type: 'select', label: 'Expiry period', options: EXPIRY_PERIOD_OPTIONS },
       { key: 'storageTemperature', type: 'select', label: 'Storage temperature', options: ['', ...storageTemperatureOptions] },
       { key: 'remarks', type: 'textarea', label: 'Item remarks' },
     ],
     initLineFields: (line) => ({
       expiryDate: '',
+      expiryPeriod: '',
       storageTemperature: '',
       remarks: '',
-      scores: defaultScores(line.orderedQty),
+      scores: initialScores(line.orderedQty),
     }),
     // The restaurant rejects everything not accepted (no back-orders).
     rejectedMode: 'auto-remainder',
 
     renderLineExtras: (line, draft, patch) => {
-      const scores: Record<string, ScoreEntry> = draft.fields.scores ?? defaultScores(line.orderedQty);
+      const scores: Record<string, ScoreEntry> = {
+        ...initialScores(line.orderedQty),
+        ...(draft.fields.scores ?? {}),
+      };
       const setScore = (key: string, field: keyof ScoreEntry, value: string) =>
         patch({
           fields: {
@@ -116,29 +353,44 @@ export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
           },
         });
       return (
-        <div className="rounded-[8px] border border-[rgba(0,0,0,0.1)] bg-white p-3 mt-1">
-          <p className="mb-3 text-[12px] font-semibold text-[#323B42]">Inspection criteria score</p>
-          <div className="space-y-2">
-            {INSPECTION_CRITERIA.map((c) => {
+        <div
+          className="rounded-[8px] border border-[rgba(0,0,0,0.1)] bg-card p-3 mt-1 outline-none"
+          data-receiving-field="scores"
+          tabIndex={-1}
+        >
+          <p className="mb-3 text-[12px] font-semibold text-foreground">Inspection criteria score</p>
+          {qualityCriteria.length === 0 ? (
+            <div className="rounded-[8px] border border-dashed border-[rgba(0,0,0,0.16)] p-3 text-[12px] text-muted-foreground">
+              No quality criteria configured.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {qualityCriteria.map((c) => {
               const s = scores[c.key] ?? { passed: '', total: '', remarks: '' };
               return (
                 <div key={c.key} className="grid grid-cols-[1.2fr_70px_16px_70px_1.4fr] items-center gap-2">
-                  <p className="text-[12px] text-[#323B42]">{c.label}</p>
+                  <p className="text-[12px] text-foreground">{c.label}</p>
                   <input
                     type="number"
+                    step="any"
+                    inputMode="decimal"
                     min="0"
                     value={s.passed}
+                    onWheel={preventNumberWheel}
                     onChange={(e) => setScore(c.key, 'passed', e.target.value)}
-                    className="rounded-[6px] border border-[rgba(0,0,0,0.1)] px-2 py-1.5 text-[13px] focus:outline-none focus:border-[#007A5E]"
+                    className="rounded-[6px] border border-[rgba(0,0,0,0.1)] px-2 py-1.5 text-[13px] focus:outline-none focus:border-primary [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                     aria-label={`${c.label} passed`}
                   />
-                  <span className="text-center text-[12px] text-[#6b7280]">/</span>
+                  <span className="text-center text-[12px] text-muted-foreground">/</span>
                   <input
                     type="number"
+                    step="any"
+                    inputMode="decimal"
                     min="1"
                     value={s.total}
+                    onWheel={preventNumberWheel}
                     onChange={(e) => setScore(c.key, 'total', e.target.value)}
-                    className="rounded-[6px] border border-[rgba(0,0,0,0.1)] px-2 py-1.5 text-[13px] focus:outline-none focus:border-[#007A5E]"
+                    className="rounded-[6px] border border-[rgba(0,0,0,0.1)] px-2 py-1.5 text-[13px] focus:outline-none focus:border-primary [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                     aria-label={`${c.label} total`}
                   />
                   <input
@@ -146,28 +398,34 @@ export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
                     value={s.remarks}
                     onChange={(e) => setScore(c.key, 'remarks', e.target.value)}
                     placeholder="Criterion remarks"
-                    className="rounded-[6px] border border-[rgba(0,0,0,0.1)] px-2 py-1.5 text-[13px] focus:outline-none focus:border-[#007A5E]"
+                    className="rounded-[6px] border border-[rgba(0,0,0,0.1)] px-2 py-1.5 text-[13px] focus:outline-none focus:border-primary"
                   />
                 </div>
               );
-            })}
-          </div>
+              })}
+            </div>
+          )}
         </div>
       );
     },
 
     validateLine: (line: NormalizedLine, draft: LineDraft) => {
       if (draft.acceptedQty <= 0) return null;
-      if (!draft.fields.expiryDate) return `Please set an expiry date for ${line.name}`;
+      if (!draft.noExpiry && !draft.fields.expiryDate) {
+        return { message: `Please set an expiry date for ${line.name}`, fieldKey: 'expiryDate' };
+      }
+      if (!draft.noExpiry && !draft.fields.expiryPeriod?.trim()) {
+        return { message: `Please set an expiry period for ${line.name}`, fieldKey: 'expiryPeriod' };
+      }
       if (!draft.fields.storageTemperature?.trim())
-        return `Please set a storage temperature for ${line.name}`;
+        return { message: `Please set a storage temperature for ${line.name}`, fieldKey: 'storageTemperature' };
       const scores: Record<string, ScoreEntry> = draft.fields.scores ?? {};
-      for (const c of INSPECTION_CRITERIA) {
+      for (const c of qualityCriteria) {
         const s = scores[c.key];
         const passed = Number(s?.passed);
         const total = Number(s?.total);
         if (!s || !Number.isFinite(passed) || !Number.isFinite(total) || total <= 0 || passed < 0 || passed > total) {
-          return `Please complete valid inspection scores for ${line.name}`;
+          return { message: `Please complete valid inspection scores for ${line.name}`, fieldKey: 'scores' };
         }
       }
       return null;
@@ -178,7 +436,7 @@ export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
       const rejected = draft.rejectedQty;
       const qualityStatus = accepted <= 0 ? 'rejected' : rejected > 0 ? 'partial' : 'accepted';
       const scores: Record<string, ScoreEntry> = draft.fields.scores ?? {};
-      const qualityScores = INSPECTION_CRITERIA.reduce(
+      const qualityScores = qualityCriteria.reduce(
         (acc, c) => ({
           ...acc,
           [c.key]: {
@@ -194,38 +452,77 @@ export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
         receivedQty: accepted,
         rejectedQty: rejected,
         condition: qualityStatus,
-        notes: JSON.stringify({ remarks: draft.fields.remarks || undefined, qualityScores }),
+        notes: JSON.stringify({
+          remarks: draft.fields.remarks || undefined,
+          noExpiry: draft.noExpiry,
+          expiryDate: draft.fields.expiryDate || undefined,
+          expiryPeriod: draft.fields.expiryPeriod || undefined,
+          storageTemperature: draft.fields.storageTemperature || undefined,
+          qualityCriteria,
+          qualityScores,
+        }),
         expiryDate:
-          accepted > 0 && draft.fields.expiryDate
+          accepted > 0 && !draft.noExpiry && draft.fields.expiryDate
             ? new Date(`${draft.fields.expiryDate}T00:00:00`).toISOString()
             : undefined,
+        expiryPeriod: accepted > 0 && !draft.noExpiry ? draft.fields.expiryPeriod || undefined : undefined,
+        noExpiry: accepted > 0 && draft.noExpiry,
         storageTemperature: accepted > 0 ? draft.fields.storageTemperature || undefined : undefined,
       };
     },
 
-    receive: async (poId, items) => {
-      await receiveMutation.mutateAsync({ id: poId, items });
+    receive: async (poId, items, proofImages = []) => {
+      await receiveMutation.mutateAsync({ id: poId, items, proofImages });
+    },
+
+    quickAction: async (poId, action, reason, proofImages) => {
+      if (action === 'reject') {
+        await rejectMutation.mutateAsync({ id: poId, reason, proofImages });
+        return;
+      }
+      await cancelMutation.mutateAsync({ id: poId, reason, proofImages });
     },
 
     historyStatusClass: (status) =>
       status === 'verified'
-        ? 'bg-[#E0F5F1] text-[#008967]'
-        : status === 'partial'
-          ? 'bg-[#fff4e6] text-[#d08700]'
-          : 'bg-[#ffe2e2] text-[#E7000B]',
+        ? 'bg-primary/10 text-primary'
+        : status === 'rejected'
+          ? 'bg-[#ffe2e2] text-[#991B1B]'
+        : status === 'cancelled'
+          ? 'bg-muted text-foreground'
+      : status === 'partial'
+        ? 'bg-[#fff4e6] text-[#d08700]'
+        : 'bg-[#ffe2e2] text-[#E7000B]',
 
     renderHistoryDetails: (record) => {
       const g = receivedById.get(record.id);
-      const items: any[] = g?.receivedItems ?? [];
+      const items: any[] = [...(g?.receivedItems ?? [])].sort(
+        (left: any, right: any) =>
+          compareItemNames(left.productName ?? '', right.productName ?? '') ||
+          String(left.backendItemId ?? left.id ?? '').localeCompare(String(right.backendItemId ?? right.id ?? '')),
+      );
       return (
         <div className="overflow-x-auto rounded-[10px] border border-[rgba(0,0,0,0.1)]">
-          <table className="w-full text-[13px]">
-            <thead className="bg-[#F8FAFB] text-[#323B42]">
+          <table className="min-w-[1120px] table-fixed text-[13px]">
+            <colgroup>
+              <col className="w-[110px]" />
+              <col className="w-[120px]" />
+              <col className="w-[80px]" />
+              <col className="w-[80px]" />
+              <col className="w-[90px]" />
+              <col className="w-[110px]" />
+              <col className="w-[120px]" />
+              <col className="w-[360px]" />
+              <col className="w-[180px]" />
+            </colgroup>
+            <thead className="bg-background text-foreground">
               <tr>
                 <th className="px-3 py-2 text-left font-medium">Product</th>
+                <th className="px-3 py-2 text-left font-medium">Category</th>
                 <th className="px-3 py-2 text-right font-medium">Accepted</th>
                 <th className="px-3 py-2 text-right font-medium">Rejected</th>
                 <th className="px-3 py-2 text-left font-medium">Expiry</th>
+                <th className="px-3 py-2 text-left font-medium">Expiry Period</th>
                 <th className="px-3 py-2 text-left font-medium">Storage Temp</th>
                 <th className="px-3 py-2 text-left font-medium">QC Scores</th>
                 <th className="px-3 py-2 text-left font-medium">Remarks</th>
@@ -234,22 +531,35 @@ export function useRestaurantReceivingConfig(): ResolvedReceivingConfig {
             <tbody className="divide-y divide-[rgba(0,0,0,0.08)]">
               {items.map((it, i) => (
                 <tr key={i}>
-                  <td className="px-3 py-2 text-[#323B42]">{it.productName}</td>
-                  <td className="px-3 py-2 text-right text-[#008967] font-medium">{it.acceptedQuantity ?? it.quantity}</td>
+                  <td className="px-3 py-2 text-foreground break-words">{it.productName}</td>
+                  <td className="px-3 py-2 text-foreground break-words">{it.category || '—'}</td>
+                  <td className="px-3 py-2 text-right text-primary font-medium">{it.acceptedQuantity ?? it.quantity}</td>
                   <td className="px-3 py-2 text-right text-[#E7000B]">{it.rejectedQuantity ?? 0}</td>
-                  <td className="px-3 py-2 text-[#323B42]">{it.expiryDate || '—'}</td>
-                  <td className="px-3 py-2 text-[#323B42]">{it.storageTemperature || '—'}</td>
-                  <td className="px-3 py-2 text-[#323B42]">
-                    {it.qualityScores
-                      ? INSPECTION_CRITERIA.map((c) => {
+                  <td className="px-3 py-2 text-foreground">{it.noExpiry ? 'No expiry' : it.expiryDate || '—'}</td>
+                  <td className="px-3 py-2 text-foreground">{it.noExpiry ? 'Not applicable' : it.expiryPeriod || '—'}</td>
+                  <td className="px-3 py-2 text-foreground break-words">{it.storageTemperature || '—'}</td>
+                  <td className="px-3 py-2 text-foreground align-top">
+                    {it.qualityScores ? (
+                      <div className={`grid gap-1.5 ${(it.qualityCriteria ?? qualityCriteria).length > 4 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                        {(it.qualityCriteria ?? qualityCriteria).map((c: QualityCriterion) => {
                           const s = it.qualityScores[c.key];
-                          return s ? `${c.label.split(' ')[0]} ${s.passed}/${s.total}` : null;
-                        })
-                          .filter(Boolean)
-                          .join(' · ')
-                      : '—'}
+                          if (!s) return null;
+                          return (
+                            <div
+                              key={c.key}
+                              className="flex items-center justify-between gap-3 rounded-md border border-[rgba(0,0,0,0.08)] bg-background px-2 py-1"
+                            >
+                              <span className="min-w-0 text-[12px] text-foreground break-words">{c.label}</span>
+                              <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">
+                                {s.passed}/{s.total}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : '—'}
                   </td>
-                  <td className="px-3 py-2 text-[#323B42]">{it.qualityRemarks || '—'}</td>
+                  <td className="px-3 py-2 text-foreground align-top break-words">{it.qualityRemarks || '—'}</td>
                 </tr>
               ))}
             </tbody>

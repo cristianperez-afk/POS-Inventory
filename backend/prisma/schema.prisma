@@ -18,7 +18,6 @@ enum BusinessModule {
 
 enum UserRole {
   Admin
-  Manager
   Staff
   Cashier
   KitchenStaff
@@ -157,6 +156,8 @@ model DiningTable {
   id            String            @id @default(uuid())
   tableNumber   String
   capacity      Int
+  occupiedSeats Int               @default(0)
+  isShared      Boolean           @default(false)
   status        DiningTableStatus @default(AVAILABLE)
   floor         String?
   notes         String?
@@ -252,6 +253,7 @@ model Recipe {
   targetFoodCost  Float?
   sellingPrice    Float?
   isActive        Boolean            @default(true)
+  archivedAt      DateTime?
   imageUrl        String?
   isVegetarian    Boolean            @default(false)
   isVegan         Boolean            @default(false)
@@ -272,6 +274,7 @@ model Recipe {
 
   @@unique([businessId, name])
   @@index([businessId, isActive])
+  @@index([businessId, archivedAt])
 }
 
 model RecipeIngredient {
@@ -293,9 +296,8 @@ model RecipeIngredient {
 
 enum DiningTableStatus {
   AVAILABLE
+  PARTIALLY_OCCUPIED
   OCCUPIED
-  RESERVED
-  CLEANING
 }
 
 enum KitchenOrderStatus {
@@ -414,6 +416,12 @@ enum PurchaseOrderStatus {
   CANCELLED
 }
 
+enum GoodsReceiptStatus {
+  RECEIVED
+  REJECTED
+  CANCELLED
+}
+
 model PurchaseOrder {
   id               String              @id @default(uuid())
   orderNumber      String
@@ -472,7 +480,10 @@ model GoodsReceipt {
   purchaseOrder   PurchaseOrder      @relation(fields: [purchaseOrderId], references: [id])
   receivedById    String?
   receivedBy      User?              @relation(fields: [receivedById], references: [id])
+  status          GoodsReceiptStatus @default(RECEIVED)
   notes           String?
+  actionReason    String?
+  proofImages     String[]           @default([])
   businessId      String
   business        Business           @relation(fields: [businessId], references: [id])
   module          BusinessModule     @default(RETAIL)
@@ -482,6 +493,7 @@ model GoodsReceipt {
   @@unique([businessId, receiptNumber])
   @@index([businessId, createdAt])
   @@index([purchaseOrderId])
+  @@index([businessId, status])
   @@index([businessId, module, createdAt])
 }
 
@@ -690,6 +702,7 @@ model BundlePackage {
   approvedById    String?
   approvedBy      User?        @relation("BundleApprovedBy", fields: [approvedById], references: [id])
   approvedAt      DateTime?
+  archivedAt      DateTime?
   items           BundleItem[]
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
@@ -708,4 +721,35 @@ model BundleItem {
   createdAt       DateTime      @default(now())
 
   @@index([bundleId])
+}
+
+// ─── Audit Log ───────────────────────────────────────────────────────────────
+// One row per meaningful action performed in the inventory system (create /
+// update / delete / status change / receive / adjust / setting change). Written
+// by InventoryApiService.recordAudit and read by the Reports "Audit Trail" tab.
+// Actor fields are denormalized so a log line stays accurate even if the user is
+// later renamed or deleted. No foreign keys, so a POS-bridge actor (no real User
+// row) can still be recorded.
+model AuditLog {
+  id               String         @id @default(uuid())
+  businessId       String
+  module           BusinessModule @default(RETAIL)
+  category         String
+  action           String
+  entityType       String?
+  entityId         String?
+  entityName       String?
+  summary          String?
+  quantity         String?
+  status           String?
+  metadata         Json?
+  performedById    String?
+  performedByName  String?
+  performedByEmail String?
+  performedByRole  String?
+  createdAt        DateTime       @default(now())
+
+  @@index([businessId, createdAt])
+  @@index([businessId, module, createdAt])
+  @@index([businessId, module, category])
 }

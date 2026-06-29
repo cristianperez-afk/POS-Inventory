@@ -36,7 +36,9 @@ export async function login(
     body: JSON.stringify({ email, password, rememberMe }),
   });
 
-  const data = await response.json();
+  const data = response.headers.get('content-type')?.includes('application/json')
+    ? await response.json().catch(() => ({}))
+    : {};
 
   if (!response.ok) {
     throw new Error(data.message || 'Invalid email or password');

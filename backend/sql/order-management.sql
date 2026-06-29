@@ -235,9 +235,13 @@ CREATE TABLE IF NOT EXISTS restaurant_tables (
   id BIGSERIAL PRIMARY KEY,
   store_id BIGINT REFERENCES stores(id) ON DELETE CASCADE,
   table_number VARCHAR(50) NOT NULL,
+  table_name VARCHAR(50),
   capacity INT NOT NULL,
+  total_seats INT,
+  occupied_seats INT NOT NULL DEFAULT 0,
+  is_shared BOOLEAN NOT NULL DEFAULT FALSE,
   status VARCHAR(50) DEFAULT 'AVAILABLE'
-    CHECK (status IN ('AVAILABLE', 'OCCUPIED', 'RESERVED', 'MAINTENANCE')),
+    CHECK (status IN ('AVAILABLE', 'OCCUPIED', 'PARTIALLY_OCCUPIED')),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -263,10 +267,38 @@ CREATE TABLE IF NOT EXISTS orders (
     CHECK (order_status IN ('PENDING', 'PREPARING', 'READY', 'SERVED', 'COMPLETED', 'CANCELLED')),
   payment_status VARCHAR(50) DEFAULT 'NOT_PAID'
     CHECK (payment_status IN ('NOT_PAID', 'PAID', 'REFUNDED', 'PARTIALLY_REFUNDED', 'VOIDED')),
+  ordered_at TIMESTAMP,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  payment_at TIMESTAMP,
+  preparing_started_at TIMESTAMP,
+  ready_at TIMESTAMP,
+  table_started_at TIMESTAMP,
+  table_ended_at TIMESTAMP,
   completed_at TIMESTAMP,
+  running_time_start TIMESTAMP,
+  running_time_end TIMESTAMP,
+  running_duration BIGINT,
+  is_running BOOLEAN NOT NULL DEFAULT FALSE,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE orders
+  ADD COLUMN IF NOT EXISTS ordered_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS payment_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS preparing_started_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS ready_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS table_started_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS table_ended_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS running_time_start TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS running_time_end TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS running_duration BIGINT,
+  ADD COLUMN IF NOT EXISTS is_running BOOLEAN NOT NULL DEFAULT FALSE;
+
+UPDATE orders
+SET ordered_at = COALESCE(running_time_start, preparing_started_at, created_at)
+WHERE ordered_at IS NULL
+  AND order_type <> 'RETAIL'
+  AND COALESCE(running_time_start, preparing_started_at, created_at) IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS order_items (
   id BIGSERIAL PRIMARY KEY,
@@ -312,6 +344,12 @@ ALTER TABLE order_item_customizations
   ADD COLUMN IF NOT EXISTS store_id BIGINT REFERENCES stores(id) ON DELETE CASCADE,
   ADD COLUMN IF NOT EXISTS original_ingredient_id BIGINT REFERENCES ingredients_inventory(id) ON DELETE SET NULL,
   ADD COLUMN IF NOT EXISTS replacement_ingredient_id BIGINT REFERENCES ingredients_inventory(id) ON DELETE SET NULL;
+
+ALTER TABLE order_item_customizations
+  ALTER COLUMN product_ingredient_id DROP NOT NULL,
+  ALTER COLUMN ingredient_alternative_id DROP NOT NULL,
+  ALTER COLUMN original_ingredient_id DROP NOT NULL,
+  ALTER COLUMN replacement_ingredient_id DROP NOT NULL;
 
 CREATE TABLE IF NOT EXISTS inventory_deductions (
   id BIGSERIAL PRIMARY KEY,
@@ -435,6 +473,7 @@ CREATE INDEX IF NOT EXISTS ingredient_alternatives_alternative_ingredient_id_idx
 CREATE INDEX IF NOT EXISTS restaurant_tables_store_id_idx ON restaurant_tables(store_id);
 CREATE INDEX IF NOT EXISTS orders_store_id_idx ON orders(store_id);
 CREATE INDEX IF NOT EXISTS orders_cashier_id_idx ON orders(cashier_id);
+CREATE INDEX IF NOT EXISTS orders_running_orders_idx ON orders(store_id, is_running) WHERE is_running = TRUE;
 CREATE INDEX IF NOT EXISTS order_items_order_id_idx ON order_items(order_id);
 CREATE INDEX IF NOT EXISTS order_items_variant_id_idx ON order_items(variant_id);
 CREATE INDEX IF NOT EXISTS order_item_customizations_order_item_id_idx ON order_item_customizations(order_item_id);

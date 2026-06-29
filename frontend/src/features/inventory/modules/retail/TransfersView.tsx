@@ -11,6 +11,7 @@ import {
   useRetailTransferRecordsQuery,
 } from '../lib/retail';
 import StockAdjustmentsView from './StockAdjustmentsView';
+import { getManilaDateKey } from '../../../../shared/utils/date';
 
 const TRANSFER_STATUS_LABEL: Record<string, string> = {
   PENDING: 'Pending',
@@ -42,6 +43,9 @@ export default function TransfersView({
   const locations = locationsQuery.data ?? [];
   const inventory = inventoryQuery.data ?? [];
   const loading = transfersQuery.isLoading || locationsQuery.isLoading || inventoryQuery.isLoading;
+  // Staff can request (create) and cancel a pending transfer; only an Admin can
+  // dispatch/complete it (those steps move stock). Mirrors the backend guards.
+  const isAdmin = currentUser?.role === 'Admin';
   const [activeTab, setActiveTab] = useState<'transfers' | 'adjustments'>('transfers');
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [showItemSelector, setShowItemSelector] = useState(false);
@@ -160,7 +164,7 @@ export default function TransfersView({
         </div>
         {activeTab === 'transfers' && (
           <div className="flex gap-3">
-            <button onClick={() => setShowTransferModal(true)} className="bg-secondary text-white px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-secondary">
+            <button onClick={() => setShowTransferModal(true)} className="bg-secondary text-white px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-secondary/90 hover:-translate-y-0.5 hover:shadow-md hover:shadow-secondary/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 active:translate-y-0 active:shadow-sm transition-all duration-200">
               <ArrowRightLeft className="size-4" />
               New Transfer
             </button>
@@ -169,9 +173,9 @@ export default function TransfersView({
       </div>
 
       {/* Tabs */}
-      <div className="bg-white border border-border rounded-[14px] overflow-hidden mb-4">
+      <div className="bg-card border border-border rounded-[14px] overflow-hidden mb-4">
         <div className="flex border-b border-border">
-          <button onClick={() => setActiveTab('transfers')} className={`flex-1 px-6 py-3 text-[16px] font-medium transition-colors relative ${activeTab === 'transfers' ? 'bg-secondary/10 text-secondary' : 'text-foreground hover:bg-muted'}`}>
+          <button onClick={() => setActiveTab('transfers')} className={`flex-1 px-6 py-3 text-[16px] font-medium transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-secondary/50 relative ${activeTab === 'transfers' ? 'bg-secondary/10 text-secondary' : 'text-foreground hover:bg-muted'}`}>
             {activeTab === 'transfers' && <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-secondary" />}
             <div className="flex items-center justify-center gap-2">
               <ArrowRightLeft className="size-5" />
@@ -179,7 +183,7 @@ export default function TransfersView({
               <span className={`px-2 py-0.5 rounded text-[12px] font-semibold ${activeTab === 'transfers' ? 'bg-secondary text-white' : 'bg-muted text-foreground'}`}>{transfers.length}</span>
             </div>
           </button>
-          <button onClick={() => setActiveTab('adjustments')} className={`flex-1 px-6 py-3 text-[16px] font-medium transition-colors relative ${activeTab === 'adjustments' ? 'bg-secondary/10 text-secondary' : 'text-foreground hover:bg-muted'}`}>
+          <button onClick={() => setActiveTab('adjustments')} className={`flex-1 px-6 py-3 text-[16px] font-medium transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-secondary/50 relative ${activeTab === 'adjustments' ? 'bg-secondary/10 text-secondary' : 'text-foreground hover:bg-muted'}`}>
             {activeTab === 'adjustments' && <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-secondary" />}
             <div className="flex items-center justify-center gap-2">
               <RefreshCw className="size-5" />
@@ -191,10 +195,10 @@ export default function TransfersView({
 
       {/* Filter — only for transfers tab */}
       {activeTab === 'transfers' && (
-        <div className="bg-white border border-border rounded-[14px] mb-4 p-4">
+        <div className="bg-card border border-border rounded-[14px] mb-4 p-4">
           <div className="flex items-center gap-2">
             <label className="text-[14px] text-foreground font-medium">Status:</label>
-            <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className="px-3 py-1.5 border border-border rounded-[6px] text-[14px] bg-white focus:outline-none focus:border-secondary">
+            <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className="px-3 py-1.5 border border-border rounded-[6px] text-[14px] bg-card focus:outline-none focus:border-secondary">
               <option value="all">All</option>
               <option value="PENDING">Pending</option>
               <option value="IN_TRANSIT">In Transit</option>
@@ -209,14 +213,14 @@ export default function TransfersView({
       {activeTab === 'transfers' ? (
         <div className="space-y-4">
           {filteredTransfers.length === 0 ? (
-            <div className="bg-white border border-border rounded-[14px] p-12 text-center">
+            <div className="bg-card border border-border rounded-[14px] p-12 text-center">
               <ArrowRightLeft className="size-16 text-muted mx-auto mb-4" />
               <p className="text-[16px] text-foreground font-medium">No transfers found</p>
               <p className="text-[14px] text-muted-foreground mt-1">Create a transfer to move items between locations</p>
             </div>
           ) : (
             filteredTransfers.map((transfer: any) => (
-              <div key={transfer.id} className="bg-white border border-border rounded-[14px] p-6">
+              <div key={transfer.id} className="bg-card border border-border rounded-[14px] p-6">
                 <div className="flex items-start justify-between mb-4">
                   <div>
                     <div className="flex items-center gap-3 mb-2">
@@ -230,7 +234,7 @@ export default function TransfersView({
                       <ArrowRightLeft className="size-4 text-secondary" />
                       <span className="font-medium">{transfer.toLocation?.name}</span>
                     </div>
-                    <p className="text-[13px] text-muted-foreground">Date: {new Date(transfer.createdAt).toLocaleDateString()}</p>
+                    <p className="text-[13px] text-muted-foreground">Date: {getManilaDateKey(transfer.createdAt)}</p>
                     {transfer.createdBy && <p className="text-[13px] text-muted-foreground">Created by: {transfer.createdBy.name}</p>}
                     {transfer.notes && <p className="text-[13px] text-muted-foreground mt-1">Notes: {transfer.notes}</p>}
                   </div>
@@ -254,9 +258,11 @@ export default function TransfersView({
 
                 {transfer.status === 'PENDING' && (
                   <div className="flex gap-2">
-                    <button onClick={() => handleDispatch(transfer.id)} className="flex-1 px-4 py-2 bg-secondary text-white rounded-[8px] text-[14px] font-medium hover:bg-secondary">
-                      Start Transit
-                    </button>
+                    {isAdmin && (
+                      <button onClick={() => handleDispatch(transfer.id)} className="flex-1 px-4 py-2 bg-secondary text-white rounded-[8px] text-[14px] font-medium hover:bg-secondary">
+                        Start Transit
+                      </button>
+                    )}
                     <button onClick={() => handleCancel(transfer.id)} className="flex-1 px-4 py-2 border border-destructive text-destructive rounded-[8px] text-[14px] font-medium hover:bg-destructive/10">
                       Cancel
                     </button>
@@ -264,14 +270,18 @@ export default function TransfersView({
                 )}
 
                 {transfer.status === 'IN_TRANSIT' && (
-                  <div className="flex gap-2">
-                    <button onClick={() => handleComplete(transfer.id)} className="flex-1 px-4 py-2 bg-secondary text-white rounded-[8px] text-[14px] font-medium hover:bg-secondary">
-                      Complete Transfer
-                    </button>
-                    <button onClick={() => handleCancel(transfer.id)} className="flex-1 px-4 py-2 border border-destructive text-destructive rounded-[8px] text-[14px] font-medium hover:bg-destructive/10">
-                      Cancel
-                    </button>
-                  </div>
+                  isAdmin ? (
+                    <div className="flex gap-2">
+                      <button onClick={() => handleComplete(transfer.id)} className="flex-1 px-4 py-2 bg-secondary text-white rounded-[8px] text-[14px] font-medium hover:bg-secondary">
+                        Complete Transfer
+                      </button>
+                      <button onClick={() => handleCancel(transfer.id)} className="flex-1 px-4 py-2 border border-destructive text-destructive rounded-[8px] text-[14px] font-medium hover:bg-destructive/10">
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="text-[13px] text-muted-foreground text-center py-2">In transit — awaiting an Admin to complete.</p>
+                  )
                 )}
               </div>
             ))
@@ -284,7 +294,7 @@ export default function TransfersView({
       {/* Transfer Modal */}
       {showTransferModal && (
         <div className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white rounded-[14px] p-6 max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+          <div className="bg-card rounded-[14px] p-6 max-w-3xl w-full max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-[24px] font-bold text-foreground">Create Transfer</h3>
               <button onClick={() => { setShowTransferModal(false); setTransferForm({ fromLocationId: '', toLocationId: '', notes: '', items: [] }); }} className="p-2 hover:bg-muted rounded">
@@ -331,9 +341,9 @@ export default function TransfersView({
                         </div>
                         <div className="flex items-center gap-3">
                           <div className="flex items-center gap-2">
-                            <button onClick={() => setTransferForm({ ...transferForm, items: transferForm.items.map(i => i.inventoryItemId === item.inventoryItemId ? { ...i, quantity: Math.max(1, i.quantity - 1) } : i) })} className="w-6 h-6 flex items-center justify-center bg-white border border-border rounded text-foreground hover:bg-muted">-</button>
+                            <button onClick={() => setTransferForm({ ...transferForm, items: transferForm.items.map(i => i.inventoryItemId === item.inventoryItemId ? { ...i, quantity: Math.max(1, i.quantity - 1) } : i) })} className="w-6 h-6 flex items-center justify-center bg-card border border-border rounded text-foreground hover:bg-muted">-</button>
                             <span className="text-[14px] font-medium text-foreground w-8 text-center">{item.quantity}</span>
-                            <button onClick={() => setTransferForm({ ...transferForm, items: transferForm.items.map(i => i.inventoryItemId === item.inventoryItemId ? { ...i, quantity: Math.min(i.maxQuantity, i.quantity + 1) } : i) })} disabled={item.quantity >= item.maxQuantity} className="w-6 h-6 flex items-center justify-center bg-white border border-border rounded text-foreground hover:bg-muted">+</button>
+                            <button onClick={() => setTransferForm({ ...transferForm, items: transferForm.items.map(i => i.inventoryItemId === item.inventoryItemId ? { ...i, quantity: Math.min(i.maxQuantity, i.quantity + 1) } : i) })} disabled={item.quantity >= item.maxQuantity} className="w-6 h-6 flex items-center justify-center bg-card border border-border rounded text-foreground hover:bg-muted">+</button>
                           </div>
                           <button onClick={() => setTransferForm({ ...transferForm, items: transferForm.items.filter(i => i.inventoryItemId !== item.inventoryItemId) })} className="text-destructive hover:bg-destructive/10 p-1 rounded"><Trash2 className="size-4" /></button>
                         </div>
@@ -354,7 +364,7 @@ export default function TransfersView({
       {/* Item Selector Modal */}
       {showItemSelector && (
         <div className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white rounded-[14px] p-6 max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+          <div className="bg-card rounded-[14px] p-6 max-w-4xl w-full max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
               <div>
                 <h3 className="text-[20px] font-bold text-foreground">Select Items</h3>
@@ -385,10 +395,10 @@ export default function TransfersView({
                         {isExpanded ? <ChevronDown className="size-5 text-foreground" /> : <ChevronRight className="size-5 text-foreground" />}
                         <Package className="size-5 text-secondary" />
                         <span className="text-[16px] font-semibold text-foreground">{category}</span>
-                        <span className="ml-auto text-[13px] text-foreground bg-white px-3 py-1 rounded-full font-medium">{count} items</span>
+                        <span className="ml-auto text-[13px] text-foreground bg-card px-3 py-1 rounded-full font-medium">{count} items</span>
                       </button>
                       {isExpanded && (
-                        <div className="bg-white">
+                        <div className="bg-card">
                           {Object.entries(subcategories).map(([sub, items]) => {
                             const key = `${category}-${sub}`;
                             const isSubExpanded = expandedSubcategories.has(key);
@@ -404,7 +414,7 @@ export default function TransfersView({
                                     {items.map((item: any) => {
                                       const isAdded = transferForm.items.some(i => i.inventoryItemId === item.id);
                                       return (
-                                        <div key={item.id} className="flex items-center justify-between p-3 bg-white border border-border rounded-[8px] hover:border-secondary">
+                                        <div key={item.id} className="flex items-center justify-between p-3 bg-card border border-border rounded-[8px] hover:border-secondary">
                                           <div className="flex-1">
                                             <p className="text-[14px] font-medium text-foreground">{item.name}</p>
                                             <div className="flex items-center gap-3 mt-1">

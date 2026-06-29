@@ -16,6 +16,7 @@ interface POSDashboardProps {
   isAdmin?: boolean;
   storeBrand?: StoreBrand;
   userName?: string | null;
+  userRole?: string | null;
   storeType?: StoreType;
   staffType?: StaffType;
 }
@@ -38,7 +39,7 @@ function TopItemImage({ src, name }: { src?: string | null; name: string }) {
   );
 }
 
-export function POSDashboard({ onLogout, onNavigate, isAdmin = false, storeBrand, userName, storeType, staffType }: POSDashboardProps) {
+export function POSDashboard({ onLogout, onNavigate, isAdmin = false, storeBrand, userName, userRole, storeType, staffType }: POSDashboardProps) {
   const { orders, queuedOrders } = useOrders();
   const { tables, getAvailableTablesCount } = useTables();
   const { settings } = useStoreSettings();
@@ -63,7 +64,7 @@ export function POSDashboard({ onLogout, onNavigate, isAdmin = false, storeBrand
 
   // Calculate table status breakdown
   const occupiedTables = tables.filter(t => t.status === 'occupied').length;
-  const maintenanceTables = tables.filter(t => t.status === 'maintenance').length;
+  const partiallyOccupiedTables = tables.filter(t => t.status === 'partially_occupied').length;
 
   const salesDataByFilter = {
     week: [
@@ -183,7 +184,7 @@ export function POSDashboard({ onLogout, onNavigate, isAdmin = false, storeBrand
 
   return (
     <div className="flex h-screen">
-      <Sidebar currentPage="pos-dashboard" onNavigate={onNavigate} onLogout={onLogout} isAdmin={isAdmin} storeBrand={storeBrand} userName={userName} storeType={storeType} staffType={staffType} />
+      <Sidebar currentPage="pos-dashboard" onNavigate={onNavigate} onLogout={onLogout} isAdmin={isAdmin} storeBrand={storeBrand} userName={userName} userRole={userRole} storeType={storeType} staffType={staffType} />
 
       <div className="flex-1 overflow-auto bg-background">
         <div className="p-6">
@@ -211,7 +212,7 @@ export function POSDashboard({ onLogout, onNavigate, isAdmin = false, storeBrand
               <p className="text-sm text-muted-foreground mb-1">Available Tables</p>
               <h2 className="text-2xl text-primary">{availableTables} / {totalTables}</h2>
               <p className="text-xs text-muted-foreground mt-1">
-                {occupiedTables} Occupied · {maintenanceTables} Maintenance
+                {occupiedTables} Occupied · {partiallyOccupiedTables} Partially Occupied
               </p>
             </div>
             <div className="bg-card rounded-xl shadow-sm border border-border p-5">

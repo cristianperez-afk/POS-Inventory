@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Package, Search, TrendingDown, TrendingUp, AlertCircle, RefreshCw, Download, BarChart3, Calendar, Clock } from "lucide-react";
 import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   useRestaurantAdjustmentsQuery,
   useRestaurantInventoryMovementsQuery,
@@ -8,6 +9,7 @@ import {
   useRestaurantWasteQuery,
 } from "../lib/restaurant";
 import { formatQuantity, getDaysUntilExpiry, getStockStatus, splitCategory, StockStatus } from "../lib/inventoryLogic";
+import { InlineDataLoading } from "../shared/InlineDataLoading";
 
 type StockItem = {
   id: string;
@@ -35,6 +37,7 @@ type ExpiryItem = {
   sku: string;
   location: string;
   expiry: string;
+  expiryPeriod: string;
   stock: number;
   unit: string;
   daysUntilExpiry: number;
@@ -60,18 +63,26 @@ type InventoryMovementSummary = {
 };
 
 const normalizeName = (value: string | undefined) => (value || '').trim().toLowerCase();
+const compareStockItemsByName = (a: StockItem, b: StockItem) =>
+  a.name.trim().localeCompare(b.name.trim(), undefined, { sensitivity: "base", numeric: true }) ||
+  a.id.localeCompare(b.id, undefined, { sensitivity: "base", numeric: true });
+const expiryPeriodOptions = ["Early Morning", "Morning", "Afternoon", "Evening", "Midnight"];
 
 export function StockControl() {
   const [viewType, setViewType] = useState<ViewType>("control");
   const [searchQuery, setSearchQuery] = useState("");
   const [classificationFilter, setClassificationFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [expiryDateFilter, setExpiryDateFilter] = useState("all");
+  const [expiryPeriodFilter, setExpiryPeriodFilter] = useState("all");
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const { data: products = [] } = useRestaurantInventoryQuery();
-  const { data: wasteLogs = [] } = useRestaurantWasteQuery();
-  const { data: adjustments = [] } = useRestaurantAdjustmentsQuery();
-  const { data: inventoryMovements = [] } = useRestaurantInventoryMovementsQuery();
+  const { data: products = [], isLoading: productsLoading } = useRestaurantInventoryQuery();
+  const { data: wasteLogs = [], isLoading: wasteLoading } = useRestaurantWasteQuery();
+  const { data: adjustments = [], isLoading: adjustmentsLoading } = useRestaurantAdjustmentsQuery();
+  const { data: inventoryMovements = [], isLoading: movementsLoading } = useRestaurantInventoryMovementsQuery();
+  const stockDataLoading = productsLoading || wasteLoading || adjustmentsLoading || movementsLoading;
+  const queryClient = useQueryClient();
 
   const getRecordedOutflowQuantity = (productName: string) => {
     const targetName = normalizeName(productName);
@@ -150,6 +161,7 @@ export function StockControl() {
         sku: product.sku,
         location: product.location || "Unassigned",
         expiry: product.expiry,
+        expiryPeriod: product.expiryPeriod || "",
         stock: product.stock,
         unit: product.unit || "pcs",
         daysUntilExpiry: getDaysUntilExpiry(product.expiry),
@@ -160,22 +172,35 @@ export function StockControl() {
 
   const lowStockItems = stockItems.filter(item => item.status === "out-of-stock" || item.status === "critical" || item.status === "low");
 
-  const filteredControlItems = stockItems.filter(item => {
-    const matchesSearch = (item.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         (item.id || '').toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesClassification = classificationFilter === "all" || item.classification === classificationFilter;
-    const matchesStatus = statusFilter === "all" || item.status === statusFilter;
-    return matchesSearch && matchesClassification && matchesStatus;
-  });
+  const filteredControlItems = stockItems
+    .filter(item => {
+      const matchesSearch = (item.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+                           (item.id || '').toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesClassification = classificationFilter === "all" || item.classification === classificationFilter;
+      const matchesStatus = statusFilter === "all" || item.status === statusFilter;
+      return matchesSearch && matchesClassification && matchesStatus;
+    })
+    .sort(compareStockItemsByName);
 
   const filteredLowStockItems = lowStockItems.filter(item => {
-    return (item.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+    const matchesSearch = (item.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
            (item.id || '').toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesStatus = statusFilter === "all" || item.status === statusFilter;
+    return matchesSearch && matchesStatus;
   });
 
   const filteredExpiryItems = expiryItems.filter(item => {
-    return (item.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+    const matchesSearch = (item.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
            (item.sku || '').toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesDate =
+      expiryDateFilter === "all" ||
+      (expiryDateFilter === "expired" && item.daysUntilExpiry < 0) ||
+      (expiryDateFilter === "today" && item.daysUntilExpiry === 0) ||
+      (expiryDateFilter === "tomorrow" && item.daysUntilExpiry === 1) ||
+      (expiryDateFilter === "next3" && item.daysUntilExpiry >= 0 && item.daysUntilExpiry <= 3) ||
+      (expiryDateFilter === "next7" && item.daysUntilExpiry >= 0 && item.daysUntilExpiry <= 7);
+    const matchesPeriod = expiryPeriodFilter === "all" || (item.expiryPeriod || "") === expiryPeriodFilter;
+    return matchesSearch && matchesDate && matchesPeriod;
   });
 
   const getStatusBadge = (status: string) => {
@@ -280,24 +305,44 @@ export function StockControl() {
     }
   };
 
+  // Cards drive the view/filters in-place. Out-of-stock / critical / low are
+  // alerts, so they open the Low Stock Alerts tab narrowed to that status.
+  // Medium / healthy / total value only exist in the Overview table, and
+  // Expiring Soon switches to the Expiring Items view.
+  const showAlert = (status: string) => {
+    setViewType("low-stock");
+    setStatusFilter(status);
+  };
+  const showStatus = (status: string) => {
+    setViewType("control");
+    setStatusFilter(status);
+  };
+  const showExpiring = () => {
+    setViewType("expiring");
+    setExpiryDateFilter("next3");
+  };
+
   const stats = [
-    { label: "Total Stock Value", value: `₱${stockItems.reduce((sum, item) => sum + item.totalValue, 0).toLocaleString()}`, icon: Package, color: "linear-gradient(to right, #009BA5, #00A7A5)" },
-    { label: "Out of Stock", value: stockItems.filter(i => i.status === "out-of-stock").length, icon: AlertCircle, color: "linear-gradient(to right, #000000, #52525B)" },
-    { label: "Critical Stock", value: stockItems.filter(i => i.status === "critical").length, icon: AlertCircle, color: "linear-gradient(to right, #DC2626, #EF4444)" },
-    { label: "Low Stock", value: stockItems.filter(i => i.status === "low").length, icon: TrendingDown, color: "linear-gradient(to right, #F59E0B, #FCD34D)" },
-    { label: "Medium Stock", value: stockItems.filter(i => i.status === "medium").length, icon: BarChart3, color: "linear-gradient(to right, #F59E0B, #FBBF24)" },
-    { label: "Healthy Stock", value: stockItems.filter(i => i.status === "healthy").length, icon: Package, color: "linear-gradient(to right, #007A5E, #008967)" },
-    { label: "Expiring Soon", value: expiryItems.filter(i => i.daysUntilExpiry <= 3).length, icon: Calendar, color: "linear-gradient(to right, #F59E0B, #DC2626)" },
+    { label: "Total Stock Value", value: `₱${stockItems.reduce((sum, item) => sum + item.totalValue, 0).toLocaleString()}`, icon: Package, color: "linear-gradient(to right, #009BA5, #00A7A5)", onClick: () => showStatus("all") },
+    { label: "Out of Stock", value: stockItems.filter(i => i.status === "out-of-stock").length, icon: AlertCircle, color: "linear-gradient(to right, #000000, #52525B)", onClick: () => showAlert("out-of-stock") },
+    { label: "Critical Stock", value: stockItems.filter(i => i.status === "critical").length, icon: AlertCircle, color: "linear-gradient(to right, #DC2626, #EF4444)", onClick: () => showAlert("critical") },
+    { label: "Low Stock", value: stockItems.filter(i => i.status === "low").length, icon: TrendingDown, color: "linear-gradient(to right, #F59E0B, #FCD34D)", onClick: () => showAlert("low") },
+    { label: "Medium Stock", value: stockItems.filter(i => i.status === "medium").length, icon: BarChart3, color: "linear-gradient(to right, #F59E0B, #FBBF24)", onClick: () => showStatus("medium") },
+    { label: "Healthy Stock", value: stockItems.filter(i => i.status === "healthy").length, icon: Package, color: "linear-gradient(to right, #007A5E, #008967)", onClick: () => showStatus("healthy") },
+    { label: "Expiring Soon", value: expiryItems.filter(i => i.daysUntilExpiry <= 3).length, icon: Calendar, color: "linear-gradient(to right, #F59E0B, #DC2626)", onClick: showExpiring },
   ];
 
-  const handleRefresh = () => {
+  const handleRefresh = async () => {
     setIsRefreshing(true);
-    // Simulate data refresh
-    setTimeout(() => {
-      setIsRefreshing(false);
-      // In a real app, this would fetch fresh data from the backend
+    try {
+      // Refetch stock data (inventory, waste, adjustments, movements) from the backend.
+      await queryClient.invalidateQueries();
       toast.success("Stock data refreshed successfully!");
-    }, 1000);
+    } catch {
+      toast.error("Failed to refresh stock data");
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
   const handleExportReport = () => {
@@ -324,10 +369,10 @@ export function StockControl() {
       filename = "low_stock_alerts.csv";
     } else if (viewType === "expiring") {
       // Export Expiring Items
-      csvContent = "SKU,Product Name,Category,Expiry Date,Days Until Expiry,Current Stock,Location\n";
+      csvContent = "SKU,Product Name,Category,Expiry Date,Expiry Period,Days Until Expiry,Current Stock,Location\n";
 
       filteredExpiryItems.forEach(item => {
-        csvContent += `${item.sku},${item.name},${item.category},${item.expiry},${item.daysUntilExpiry},${item.stock} ${item.unit},${item.location}\n`;
+        csvContent += `${item.sku},${item.name},${item.category},${item.expiry},${item.expiryPeriod || 'N/A'},${item.daysUntilExpiry},${item.stock} ${item.unit},${item.location}\n`;
       });
 
       filename = "expiring_items_report.csv";
@@ -359,14 +404,14 @@ export function StockControl() {
           <button
             onClick={handleRefresh}
             disabled={isRefreshing}
-            className="px-6 py-3 bg-muted text-foreground rounded-2xl hover:bg-muted/80 transition-all duration-200 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-6 py-3 bg-muted text-foreground rounded-2xl border border-transparent hover:bg-muted/80 hover:-translate-y-0.5 hover:shadow-md hover:border-primary/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-sm transition-all duration-200 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:translate-y-0 disabled:shadow-none disabled:border-transparent"
           >
             <RefreshCw className={`w-5 h-5 ${isRefreshing ? "animate-spin" : ""}`} />
             {isRefreshing ? "Refreshing..." : "Refresh"}
           </button>
           <button
             onClick={handleExportReport}
-            className="px-6 py-3 bg-gradient-to-r from-primary to-secondary text-white rounded-2xl hover:shadow-lg hover:shadow-primary/30 transition-all duration-200 flex items-center gap-2"
+            className="px-6 py-3 bg-gradient-to-r from-primary to-secondary text-white rounded-2xl hover:-translate-y-0.5 hover:shadow-lg hover:shadow-primary/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-md transition-all duration-200 flex items-center gap-2"
           >
             <Download className="w-5 h-5" />
             Export Report
@@ -379,7 +424,13 @@ export function StockControl() {
         {stats.map((stat, index) => {
           const Icon = stat.icon;
           return (
-            <div key={index} className="bg-card rounded-2xl p-6 shadow-sm border border-border overflow-hidden min-w-0">
+            <button
+              type="button"
+              key={index}
+              onClick={stat.onClick}
+              aria-label={`Filter by ${stat.label}`}
+              className="group text-left w-full bg-card rounded-2xl p-6 shadow-sm border border-border overflow-hidden min-w-0 cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-xl hover:shadow-primary/25 hover:border-primary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-lg active:shadow-primary/30 active:border-primary"
+            >
               <div className="flex items-center gap-3 mb-3">
                 <div className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: stat.color }}>
                   <Icon className="w-6 h-6 text-white" />
@@ -387,7 +438,7 @@ export function StockControl() {
               </div>
               <p className="text-muted-foreground text-sm mb-2 truncate">{stat.label}</p>
               <p className="text-xl font-bold text-foreground break-words">{stat.value}</p>
-            </div>
+            </button>
           );
         })}
       </div>
@@ -406,7 +457,7 @@ export function StockControl() {
           Overview
         </button>
         <button
-          onClick={() => setViewType("low-stock")}
+          onClick={() => { setViewType("low-stock"); setStatusFilter("all"); }}
           className={`px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200 flex items-center gap-2 ${
             viewType === "low-stock"
               ? "bg-primary text-white shadow-md"
@@ -469,6 +520,32 @@ export function StockControl() {
               </select>
             </>
           )}
+          {viewType === "expiring" && (
+            <>
+              <select
+                value={expiryDateFilter}
+                onChange={(e) => setExpiryDateFilter(e.target.value)}
+                className="px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all appearance-none cursor-pointer"
+              >
+                <option value="all">All Expiry Dates</option>
+                <option value="expired">Expired</option>
+                <option value="today">Expires Today</option>
+                <option value="tomorrow">Expires Tomorrow</option>
+                <option value="next3">Within 3 Days</option>
+                <option value="next7">Within 7 Days</option>
+              </select>
+              <select
+                value={expiryPeriodFilter}
+                onChange={(e) => setExpiryPeriodFilter(e.target.value)}
+                className="px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all appearance-none cursor-pointer"
+              >
+                <option value="all">All Expiry Periods</option>
+                {expiryPeriodOptions.map((period) => (
+                  <option key={period} value={period}>{period}</option>
+                ))}
+              </select>
+            </>
+          )}
         </div>
       </div>
 
@@ -492,7 +569,11 @@ export function StockControl() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {filteredControlItems.map((item) => (
+                {stockDataLoading ? (
+                  <tr><td colSpan={10}><InlineDataLoading label="Loading stock overview…" /></td></tr>
+                ) : filteredControlItems.length === 0 ? (
+                  <tr><td colSpan={10} className="px-6 py-10 text-center text-muted-foreground">No stock items found.</td></tr>
+                ) : filteredControlItems.map((item) => (
                   <tr key={item.id} className="hover:bg-muted/30 transition-colors">
                     <td className="px-6 py-4">
                       <span className="font-medium text-primary">{item.id}</span>
@@ -527,7 +608,9 @@ export function StockControl() {
 
       {viewType === "low-stock" && (
         <div className="space-y-4">
-          {filteredLowStockItems.length === 0 ? (
+          {stockDataLoading ? (
+            <div className="bg-card rounded-2xl border border-border"><InlineDataLoading label="Loading low-stock alerts…" /></div>
+          ) : filteredLowStockItems.length === 0 ? (
             <div className="bg-card rounded-2xl p-12 text-center shadow-sm border border-border">
               <Package className="w-16 h-16 mx-auto text-muted-foreground mb-4" />
               <h3 className="text-xl font-semibold text-foreground mb-2">No Low Stock Items</h3>
@@ -598,7 +681,9 @@ export function StockControl() {
 
       {viewType === "expiring" && (
         <div className="space-y-4">
-          {filteredExpiryItems.length === 0 ? (
+          {stockDataLoading ? (
+            <div className="bg-card rounded-2xl border border-border"><InlineDataLoading label="Loading expiring items…" /></div>
+          ) : filteredExpiryItems.length === 0 ? (
             <div className="bg-card rounded-2xl p-12 text-center shadow-sm border border-border">
               <Calendar className="w-16 h-16 mx-auto text-muted-foreground mb-4" />
               <h3 className="text-xl font-semibold text-foreground mb-2">No Expiring Items</h3>
@@ -640,6 +725,10 @@ export function StockControl() {
                         <div>
                           <p className="text-xs text-muted-foreground mb-1">Expiry Date</p>
                           <p className="text-sm font-medium text-foreground">{item.expiry}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground mb-1">Expiry Period</p>
+                          <p className="text-sm font-medium text-foreground">{item.expiryPeriod || "Not specified"}</p>
                         </div>
                         <div>
                           <p className="text-xs text-muted-foreground mb-1">Days Until Expiry</p>

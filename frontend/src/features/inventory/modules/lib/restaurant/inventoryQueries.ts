@@ -7,6 +7,7 @@ import {
   createInventoryItem,
   createStockMovement,
   deleteInventoryItem,
+  getIngredientConsumptionReport,
   getInventory,
   updateInventoryItem,
 } from '../../../app/api/client';
@@ -15,17 +16,19 @@ import {
   useDomainMutation,
   useStockMovementsQuery,
 } from '../domainQueries';
+import { isRecentlyAdded } from '../../../app/utils/format';
+import { getManilaDateKey } from '../../../../../shared/utils/date';
 
 const toDateInput = (value?: string | null) => {
   if (!value) return '';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
+  return getManilaDateKey(value);
 };
 
 async function getRestaurantInventory() {
+  // Inventory tracks raw ingredients and supplies only. Finished MENU_ITEM dishes
+  // (recipes/menu items) are managed on the menu/recipe screens, not here.
   const groups = await Promise.all([
     getInventory({ itemType: 'INGREDIENT' }),
-    getInventory({ itemType: 'MENU_ITEM' }),
     getInventory({ itemType: 'SUPPLY' }),
   ]);
   return groups.flat();
@@ -51,10 +54,16 @@ export function mapRestaurantInventory(items: ApiInventoryItem[]) {
     price: item.price ?? 0,
     condition: item.condition ?? 'Good',
     expiry: toDateInput(item.expiryDate),
+    expiryPeriod: item.expiryPeriod ?? '',
     location: item.location?.name ?? 'Unassigned',
-    unit: item.unit ?? 'pcs',
+    unit: item.baseUnit ?? item.unit ?? 'pcs',
+    purchaseUnit: item.purchaseUnit ?? item.unit ?? item.baseUnit ?? 'pcs',
+    baseUnit: item.baseUnit ?? item.unit ?? 'pcs',
+    conversionFactor: item.conversionFactor ?? 1,
     storageTemperature: item.storageTemperature ?? 'Dry Storage',
     isActive: item.isActive ?? true,
+    isRecent: isRecentlyAdded(item.createdAt ?? item.dateAdded),
+    addedDate: item.createdAt ?? item.dateAdded ?? '',
   }));
 }
 
@@ -167,10 +176,18 @@ export function useRestaurantInventoryMovementsQuery() {
   );
 }
 
+export function useRestaurantIngredientConsumptionQuery(range?: { from?: string; to?: string }) {
+  return useQuery({
+    queryKey: ['restaurant', 'ingredient-consumption', range?.from ?? null, range?.to ?? null],
+    queryFn: () => getIngredientConsumptionReport({ module: 'RESTAURANT', from: range?.from, to: range?.to }),
+  });
+}
+
 export function useCreateRestaurantInventoryMutation() {
   return useDomainMutation(
     (data: Record<string, unknown>) => createInventoryItem(data),
-    [domainQueryKeys.inventory, domainQueryKeys.stockMovements],
+    // restaurantSettings: a new item may auto-register a CATEGORY_HIERARCHY entry.
+    [domainQueryKeys.inventory, domainQueryKeys.stockMovements, domainQueryKeys.restaurantSettings],
   );
 }
 

@@ -2,14 +2,14 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { Sidebar } from '../../shared/components/Sidebar';
 import { Page, type StoreBrand } from '../../shared/App';
 import type { StaffType, StoreType } from '../../auth/types/auth';
-import { Minus, Plus, Search, X, AlertCircle, ShoppingBag, Shirt, Barcode, Receipt, Trash2, Printer } from 'lucide-react';
+import { Barcode, Minus, Plus, Search, X, AlertCircle, ShoppingBag, Trash2, Printer } from 'lucide-react';
 import { useOrders } from '../context/RetailOrderContext';
 import { ThermalReceipt } from './RetailThermalReceipt';
 import { useStoreSettings } from '../../shared/context/StoreSettingsContext';
 import { DeleteConfirmDialog } from '../../shared/components/DeleteConfirmDialog';
 import { getApiBaseUrl } from '../../auth/services/auth';
 import type { AuthenticatedUser } from '../../auth/types/auth';
-import { getLocalDateKey } from '../../shared/utils/date';
+import { getLocalDateKey, getManilaTime } from '../../shared/utils/date';
 import { useCompletePaymentMutation, usePosMenuQuery } from '../../features/pos/hooks/usePosMenuQuery';
 
 interface RetailCreateOrderProps {
@@ -19,6 +19,7 @@ interface RetailCreateOrderProps {
   onLogout: () => void;
   storeBrand?: StoreBrand;
   userName?: string | null;
+  userRole?: string | null;
   storeType?: StoreType;
   staffType?: StaffType;
 }
@@ -32,6 +33,7 @@ interface CartItem {
   size?: string;
   color?: string;
   price: number;
+  wholesalePrice?: number;
   quantity: number;
   image: string;
   stockQuantity?: number;
@@ -48,6 +50,7 @@ interface RetailProduct {
   size?: string;
   color?: string;
   price: number;
+  wholesalePrice?: number;
   image: string;
   stockQuantity?: number;
 }
@@ -61,7 +64,7 @@ interface RetailProductGroup extends RetailProduct {
   colors: string[];
 }
 
-export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout, storeBrand, userName, storeType = 'RETAIL_STORE', staffType }: RetailCreateOrderProps) {
+export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout, storeBrand, userName, userRole, storeType = 'RETAIL_STORE', staffType }: RetailCreateOrderProps) {
   const { addOrder, orders, getCustomerHistory, getRecommendedProducts } = useOrders();
   const { settings, discounts } = useStoreSettings();
   const posMenuQuery = usePosMenuQuery(currentUser?.id);
@@ -75,14 +78,21 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [selectedProductGroup, setSelectedProductGroup] = useState<RetailProductGroup | null>(null);
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [selectedCartItemIndexes, setSelectedCartItemIndexes] = useState<number[]>([]);
   const [deletingCartItem, setDeletingCartItem] = useState<{ index: number; name: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [barcodeQuery, setBarcodeQuery] = useState('');
+  const [useWholesalePricing, setUseWholesalePricing] = useState(false);
+  const [showVoidModal, setShowVoidModal] = useState(false);
+  const [voidPasscode, setVoidPasscode] = useState('');
+  const [voidAuthorizationError, setVoidAuthorizationError] = useState('');
+  const [isVoidSubmitting, setIsVoidSubmitting] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [showPayment, setShowPayment] = useState(false);
   const [showReceipt, setShowReceipt] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [completedOrder, setCompletedOrder] = useState<any>(null);
-  const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'Card' | 'GCash' | 'PayMaya'>('Cash');
+  const [paymentMethod, setPaymentMethod] = useState('Cash');
   const [cashAmount, setCashAmount] = useState('');
   const [isPaymentSubmitting, setIsPaymentSubmitting] = useState(false);
   const [changeAmount, setChangeAmount] = useState(0);
@@ -90,6 +100,8 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
   const [customDiscountPercent, setCustomDiscountPercent] = useState<number>(0);
   const [showDiscountModal, setShowDiscountModal] = useState(false);
   const [validationError, setValidationError] = useState<string>('');
+  const enabledPaymentMethods = settings.enabled_payment_methods.length > 0 ? settings.enabled_payment_methods : ['Cash'];
+  const selectedPaymentAccount = settings.payment_method_accounts[paymentMethod];
 
   // Autocomplete for customer
   const [showCustomerSuggestions, setShowCustomerSuggestions] = useState(false);
@@ -111,13 +123,14 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
       size: product.size ?? undefined,
       color: product.color ?? undefined,
       price: Number(product.price ?? 0),
+      wholesalePrice: Number(product.wholesale_price ?? product.wholesalePrice ?? product.cost_price ?? product.cost ?? product.price ?? 0),
       image: product.image_url || storeBrand?.logo || '',
       stockQuantity: Number(product.available_quantity ?? product.stock_quantity ?? 0),
     }));
   }, [posMenuQuery.data, storeBrand?.logo]);
   const dynamicProductCategories = useMemo(
     () => [
-      { id: 'all', name: 'All Items' },
+      { id: 'all', name: 'All' },
       ...Array.from(new Set(posProducts.map((product) => product.category))).map((category) => ({ id: category, name: category })),
     ],
     [posProducts],
@@ -191,6 +204,10 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  useEffect(() => {
+    setSelectedCartItemIndexes((indexes) => indexes.filter((index) => index < cart.length));
+  }, [cart.length]);
+
   const handleSelectCustomer = (name: string) => {
     setCustomerName(name);
     setShowCustomerSuggestions(false);
@@ -249,19 +266,21 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
   }, [customerName, orders, posProducts]);
 
   const addToCart = (product: RetailProduct) => {
+    const salePrice = useWholesalePricing ? product.wholesalePrice ?? product.price : product.price;
     const currentQuantity = cart
       .filter((item) => item.variantId === product.variantId)
       .reduce((sum, item) => sum + item.quantity, 0);
     if (product.stockQuantity !== undefined && currentQuantity >= product.stockQuantity) {
       setScanFeedback({ type: 'error', message: `${product.name} is out of stock.` });
-      return;
+      return false;
     }
 
     const existingItemIndex = cart.findIndex(item =>
       item.id === product.id &&
       item.variantId === product.variantId &&
       item.size === product.size &&
-      item.color === product.color
+      item.color === product.color &&
+      item.price === salePrice
     );
 
     if (existingItemIndex !== -1) {
@@ -279,31 +298,50 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
         category: product.category,
         size: product.size,
         color: product.color,
-        price: product.price,
+        price: salePrice,
+        wholesalePrice: product.wholesalePrice,
         quantity: 1,
         image: product.image,
         stockQuantity: product.stockQuantity,
       };
       setCart([...cart, newItem]);
     }
+
+    return true;
+  };
+
+  const addProductByCode = (code: string) => {
+    const product = posProducts.find(p => p.code.toUpperCase() === code.trim().toUpperCase());
+
+    if (!product) {
+      setScanFeedback({ type: 'error', message: `No product found for ${code}.` });
+      return false;
+    }
+
+    if (!addToCart(product)) return false;
+    setScanFeedback({ type: 'success', message: `${product.name} added to cart!` });
+    setTimeout(() => {
+      setScanFeedback(null);
+    }, 2000);
+    return true;
   };
 
   const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && searchQuery.trim()) {
       e.preventDefault();
 
-      // Check if search query is an exact product code
-      const product = posProducts.find(p => p.code.toUpperCase() === searchQuery.toUpperCase());
-
-      if (product) {
-        addToCart(product);
-        setScanFeedback({ type: 'success', message: `${product.name} added to cart!` });
+      if (addProductByCode(searchQuery)) {
         setSearchQuery('');
+      }
+    }
+  };
 
-        // Clear feedback after 2 seconds
-        setTimeout(() => {
-          setScanFeedback(null);
-        }, 2000);
+  const handleBarcodeKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && barcodeQuery.trim()) {
+      e.preventDefault();
+
+      if (addProductByCode(barcodeQuery)) {
+        setBarcodeQuery('');
       }
     }
   };
@@ -311,8 +349,9 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
   const updateQuantity = (index: number, newQuantity: number) => {
     if (newQuantity <= 0) {
       setCart(cart.filter((_, i) => i !== index));
+      setSelectedCartItemIndexes((indexes) => indexes.filter((itemIndex) => itemIndex !== index).map((itemIndex) => itemIndex > index ? itemIndex - 1 : itemIndex));
     } else if (cart[index]?.stockQuantity !== undefined && newQuantity > cart[index].stockQuantity) {
-      setScanFeedback({ type: 'error', message: `Only ${cart[index].stockQuantity} ${cart[index].name} available.` });
+      setScanFeedback({ type: 'error', message: `Only ${Math.trunc(cart[index].stockQuantity)} ${cart[index].name} available.` });
     } else {
       setCart(cart.map((item, i) =>
         i === index ? { ...item, quantity: newQuantity } : item
@@ -322,7 +361,77 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
 
   const removeItem = (index: number) => {
     setCart(cart.filter((_, i) => i !== index));
+    setSelectedCartItemIndexes((indexes) => indexes.filter((itemIndex) => itemIndex !== index).map((itemIndex) => itemIndex > index ? itemIndex - 1 : itemIndex));
     setDeletingCartItem(null);
+  };
+
+  const selectedCartItemSet = useMemo(() => new Set(selectedCartItemIndexes), [selectedCartItemIndexes]);
+  const selectedCartItemCount = selectedCartItemIndexes.length;
+  const allCartItemsSelected = cart.length > 0 && selectedCartItemCount === cart.length;
+
+  const toggleCartItemSelection = (index: number) => {
+    setSelectedCartItemIndexes((indexes) =>
+      indexes.includes(index)
+        ? indexes.filter((itemIndex) => itemIndex !== index)
+        : [...indexes, index].sort((a, b) => a - b),
+    );
+  };
+
+  const toggleAllCartItems = () => {
+    setSelectedCartItemIndexes(allCartItemsSelected ? [] : cart.map((_, index) => index));
+  };
+
+  const voidSelectedCartItems = async () => {
+    if (selectedCartItemCount === 0) return;
+    if (!currentUser?.id) {
+      setVoidAuthorizationError('No retail staff session was found.');
+      return;
+    }
+    if (voidPasscode.trim().length < 4) {
+      setVoidAuthorizationError('Enter the retail POS manager Unique PIN.');
+      return;
+    }
+
+    setIsVoidSubmitting(true);
+    setVoidAuthorizationError('');
+
+    try {
+      const response = await fetch(`${getApiBaseUrl()}/admin/retail/void-pin/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: currentUser.id,
+          void_pin: voidPasscode,
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.message ?? 'Invalid retail POS manager Unique PIN.');
+      }
+
+      const authorizedBy = data?.manager?.full_name ? ` by ${data.manager.full_name}` : '';
+      setCart((items) => items.filter((_, index) => !selectedCartItemSet.has(index)));
+      setSelectedCartItemIndexes([]);
+      setShowVoidModal(false);
+      setVoidPasscode('');
+      setValidationError('');
+      setScanFeedback({
+        type: 'success',
+        message: `Void authorized${authorizedBy}. ${selectedCartItemCount} item${selectedCartItemCount === 1 ? '' : 's'} removed from cart.`,
+      });
+    } catch (voidError) {
+      setVoidAuthorizationError(voidError instanceof Error ? voidError.message : 'Unable to authorize void.');
+    } finally {
+      setIsVoidSubmitting(false);
+    }
+  };
+
+  const openVoidModal = () => {
+    setSelectedCartItemIndexes([]);
+    setVoidPasscode('');
+    setVoidAuthorizationError('');
+    setShowVoidModal(true);
   };
 
   const filteredProducts = posProducts.filter(p => {
@@ -430,6 +539,9 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
       transactionNumber: `RET-${transactionNumber}`,
       customer: customerName.trim() || undefined,
       items: cart.map(item => ({
+        id: item.id,
+        variantId: item.variantId,
+        code: item.code,
         name: item.name,
         category: item.category,
         size: item.size,
@@ -447,7 +559,7 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
       paymentMethod,
       paymentStatus: 'Paid' as const,
       date: getLocalDateKey(),
-      time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+      time: getManilaTime(),
       cashReceived: paymentMethod === 'Cash' ? parseFloat(cashAmount) : total,
       changeGiven: paymentMethod === 'Cash' ? computedChange : 0,
       cashier: userName || 'Staff',
@@ -515,6 +627,7 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
     setCompletedOrder(null);
     setChangeAmount(0);
     setCart([]);
+    setSelectedCartItemIndexes([]);
     setCustomerName('');
     setDiscountType('none');
     setCustomDiscountPercent(0);
@@ -526,26 +639,23 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
 
   return (
     <div className="flex h-screen bg-background">
-      <Sidebar currentPage="retail-sales" onNavigate={onNavigate} onLogout={onLogout} storeType={storeType} staffType={staffType} storeBrand={storeBrand} userName={userName} />
+      <Sidebar currentPage="retail-sales" onNavigate={onNavigate} onLogout={onLogout} storeType={storeType} staffType={staffType} storeBrand={storeBrand} userName={userName} userRole={userRole} />
 
-      <div className="flex-1 overflow-auto bg-gray-50">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-gray-50 xl:flex-row">
+      <div className="min-w-0 flex-1 overflow-auto bg-gray-50">
         <div className="p-5">
-          <div className="flex items-center gap-2 mb-4">
-            <Shirt className="w-6 h-6 text-primary" />
-            <h2 className="text-lg">Ukay-Ukay Products</h2>
-          </div>
+          <h2 className="mb-4 text-lg font-semibold">Product Menu</h2>
 
           <div className="mb-4">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <Barcode className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-primary" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyDown={handleSearchKeyDown}
-                placeholder="Search by name, color, or scan product code (e.g., UKY001)..."
-                className="w-full pl-9 pr-10 py-2.5 border-2 border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary bg-white"
+                placeholder="Search Products"
+                className="w-full rounded-lg border border-border bg-white py-2.5 pl-9 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                 autoComplete="off"
               />
             </div>
@@ -598,12 +708,12 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
             </div>
           )}
 
-          <div className="bg-white rounded-lg p-1 mb-4 inline-flex gap-1 flex-wrap">
+          <div className="mb-4 inline-flex max-w-full flex-wrap gap-1 rounded-lg bg-white p-1">
             {dynamicProductCategories.map(cat => (
               <button
                 key={cat.id}
                 onClick={() => setSelectedCategory(cat.id)}
-                className={`px-4 py-1.5 rounded-lg text-xs transition-colors ${
+                className={`rounded-lg px-4 py-1.5 text-xs transition-colors ${
                   selectedCategory === cat.id
                     ? 'bg-primary text-primary-foreground'
                     : 'text-muted-foreground hover:bg-muted'
@@ -614,7 +724,64 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
             ))}
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+          <div className="overflow-hidden rounded-lg border border-border bg-white">
+            <div className="max-h-[calc(100vh-265px)] overflow-auto">
+              <table className="w-full min-w-[760px] border-collapse text-sm">
+                <thead className="sticky top-0 z-10 bg-white shadow-[0_1px_0_#e5e7eb]">
+                  <tr className="text-left text-xs font-semibold text-foreground">
+                    <th className="w-[18%] border-r border-border px-4 py-3">Product Number</th>
+                    <th className="w-[34%] border-r border-border px-4 py-3">Product Name</th>
+                    <th className="w-[18%] border-r border-border px-4 py-3">Wholesale Price</th>
+                    <th className="w-[18%] border-r border-border px-4 py-3">Retail Price</th>
+                    <th className="w-[12%] px-4 py-3">Stocks</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredProducts.map((product) => {
+                    const inCart = cart.some((item) => item.variantId === product.variantId);
+                    const isOutOfStock = product.stockQuantity !== undefined && product.stockQuantity <= 0;
+
+                    return (
+                      <tr
+                        key={`${product.id}-${product.variantId}`}
+                        onClick={() => {
+                          if (!isOutOfStock) addToCart(product);
+                        }}
+                        className={`cursor-pointer border-t border-border text-sm transition-colors ${
+                          inCart
+                            ? 'bg-emerald-50 text-emerald-800'
+                            : isOutOfStock
+                              ? 'cursor-not-allowed bg-gray-50 text-muted-foreground opacity-70'
+                              : 'hover:bg-emerald-50/70'
+                        }`}
+                      >
+                        <td className="border-r border-border px-4 py-2.5 font-mono text-xs">{product.code}</td>
+                        <td className="border-r border-border px-4 py-2.5 font-medium">
+                          {product.name}
+                          {(product.size || product.color) && (
+                            <span className="ml-2 text-xs font-normal text-muted-foreground">
+                              {product.size ? product.size : ''}{product.size && product.color ? ' / ' : ''}{product.color ? product.color : ''}
+                            </span>
+                          )}
+                        </td>
+                        <td className="border-r border-border px-4 py-2.5">{(product.wholesalePrice ?? product.price).toFixed(2)}</td>
+                        <td className="border-r border-border px-4 py-2.5">{product.price.toFixed(2)}</td>
+                        <td className="px-4 py-2.5">{product.stockQuantity !== undefined ? Math.trunc(product.stockQuantity) : 'N/A'}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {filteredProducts.length === 0 && (
+                <div className="px-4 py-8 text-center text-sm text-muted-foreground">No inventory items found.</div>
+              )}
+            </div>
+          </div>
+          <p className="mt-4 px-4 text-xs text-muted-foreground">
+            Showing {filteredProducts.length} of {posProducts.length} items
+          </p>
+
+          <div className="hidden grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
             {groupedProducts.map(product => (
               <button
                 key={`${product.id}-${product.category}-${product.name}`}
@@ -661,52 +828,105 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
       </div>
 
       {/* Right sidebar - Cart */}
-      <div className="w-80 bg-white border-l border-border p-5 flex flex-col">
-        <div className="flex items-center gap-2 mb-4">
-          <ShoppingBag className="w-5 h-5 text-primary" />
-          <h3 className="text-sm font-medium">Shopping Cart</h3>
+      <div className="flex max-h-[48vh] w-full shrink-0 flex-col border-t border-border bg-white p-5 xl:max-h-none xl:w-[clamp(480px,34vw,620px)] xl:border-l xl:border-t-0">
+        <div className="mb-6 flex items-center gap-3">
+          <ShoppingBag className="h-5 w-5 text-emerald-600" />
+          <h3 className="text-base font-semibold">Shopping Cart</h3>
         </div>
 
         <div className="mb-4">
-          <label className="block text-xs text-muted-foreground mb-1.5">Customer Name (Optional):</label>
-          <div ref={customerInputRef} className="relative">
+          <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Scan Barcode Here:</label>
+          <div className="relative">
             <input
               type="text"
-              value={customerName}
-              onChange={(e) => setCustomerName(e.target.value)}
-              onKeyDown={handleCustomerKeyDown}
-              placeholder="Enter customer name (optional)"
-              className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary bg-gray-50"
+              value={barcodeQuery}
+              onChange={(e) => setBarcodeQuery(e.target.value)}
+              onKeyDown={handleBarcodeKeyDown}
+              placeholder="Scan barcode or enter product code..."
+              className="w-full rounded-lg border border-border bg-white py-2.5 pl-3 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
               autoComplete="off"
             />
+            <Barcode className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-emerald-600" />
+          </div>
+        </div>
 
-            {showCustomerSuggestions && customerSuggestions.length > 0 && (
-              <div className="absolute z-50 w-full mt-1 bg-white border border-border rounded-lg shadow-lg max-h-60 overflow-y-auto">
-                {customerSuggestions.map((name, index) => (
-                  <button
-                    key={index}
-                    onClick={() => handleSelectCustomer(name)}
-                    className={`w-full text-left px-3 py-2 text-sm hover:bg-primary/10 transition-colors flex items-center gap-2 ${
-                      index === selectedSuggestionIndex ? 'bg-primary/10' : ''
-                    }`}
-                  >
-                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary/20 to-primary/40 flex items-center justify-center text-primary font-medium text-xs">
-                      {name.charAt(0).toUpperCase()}
-                    </div>
-                    <div className="flex-1">
-                      <p className="font-medium text-gray-900">{name}</p>
-                      <p className="text-xs text-gray-500">
-                        {orders.filter(o => o.customer && o.customer.toLowerCase() === name.toLowerCase()).length} previous purchases
-                      </p>
-                    </div>
-                  </button>
-                ))}
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="text-sm font-semibold text-emerald-600">Transaction ID:</span>
+            <span className="rounded bg-black px-4 py-1 font-mono text-sm text-emerald-500">
+              {currentTransactionNumber || String(transactionNumberRef.current)}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={openVoidModal}
+            className="flex shrink-0 items-center justify-center gap-2 rounded-lg border border-red-300 px-5 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-50"
+          >
+            <Trash2 className="h-4 w-4" />
+            Void
+          </button>
+        </div>
+
+        <div className="mb-4 min-h-0 overflow-hidden rounded-lg border border-border xl:flex-1">
+          <div className="max-h-[248px] overflow-auto xl:h-full xl:max-h-none">
+            <table className="w-full min-w-[540px] border-collapse text-sm">
+              <thead className="sticky top-0 bg-white shadow-[0_1px_0_#e5e7eb]">
+                <tr className="text-left text-xs font-semibold text-foreground">
+                  <th className="w-10 border-r border-border px-3 py-3 text-center">#</th>
+                  <th className="w-20 border-r border-border px-3 py-3">Quantity</th>
+                  <th className="border-r border-border px-3 py-3">Product Name</th>
+                  <th className="w-20 border-r border-border px-3 py-3">Price</th>
+                  <th className="w-20 px-3 py-3">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cart.map((item, index) => {
+                  const isSelected = selectedCartItemSet.has(index);
+
+                  return (
+                    <tr
+                      key={`cart-table-${index}`}
+                      onClick={() => toggleCartItemSelection(index)}
+                      className={`cursor-pointer border-t border-border transition-colors ${
+                        isSelected ? 'bg-emerald-50 text-emerald-800' : 'hover:bg-gray-50'
+                      }`}
+                    >
+                      <td className="border-r border-border px-3 py-3 text-center text-xs">{index + 1}</td>
+                      <td className="border-r border-border px-3 py-3">
+                        <input
+                          type="number"
+                          min="1"
+                          value={item.quantity}
+                          onChange={(event) => updateQuantity(index, Number(event.target.value))}
+                          onClick={(event) => event.stopPropagation()}
+                          className="h-9 w-12 rounded-md border border-border text-center text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                        />
+                      </td>
+                      <td className="border-r border-border px-3 py-3 font-semibold">
+                        {item.name}
+                        {(item.size || item.color) && (
+                          <p className="mt-1 text-xs font-normal text-muted-foreground">
+                            {item.size ? item.size : ''}{item.size && item.color ? ' / ' : ''}{item.color ? item.color : ''}
+                          </p>
+                        )}
+                      </td>
+                      <td className="border-r border-border px-3 py-3 font-semibold">{item.price.toFixed(2)}</td>
+                      <td className="px-3 py-3 font-semibold">{(item.price * item.quantity).toFixed(2)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {cart.length === 0 && (
+              <div className="py-8 text-center">
+                <ShoppingBag className="mx-auto mb-2 h-10 w-10 text-muted-foreground opacity-50" />
+                <p className="text-xs text-muted-foreground">Cart is empty</p>
               </div>
             )}
           </div>
         </div>
 
-        <div className="flex-1 overflow-auto mb-4">
+        <div className="hidden flex-1 overflow-auto mb-4">
           {cart.length === 0 ? (
             <div className="text-center py-8">
               <ShoppingBag className="w-12 h-12 text-muted-foreground mx-auto mb-2 opacity-50" />
@@ -714,9 +934,36 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
             </div>
           ) : (
             <div className="space-y-2">
-              {cart.map((item, index) => (
-                <div key={`cart-${index}`} className="border border-border rounded-lg p-2 bg-gray-50">
+              {cart.map((item, index) => {
+                const isSelected = selectedCartItemSet.has(index);
+
+                return (
+                <div
+                  key={`cart-${index}`}
+                  onClick={() => toggleCartItemSelection(index)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      toggleCartItemSelection(index);
+                    }
+                  }}
+                  className={`w-full rounded-lg border p-2 text-left transition-colors ${
+                    isSelected
+                      ? 'border-primary bg-primary/5 ring-1 ring-primary/20'
+                      : 'border-border bg-gray-50 hover:border-primary/40'
+                  }`}
+                >
                   <div className="flex items-start gap-2">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => toggleCartItemSelection(index)}
+                      onClick={(event) => event.stopPropagation()}
+                      className="mt-3 h-4 w-4 rounded border-gray-300 accent-primary"
+                      aria-label={`Select ${item.name}`}
+                    />
                     <div className="w-10 h-10 rounded overflow-hidden bg-muted flex-shrink-0">
                       <img src={item.image} alt={item.name} className="w-full h-full object-cover" />
                     </div>
@@ -737,21 +984,33 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
                     <div className="flex flex-col gap-1">
                       <div className="flex items-center gap-1">
                         <button
-                          onClick={() => updateQuantity(index, item.quantity - 1)}
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            updateQuantity(index, item.quantity - 1);
+                          }}
                           className="w-5 h-5 rounded bg-white border hover:bg-gray-100 flex items-center justify-center"
                         >
                           <Minus className="w-3 h-3" />
                         </button>
                         <span className="text-xs w-6 text-center">{item.quantity}</span>
                         <button
-                          onClick={() => updateQuantity(index, item.quantity + 1)}
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            updateQuantity(index, item.quantity + 1);
+                          }}
                           className="w-5 h-5 rounded bg-white border hover:bg-gray-100 flex items-center justify-center"
                         >
                           <Plus className="w-3 h-3" />
                         </button>
                       </div>
                       <button
-                        onClick={() => setDeletingCartItem({ index, name: item.name })}
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setDeletingCartItem({ index, name: item.name });
+                        }}
                         className="w-5 h-5 rounded bg-white border border-red-200 hover:bg-red-50 flex items-center justify-center text-red-600"
                         title="Remove item"
                       >
@@ -760,12 +1019,24 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
                     </div>
                   </div>
                 </div>
-              ))}
+              );
+              })}
             </div>
           )}
         </div>
 
-        <div className="space-y-1.5 mb-4 text-xs border-t border-border pt-3">
+        <div className="mt-auto">
+        <label className="mb-4 flex items-center gap-2 border-b border-border pb-4 text-sm">
+          <input
+            type="checkbox"
+            checked={useWholesalePricing}
+            onChange={(event) => setUseWholesalePricing(event.target.checked)}
+            className="h-4 w-4 rounded border-gray-300 accent-primary"
+          />
+          <span>Check for Wholesale Pricing</span>
+        </label>
+
+        <div className="space-y-1.5 mb-4 text-xs">
           <div className="flex justify-between">
             <span className="text-muted-foreground">Subtotal:</span>
             <span>₱ {subtotal.toFixed(2)}</span>
@@ -815,11 +1086,105 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
 
         <button
           onClick={handlePreviewOrder}
-          className="w-full bg-primary text-primary-foreground py-2.5 rounded-lg hover:bg-primary/90 transition-colors text-sm font-medium"
+          className="w-full rounded-lg bg-primary py-3 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
         >
           Proceed to Checkout
         </button>
+        </div>
       </div>
+      </div>
+
+      {showVoidModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+          <div className="w-full max-w-md rounded-lg bg-white shadow-2xl">
+            <div className="flex items-center justify-between px-5 py-4">
+              <h2 className="text-base font-semibold">Void Items</h2>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowVoidModal(false);
+                  setVoidAuthorizationError('');
+                  setVoidPasscode('');
+                }}
+                className="text-muted-foreground hover:text-foreground"
+                aria-label="Close void items"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="px-5 pb-5">
+              <p className="mb-3 text-xs text-muted-foreground">Select item(s) to void:</p>
+              <div className="mb-5 space-y-3 text-sm">
+                <label className="flex items-center gap-3 text-xs font-medium">
+                  <input
+                    type="checkbox"
+                    checked={allCartItemsSelected}
+                    onChange={toggleAllCartItems}
+                    className="h-4 w-4 rounded border-gray-300 accent-primary"
+                  />
+                  Select All
+                </label>
+                {cart.map((item, index) => (
+                  <label key={`void-${index}`} className="grid grid-cols-[20px_24px_1fr_auto] items-center gap-3 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={selectedCartItemSet.has(index)}
+                      onChange={() => toggleCartItemSelection(index)}
+                      className="h-4 w-4 rounded border-gray-300 accent-primary"
+                    />
+                    <span>{index + 1}</span>
+                    <span className="font-medium">{item.name}</span>
+                    <span>{(item.price * item.quantity).toFixed(2)}</span>
+                  </label>
+                ))}
+                {cart.length === 0 && (
+                  <p className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-xs text-muted-foreground">
+                    Cart is empty.
+                  </p>
+                )}
+              </div>
+
+              <label className="mb-2 block text-xs text-muted-foreground">Enter passcode to void selected item(s):</label>
+              <input
+                type="password"
+                inputMode="numeric"
+                maxLength={6}
+                value={voidPasscode}
+                onChange={(event) => setVoidPasscode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                className="mb-4 h-12 w-full rounded-lg border border-border px-4 text-center text-xl tracking-[0.8em] focus:outline-none focus:ring-2 focus:ring-primary"
+                aria-label="Void passcode"
+              />
+              {voidAuthorizationError && (
+                <p className="mb-4 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-600">
+                  {voidAuthorizationError}
+                </p>
+              )}
+
+              <div className="flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowVoidModal(false);
+                    setVoidAuthorizationError('');
+                    setVoidPasscode('');
+                  }}
+                  className="rounded-lg border border-border px-8 py-2 text-sm hover:bg-muted"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={voidSelectedCartItems}
+                  disabled={selectedCartItemCount === 0 || isVoidSubmitting}
+                  className="rounded-lg bg-red-500 px-8 py-2 text-sm font-semibold text-white hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isVoidSubmitting ? 'Authorizing...' : 'Void Selected'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Variant Picker Modal */}
       {selectedProductGroup && (
@@ -862,7 +1227,7 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
                           {variant.size && <span className="text-xs bg-white px-1.5 py-0.5 rounded border">Size: {variant.size}</span>}
                           {variant.color && <span className="text-xs bg-white px-1.5 py-0.5 rounded border">{variant.color}</span>}
                           {variant.stockQuantity !== undefined && (
-                            <span className="text-xs bg-white px-1.5 py-0.5 rounded border">{variant.stockQuantity} stock</span>
+                            <span className="text-xs bg-white px-1.5 py-0.5 rounded border">{Math.trunc(variant.stockQuantity)} stock</span>
                           )}
                         </div>
                       </div>
@@ -996,7 +1361,7 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
               <div className="mb-4">
                 <label className="block text-sm font-medium mb-2">Payment Method</label>
                 <div className="grid grid-cols-2 gap-2">
-                  {(['Cash', 'Card', 'GCash', 'PayMaya'] as const).map(method => (
+                  {enabledPaymentMethods.map(method => (
                     <button
                       key={method}
                       onClick={() => setPaymentMethod(method)}
@@ -1033,6 +1398,15 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
                     </div>
                   )}
                 </>
+              )}
+
+              {paymentMethod !== 'Cash' && selectedPaymentAccount && (
+                <div className="mb-4 rounded-lg border border-primary/20 bg-primary/5 p-4 text-sm">
+                  {selectedPaymentAccount.qr_image && <img src={selectedPaymentAccount.qr_image} alt={`${paymentMethod} QR code`} className="mb-3 h-40 w-40 rounded-lg border border-border bg-white object-contain p-2" />}
+                  {selectedPaymentAccount.account_name && <p><span className="font-medium">Account Name:</span> {selectedPaymentAccount.account_name}</p>}
+                  {selectedPaymentAccount.account_number && <p><span className="font-medium">Account Details:</span> {selectedPaymentAccount.account_number}</p>}
+                  {selectedPaymentAccount.instructions && <p className="mt-2 text-muted-foreground">{selectedPaymentAccount.instructions}</p>}
+                </div>
               )}
 
               <div className="flex gap-2">

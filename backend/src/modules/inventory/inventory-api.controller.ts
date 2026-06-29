@@ -25,6 +25,11 @@ export class InventoryApiController {
     return this.inventoryApiService.createInventoryItem(user, body);
   }
 
+  @Get('inventory/:id/cost-history')
+  getItemCostHistory(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.getItemCostHistory(user, id);
+  }
+
   @Patch('inventory/:id')
   updateInventoryItem(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() body: Record<string, unknown>) {
     return this.inventoryApiService.updateInventoryItem(user, id, body);
@@ -79,14 +84,32 @@ export class InventoryApiController {
     return this.inventoryApiService.updateRecipe(user, id, body);
   }
 
+  @Post('recipes/:id/restore')
+  restoreRecipe(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.restoreRecipe(user, id);
+  }
+
   @Delete('recipes/:id')
-  deleteRecipe(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
-    return this.inventoryApiService.deleteRecipe(user, id);
+  deleteRecipe(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Query('permanent') permanent?: string,
+  ) {
+    return this.inventoryApiService.deleteRecipe(user, id, permanent === 'true');
   }
 
   @Get('kitchen-orders')
   listKitchenOrders(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string | undefined>) {
     return this.inventoryApiService.listKitchenOrders(user, query);
+  }
+
+  @Patch('kitchen-orders/:id/status')
+  updateKitchenOrderStatus(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() body: { status?: string },
+  ) {
+    return this.inventoryApiService.updateKitchenOrderStatus(user, id, body);
   }
 
   @Get('suppliers')
@@ -159,9 +182,44 @@ export class InventoryApiController {
     return this.inventoryApiService.receivePurchaseOrder(user, id, body);
   }
 
+  @Patch('purchase-orders/:id/goods-receipt/reject')
+  rejectGoodsReceipt(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.quickActionGoodsReceipt(user, id, body, 'reject');
+  }
+
+  @Patch('purchase-orders/:id/goods-receipt/cancel')
+  cancelGoodsReceipt(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.quickActionGoodsReceipt(user, id, body, 'cancel');
+  }
+
   @Get('transfers')
   listTransfers(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string | undefined>) {
     return this.inventoryApiService.listTransfers(user, query);
+  }
+
+  @Post('transfers')
+  createTransfer(@CurrentUser() user: AuthenticatedUser, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.createTransfer(user, body);
+  }
+
+  @Get('transfers/:id')
+  getTransfer(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.getTransfer(user, id);
+  }
+
+  @Patch('transfers/:id/dispatch')
+  dispatchTransfer(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.dispatchTransfer(user, id);
+  }
+
+  @Patch('transfers/:id/complete')
+  completeTransfer(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.completeTransfer(user, id);
+  }
+
+  @Patch('transfers/:id/cancel')
+  cancelTransfer(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.cancelTransfer(user, id);
   }
 
   @Get('sales')
@@ -174,6 +232,21 @@ export class InventoryApiController {
     return this.inventoryApiService.listStockMovements(user, query);
   }
 
+  @Get('audit-logs')
+  listAuditLogs(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string | undefined>) {
+    return this.inventoryApiService.listAuditLogs(user, query);
+  }
+
+  @Get('reports/ingredient-consumption')
+  ingredientConsumptionReport(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string | undefined>) {
+    return this.inventoryApiService.ingredientConsumptionReport(user, query);
+  }
+
+  @Get('reports/items-sold')
+  itemsSoldReport(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string | undefined>) {
+    return this.inventoryApiService.itemsSoldReport(user, query);
+  }
+
   @Post('stock-movements')
   createStockMovement(@CurrentUser() user: AuthenticatedUser, @Body() body: Record<string, unknown>) {
     return this.inventoryApiService.createStockMovement(user, body);
@@ -182,6 +255,60 @@ export class InventoryApiController {
   @Get('bundles')
   listBundles(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string | undefined>) {
     return this.inventoryApiService.listBundles(user, query);
+  }
+
+  @Post('bundles')
+  createBundle(@CurrentUser() user: AuthenticatedUser, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.createBundle(user, body);
+  }
+
+  @Get('bundles/:id')
+  getBundle(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.getBundle(user, id);
+  }
+
+  @Patch('bundles/:id')
+  updateBundle(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.updateBundle(user, id, body);
+  }
+
+  @Patch('bundles/:id/approve')
+  approveBundle(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.approveBundle(user, id);
+  }
+
+  @Patch('bundles/:id/reject')
+  rejectBundle(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() body: { rejectionReason?: string; reason?: string },
+  ) {
+    return this.inventoryApiService.rejectBundle(user, id, body);
+  }
+
+  @Patch('bundles/:id/activate')
+  activateBundle(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.activateBundle(user, id);
+  }
+
+  @Patch('bundles/:id/deactivate')
+  deactivateBundle(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.deactivateBundle(user, id);
+  }
+
+  @Patch('bundles/:id/archive')
+  archiveBundle(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.archiveBundle(user, id);
+  }
+
+  @Post('bundles/:id/restore')
+  restoreBundle(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.restoreBundle(user, id);
+  }
+
+  @Delete('bundles/:id')
+  deleteBundle(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.deleteBundle(user, id);
   }
 
   @Get('adjustments')

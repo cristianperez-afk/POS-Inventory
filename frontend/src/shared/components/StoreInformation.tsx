@@ -52,7 +52,7 @@ const defaultStoreInfo: StoreInformationData = {
 };
 
 export function StoreInformation({ currentUser, onLogout, onNavigate, onUserUpdate, onStoreBrandUpdate, storeBrand }: StoreInformationProps) {
-  const { settings, discounts } = useStoreSettings();
+  const { settings, discounts, reload } = useStoreSettings();
   const defaultLogo = getDefaultStoreLogo(currentUser?.store_type);
   const [storeInfo, setStoreInfo] = useState<StoreInformationData>(defaultStoreInfo);
   const [loading, setLoading] = useState(true);
@@ -138,7 +138,6 @@ export function StoreInformation({ currentUser, onLogout, onNavigate, onUserUpda
           receipt_footer_message: textOrNull(storeInfo.receipt_footer_message),
           operating_hours: textOrNull(storeInfo.operating_hours),
           currency: textOrNull(storeInfo.currency),
-          theme_color: textOrNull(storeInfo.theme_color),
         }),
       });
       const data = await response.json();
@@ -161,6 +160,7 @@ export function StoreInformation({ currentUser, onLogout, onNavigate, onUserUpda
         receipt_footer_message: normalized.receipt_footer_message,
         operating_hours: normalized.operating_hours,
       });
+      await reload();
       setMessage('Store information saved.');
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Unable to save store information.');
@@ -198,7 +198,7 @@ export function StoreInformation({ currentUser, onLogout, onNavigate, onUserUpda
 
   return (
     <div className="flex h-screen">
-      <Sidebar currentPage="store-information" onNavigate={onNavigate} onLogout={onLogout} isAdmin storeBrand={storeBrand} userName={currentUser?.full_name} storeType={currentUser?.store_type} />
+      <Sidebar currentPage="store-information" onNavigate={onNavigate} onLogout={onLogout} isAdmin={currentUser?.role === 'ADMIN'} storeBrand={storeBrand} userName={currentUser?.full_name} userRole={currentUser?.role} storeType={currentUser?.store_type} staffType={currentUser?.staff_type} />
 
       <div className="flex-1 overflow-auto bg-background">
         <main className="p-6">
@@ -308,22 +308,6 @@ export function StoreInformation({ currentUser, onLogout, onNavigate, onUserUpda
                   <div className="grid gap-4 md:grid-cols-2">
                     <TextInput label="Operating Hours" value={storeInfo.operating_hours ?? ''} onChange={(value) => updateField('operating_hours', value)} maxLength={100} />
                     <TextInput label="Currency" value={storeInfo.currency ?? ''} onChange={(value) => updateField('currency', value.toUpperCase())} maxLength={20} />
-                    <div>
-                      <label className="mb-2 block text-sm font-medium text-primary">Theme Color</label>
-                      <div className="flex gap-3">
-                        <input
-                          type="color"
-                          value={storeInfo.theme_color || '#008967'}
-                          onChange={(event) => updateField('theme_color', event.target.value)}
-                          className="h-10 w-14 rounded-lg border border-border bg-input-background p-1"
-                        />
-                        <input
-                          value={storeInfo.theme_color ?? ''}
-                          onChange={(event) => updateField('theme_color', event.target.value)}
-                          className="w-full rounded-lg border border-border bg-input-background px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                        />
-                      </div>
-                    </div>
                   </div>
                 </div>
               </section>

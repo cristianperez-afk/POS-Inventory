@@ -18,9 +18,29 @@ export type PosMenuIngredient = {
 export type PosMenuModifier = {
   id: string;
   name: string;
-  type: 'remove';
+  type: 'remove' | 'ingredient_level' | 'size_variant' | 'note' | 'add_on';
   itemId?: string;
   itemName?: string;
+  quantity?: number;
+  unit?: string;
+  maxQuantity?: number;
+  levelPercent?: number;
+  sizeMultiplier?: number;
+  sellingPrice?: number;
+  ingredientQuantities?: Record<string, number>;
+  priceDelta?: number;
+  priceDeltaPercent?: number;
+  quantityAvailable?: number | null;
+  stockStatus?: 'available' | 'unavailable' | 'untracked';
+};
+
+export type PosIngredient = {
+  id: number;
+  name: string;
+  quantity_available?: number | string | null;
+  unit?: string | null;
+  cost_per_unit?: number | string | null;
+  is_available?: boolean;
 };
 
 export type PosMenuProduct = {
@@ -42,8 +62,12 @@ export type PosMenuProduct = {
   stock_quantity?: number | string | null;
   low_stock_limit?: number | string | null;
   available_quantity?: number | string | null;
+  available_orders?: number | string | null;
+  availableOrders?: number | string | null;
   is_available?: boolean;
   is_active?: boolean;
+  servings?: number | string | null;
+  prep_time_minutes?: number | string | null;
   ingredients?: PosMenuIngredient[];
   modifiers?: PosMenuModifier[];
 };
@@ -53,6 +77,19 @@ export function usePosMenuQuery(userId?: number | string | null) {
     queryKey: ['pos-menu', userId],
     enabled: Boolean(userId),
     queryFn: () => apiClient<PosMenuProduct[]>(`/pos/menu?user_id=${userId}`),
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
+  });
+}
+
+export function usePosIngredientsQuery(userId?: number | string | null) {
+  return useQuery({
+    queryKey: ['pos-ingredients', userId],
+    enabled: Boolean(userId),
+    queryFn: () => apiClient<PosIngredient[]>(`/pos/ingredients?user_id=${userId}`),
+    staleTime: 10 * 60_000,
+    gcTime: 30 * 60_000,
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -61,6 +98,7 @@ export function useProductRecipeQuery(userId?: number | string | null, productId
     queryKey: ['pos-product-recipe', userId, productId],
     enabled: Boolean(userId && productId),
     queryFn: () => apiClient(`/products/${productId}/recipe?user_id=${userId}`),
+    refetchOnWindowFocus: true,
   });
 }
 

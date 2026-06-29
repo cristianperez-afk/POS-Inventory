@@ -6,6 +6,7 @@ import {
   useRetailLocationsQuery,
   useRetailSalesQuery,
 } from '../lib/retail';
+import { formatManilaFullDateTime, getLocalDateKey, parseDatabaseTimestamp } from '../../../../shared/utils/date';
 
 type Sale = {
   id: string;
@@ -33,12 +34,8 @@ const STATUS_PILL: Record<string, string> = {
 };
 
 const formatDateTime = (value: string) => {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString('en-PH', {
-    year: 'numeric', month: 'short', day: '2-digit',
-    hour: '2-digit', minute: '2-digit',
-  });
+  const formatted = formatManilaFullDateTime(value);
+  return formatted === '-' ? value : formatted;
 };
 
 export default function SalesHistoryView({
@@ -63,7 +60,7 @@ export default function SalesHistoryView({
   const [refundTarget, setRefundTarget] = useState<Sale | null>(null);
   const [refundReason, setRefundReason] = useState('');
 
-  const canRefund = currentUser?.role === 'Admin' || currentUser?.role === 'Manager';
+  const canRefund = currentUser?.role === 'Admin';
 
   const rangeStart = useMemo(() => {
     if (dateRange === 'all') return null;
@@ -79,7 +76,7 @@ export default function SalesHistoryView({
   const filteredSales = useMemo(() => {
     const term = search.trim().toLowerCase();
     return sales.filter((s) => {
-      if (rangeStart && new Date(s.createdAt) < rangeStart) return false;
+      if (rangeStart && parseDatabaseTimestamp(s.createdAt) < rangeStart) return false;
       if (locationId !== 'all' && s.location?.id !== locationId) return false;
       if (status !== 'all' && s.status !== status) return false;
       if (paymentMethod !== 'all' && s.paymentMethod !== paymentMethod) return false;
@@ -150,7 +147,7 @@ export default function SalesHistoryView({
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = `Sales_History_${new Date().toISOString().split('T')[0]}.csv`;
+    link.download = `Sales_History_${getLocalDateKey()}.csv`;
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
@@ -171,7 +168,7 @@ export default function SalesHistoryView({
         </div>
         <button
           onClick={handleExport}
-          className="bg-secondary text-white px-4 py-2 rounded-[8px] text-[14px] font-medium hover:bg-secondary/90 transition-colors flex items-center gap-2"
+          className="bg-secondary text-white px-4 py-2 rounded-[8px] text-[14px] font-medium hover:bg-secondary/90 hover:-translate-y-0.5 hover:shadow-md hover:shadow-secondary/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 active:translate-y-0 active:shadow-sm transition-all duration-200 flex items-center gap-2"
         >
           <Download className="size-4" />
           Export
@@ -429,3 +426,4 @@ export default function SalesHistoryView({
     </div>
   );
 }
+

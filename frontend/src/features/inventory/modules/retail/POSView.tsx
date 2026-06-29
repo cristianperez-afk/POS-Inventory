@@ -8,6 +8,7 @@ import {
   useRetailLocationsQuery,
   useRetailSalesQuery,
 } from '../lib/retail';
+import { formatManilaFullDateTime } from '../../../../shared/utils/date';
 
 export default function POSView({
   currentUser,
@@ -310,7 +311,7 @@ export default function POSView({
                   <div className="flex items-start justify-between mb-2">
                     <div>
                       <p className="text-[16px] font-bold text-foreground">{sale.transactionNumber}</p>
-                      <p className="text-[13px] text-muted-foreground">{new Date(sale.createdAt).toLocaleString()} • {sale.cashier?.name ?? '—'}</p>
+                      <p className="text-[13px] text-muted-foreground">{formatManilaFullDateTime(sale.createdAt)} • {sale.cashier?.name ?? '—'}</p>
                     </div>
                     <div className="text-right">
                       <p className="text-[18px] font-bold text-secondary">₱{sale.total.toLocaleString()}</p>
@@ -335,7 +336,7 @@ export default function POSView({
       {/* Returns Tab */}
       {activeTab === 'returns' && (
         <div className="bg-white border border-border rounded-[14px] p-6">
-          <p className="text-[14px] text-muted-foreground mb-4">Process returns for completed sales (Admin/Manager only)</p>
+          <p className="text-[14px] text-muted-foreground mb-4">Process returns for completed sales (Inventory Manager only)</p>
           {sales.filter((s: any) => s.status === 'COMPLETED').length === 0 ? (
             <p className="text-center text-muted-foreground py-8">No completed sales available for returns.</p>
           ) : (
@@ -345,7 +346,7 @@ export default function POSView({
                   <div className="flex items-start justify-between mb-3">
                     <div>
                       <p className="text-[16px] font-bold text-foreground">{sale.transactionNumber}</p>
-                      <p className="text-[13px] text-muted-foreground">{new Date(sale.createdAt).toLocaleString()}</p>
+                      <p className="text-[13px] text-muted-foreground">{formatManilaFullDateTime(sale.createdAt)}</p>
                       <p className="text-[13px] text-muted-foreground">Items: {sale.items?.map((i: any) => i.name).join(', ')}</p>
                     </div>
                     <p className="text-[18px] font-bold text-secondary">₱{sale.total.toLocaleString()}</p>
@@ -421,7 +422,7 @@ export default function POSView({
               <p className="text-[14px] text-muted-foreground">{lastTransaction.transactionNumber}</p>
             </div>
             <div className="border border-border rounded-[8px] p-4 mb-4">
-              <p className="text-[12px] text-muted-foreground mb-2">{new Date(lastTransaction.createdAt).toLocaleString()}</p>
+              <p className="text-[12px] text-muted-foreground mb-2">{formatManilaFullDateTime(lastTransaction.createdAt)}</p>
               <div className="space-y-1 mb-3">
                 {lastTransaction.items?.map((item: any, idx: number) => (
                   <div key={idx} className="flex justify-between text-[13px]">

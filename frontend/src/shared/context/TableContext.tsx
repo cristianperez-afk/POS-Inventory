@@ -1,12 +1,17 @@
 import { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { useOrders } from './OrderContext';
+import { getApiBaseUrl } from '../../auth/services/auth';
+import type { AuthenticatedUser } from '../../auth/types/auth';
 
 export interface Table {
-  id: number;
-  number: number;
-  status: 'available' | 'occupied' | 'reserved' | 'maintenance';
+  id: string;
+  number: string;
+  status: 'available' | 'occupied' | 'partially_occupied';
   orderId?: string;
   seats: number;
+  occupiedSeats: number;
+  availableSeats: number;
+  isShared: boolean;
 }
 
 export interface TableNotification {
@@ -53,13 +58,14 @@ export interface AssignmentNotification {
 
 interface TableContextType {
   tables: Table[];
-  setTableStatus: (tableNumber: number, status: 'available' | 'maintenance' | 'reserved') => void;
+  setTableStatus: (tableNumber: string, status: 'available') => Promise<void>;
   getAvailableTablesCount: () => number;
   notifications: TableNotification[];
   dismissNotification: (id: string) => void;
-  addTable: (tableNumber: number, seats: number) => boolean;
-  deleteTable: (tableId: number) => boolean;
-  updateTable: (tableId: number, tableNumber: number, seats: number) => boolean;
+  addTable: (tableNumber: string, seats: number, isShared: boolean) => Promise<boolean>;
+  deleteTable: (tableId: string) => Promise<boolean>;
+  updateTable: (tableId: string, tableNumber: string, seats: number, isShared: boolean) => Promise<boolean>;
+  setTableOccupancy: (tableId: string, occupiedSeats: number) => Promise<boolean>;
   queueHistory: QueueHistoryEntry[];
   tableHistory: TableHistoryEntry[];
   assignmentNotification: AssignmentNotification | null;
@@ -70,66 +76,23 @@ interface TableContextType {
 }
 
 const TableContext = createContext<TableContextType | null>(null);
-const TABLES_STORAGE_KEY = 'bukolabs-pos-restaurant-tables-v1';
-const defaultSeatCounts = [2, 4, 4, 6, 2, 4, 4, 4, 2, 6, 4, 4, 2, 4, 6, 4, 2, 4, 4, 6];
 
-function createDefaultTables(): Table[] {
-  return Array.from({ length: 20 }, (_, i) => ({
-    id: i + 1,
-    number: i + 1,
-    status: 'available' as const,
-    seats: defaultSeatCounts[i],
-  }));
-}
-
-function loadStoredTables(): Table[] {
-  if (typeof window === 'undefined') {
-    return createDefaultTables();
-  }
-
-  try {
-    const raw = window.localStorage.getItem(TABLES_STORAGE_KEY);
-    if (!raw) return createDefaultTables();
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return createDefaultTables();
-
-    const tables = parsed
-      .map((table: Partial<Table>, index: number): Table | null => {
-        const number = Number(table.number);
-        const seats = Number(table.seats);
-        const id = Number(table.id);
-        const status = table.status === 'maintenance' || table.status === 'reserved' || table.status === 'occupied' ? table.status : 'available';
-        if (!Number.isFinite(number) || number < 1 || !Number.isFinite(seats) || seats < 1) return null;
-        return {
-          id: Number.isFinite(id) && id > 0 ? id : index + 1,
-          number,
-          seats,
-          status,
-          orderId: undefined,
-        };
-      })
-      .filter((table): table is Table => Boolean(table));
-
-    return tables.length > 0 ? tables : createDefaultTables();
-  } catch {
-    return createDefaultTables();
-  }
-}
-
-function saveStoredTables(tables: Table[]) {
-  if (typeof window === 'undefined') return;
-
-  const manualTables = tables.map(({ id, number, status, seats }) => ({
-    id,
-    number,
-    status: status === 'occupied' ? 'available' : status,
+function mapApiTable(row: any): Table {
+  const seats = Number(row.total_seats ?? row.capacity ?? 0);
+  const occupiedSeats = Number(row.occupied_seats ?? 0);
+  return {
+    id: String(row.id),
+    number: String(row.table_number ?? row.table_name ?? row.tableNumber),
+    status: String(row.status ?? 'AVAILABLE').toLowerCase() as Table['status'],
     seats,
-  }));
-  window.localStorage.setItem(TABLES_STORAGE_KEY, JSON.stringify(manualTables));
+    occupiedSeats,
+    availableSeats: Number(row.available_seats ?? Math.max(0, seats - occupiedSeats)),
+    isShared: Boolean(row.is_shared),
+  };
 }
 
-export function TableProvider({ children }: { children: ReactNode }) {
-  const { orders, queuedOrders, updateOrder, assignQueuedOrderToTable } = useOrders();
+export function TableProvider({ children, currentUser }: { children: ReactNode; currentUser: AuthenticatedUser | null }) {
+  const { orders, queuedOrders, updateOrder, assignQueuedOrderToTable, paymentCompletedSignal } = useOrders();
   const [notifications, setNotifications] = useState<Array<{ id: string; message: string }>>([]);
   const [queueHistory, setQueueHistory] = useState<QueueHistoryEntry[]>([]);
   const [tableHistory, setTableHistory] = useState<TableHistoryEntry[]>([]);
@@ -143,45 +106,43 @@ export function TableProvider({ children }: { children: ReactNode }) {
   useEffect(() => { queuedOrdersRef.current = queuedOrders; }, [queuedOrders]);
   useEffect(() => { assignmentNotificationRef.current = assignmentNotification; }, [assignmentNotification]);
 
-  const [tables, setTables] = useState<Table[]>(loadStoredTables);
+  const [tables, setTables] = useState<Table[]>([]);
+
+  const loadTables = async () => {
+    if (!currentUser?.id || currentUser.store_type !== 'RESTAURANT') {
+      setTables([]);
+      return;
+    }
+    const response = await fetch(`${getApiBaseUrl()}/admin/pos/tables?user_id=${currentUser.id}`);
+    const data = await response.json();
+    setTables(Array.isArray(data) ? data.map(mapApiTable) : []);
+  };
 
   useEffect(() => {
-    saveStoredTables(tables);
-  }, [tables]);
+    void loadTables();
+  }, [currentUser?.id, currentUser?.store_type, paymentCompletedSignal, orders.length]);
 
-  const orderUsesTable = (orderTable: string, tableNumber: number) => {
+  const orderUsesTable = (orderTable: string, tableNumber: string) => {
     const matches = orderTable.match(/Table\s+\d+/gi) ?? [];
-    return matches.some((label) => Number(label.match(/\d+/)?.[0]) === tableNumber);
+    return matches.some((label) => String(label.match(/\d+/)?.[0]) === String(tableNumber));
   };
 
   // Sync tables with orders
   useEffect(() => {
     setTables(prevTables => {
       const newTables = prevTables.map(table => {
-        // Find active order for this table
         const order = orders.find(o =>
           orderUsesTable(o.table, table.number) &&
           o.orderStatus !== 'Completed'
         );
 
-        // Preserve manually set maintenance and reserved status
-        if ((table.status === 'maintenance' || table.status === 'reserved') && !order) {
-          return table;
-        }
-
         if (order) {
           return {
             ...table,
-            status: 'occupied' as const,
             orderId: order.id,
-            seats: table.seats, // Preserve seats count
           };
-        } else {
-          // If was occupied, make available; otherwise keep current status
-          return table.status === 'occupied'
-            ? { ...table, status: 'available' as const, orderId: undefined, seats: table.seats }
-            : table;
         }
+        return { ...table, orderId: undefined };
       });
 
       // Record occupancy and release times as table status changes.
@@ -261,7 +222,11 @@ export function TableProvider({ children }: { children: ReactNode }) {
 
     const newlyAvailable = tables.filter(t => {
       const prev = prevTables.find(p => p.id === t.id);
-      return prev?.status === 'occupied' && t.status === 'available';
+      if (!prev) return false;
+      const wasUnavailable = prev.status === 'occupied' && t.status !== 'occupied';
+      const gainedSharedSeats = t.isShared && t.availableSeats > prev.availableSeats;
+      const becameAvailable = t.status === 'available' && prev.status !== 'available';
+      return wasUnavailable || gainedSharedSeats || becameAvailable;
     });
 
     prevTablesRef.current = tables;
@@ -272,11 +237,16 @@ export function TableProvider({ children }: { children: ReactNode }) {
     if (assignmentNotificationRef.current) return; // already showing one
 
     const firstInQueue = currentQueued[0];
+    const seatsForQueue = (table: Table) => table.isShared ? table.availableSeats : table.seats;
+    const canSeat = (table: Table, partySize: number) =>
+      table.isShared
+        ? table.availableSeats >= partySize
+        : table.status === 'available' && table.seats >= partySize;
 
     // Find the smallest fitting table among newly freed tables for the first queued customer
     const fittingTable = newlyAvailable
-      .filter(t => t.seats >= (firstInQueue.partySize || 0))
-      .sort((a, b) => a.seats - b.seats)[0];
+      .filter(t => canSeat(t, firstInQueue.partySize || 0))
+      .sort((a, b) => seatsForQueue(a) - seatsForQueue(b))[0];
 
     if (fittingTable) {
       setAssignmentNotification({
@@ -292,7 +262,7 @@ export function TableProvider({ children }: { children: ReactNode }) {
     } else {
       // First in queue doesn't fit any freed table — find any compatible pair
       for (const table of newlyAvailable) {
-        const compatible = currentQueued.find(o => (o.partySize || 0) <= table.seats);
+        const compatible = currentQueued.find(o => canSeat(table, o.partySize || 0));
         if (compatible) {
           setAssignmentNotification({
             availableTable: table,
@@ -310,68 +280,62 @@ export function TableProvider({ children }: { children: ReactNode }) {
     }
   }, [tables]);
 
-  const setTableStatus = (tableNumber: number, status: 'available' | 'maintenance' | 'reserved') => {
-    setTables(prevTables =>
-      prevTables.map(t =>
-        t.number === tableNumber ? { ...t, status } : t
-      )
-    );
+  const setTableStatus = async (tableNumber: string, status: 'available') => {
+    const table = tables.find(t => t.number === tableNumber);
+    if (!table || !currentUser?.id || status !== 'available') return;
+    await updateTable(table.id, table.number, table.seats, table.isShared);
   };
 
   const getAvailableTablesCount = () => {
-    return tables.filter(t => t.status === 'available').length;
+    return tables.filter(t => t.status === 'available' || t.status === 'partially_occupied').length;
   };
 
   const dismissNotification = (id: string) => {
     setNotifications(prev => prev.filter(n => n.id !== id));
   };
 
-  const addTable = (tableNumber: number, seats: number): boolean => {
-    // Check if table number already exists
-    const numberExists = tables.some(t => t.number === tableNumber);
-    if (numberExists) {
-      return false;
-    }
-
-    // Find max ID to generate new ID
-    const maxId = Math.max(...tables.map(t => t.id), 0);
-
-    const newTable: Table = {
-      id: maxId + 1,
-      number: tableNumber,
-      status: 'available',
-      seats: seats,
-    };
-
-    setTables(prev => [...prev, newTable]);
+  const addTable = async (tableNumber: string, seats: number, isShared: boolean): Promise<boolean> => {
+    if (!currentUser?.id || tables.some(t => t.number === tableNumber)) return false;
+    const response = await fetch(`${getApiBaseUrl()}/admin/pos/tables`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: currentUser.id, table_number: tableNumber, total_seats: seats, is_shared: isShared }),
+    });
+    if (!response.ok) return false;
+    await loadTables();
     return true;
   };
 
-  const deleteTable = (tableId: number): boolean => {
-    // Check if table has active order
-    const table = tables.find(t => t.id === tableId);
-    if (table?.orderId) {
-      return false; // Cannot delete table with active order
-    }
-
-    setTables(prev => prev.filter(t => t.id !== tableId));
+  const deleteTable = async (tableId: string): Promise<boolean> => {
+    if (!currentUser?.id) return false;
+    const response = await fetch(`${getApiBaseUrl()}/admin/pos/tables/${tableId}?user_id=${currentUser.id}`, { method: 'DELETE' });
+    if (!response.ok) return false;
+    await loadTables();
     return true;
   };
 
-  const updateTable = (tableId: number, tableNumber: number, seats: number): boolean => {
-    // Check if new table number already exists (excluding current table)
+  const updateTable = async (tableId: string, tableNumber: string, seats: number, isShared: boolean): Promise<boolean> => {
     const numberExists = tables.some(t => t.id !== tableId && t.number === tableNumber);
-    if (numberExists) {
-      return false;
-    }
+    if (!currentUser?.id || numberExists) return false;
+    const response = await fetch(`${getApiBaseUrl()}/admin/pos/tables/${tableId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: currentUser.id, table_number: tableNumber, total_seats: seats, is_shared: isShared }),
+    });
+    if (!response.ok) return false;
+    await loadTables();
+    return true;
+  };
 
-    setTables(prevTables =>
-      prevTables.map(t =>
-        t.id === tableId
-          ? { ...t, number: tableNumber, seats: seats }
-          : t
-      )
-    );
+  const setTableOccupancy = async (tableId: string, occupiedSeats: number): Promise<boolean> => {
+    if (!currentUser?.id) return false;
+    const response = await fetch(`${getApiBaseUrl()}/admin/pos/tables/${tableId}/occupancy`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: currentUser.id, occupied_seats: occupiedSeats }),
+    });
+    if (!response.ok) return false;
+    await loadTables();
     return true;
   };
 
@@ -469,11 +433,12 @@ export function TableProvider({ children }: { children: ReactNode }) {
     dismissAssignmentNotification();
 
     // Try to find next compatible customer
-    const availableTable = tables.find(t => t.status === 'available');
+    const availableTable = tables.find(t => t.status === 'available' || t.status === 'partially_occupied');
     if (availableTable) {
+      const availableSeats = availableTable.isShared ? availableTable.availableSeats : availableTable.seats;
       const nextCompatible = queuedOrders
         .filter(o => o.id !== orderId)
-        .find(o => (o.partySize || 0) <= availableTable.seats);
+        .find(o => (o.partySize || 0) <= availableSeats);
 
       if (nextCompatible) {
         setAssignmentNotification({
@@ -524,6 +489,7 @@ export function TableProvider({ children }: { children: ReactNode }) {
       addTable,
       deleteTable,
       updateTable,
+      setTableOccupancy,
       queueHistory,
       tableHistory,
       assignmentNotification,

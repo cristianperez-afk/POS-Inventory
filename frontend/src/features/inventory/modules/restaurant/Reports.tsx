@@ -1,21 +1,24 @@
-import { useState, useMemo } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell } from "recharts";
-import { Download, TrendingUp, PhilippinePeso, ShoppingCart, Eye, AlertTriangle, ClipboardList } from "lucide-react";
+import { ChevronDown, ChevronRight, Clock, Download, TrendingUp, PhilippinePeso, ShoppingCart, Eye, AlertTriangle, ClipboardList, Search, Activity } from "lucide-react";
 import {
   useRestaurantAdjustmentsQuery,
   useRestaurantGoodsRecordsQuery,
-  useRestaurantInventoryMovementsQuery,
+  useRestaurantIngredientConsumptionQuery,
   useRestaurantInventoryQuery,
   useRestaurantKitchenOrdersQuery,
   useRestaurantPurchaseOrdersQuery,
   useRestaurantTransfersQuery,
   useRestaurantUsersQuery,
   useRestaurantWasteQuery,
+  useRestaurantAuditLogsQuery,
 } from "../lib/restaurant";
 import { useSession } from "../../app/hooks/useSession";
 import { defaultCategoryHierarchy, formatCurrency, getInventoryValue, splitCategory } from "../lib/inventoryLogic";
+import { formatManilaFullDateTime, getLocalDateKey } from "../../../../shared/utils/date";
+import { InlineDataLoading } from "../shared/InlineDataLoading";
 
-type TabType = 'overview' | 'inventory' | 'orders' | 'operations' | 'audit' | 'financial' | 'confidential';
+type TabType = 'overview' | 'inventory' | 'consumption' | 'orders' | 'operations' | 'audit' | 'admin';
 
 const COLORS = ["#007A5E", "#009BA5", "#F59E0B", "#DC2626", "#8B5CF6", "#EC4899", "#10b981"];
 
@@ -25,45 +28,109 @@ const statusPill = (status: string) => {
     approved: 'bg-blue-100 text-blue-700',
     partial: 'bg-yellow-100 text-yellow-700',
     rejected: 'bg-red-100 text-red-700',
-    cancelled: 'bg-gray-100 text-gray-600',
+    cancelled: 'bg-muted text-muted-foreground',
     completed: 'bg-green-100 text-green-700',
     'in-transit': 'bg-blue-100 text-blue-700',
     pending: 'bg-yellow-100 text-yellow-700',
     verified: 'bg-green-100 text-green-700',
     admin: 'bg-red-100 text-red-700',
     manager: 'bg-blue-100 text-blue-700',
-    staff: 'bg-gray-100 text-gray-700',
+    staff: 'bg-muted text-muted-foreground',
     active: 'bg-green-100 text-green-700',
-    inactive: 'bg-gray-100 text-gray-600',
+    inactive: 'bg-muted text-muted-foreground',
   };
-  return map[status?.toLowerCase()] ?? 'bg-gray-100 text-gray-600';
+  return map[status?.toLowerCase()] ?? 'bg-muted text-muted-foreground';
 };
 
 const formatAuditDate = (value?: string) => {
   if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString('en-PH', {
-    year: 'numeric',
-    month: 'short',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  const formatted = formatManilaFullDateTime(value);
+  return formatted === 'Invalid Date' ? value : formatted;
 };
 
 const csvValue = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
 const normalizeAuditActor = (value: unknown) => String(value ?? '').trim().toLowerCase();
+const cleanList = (items?: unknown[]) =>
+  Array.from(new Set((items ?? []).map((item) => String(item ?? '').trim()).filter(Boolean)));
+const formatDuration = (start?: string, end?: string) => {
+  if (!start) return '0 mins';
+  const startTime = new Date(start).getTime();
+  const endTime = end ? new Date(end).getTime() : Date.now();
+  if (Number.isNaN(startTime) || Number.isNaN(endTime)) return '0 mins';
+  const minutes = Math.max(0, Math.round((endTime - startTime) / 60000));
+  if (minutes < 60) return `${minutes} min${minutes === 1 ? '' : 's'}`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return `${hours} hr${hours === 1 ? '' : 's'}${rest ? ` ${rest} mins` : ''}`;
+};
+const formatRunningSeconds = (seconds: number) => {
+  const safeSeconds = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.floor((safeSeconds % 3600) / 60);
+  const remainder = safeSeconds % 60;
+  return [hours, minutes, remainder].map((value) => String(value).padStart(2, '0')).join(':');
+};
+const runningSeconds = (order: any, now: number) => {
+  if (order.runningDuration !== null && order.runningDuration !== undefined && !order.isRunning) {
+    return Number(order.runningDuration);
+  }
+  const start = order.runningTimeStart ?? order.running_time_start ?? order.preparingStartedAt;
+  const end = order.runningTimeEnd ?? order.running_time_end ?? (order.isRunning ? undefined : order.completedAt);
+  const startMs = start ? new Date(start).getTime() : NaN;
+  const endMs = end ? new Date(end).getTime() : now;
+  return Number.isNaN(startMs) || Number.isNaN(endMs) ? 0 : Math.max(0, Math.floor((endMs - startMs) / 1000));
+};
+const normalizeOrderStatus = (value?: string) =>
+  String(value ?? 'pending').replace(/_/g, ' ').toLowerCase();
+
+function DetailValues({ label, values, warning = false }: { label: string; values: string[]; warning?: boolean }) {
+  return (
+    <div>
+      <p className={`text-xs font-semibold ${warning && values.length > 0 ? 'text-amber-700' : 'text-foreground'}`}>{label}</p>
+      {values.length === 0 ? (
+        <p className="mt-1 text-xs text-muted-foreground">None</p>
+      ) : (
+        <div className="mt-1 flex flex-wrap gap-1.5">
+          {values.map((value) => (
+            <span key={value} className={`rounded border px-2 py-1 text-xs ${warning ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-border bg-muted/40 text-muted-foreground'}`}>
+              {value}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function Reports() {
   const { currentUser } = useSession();
   const [activeTab, setActiveTab] = useState<TabType>('overview');
-  const [dateRange, setDateRange] = useState("30days");
+  const [expandedPosTransactions, setExpandedPosTransactions] = useState<Record<string, boolean>>({});
+  const [auditModuleFilter, setAuditModuleFilter] = useState('all');
+  const [activityQuery, setActivityQuery] = useState('');
+  const [activityDateFrom, setActivityDateFrom] = useState('');
+  const [activityDateTo, setActivityDateTo] = useState('');
+  const [activityUserFilter, setActivityUserFilter] = useState('All');
+  const [activityModuleFilter, setActivityModuleFilter] = useState('All');
+  const [activityActionFilter, setActivityActionFilter] = useState('All');
+  const [consumptionFrom, setConsumptionFrom] = useState('');
+  const [consumptionTo, setConsumptionTo] = useState('');
+  const consumptionQuery = useRestaurantIngredientConsumptionQuery({
+    from: consumptionFrom || undefined,
+    to: consumptionTo || undefined,
+  });
+  const consumption = consumptionQuery.data;
   const [selectedMainCategory, setSelectedMainCategory] = useState("all");
   const [selectedSubCategory, setSelectedSubCategory] = useState("all");
+  const [runningClock, setRunningClock] = useState(() => Date.now());
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setRunningClock(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   const isAdmin = currentUser?.role === "Admin";
-  const hasFullAuditTrailAccess = currentUser?.role === "Admin" || currentUser?.role === "Manager";
+  const hasFullAuditTrailAccess = currentUser?.role === "Admin";
   const currentUserEmail = currentUser?.email ?? "";
 
   const { data: products = [] } = useRestaurantInventoryQuery();
@@ -72,9 +139,11 @@ export function Reports() {
   const { data: adjustments = [] } = useRestaurantAdjustmentsQuery();
   const { data: wasteLogs = [] } = useRestaurantWasteQuery();
   const { data: goodsReceived = [] } = useRestaurantGoodsRecordsQuery();
-  const { data: inventoryMovements = [] } = useRestaurantInventoryMovementsQuery();
   const { data: posOrders = [] } = useRestaurantKitchenOrdersQuery();
   const { data: users = [] } = useRestaurantUsersQuery(isAdmin);
+  // Real audit trail — one row per recorded activity (create / update / delete /
+  // status change / receive / adjust / setting change) written by the backend.
+  const { data: auditTrail = [], isLoading: auditTrailLoading } = useRestaurantAuditLogsQuery();
 
   const inventoryValue = getInventoryValue(products);
 
@@ -159,6 +228,59 @@ export function Reports() {
     [receivedPOs],
   );
 
+  const posTransactions = useMemo(() =>
+    (posOrders as any[]).map((order) => {
+      const items = Array.isArray(order.items) ? order.items : [];
+      const orderedAt = order.runningTimeStart ?? order.running_time_start ?? order.preparingStartedAt ?? '';
+      const completedAt = ['completed', 'cancelled'].includes(String(order.status ?? '').toLowerCase())
+        ? order.completedAt ?? order.tableEndedAt ?? order.updatedAt ?? orderedAt
+        : undefined;
+      const tableStartedAt = order.tableStartedAt ?? undefined;
+      const tableEndedAt = order.tableEndedAt ?? completedAt;
+      return {
+        id: order.id,
+        orderNumber: order.orderNumber ?? order.receiptNo ?? order.id,
+        customerName: order.customerName ?? 'Walk-in Customer',
+        orderType: order.orderType ?? 'Takeout',
+        tableNumber: order.tableNumber || 'No table selected',
+        paymentMethod: order.paymentMethod ?? 'POS',
+        paymentStatus: String(order.paymentStatus ?? 'NOT_PAID').replace(/_/g, ' '),
+        orderStatus: normalizeOrderStatus(order.status),
+        totalAmount: Number(order.totalAmount ?? 0),
+        orderedAt,
+        completedAt,
+        paymentAt: order.paymentAt ?? undefined,
+        preparingStartedAt: order.preparingStartedAt ?? undefined,
+        readyAt: order.readyAt ?? undefined,
+        tableStartedAt,
+        tableEndedAt,
+        preparationTime: order.preparingStartedAt ? formatDuration(order.preparingStartedAt, order.readyAt ?? undefined) : 'Not started',
+        runningTime: formatRunningSeconds(runningSeconds(order, runningClock)),
+        customerStayDuration: tableStartedAt ? formatDuration(tableStartedAt, tableEndedAt) : 'No table selected',
+        items,
+      };
+    }),
+    [posOrders, runningClock],
+  );
+
+  const averageCompletionTime = useMemo(() => {
+    const finalized = posTransactions.filter((order) => order.completedAt);
+    if (finalized.length === 0) return '00:00:00';
+    const total = finalized.reduce((sum, order) => sum + runningSeconds(order, runningClock), 0);
+    return formatRunningSeconds(total / finalized.length);
+  }, [posTransactions, runningClock]);
+
+  const averagePreparationTime = useMemo(() => {
+    const prepared = posTransactions.filter((order) => order.preparingStartedAt && order.readyAt);
+    if (prepared.length === 0) return '00:00:00';
+    const total = prepared.reduce((sum, order) => {
+      const start = new Date(order.preparingStartedAt!).getTime();
+      const end = new Date(order.readyAt!).getTime();
+      return sum + (Number.isNaN(start) || Number.isNaN(end) ? 0 : Math.max(0, Math.floor((end - start) / 1000)));
+    }, 0);
+    return formatRunningSeconds(total / prepared.length);
+  }, [posTransactions]);
+
   // ── Operations ──────────────────────────────────────────────────────────────
   const operationsData = useMemo(() => {
     const completedTransfers = transfers.filter(t => t.status === 'completed').length;
@@ -204,113 +326,6 @@ export function Reports() {
     return { totalInventoryValue, totalPOSpending, receivedPOValue, wasteValue, categoryValue, assetHealthScore };
   }, [products, purchaseOrders, receivedPOs, wasteLogs]);
 
-  const auditTrail = useMemo(() => {
-    const entries = [
-      ...inventoryMovements.map(movement => ({
-        id: `movement-${movement.id}`,
-        date: movement.date || '',
-        module: 'Inventory',
-        action: String(movement.type || 'Stock Movement').replace(/_/g, ' '),
-        item: movement.item || 'Item',
-        quantity: movement.quantity ? `${movement.quantity} ${movement.unit || ''}`.trim() : '',
-        performedBy: movement.createdBy || movement.by || '',
-        reference: movement.sourceId || movement.source || movement.id,
-        details: [
-          movement.previousQuantity !== undefined && movement.newQuantity !== undefined
-            ? `${movement.previousQuantity} to ${movement.newQuantity}`
-            : '',
-          movement.notes || movement.reason || '',
-          movement.location ? `Location: ${movement.location}` : '',
-        ].filter(Boolean).join(' | '),
-        status: 'recorded',
-      })),
-      ...posOrders.map(order => ({
-        id: `pos-${order.id}`,
-        date: order.voidedAt || order.orderedAt || '',
-        module: 'POS / Kitchen',
-        action: order.status === 'voided' ? 'Receipt Voided' : 'Receipt Completed',
-        item: order.recipeName || 'Menu item',
-        quantity: order.quantity ? `${order.quantity} order(s)` : '',
-        performedBy: order.completedBy || '',
-        reference: order.receiptNo || order.id,
-        details: [
-          order.modifiers?.length ? `Modifiers: ${order.modifiers.join(', ')}` : '',
-          order.voidReason ? `Void reason: ${order.voidReason}` : '',
-          order.notes || '',
-        ].filter(Boolean).join(' | '),
-        status: order.status || 'recorded',
-      })),
-      ...goodsReceived.map(receipt => ({
-        id: `receipt-${receipt.backendId || receipt.id}`,
-        date: receipt.receivedDate || '',
-        module: 'Goods Received',
-        action: 'Receipt Verified',
-        item: `${receipt.items || receipt.receivedItems?.length || 0} item(s)`,
-        quantity: `${(receipt.receivedItems || []).reduce((sum: number, item: any) => sum + (item.acceptedQuantity || 0), 0)} accepted`,
-        performedBy: receipt.receivedBy || '',
-        reference: receipt.id,
-        details: receipt.notes || `PO: ${receipt.poId || 'N/A'}`,
-        status: receipt.status || 'recorded',
-      })),
-      ...purchaseOrders.map(order => ({
-        id: `po-${order.backendId || order.id}`,
-        date: order.createdAt || order.date || '',
-        module: 'Purchase Order',
-        action: `PO ${order.status || 'created'}`,
-        item: order.supplier || 'Supplier',
-        quantity: `${order.items || order.orderItems?.length || 0} item(s)`,
-        performedBy: order.createdBy || '',
-        reference: order.id,
-        details: order.rejectionNote || `Total: ${formatCurrency(order.total || 0)}`,
-        status: order.status || 'recorded',
-      })),
-      ...transfers.map(transfer => ({
-        id: `transfer-${transfer.backendId || transfer.id}`,
-        date: transfer.completedDate || transfer.requestDate || '',
-        module: 'Transfer',
-        action: `Transfer ${transfer.status || 'requested'}`,
-        item: transfer.item || 'Multiple items',
-        quantity: transfer.quantity ? `${transfer.quantity} ${transfer.unit || ''}`.trim() : '',
-        performedBy: transfer.requestedByEmail || transfer.requestedBy || '',
-        reference: transfer.id,
-        details: `${transfer.from || 'Source'} to ${transfer.to || 'Destination'}`,
-        status: transfer.status || 'recorded',
-      })),
-      ...adjustments.map(adjustment => ({
-        id: `adjustment-${adjustment.id}`,
-        date: adjustment.date || '',
-        module: 'Adjustment',
-        action: adjustment.type || 'Correction',
-        item: adjustment.item || 'Item',
-        quantity: adjustment.quantity ? `${adjustment.quantity} ${adjustment.unit || ''}`.trim() : '',
-        performedBy: adjustment.adjustedBy || '',
-        reference: adjustment.id,
-        details: adjustment.reason || adjustment.notes || '',
-        status: 'recorded',
-      })),
-      ...wasteLogs.map(waste => ({
-        id: `waste-${waste.id}`,
-        date: waste.date || '',
-        module: 'Waste',
-        action: waste.wasteType || 'Waste Log',
-        item: waste.item || 'Item',
-        quantity: waste.quantity ? `${waste.quantity} ${waste.unit || ''}`.trim() : '',
-        performedBy: waste.loggedBy || '',
-        reference: waste.id,
-        details: waste.notes || `Value: ${formatCurrency(waste.totalValue || 0)}`,
-        status: 'recorded',
-      })),
-    ];
-
-    return entries
-      .filter(entry => entry.date || entry.reference)
-      .sort((a, b) => {
-        const aTime = new Date(a.date).getTime();
-        const bTime = new Date(b.date).getTime();
-        return (Number.isNaN(bTime) ? 0 : bTime) - (Number.isNaN(aTime) ? 0 : aTime);
-      });
-  }, [inventoryMovements, posOrders, goodsReceived, purchaseOrders, transfers, adjustments, wasteLogs]);
-
   const visibleAuditTrail = useMemo(() => {
     if (hasFullAuditTrailAccess) return auditTrail;
     if (!currentUserEmail) return [];
@@ -329,6 +344,20 @@ export function Reports() {
     const latest = visibleAuditTrail[0]?.date ? formatAuditDate(visibleAuditTrail[0].date) : 'No activity';
     return { byModule, latest };
   }, [visibleAuditTrail]);
+
+  // Summary cards filter the activity table below by module; clicking the active
+  // card (or Total Events) clears it back to "all".
+  const toggleAuditModule = (module: string) => {
+    setAuditModuleFilter((current) => (current === module ? 'all' : module));
+  };
+
+  const filteredAuditTrail = useMemo(
+    () =>
+      auditModuleFilter === 'all'
+        ? visibleAuditTrail
+        : visibleAuditTrail.filter((entry) => entry.module === auditModuleFilter),
+    [visibleAuditTrail, auditModuleFilter],
+  );
 
   // ── Confidential ────────────────────────────────────────────────────────────
   const confidentialData = useMemo(() => {
@@ -364,9 +393,52 @@ export function Reports() {
     return { byRole, byStatus, criticalEvents };
   }, [isAdmin, users, wasteLogs, adjustments]);
 
+  // Activity Log — a POS-style event feed over the real audit trail, with the same
+  // filter set as the POS Activity Log page (date range, user, module, action,
+  // free-text search).
+  const activityUsers = useMemo(() => {
+    const map = new Map<string, string>();
+    auditTrail.forEach((entry) => {
+      const value = (entry.performedBy || '').trim();
+      if (value && !map.has(value)) map.set(value, entry.performedByName || value);
+    });
+    return Array.from(map.entries())
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [auditTrail]);
+
+  const activityModules = useMemo(
+    () => ['All', ...Array.from(new Set(auditTrail.map((e) => e.module).filter(Boolean))).sort()],
+    [auditTrail],
+  );
+  const activityActions = useMemo(
+    () => ['All', ...Array.from(new Set(auditTrail.map((e) => e.action).filter(Boolean))).sort()],
+    [auditTrail],
+  );
+
+  const activityLog = useMemo(() => {
+    const query = activityQuery.trim().toLowerCase();
+    return auditTrail.filter((entry) => {
+      if (activityUserFilter !== 'All' && normalizeAuditActor(entry.performedBy) !== normalizeAuditActor(activityUserFilter)) return false;
+      if (activityModuleFilter !== 'All' && entry.module !== activityModuleFilter) return false;
+      if (activityActionFilter !== 'All' && entry.action !== activityActionFilter) return false;
+      const day = (entry.date || '').slice(0, 10);
+      if (activityDateFrom && (!day || day < activityDateFrom)) return false;
+      if (activityDateTo && (!day || day > activityDateTo)) return false;
+      if (query) {
+        const haystack = [
+          entry.performedByName, entry.performedBy, entry.module, entry.action,
+          entry.item, entry.quantity, entry.details,
+        ].join(' ').toLowerCase();
+        if (!haystack.includes(query)) return false;
+      }
+      return true;
+    });
+  }, [auditTrail, activityUserFilter, activityModuleFilter, activityActionFilter, activityDateFrom, activityDateTo, activityQuery]);
+
   // ── Export ──────────────────────────────────────────────────────────────────
   const handleExport = () => {
-    const timestamp = new Date().toISOString().split('T')[0];
+    const timestamp = getLocalDateKey();
     let csv = '';
     let filename = `restaurant_${activeTab}_${timestamp}.csv`;
 
@@ -375,8 +447,40 @@ export function Reports() {
       Object.entries(categoryStats).forEach(([cat, d]) => {
         csv += `${cat},${d.quantity},${d.value.toFixed(2)},${d.items}\n`;
       });
+    } else if (activeTab === 'consumption') {
+      csv = 'Ingredient,Category,Total Consumed,Unit,Times Used,Current Stock,Last Used\n';
+      (consumption?.items ?? []).forEach(r => {
+        csv += [
+          r.name,
+          r.category ?? '',
+          r.totalConsumed,
+          r.unit ?? '',
+          r.movementCount,
+          r.currentStock ?? '',
+          formatAuditDate(r.lastConsumedAt ?? undefined),
+        ].map(csvValue).join(',') + '\n';
+      });
     } else if (activeTab === 'orders') {
-      csv = 'Date,Supplier,Status,Total\n';
+      csv = 'Type,Order Number,Customer,Order Type,Table,Payment Method,Payment Status,Order Status,Total,Time Ordered,Time Completed,Preparation Time,Running Time,Customer Stay Duration\n';
+      posTransactions.forEach(order => {
+        csv += [
+          'POS Transaction',
+          order.orderNumber,
+          order.customerName,
+          order.orderType,
+          order.tableNumber,
+          order.paymentMethod,
+          order.paymentStatus,
+          order.orderStatus,
+          order.totalAmount.toFixed(2),
+          formatAuditDate(order.orderedAt),
+          order.completedAt ? formatAuditDate(order.completedAt) : '',
+          order.preparationTime,
+          order.runningTime,
+          order.customerStayDuration,
+        ].map(csvValue).join(',') + '\n';
+      });
+      csv += '\nPurchase Date,Supplier,Status,Total\n';
       purchaseOrders.forEach(o => {
         csv += `${o.date || ''},${o.supplier || ''},${o.status || ''},${(o.total || 0).toFixed(2)}\n`;
       });
@@ -402,16 +506,14 @@ export function Reports() {
           entry.details,
         ].map(csvValue).join(',') + '\n';
       });
-    } else if (activeTab === 'financial') {
+    } else if (activeTab === 'admin') {
       if (!isAdmin) return;
       csv = 'Metric,Value\n';
       csv += `Total Inventory Value,${financialData.totalInventoryValue.toFixed(2)}\n`;
       csv += `Total PO Spending,${financialData.totalPOSpending.toFixed(2)}\n`;
       csv += `Waste Loss,${financialData.wasteValue.toFixed(2)}\n`;
       csv += `Asset Health Score,${financialData.assetHealthScore.toFixed(1)}%\n`;
-    } else if (activeTab === 'confidential') {
-      if (!isAdmin) return;
-      csv = 'CONFIDENTIAL\n\nUser List\nName,Email,Role,Status,Last Login\n';
+      csv += '\nUser List\nName,Email,Role,Status,Last Login\n';
       users.forEach(u => {
         csv += `${u.name},${u.email},${u.role},${u.status},${u.lastLogin || ''}\n`;
       });
@@ -429,12 +531,12 @@ export function Reports() {
 
   // ── Tab button helper ───────────────────────────────────────────────────────
   const tabCls = (id: TabType, danger = false) =>
-    `px-6 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${
+    `px-6 py-3 text-sm font-medium border-b-2 rounded-t-lg transition-all duration-200 flex items-center gap-2 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${
       activeTab === id
         ? danger
           ? 'text-red-600 border-red-600'
           : 'text-primary border-primary'
-        : 'text-muted-foreground border-transparent hover:text-foreground'
+        : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/40 hover:border-border'
     }`;
 
   return (
@@ -446,20 +548,23 @@ export function Reports() {
           <p className="text-sm text-muted-foreground">Comprehensive restaurant reports and insights</p>
         </div>
         <div className="flex gap-3">
-          <select
-            value={dateRange}
-            onChange={e => setDateRange(e.target.value)}
-            className="bg-card border border-border rounded-xl px-4 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
-          >
-            <option value="7days">Last 7 Days</option>
-            <option value="30days">Last 30 Days</option>
-            <option value="3months">Last 3 Months</option>
-            <option value="year">This Year</option>
-            <option value="all">All Time</option>
-          </select>
+          <label className="text-xs text-muted-foreground">
+            From
+            <input type="date" value={consumptionFrom} onChange={e => setConsumptionFrom(e.target.value)}
+              className="block mt-1 bg-card border border-border rounded-xl px-3 py-2 text-sm text-foreground cursor-pointer hover:border-primary/60 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all duration-200" />
+          </label>
+          <label className="text-xs text-muted-foreground">
+            To
+            <input type="date" value={consumptionTo} onChange={e => setConsumptionTo(e.target.value)}
+              className="block mt-1 bg-card border border-border rounded-xl px-3 py-2 text-sm text-foreground cursor-pointer hover:border-primary/60 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all duration-200" />
+          </label>
+          {(consumptionFrom || consumptionTo) && (
+            <button onClick={() => { setConsumptionFrom(''); setConsumptionTo(''); }}
+              className="self-end px-3 py-2 text-sm text-muted-foreground hover:text-foreground">Clear</button>
+          )}
           <button
             onClick={handleExport}
-            className="bg-primary text-primary-foreground px-4 py-2 rounded-xl text-sm font-medium hover:opacity-90 transition-opacity flex items-center gap-2"
+            className="bg-primary text-primary-foreground px-4 py-2 rounded-xl text-sm font-medium hover:opacity-90 hover:-translate-y-0.5 hover:shadow-md hover:shadow-primary/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-sm transition-all duration-200 flex items-center gap-2"
           >
             <Download className="w-4 h-4" />
             Export
@@ -471,6 +576,7 @@ export function Reports() {
       <div className="flex gap-0 mb-6 border-b border-border overflow-x-auto">
         <button onClick={() => setActiveTab('overview')} className={tabCls('overview')}>Overview</button>
         <button onClick={() => setActiveTab('inventory')} className={tabCls('inventory')}>Inventory Report</button>
+        <button onClick={() => setActiveTab('consumption')} className={tabCls('consumption')}>Ingredients Used</button>
         <button onClick={() => setActiveTab('orders')} className={tabCls('orders')}>Purchase Orders</button>
         <button onClick={() => setActiveTab('operations')} className={tabCls('operations')}>Operations Report</button>
         <button onClick={() => setActiveTab('audit')} className={tabCls('audit')}>
@@ -478,12 +584,9 @@ export function Reports() {
           Audit Trail
         </button>
         {isAdmin && (
-          <button onClick={() => setActiveTab('financial')} className={tabCls('financial')}>Financial Report</button>
-        )}
-        {isAdmin && (
-          <button onClick={() => setActiveTab('confidential')} className={tabCls('confidential', true)}>
+          <button onClick={() => setActiveTab('admin')} className={tabCls('admin')}>
             <Eye className="w-4 h-4" />
-            Confidential
+            Admin Report
           </button>
         )}
       </div>
@@ -495,7 +598,7 @@ export function Reports() {
             <h3 className="text-xl font-semibold text-foreground">System Overview</h3>
           </div>
 
-          <div className="grid grid-cols-3 gap-4 mb-6">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
             <div className="bg-card border border-border rounded-2xl p-6 overflow-hidden">
               <div className="flex items-center justify-between mb-4">
                 <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-cyan-500 rounded-xl flex items-center justify-center flex-shrink-0">
@@ -524,6 +627,24 @@ export function Reports() {
               <p className="text-2xl font-bold text-foreground break-words">
                 {formatCurrency(receivedPOs.length ? receivedPOs.reduce((s, o) => s + o.total, 0) / receivedPOs.length : 0)}
               </p>
+            </div>
+            <div className="bg-card border border-border rounded-2xl p-6 overflow-hidden">
+              <div className="flex items-center justify-between mb-4">
+                <div className="w-10 h-10 bg-gradient-to-br from-amber-500 to-orange-500 rounded-xl flex items-center justify-center flex-shrink-0">
+                  <Clock className="w-5 h-5 text-white" />
+                </div>
+              </div>
+              <p className="text-muted-foreground text-xs mb-1">Avg. Completion Time</p>
+              <p className="text-2xl font-bold text-foreground break-words">{averageCompletionTime}</p>
+            </div>
+            <div className="bg-card border border-border rounded-2xl p-6 overflow-hidden">
+              <div className="flex items-center justify-between mb-4">
+                <div className="w-10 h-10 bg-gradient-to-br from-sky-500 to-blue-500 rounded-xl flex items-center justify-center flex-shrink-0">
+                  <Clock className="w-5 h-5 text-white" />
+                </div>
+              </div>
+              <p className="text-muted-foreground text-xs mb-1">Avg. Preparation Time</p>
+              <p className="text-2xl font-bold text-foreground break-words">{averagePreparationTime}</p>
             </div>
           </div>
 
@@ -653,6 +774,80 @@ export function Reports() {
         </div>
       )}
 
+      {/* ── Ingredients Used (consumption) ─────────────────────────────────────── */}
+      {activeTab === 'consumption' && (
+        <div>
+          <div className="flex flex-wrap items-end justify-between gap-4 mb-4">
+            <div>
+              <h2 className="text-lg font-semibold text-foreground">Ingredients Used</h2>
+              <p className="text-sm text-muted-foreground">
+                Quantity of each ingredient consumed by completed sales{consumption?.from || consumption?.to ? '' : ' (last 30 days)'}.
+              </p>
+            </div>
+            <div className="flex items-end gap-3">
+              <label className="text-xs text-muted-foreground">
+                From
+                <input type="date" value={consumptionFrom} onChange={e => setConsumptionFrom(e.target.value)}
+                  className="block mt-1 px-3 py-2 border border-border rounded-lg text-sm bg-background" />
+              </label>
+              <label className="text-xs text-muted-foreground">
+                To
+                <input type="date" value={consumptionTo} onChange={e => setConsumptionTo(e.target.value)}
+                  className="block mt-1 px-3 py-2 border border-border rounded-lg text-sm bg-background" />
+              </label>
+              {(consumptionFrom || consumptionTo) && (
+                <button onClick={() => { setConsumptionFrom(''); setConsumptionTo(''); }}
+                  className="px-3 py-2 text-sm text-muted-foreground hover:text-foreground">Clear</button>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+            <div className="bg-card border border-border rounded-xl p-4">
+              <p className="text-xs text-muted-foreground">Ingredients used</p>
+              <p className="text-2xl font-semibold text-foreground">{consumption?.totalIngredients ?? 0}</p>
+            </div>
+            <div className="bg-card border border-border rounded-xl p-4">
+              <p className="text-xs text-muted-foreground">Total quantity consumed</p>
+              <p className="text-2xl font-semibold text-foreground">{(consumption?.totalQuantityConsumed ?? 0).toLocaleString()}</p>
+            </div>
+          </div>
+
+          <div className="bg-card border border-border rounded-xl overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 text-muted-foreground">
+                <tr>
+                  <th className="text-left px-4 py-3 font-medium">Ingredient</th>
+                  <th className="text-left px-4 py-3 font-medium">Category</th>
+                  <th className="text-right px-4 py-3 font-medium">Consumed</th>
+                  <th className="text-right px-4 py-3 font-medium">Times used</th>
+                  <th className="text-right px-4 py-3 font-medium">Current stock</th>
+                  <th className="text-left px-4 py-3 font-medium">Last used</th>
+                </tr>
+              </thead>
+              <tbody>
+                {consumptionQuery.isLoading && (
+                  <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">Loading…</td></tr>
+                )}
+                {!consumptionQuery.isLoading && (consumption?.items?.length ?? 0) === 0 && (
+                  <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">No ingredient consumption in this period.</td></tr>
+                )}
+                {consumption?.items?.map(r => (
+                  <tr key={r.itemId} className="border-t border-border">
+                    <td className="px-4 py-3 text-foreground">{r.name}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{r.category ?? '—'}</td>
+                    <td className="px-4 py-3 text-right text-foreground font-medium">{r.totalConsumed.toLocaleString()} {r.unit ?? ''}</td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">{r.movementCount}</td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">{r.currentStock ?? '—'} {r.unit ?? ''}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{formatAuditDate(r.lastConsumedAt ?? undefined)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* ── Purchase Orders ────────────────────────────────────────────────────── */}
       {activeTab === 'orders' && (
         <div>
@@ -678,6 +873,122 @@ export function Reports() {
                 {formatCurrency(receivedPOs.reduce((s, o) => s + o.total, 0))}
               </p>
             </div>
+          </div>
+
+          <div className="bg-card border border-border rounded-2xl p-6 mb-4">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <h4 className="text-base font-semibold text-foreground">POS Transaction History</h4>
+                <p className="text-xs text-muted-foreground">Expandable order details with products, ingredients, modifiers, payment status, running time, and stay duration.</p>
+              </div>
+              <span className="rounded-full border border-border bg-muted/40 px-3 py-1 text-xs font-medium text-muted-foreground">
+                {posTransactions.length} transaction{posTransactions.length === 1 ? '' : 's'}
+              </span>
+            </div>
+
+            {posTransactions.length === 0 ? (
+              <p className="py-8 text-center text-sm text-muted-foreground">No POS transactions found</p>
+            ) : (
+              <div className="space-y-3">
+                {posTransactions.slice(0, 100).map((order) => {
+                  const isExpanded = expandedPosTransactions[order.id] ?? false;
+
+                  return (
+                    <div key={order.id} className="rounded-xl border border-border bg-card">
+                      <button
+                        type="button"
+                        onClick={() => setExpandedPosTransactions((current) => ({ ...current, [order.id]: !isExpanded }))}
+                        className="flex w-full flex-col gap-3 px-4 py-4 text-left transition hover:bg-muted/30 lg:flex-row lg:items-center lg:justify-between"
+                      >
+                        <div className="flex min-w-0 items-start gap-2">
+                          {isExpanded ? <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" /> : <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />}
+                          <div className="min-w-0">
+                            <p className="font-semibold text-foreground">Transaction #{order.orderNumber}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {order.customerName} - {order.orderType} - {order.tableNumber}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2 lg:min-w-[520px] lg:grid-cols-5">
+                          <span>{formatAuditDate(order.orderedAt)}</span>
+                          <span className={`rounded-full px-2 py-1 text-center font-medium capitalize ${statusPill(order.paymentStatus)}`}>{order.paymentStatus}</span>
+                          <span className={`rounded-full px-2 py-1 text-center font-medium capitalize ${statusPill(order.orderStatus)}`}>{order.orderStatus}</span>
+                          <span className="font-semibold text-foreground">{formatCurrency(order.totalAmount)}</span>
+                          <span className="inline-flex items-center gap-1"><Clock className="h-3.5 w-3.5" /> {order.runningTime}</span>
+                        </div>
+                      </button>
+
+                      {isExpanded && (
+                        <div className="border-t border-border px-4 py-4">
+                          <div className="mb-4 grid gap-3 md:grid-cols-4">
+                            <div className="rounded-lg bg-muted/30 p-3">
+                              <p className="text-xs text-muted-foreground">Payment Method</p>
+                              <p className="text-sm font-semibold text-foreground">{order.paymentMethod}</p>
+                            </div>
+                            <div className="rounded-lg bg-muted/30 p-3">
+                              <p className="text-xs text-muted-foreground">Completed Time</p>
+                              <p className="text-sm font-semibold text-foreground">{order.completedAt ? formatAuditDate(order.completedAt) : 'In progress'}</p>
+                            </div>
+                            <div className="rounded-lg bg-muted/30 p-3">
+                              <p className="text-xs text-muted-foreground">Payment Time</p>
+                              <p className="text-sm font-semibold text-foreground">{order.paymentAt ? formatAuditDate(order.paymentAt) : '-'}</p>
+                            </div>
+                            <div className="rounded-lg bg-muted/30 p-3">
+                              <p className="text-xs text-muted-foreground">Preparing Start</p>
+                              <p className="text-sm font-semibold text-foreground">{order.preparingStartedAt ? formatAuditDate(order.preparingStartedAt) : '-'}</p>
+                            </div>
+                            <div className="rounded-lg bg-muted/30 p-3">
+                              <p className="text-xs text-muted-foreground">Ready to Serve</p>
+                              <p className="text-sm font-semibold text-foreground">{order.readyAt ? formatAuditDate(order.readyAt) : '-'}</p>
+                            </div>
+                            <div className="rounded-lg bg-muted/30 p-3">
+                              <p className="text-xs text-muted-foreground">Preparation Time</p>
+                              <p className="text-sm font-semibold text-foreground">{order.preparationTime}</p>
+                            </div>
+                            <div className="rounded-lg bg-muted/30 p-3">
+                              <p className="text-xs text-muted-foreground">Running Time</p>
+                              <p className="text-sm font-semibold text-foreground">{order.runningTime}</p>
+                            </div>
+                            <div className="rounded-lg bg-muted/30 p-3">
+                              <p className="text-xs text-muted-foreground">Customer Stay Duration</p>
+                              <p className="text-sm font-semibold text-foreground">{order.customerStayDuration}</p>
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            {order.items.length === 0 ? (
+                              <p className="rounded-lg border border-dashed border-border px-3 py-6 text-center text-sm text-muted-foreground">No product details saved for this transaction</p>
+                            ) : order.items.map((item: any) => {
+                              const ingredients = cleanList(item.ingredients);
+                              const removed = cleanList(item.removedIngredients);
+                              const added = cleanList(item.addedIngredients);
+                              const replaced = cleanList(item.replacedIngredients);
+                              const notes = cleanList([...(item.specialInstructions ?? []), item.notes ?? '', ...(item.modifiers ?? [])]);
+
+                              return (
+                                <div key={String(item.id)} className="rounded-lg border border-border p-3">
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <p className="font-semibold text-foreground">{item.name} x{item.quantity}</p>
+                                    <p className="text-sm text-muted-foreground">{formatCurrency(Number(item.price ?? 0))} - {Number(item.prepTimeMinutes ?? 0)} mins</p>
+                                  </div>
+                                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                    <DetailValues label="Ingredients" values={ingredients} />
+                                    <DetailValues label="Removed" values={removed} warning />
+                                    <DetailValues label="Added" values={added} warning />
+                                    <DetailValues label="Replaced" values={replaced} warning />
+                                    <DetailValues label="Special Notes" values={notes} />
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           <div className="bg-card border border-border rounded-2xl p-6 mb-4">
@@ -841,18 +1152,28 @@ export function Reports() {
           </div>
 
           <div className="grid grid-cols-4 gap-4 mb-4">
-            <div className="bg-card border border-border rounded-2xl p-6">
-              <p className="text-muted-foreground text-xs mb-2">Total Events</p>
-              <p className="text-2xl font-bold text-foreground">{visibleAuditTrail.length}</p>
-            </div>
-            <div className="bg-card border border-border rounded-2xl p-6">
-              <p className="text-muted-foreground text-xs mb-2">Inventory Events</p>
-              <p className="text-2xl font-bold text-primary">{auditSummary.byModule.Inventory || 0}</p>
-            </div>
-            <div className="bg-card border border-border rounded-2xl p-6">
-              <p className="text-muted-foreground text-xs mb-2">Receiving Events</p>
-              <p className="text-2xl font-bold text-green-700">{auditSummary.byModule['Goods Received'] || 0}</p>
-            </div>
+            {[
+              { label: 'Total Events', value: visibleAuditTrail.length, valueClass: 'text-foreground', module: 'all' },
+              { label: 'Inventory Events', value: auditSummary.byModule.Inventory || 0, valueClass: 'text-primary', module: 'Inventory' },
+              { label: 'Receiving Events', value: auditSummary.byModule['Goods Received'] || 0, valueClass: 'text-green-700', module: 'Goods Received' },
+            ].map((card) => {
+              const isActive = auditModuleFilter === card.module;
+              return (
+                <button
+                  key={card.label}
+                  type="button"
+                  onClick={() => toggleAuditModule(card.module)}
+                  aria-pressed={isActive}
+                  aria-label={`Filter audit trail by ${card.label}`}
+                  className={`group text-left w-full bg-card border rounded-2xl p-6 cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-xl hover:shadow-primary/25 hover:border-primary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-lg active:shadow-primary/30 ${
+                    isActive ? 'border-primary bg-primary/5 shadow-md shadow-primary/20' : 'border-border'
+                  }`}
+                >
+                  <p className="text-muted-foreground text-xs mb-2">{card.label}</p>
+                  <p className={`text-2xl font-bold ${card.valueClass}`}>{card.value}</p>
+                </button>
+              );
+            })}
             <div className="bg-card border border-border rounded-2xl p-6 overflow-hidden">
               <p className="text-muted-foreground text-xs mb-2">Latest Activity</p>
               <p className="text-sm font-semibold text-foreground break-words">{auditSummary.latest}</p>
@@ -862,7 +1183,10 @@ export function Reports() {
           <div className="bg-card border border-border rounded-2xl p-6">
             <div className="flex items-center justify-between mb-4">
               <h4 className="text-base font-semibold text-foreground">Recent Activity</h4>
-              <p className="text-xs text-muted-foreground">{visibleAuditTrail.length} record{visibleAuditTrail.length !== 1 ? 's' : ''}</p>
+              <p className="text-xs text-muted-foreground">
+                {auditModuleFilter === 'all' ? '' : `${auditModuleFilter} • `}
+                {filteredAuditTrail.length} record{filteredAuditTrail.length !== 1 ? 's' : ''}
+              </p>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[900px]">
@@ -879,14 +1203,16 @@ export function Reports() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {visibleAuditTrail.length === 0 ? (
+                  {auditTrailLoading ? (
+                    <tr><td colSpan={8}><InlineDataLoading label="Loading audit trail…" /></td></tr>
+                  ) : filteredAuditTrail.length === 0 ? (
                     <tr>
                       <td colSpan={8} className="px-4 py-8 text-center text-sm text-muted-foreground">
                         No audit trail records found
                       </td>
                     </tr>
                   ) : (
-                    visibleAuditTrail.slice(0, 100).map(entry => (
+                    filteredAuditTrail.slice(0, 100).map(entry => (
                       <tr key={entry.id} className="hover:bg-muted/30 transition-colors">
                         <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">{formatAuditDate(entry.date)}</td>
                         <td className="px-4 py-3">
@@ -910,20 +1236,7 @@ export function Reports() {
         </div>
       )}
 
-      {activeTab === 'financial' && !isAdmin && (
-        <div className="bg-card border border-border rounded-2xl p-12 text-center">
-          <div className="bg-red-100 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4">
-            <Eye className="w-10 h-10 text-red-600" />
-          </div>
-          <h3 className="text-xl font-bold text-foreground mb-2">Access Denied</h3>
-          <p className="text-sm text-muted-foreground">
-            You do not have permission to view financial reports.<br />
-            This section is restricted to administrators only.
-          </p>
-        </div>
-      )}
-
-      {activeTab === 'financial' && isAdmin && (
+      {activeTab === 'admin' && isAdmin && (
         <div>
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-xl font-semibold text-foreground">Financial Report</h3>
@@ -1028,22 +1341,9 @@ export function Reports() {
         </div>
       )}
 
-      {/* ── Confidential (admin only) ──────────────────────────────────────────── */}
-      {activeTab === 'confidential' && !isAdmin && (
-        <div className="bg-card border border-border rounded-2xl p-12 text-center">
-          <div className="bg-red-100 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4">
-            <Eye className="w-10 h-10 text-red-600" />
-          </div>
-          <h3 className="text-xl font-bold text-foreground mb-2">Access Denied</h3>
-          <p className="text-sm text-muted-foreground">
-            You do not have permission to view confidential reports.<br />
-            This section is restricted to administrators only.
-          </p>
-        </div>
-      )}
-
-      {activeTab === 'confidential' && isAdmin && confidentialData && (
-        <div>
+      {/* ── Confidential / Security (part of the merged Admin Report) ───────────── */}
+      {activeTab === 'admin' && isAdmin && confidentialData && (
+        <div className="mt-6 pt-6 border-t border-border">
           {/* Badge + export */}
           <div className="flex items-center gap-3 mb-4">
             <div className="bg-red-600 text-white px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-2">
@@ -1053,11 +1353,11 @@ export function Reports() {
           </div>
 
           {/* Warning banner */}
-          <div className="bg-red-50 border-2 border-red-500 rounded-2xl p-4 mb-6 flex items-start gap-3">
-            <AlertTriangle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+          <div className="flex items-start gap-3 rounded-2xl border-2 border-red-300 bg-red-50 p-4 mb-6 dark:border-red-700 dark:bg-red-950/40">
+            <AlertTriangle className="w-5 h-5 text-red-700 flex-shrink-0 mt-0.5 dark:text-red-200" />
             <div>
-              <p className="text-sm font-semibold text-red-600">Warning</p>
-              <p className="text-xs text-foreground mt-1">
+              <p className="text-sm font-semibold text-red-800 dark:text-red-200">Warning</p>
+              <p className="text-xs text-red-900 mt-1 dark:text-red-100">
                 This report contains sensitive operational and user data. Access is restricted to administrators only.
                 Do not share this information with unauthorized personnel.
               </p>
@@ -1081,7 +1381,7 @@ export function Reports() {
                 <p className="text-2xl font-bold text-red-700">{confidentialData.byRole['admin'] || 0}</p>
               </div>
               <div className="p-4 bg-green-50 rounded-xl">
-                <p className="text-xs text-green-700 mb-1">Staff / Manager</p>
+                <p className="text-xs text-green-700 mb-1">Staff / Inventory Manager</p>
                 <p className="text-2xl font-bold text-green-700">
                   {(confidentialData.byRole['staff'] || 0) + (confidentialData.byRole['manager'] || 0)}
                 </p>
@@ -1089,32 +1389,66 @@ export function Reports() {
             </div>
           </div>
 
-          {/* User Activity Log */}
+          {/* Activity Log */}
           <div className="bg-card border border-border rounded-2xl p-6 mb-4">
-            <h4 className="text-base font-semibold text-foreground mb-4">User Activity Log</h4>
-            <div className="space-y-2">
-              {users.length === 0 ? (
-                <p className="py-6 text-center text-sm text-muted-foreground">No user data available</p>
-              ) : users.map(u => (
-                <div key={u.id} className="flex items-center justify-between p-3 bg-muted/30 rounded-xl">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0 ${
-                      u.role === 'admin' ? 'bg-red-600' : u.role === 'manager' ? 'bg-primary' : 'bg-secondary'
-                    }`}>
-                      {(u.name || '?').charAt(0).toUpperCase()}
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-foreground">{u.name}</p>
-                      <p className="text-xs text-muted-foreground">{u.email}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className={`px-2 py-1 rounded-lg text-xs font-medium capitalize ${statusPill(u.role)}`}>{u.role}</span>
-                    <span className={`px-2 py-1 rounded-lg text-xs font-medium capitalize ${statusPill(u.status)}`}>{u.status}</span>
-                    <p className="text-xs text-muted-foreground w-28 text-right">{u.lastLogin || '—'}</p>
-                  </div>
-                </div>
-              ))}
+            <div className="flex items-center gap-2 mb-1">
+              <Activity className="w-4 h-4 text-primary" />
+              <h4 className="text-base font-semibold text-foreground">Activity Log</h4>
+            </div>
+            <p className="text-xs text-muted-foreground mb-4">
+              Review recorded inventory actions and staff activity. {activityLog.length} of {auditTrail.length} entr{auditTrail.length === 1 ? 'y' : 'ies'}.
+            </p>
+
+            <div className="mb-4 grid gap-3 md:grid-cols-5">
+              <input type="date" value={activityDateFrom} onChange={(e) => setActivityDateFrom(e.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm bg-background" />
+              <input type="date" value={activityDateTo} onChange={(e) => setActivityDateTo(e.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm bg-background" />
+              <select value={activityUserFilter} onChange={(e) => setActivityUserFilter(e.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm bg-background">
+                <option value="All">All Users</option>
+                {activityUsers.map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}
+              </select>
+              <select value={activityModuleFilter} onChange={(e) => setActivityModuleFilter(e.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm bg-background">
+                {activityModules.map((m) => <option key={m} value={m}>{m === 'All' ? 'All Modules' : m}</option>)}
+              </select>
+              <select value={activityActionFilter} onChange={(e) => setActivityActionFilter(e.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm bg-background">
+                {activityActions.map((a) => <option key={a} value={a}>{a === 'All' ? 'All Actions' : a}</option>)}
+              </select>
+              <div className="relative md:col-span-5">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <input value={activityQuery} onChange={(e) => setActivityQuery(e.target.value)} placeholder="Search activity details..." className="w-full rounded-lg border border-border py-2 pl-9 pr-3 text-sm bg-background" />
+              </div>
+            </div>
+
+            <div className="overflow-x-auto rounded-lg border border-border">
+              <table className="w-full text-sm min-w-[760px]">
+                <thead className="bg-muted/50">
+                  <tr>
+                    <th className="px-4 py-3 text-left font-semibold text-foreground">Date &amp; Time</th>
+                    <th className="px-4 py-3 text-left font-semibold text-foreground">User</th>
+                    <th className="px-4 py-3 text-left font-semibold text-foreground">Role</th>
+                    <th className="px-4 py-3 text-left font-semibold text-foreground">Module</th>
+                    <th className="px-4 py-3 text-left font-semibold text-foreground">Action</th>
+                    <th className="px-4 py-3 text-left font-semibold text-foreground">Details</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {auditTrailLoading ? (
+                    <tr><td colSpan={6}><InlineDataLoading label="Loading activity…" /></td></tr>
+                  ) : activityLog.length === 0 ? (
+                    <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">No activity found.</td></tr>
+                  ) : activityLog.slice(0, 200).map((entry) => (
+                    <tr key={entry.id} className="align-top hover:bg-muted/30 transition-colors">
+                      <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">{formatAuditDate(entry.date)}</td>
+                      <td className="px-4 py-3 text-foreground">{entry.performedByName || 'System'}</td>
+                      <td className="px-4 py-3"><span className="capitalize">{entry.performedByRole || '—'}</span></td>
+                      <td className="px-4 py-3"><span className="inline-flex rounded-lg bg-muted px-2 py-1 text-xs font-medium text-foreground">{entry.module}</span></td>
+                      <td className="px-4 py-3 capitalize text-foreground">{entry.action.toLowerCase()}</td>
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {[entry.item && `${entry.item}${entry.quantity ? ` (${entry.quantity})` : ''}`, entry.details].filter(Boolean).join(' — ') || '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
 
@@ -1150,3 +1484,4 @@ export function Reports() {
     </div>
   );
 }
+

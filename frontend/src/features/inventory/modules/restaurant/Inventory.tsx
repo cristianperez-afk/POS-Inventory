@@ -1,16 +1,20 @@
 import { useState } from "react";
-import { Search, Edit, Archive, ArchiveRestore, AlertCircle, X, Save, ChevronRight, ChevronDown, Folder, FolderOpen, Package, PlusCircle } from "lucide-react";
+import { Search, Edit, Archive, ArchiveRestore, AlertCircle, X, Save, ChevronRight, ChevronDown, Folder, FolderOpen, Package, PlusCircle, History, Sparkles, SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "../../app/hooks/useSession";
 import { formatQuantity } from "../lib/inventoryLogic";
+import { CostHistoryModal } from "../shared/costing/CostHistoryModal";
+import { InlineDataLoading } from "../shared/InlineDataLoading";
 import {
   useRestaurantCategoryHierarchyQuery,
   useRestaurantInventoryQuery,
   useRestaurantLocationsQuery,
   useRestaurantStorageTemperatureOptionsQuery,
   useUpdateRestaurantInventoryMutation,
+  useUpsertRestaurantCategoryHierarchyMutation,
 } from "../lib/restaurant";
 import { AddProduct } from "./AddProduct";
+import { getManilaDateKey } from "../../../../shared/utils/date";
 
 type Product = {
   id: number;
@@ -25,11 +29,28 @@ type Product = {
   reorderPoint?: number;
   price: number;
   expiry: string;
+  expiryPeriod?: string;
   location?: string;
   unit: string;
+  purchaseUnit?: string;
+  baseUnit?: string;
+  conversionFactor?: number;
   storageTemperature?: string;
   isActive?: boolean;
+  isRecent?: boolean;
+  addedDate?: string;
 };
+
+const EXPIRY_PERIOD_OPTIONS = [
+  "Early Morning",
+  "Morning",
+  "Afternoon",
+  "Evening",
+  "Midnight",
+];
+
+const compareFolderNames = (left: string, right: string) =>
+  left.trim().localeCompare(right.trim(), undefined, { sensitivity: "base", numeric: true });
 
 export function Inventory() {
   const { currentUser } = useSession();
@@ -42,17 +63,36 @@ export function Inventory() {
   const [showInitialStockModal, setShowInitialStockModal] = useState(false);
   const [pendingDeactivateId, setPendingDeactivateId] = useState<number | null>(null);
   const [showArchived, setShowArchived] = useState(false);
+  const [expiryPeriodFilter, setExpiryPeriodFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [costHistoryItem, setCostHistoryItem] = useState<{ id: string; name: string } | null>(null);
+  const [showRecentModal, setShowRecentModal] = useState(false);
+  const [showCategoryManager, setShowCategoryManager] = useState(false);
+  const [editingCategoryName, setEditingCategoryName] = useState("");
+  const [categoryDraftName, setCategoryDraftName] = useState("");
+  const [editingSubCategory, setEditingSubCategory] = useState<{ category: string; subCategory: string } | null>(null);
+  const [subCategoryDraftName, setSubCategoryDraftName] = useState("");
 
   // Hierarchical category structure — read from persisted backend settings so
   // categories added via Initial Stock Setup appear here immediately.
-  const { data: categoryHierarchy = {} } = useRestaurantCategoryHierarchyQuery();
-  const { data: storageTemperatureOptions = [] } = useRestaurantStorageTemperatureOptionsQuery();
+  const { data: categoryHierarchy = {}, isLoading: categoriesLoading } = useRestaurantCategoryHierarchyQuery();
+  const { data: storageTemperatureOptions = [], isLoading: storageOptionsLoading } = useRestaurantStorageTemperatureOptionsQuery();
 
-  const { data: products = [] } = useRestaurantInventoryQuery<Product[]>();
-  const { data: locations = [] } = useRestaurantLocationsQuery();
+  const { data: products = [], isLoading: productsLoading } = useRestaurantInventoryQuery<Product[]>();
+  const { data: locations = [], isLoading: locationsLoading } = useRestaurantLocationsQuery();
+  const inventoryLoading = categoriesLoading || storageOptionsLoading || productsLoading || locationsLoading;
   const updateProduct = useUpdateRestaurantInventoryMutation();
+  const saveCategoryHierarchy = useUpsertRestaurantCategoryHierarchyMutation();
 
-  const mainCategories = Object.keys(categoryHierarchy);
+  // Inventory lists raw ingredients/supplies only. "Menu Items" is a menu/recipe
+  // grouping (present in the default hierarchy) and must not appear as an
+  // inventory category folder.
+  const mainCategories = Object.keys(categoryHierarchy).filter(
+    (category) => category !== "Menu Items",
+  ).sort(compareFolderNames);
+
+  const getSortedSubCategories = (category: string) =>
+    [...(categoryHierarchy[category] || [])].sort(compareFolderNames);
 
   const toggleMainCategory = (category: string) => {
     const newExpanded = new Set(expandedMainCategories);
@@ -82,16 +122,33 @@ export function Inventory() {
   };
 
   const getProductsInCategory = (mainCategory: string, subCategory: string) => {
-    return products.filter(p => {
-      const categoryKey = `${mainCategory} > ${subCategory}`;
-      const matchesCategory = p.category === categoryKey;
-      const matchesSearch = searchQuery === "" ||
-        (p.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (p.sku || '').toLowerCase().includes(searchQuery.toLowerCase());
-      // Archived (deactivated) items are hidden unless the user opts to see them.
-      const matchesArchived = showArchived || p.isActive !== false;
-      return matchesCategory && matchesSearch && matchesArchived;
-    });
+    return products
+      .filter(p => {
+        const categoryKey = `${mainCategory} > ${subCategory}`;
+        const matchesCategory = p.category === categoryKey;
+        const matchesSearch = searchQuery === "" ||
+          (p.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+          (p.sku || '').toLowerCase().includes(searchQuery.toLowerCase());
+        const matchesExpiryPeriod = expiryPeriodFilter === "all" || (p.expiryPeriod || "") === expiryPeriodFilter;
+        const matchesStatus = statusFilter === "all" ||
+          getStockStatus(p.stock, p.maxStock, p.minStock, p.reorderPoint).label === statusFilter;
+        // Archived (deactivated) items are hidden unless the user opts to see them.
+        const matchesArchived = showArchived || p.isActive !== false;
+        return matchesCategory && matchesSearch && matchesExpiryPeriod && matchesStatus && matchesArchived;
+      })
+      .sort((left, right) =>
+        compareFolderNames(left.name, right.name) || compareFolderNames(left.sku, right.sku),
+      );
+  };
+
+  // Both search and the status tiles narrow the tree; either should auto-expand
+  // folders so matching products are visible without manual drilling.
+  const isTreeFiltered = searchQuery !== "" || statusFilter !== "all";
+
+  // Clicking a status tile filters the tree by that status; clicking the active
+  // tile again (or the Total tile) clears the filter.
+  const toggleStatusFilter = (status: string) => {
+    setStatusFilter((current) => (current === status ? "all" : status));
   };
 
   const getProductCountInSubCategory = (mainCategory: string, subCategory: string) => {
@@ -99,7 +156,7 @@ export function Inventory() {
   };
 
   const getProductCountInMainCategory = (mainCategory: string) => {
-    if (searchQuery === "") {
+    if (searchQuery === "" && statusFilter === "all") {
       return products.filter(p => p.category.startsWith(mainCategory + " > ")).length;
     }
     return categoryHierarchy[mainCategory]?.reduce((count, sub) =>
@@ -124,6 +181,7 @@ export function Inventory() {
           expiryDate: editingProduct.expiry
             ? new Date(`${editingProduct.expiry}T00:00:00`).toISOString()
             : undefined,
+          expiryPeriod: editingProduct.expiryPeriod || undefined,
           storageTemperature: editingProduct.storageTemperature || undefined,
         },
       });
@@ -170,6 +228,118 @@ export function Inventory() {
     }
   };
 
+  const startCategoryRename = (category: string) => {
+    setEditingCategoryName(category);
+    setCategoryDraftName(category);
+  };
+
+  const startSubCategoryRename = (category: string, subCategory: string) => {
+    setEditingSubCategory({ category, subCategory });
+    setSubCategoryDraftName(subCategory);
+  };
+
+  const handleRenameCategory = async () => {
+    const oldName = editingCategoryName;
+    const nextName = categoryDraftName.trim();
+    if (!oldName || !nextName || oldName === nextName) {
+      setEditingCategoryName("");
+      setCategoryDraftName("");
+      return;
+    }
+    if (categoryHierarchy[nextName]) {
+      toast.error(`Category "${nextName}" already exists`);
+      return;
+    }
+
+    const nextHierarchy = Object.fromEntries(
+      Object.entries(categoryHierarchy).map(([category, subCategories]) => [
+        category === oldName ? nextName : category,
+        subCategories,
+      ]),
+    );
+
+    const affectedProducts = products.filter((product) =>
+      product.category.startsWith(`${oldName} > `),
+    );
+
+    try {
+      await saveCategoryHierarchy.mutateAsync(nextHierarchy);
+      await Promise.all(
+        affectedProducts.map((product) =>
+          updateProduct.mutateAsync({
+            id: product.backendId ?? String(product.id),
+            data: {
+              category: product.category.replace(`${oldName} > `, `${nextName} > `),
+            },
+          }),
+        ),
+      );
+      setExpandedMainCategories((current) => {
+        const next = new Set(current);
+        if (next.delete(oldName)) next.add(nextName);
+        return next;
+      });
+      setExpandedSubCategories((current) => {
+        const next = new Set<string>();
+        current.forEach((key) => {
+          next.add(key.startsWith(`${oldName} > `) ? key.replace(`${oldName} > `, `${nextName} > `) : key);
+        });
+        return next;
+      });
+      setEditingCategoryName("");
+      setCategoryDraftName("");
+      toast.success(`Category renamed to "${nextName}"`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to rename category");
+    }
+  };
+
+  const handleRenameSubCategory = async () => {
+    if (!editingSubCategory) return;
+    const { category, subCategory } = editingSubCategory;
+    const nextName = subCategoryDraftName.trim();
+    if (!nextName || subCategory === nextName) {
+      setEditingSubCategory(null);
+      setSubCategoryDraftName("");
+      return;
+    }
+    const siblings = categoryHierarchy[category] || [];
+    if (siblings.some((item) => item.toLowerCase() === nextName.toLowerCase() && item !== subCategory)) {
+      toast.error(`Subcategory "${nextName}" already exists in ${category}`);
+      return;
+    }
+
+    const oldCategoryKey = `${category} > ${subCategory}`;
+    const nextCategoryKey = `${category} > ${nextName}`;
+    const nextHierarchy = {
+      ...categoryHierarchy,
+      [category]: siblings.map((item) => (item === subCategory ? nextName : item)),
+    };
+    const affectedProducts = products.filter((product) => product.category === oldCategoryKey);
+
+    try {
+      await saveCategoryHierarchy.mutateAsync(nextHierarchy);
+      await Promise.all(
+        affectedProducts.map((product) =>
+          updateProduct.mutateAsync({
+            id: product.backendId ?? String(product.id),
+            data: { category: nextCategoryKey },
+          }),
+        ),
+      );
+      setExpandedSubCategories((current) => {
+        const next = new Set(current);
+        if (next.delete(oldCategoryKey)) next.add(nextCategoryKey);
+        return next;
+      });
+      setEditingSubCategory(null);
+      setSubCategoryDraftName("");
+      toast.success(`Subcategory renamed to "${nextName}"`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to rename subcategory");
+    }
+  };
+
   const getStockStatus = (stock: number, maxStock: number, minStock?: number, reorderPoint?: number) => {
     if (stock <= 0) {
       return { color: "bg-black text-white border-black", label: "Out of Stock", textColor: "text-black" };
@@ -196,15 +366,37 @@ export function Inventory() {
     <div className="p-8">
       {/* Header */}
       <div className="mb-8 flex items-center justify-between">
-        <h1 className="text-3xl font-bold text-foreground">Inventory</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-3xl font-bold text-foreground">Inventory</h1>
+          {products.filter((p) => p.isRecent).length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowRecentModal(true)}
+              title="View recently added items"
+              className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors cursor-pointer"
+            >
+              <Sparkles className="w-4 h-4" />
+              {products.filter((p) => p.isRecent).length} recently added
+            </button>
+          )}
+        </div>
         {userRole === "admin" && (
-          <button
-            onClick={() => setShowInitialStockModal(true)}
-            className="px-4 py-2 bg-muted text-foreground border border-border rounded-xl hover:bg-muted/80 transition-colors text-sm font-medium flex items-center gap-2"
-          >
-            <PlusCircle className="w-4 h-4" />
-            Initial Stock Setup
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setShowCategoryManager(true)}
+              className="px-4 py-2 bg-muted text-foreground border border-border rounded-xl hover:bg-muted/80 hover:-translate-y-0.5 hover:shadow-md hover:border-primary/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-sm transition-all duration-200 text-sm font-medium flex items-center gap-2"
+            >
+              <SlidersHorizontal className="w-4 h-4" />
+              Customize Categories
+            </button>
+            <button
+              onClick={() => setShowInitialStockModal(true)}
+              className="px-4 py-2 bg-muted text-foreground border border-border rounded-xl hover:bg-muted/80 hover:-translate-y-0.5 hover:shadow-md hover:border-primary/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-sm transition-all duration-200 text-sm font-medium flex items-center gap-2"
+            >
+              <PlusCircle className="w-4 h-4" />
+              Initial Stock Setup
+            </button>
+          </div>
         )}
       </div>
 
@@ -231,42 +423,53 @@ export function Inventory() {
             />
             Show archived
           </label>
+          <select
+            value={expiryPeriodFilter}
+            onChange={(e) => setExpiryPeriodFilter(e.target.value)}
+            className="px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary transition-all whitespace-nowrap"
+          >
+            <option value="all">All expiry periods</option>
+            {EXPIRY_PERIOD_OPTIONS.map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
         </div>
 
-        {/* Stats Row */}
+        {/* Stats Row — click a tile to filter the tree by stock status */}
         <div className="grid grid-cols-6 gap-4 mt-4 pt-4 border-t border-border">
-          <div className="text-center">
-            <p className="text-xl font-bold text-foreground">{products.length}</p>
-            <p className="text-muted-foreground text-sm">Total</p>
-          </div>
-          <div className="text-center">
-            <p className="text-xl font-bold text-black">{products.filter(p => getStockStatus(p.stock, p.maxStock, p.minStock, p.reorderPoint).label === "Out of Stock").length}</p>
-            <p className="text-muted-foreground text-sm">Out</p>
-          </div>
-          <div className="text-center">
-            <p className="text-xl font-bold text-red-600">{products.filter(p => getStockStatus(p.stock, p.maxStock, p.minStock, p.reorderPoint).label === "Critical Stock").length}</p>
-            <p className="text-muted-foreground text-sm">Critical</p>
-          </div>
-          <div className="text-center">
-            <p className="text-xl font-bold text-orange-600">{products.filter(p => getStockStatus(p.stock, p.maxStock, p.minStock, p.reorderPoint).label === "Low Stock").length}</p>
-            <p className="text-muted-foreground text-sm">Low</p>
-          </div>
-          <div className="text-center">
-            <p className="text-xl font-bold text-yellow-700">{products.filter(p => getStockStatus(p.stock, p.maxStock, p.minStock, p.reorderPoint).label === "Medium Stock").length}</p>
-            <p className="text-muted-foreground text-sm">Medium</p>
-          </div>
-          <div className="text-center">
-            <p className="text-xl font-bold text-green-600">{products.filter(p => getStockStatus(p.stock, p.maxStock, p.minStock, p.reorderPoint).label === "Healthy Stock").length}</p>
-            <p className="text-muted-foreground text-sm">Healthy</p>
-          </div>
+          {[
+            { status: "all", label: "Total", valueClass: "text-foreground", count: products.length },
+            { status: "Out of Stock", label: "Out", valueClass: "text-black", count: products.filter(p => getStockStatus(p.stock, p.maxStock, p.minStock, p.reorderPoint).label === "Out of Stock").length },
+            { status: "Critical Stock", label: "Critical", valueClass: "text-red-600", count: products.filter(p => getStockStatus(p.stock, p.maxStock, p.minStock, p.reorderPoint).label === "Critical Stock").length },
+            { status: "Low Stock", label: "Low", valueClass: "text-orange-600", count: products.filter(p => getStockStatus(p.stock, p.maxStock, p.minStock, p.reorderPoint).label === "Low Stock").length },
+            { status: "Medium Stock", label: "Medium", valueClass: "text-yellow-700", count: products.filter(p => getStockStatus(p.stock, p.maxStock, p.minStock, p.reorderPoint).label === "Medium Stock").length },
+            { status: "Healthy Stock", label: "Healthy", valueClass: "text-green-600", count: products.filter(p => getStockStatus(p.stock, p.maxStock, p.minStock, p.reorderPoint).label === "Healthy Stock").length },
+          ].map((tile) => {
+            const isActive = statusFilter === tile.status;
+            return (
+              <button
+                type="button"
+                key={tile.label}
+                onClick={() => toggleStatusFilter(tile.status)}
+                aria-pressed={isActive}
+                aria-label={`Filter by ${tile.label}`}
+                className={`group text-center rounded-xl py-3 px-2 border transition-all duration-200 cursor-pointer hover:-translate-y-1 hover:shadow-lg hover:shadow-primary/25 hover:border-primary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-md ${
+                  isActive ? "border-primary bg-primary/5 shadow-md shadow-primary/20" : "border-transparent"
+                }`}
+              >
+                <p className={`text-xl font-bold ${tile.valueClass}`}>{tile.count}</p>
+                <p className="text-muted-foreground text-sm">{tile.label}</p>
+              </button>
+            );
+          })}
         </div>
       </div>
 
       {/* Folder Tree View */}
       <div className="bg-card rounded-2xl shadow-sm border border-border overflow-hidden p-4">
         <div className="space-y-4">
-          {mainCategories.map((mainCategory) => {
-            const hasMatchingProducts = searchQuery !== "" &&
+          {!inventoryLoading && mainCategories.map((mainCategory) => {
+            const hasMatchingProducts = isTreeFiltered &&
               (categoryHierarchy[mainCategory]?.some(sub => getProductsInCategory(mainCategory, sub).length > 0) ?? false);
             const isMainExpanded = expandedMainCategories.has(mainCategory) || hasMatchingProducts;
             const mainCategoryCount = getProductCountInMainCategory(mainCategory);
@@ -297,13 +500,13 @@ export function Inventory() {
                 {/* Subcategories */}
                 {isMainExpanded && (
                   <div className="bg-background">
-                    {categoryHierarchy[mainCategory].map((subCategory) => {
+                    {getSortedSubCategories(mainCategory).map((subCategory) => {
                       const subKey = `${mainCategory} > ${subCategory}`;
                       const subCategoryProducts = getProductsInCategory(mainCategory, subCategory);
                       const subCount = subCategoryProducts.length;
-                      const isSubExpanded = expandedSubCategories.has(subKey) || (searchQuery !== "" && subCount > 0);
+                      const isSubExpanded = expandedSubCategories.has(subKey) || (isTreeFiltered && subCount > 0);
 
-                      if (searchQuery && subCount === 0) return null;
+                      if (isTreeFiltered && subCount === 0) return null;
 
                       return (
                         <div key={subKey} className="border-l border-primary/20 ml-4">
@@ -334,72 +537,94 @@ export function Inventory() {
                               {subCategoryProducts.map((product) => (
                                 <div
                                   key={product.id}
-                                  className="flex items-center gap-2 p-2 bg-card border border-border rounded-lg hover:shadow-md transition-all"
+                                  className="flex items-center gap-2 overflow-hidden p-2 bg-card border border-border rounded-lg hover:shadow-md transition-all"
                                 >
                                   <Package className="w-5 h-5 text-primary flex-shrink-0" />
 
-                                  <div className="flex-1 grid grid-cols-6 gap-2 items-center">
-                                    <div className="col-span-2">
-                                      <p className="font-medium text-foreground text-sm truncate">{product.name}</p>
+                                  <div className="min-w-0 flex-1 grid grid-cols-[minmax(150px,2fr)_minmax(105px,1fr)_minmax(115px,1fr)_minmax(95px,0.85fr)_minmax(145px,1fr)] gap-3 items-center [&>div]:min-w-0 [&>div>p]:truncate">
+                                    <div className="min-w-0">
+                                      <div className="flex items-center gap-2">
+                                        <p className="font-medium text-foreground text-sm truncate">{product.name}</p>
+                                        {product.isRecent && (
+                                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-primary/10 text-primary flex-shrink-0">
+                                            <Sparkles className="w-3 h-3" />
+                                            New
+                                          </span>
+                                        )}
+                                      </div>
                                       <p className="text-xs text-muted-foreground truncate">{product.sku}</p>
                                     </div>
 
-                                    <div>
+                                    <div className="min-w-0">
                                       <p className="text-xs text-muted-foreground truncate">{product.location}</p>
                                     </div>
 
-                                    <div>
-                                      <p className={`text-sm font-bold ${getStockStatus(product.stock, product.maxStock, product.minStock, product.reorderPoint).textColor}`}>
+                                    <div className="min-w-0">
+                                      <p className={`text-[13px] font-bold ${getStockStatus(product.stock, product.maxStock, product.minStock, product.reorderPoint).textColor}`}>
                                         {formatQuantity(product.stock, product.unit)} / {formatQuantity(product.maxStock, product.unit)}
                                       </p>
+                                      {product.purchaseUnit && product.conversionFactor && product.conversionFactor > 1 && (
+                                        <p className="text-[10px] leading-tight text-muted-foreground truncate">
+                                          {formatQuantity(product.stock / product.conversionFactor, product.purchaseUnit)} packages
+                                        </p>
+                                      )}
                                     </div>
 
-                                    <div>
-                                      <p className="text-sm font-medium text-foreground">₱{product.price}</p>
+                                    <div className="min-w-0">
+                                      <p className="text-[13px] font-medium text-foreground truncate">₱{product.price}</p>
                                     </div>
 
-                                    <div>
-                                      <p className="text-xs text-foreground truncate">{product.expiry}</p>
+                                    <div className="min-w-0">
+                                      <p className="text-[11px] leading-tight text-foreground truncate">{product.expiry || "No expiry"}</p>
+                                      <p className="text-[10px] leading-tight text-muted-foreground truncate">{product.expiryPeriod || "No period"}</p>
                                     </div>
                                   </div>
 
-                                  <div className="flex items-center gap-1 flex-shrink-0">
+                                  <div className="flex w-[90px] min-w-[90px] items-center justify-end gap-0.5">
+                                    <button
+                                      onClick={() => setCostHistoryItem({ id: product.backendId ?? String(product.id), name: product.name })}
+                                      className="p-1 hover:bg-emerald-50 text-emerald-600 rounded-md transition-colors"
+                                      title="View cost history"
+                                    >
+                                      <History className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                      onClick={() => handleEdit(product)}
+                                      className="p-1 hover:bg-green-50 text-green-600 rounded-md transition-colors"
+                                      title="Edit storage & expiry"
+                                    >
+                                      <Edit className="w-4 h-4" />
+                                    </button>
+                                    {product.isActive === false ? (
+                                      <button
+                                        onClick={() => handleReactivate(product)}
+                                        className="p-1 hover:bg-green-50 text-green-600 rounded-md transition-colors"
+                                        title="Reactivate"
+                                      >
+                                        <ArchiveRestore className="w-4 h-4" />
+                                      </button>
+                                    ) : (
+                                      <button
+                                        onClick={() => handleDeactivate(product.id)}
+                                        className="p-1 hover:bg-amber-50 text-amber-600 rounded-md transition-colors"
+                                        title="Archive (deactivate)"
+                                      >
+                                        <Archive className="w-4 h-4" />
+                                      </button>
+                                    )}
+                                  </div>
+
+                                  <div className="flex w-[112px] min-w-[112px] items-center justify-center gap-1">
                                     {product.isActive === false && (
                                       <span className="px-2 py-0.5 rounded text-xs font-medium border bg-muted text-muted-foreground border-border">
                                         Archived
                                       </span>
                                     )}
-                                    <span className={`px-2 py-0.5 rounded text-xs font-medium border ${getStockStatus(product.stock, product.maxStock, product.minStock, product.reorderPoint).color}`}>
+                                    <span className={`max-w-full truncate px-1.5 py-0.5 rounded text-[11px] font-medium border ${getStockStatus(product.stock, product.maxStock, product.minStock, product.reorderPoint).color}`}>
                                       {getStockStatus(product.stock, product.maxStock, product.minStock, product.reorderPoint).label}
                                     </span>
                                   </div>
 
-                                  <div className="flex items-center gap-1 flex-shrink-0">
-                                    <button
-                                      onClick={() => handleEdit(product)}
-                                      className="p-1.5 hover:bg-green-50 text-green-600 rounded-lg transition-colors"
-                                      title="Edit storage & expiry"
-                                    >
-                                      <Edit className="w-5 h-5" />
-                                    </button>
-                                    {product.isActive === false ? (
-                                      <button
-                                        onClick={() => handleReactivate(product)}
-                                        className="p-1.5 hover:bg-green-50 text-green-600 rounded-lg transition-colors"
-                                        title="Reactivate"
-                                      >
-                                        <ArchiveRestore className="w-5 h-5" />
-                                      </button>
-                                    ) : (
-                                      <button
-                                        onClick={() => handleDeactivate(product.id)}
-                                        className="p-1.5 hover:bg-amber-50 text-amber-600 rounded-lg transition-colors"
-                                        title="Archive (deactivate)"
-                                      >
-                                        <Archive className="w-5 h-5" />
-                                      </button>
-                                    )}
-                                  </div>
                                 </div>
                               ))}
                               {subCategoryProducts.length === 0 && (
@@ -418,12 +643,217 @@ export function Inventory() {
             );
           })}
         </div>
-        {mainCategories.length === 0 && (
+        {inventoryLoading ? (
+          <InlineDataLoading label="Loading food inventory…" className="py-10" />
+        ) : mainCategories.length === 0 && (
           <div className="p-8 text-center text-muted-foreground">
             No categories available
           </div>
         )}
       </div>
+
+      {/* Cost History Modal */}
+      {costHistoryItem && (
+        <CostHistoryModal
+          itemId={costHistoryItem.id}
+          itemName={costHistoryItem.name}
+          onClose={() => setCostHistoryItem(null)}
+        />
+      )}
+
+      {/* Category Manager Modal */}
+      {showCategoryManager && userRole === "admin" && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-card rounded-2xl shadow-xl border border-border w-full max-w-3xl max-h-[85vh] overflow-y-auto">
+            <div className="sticky top-0 bg-card border-b border-border px-6 py-4 flex items-center justify-between z-10">
+              <div>
+                <h2 className="text-xl font-bold text-foreground">Customize Categories</h2>
+                <p className="text-sm text-muted-foreground">Rename main categories and subcategories used by Food Inventory.</p>
+              </div>
+              <button
+                onClick={() => {
+                  setShowCategoryManager(false);
+                  setEditingCategoryName("");
+                  setCategoryDraftName("");
+                  setEditingSubCategory(null);
+                  setSubCategoryDraftName("");
+                }}
+                className="p-2 hover:bg-muted rounded-xl transition-colors"
+                aria-label="Close category manager"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              {mainCategories.map((category) => (
+                <div key={category} className="rounded-xl border border-border bg-muted/20 p-4">
+                  <div className="flex items-center gap-3">
+                    <Folder className="w-5 h-5 text-orange-500 flex-shrink-0" />
+                    {editingCategoryName === category ? (
+                      <div className="flex flex-1 items-center gap-2">
+                        <input
+                          value={categoryDraftName}
+                          onChange={(event) => setCategoryDraftName(event.target.value)}
+                          className="min-w-0 flex-1 rounded-lg border border-input bg-input-background px-3 py-2 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/30"
+                          autoFocus
+                        />
+                        <button
+                          type="button"
+                          onClick={handleRenameCategory}
+                          disabled={!categoryDraftName.trim()}
+                          className="px-3 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
+                        >
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingCategoryName("");
+                            setCategoryDraftName("");
+                          }}
+                          className="px-3 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <span className="flex-1 font-semibold text-foreground">{category}</span>
+                        <button
+                          type="button"
+                          onClick={() => startCategoryRename(category)}
+                          className="px-3 py-1.5 bg-white border border-border rounded-lg text-sm font-medium text-foreground hover:bg-muted inline-flex items-center gap-1.5"
+                        >
+                          <Edit className="w-3.5 h-3.5" />
+                          Rename
+                        </button>
+                      </>
+                    )}
+                  </div>
+
+                  <div className="mt-3 space-y-2 pl-8">
+                    {getSortedSubCategories(category).map((subCategory) => {
+                      const isEditing = editingSubCategory?.category === category && editingSubCategory.subCategory === subCategory;
+                      return (
+                        <div key={`${category} > ${subCategory}`} className="flex items-center gap-2 rounded-lg bg-background border border-border px-3 py-2">
+                          <FolderOpen className="w-4 h-4 text-primary flex-shrink-0" />
+                          {isEditing ? (
+                            <>
+                              <input
+                                value={subCategoryDraftName}
+                                onChange={(event) => setSubCategoryDraftName(event.target.value)}
+                                className="min-w-0 flex-1 rounded-lg border border-input bg-input-background px-3 py-2 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/30"
+                                autoFocus
+                              />
+                              <button
+                                type="button"
+                                onClick={handleRenameSubCategory}
+                                disabled={!subCategoryDraftName.trim()}
+                                className="px-3 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
+                              >
+                                Save
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingSubCategory(null);
+                                  setSubCategoryDraftName("");
+                                }}
+                                className="px-3 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted"
+                              >
+                                Cancel
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <span className="flex-1 text-sm font-medium text-foreground">{subCategory}</span>
+                              <button
+                                type="button"
+                                onClick={() => startSubCategoryRename(category, subCategory)}
+                                className="px-3 py-1.5 bg-white border border-border rounded-lg text-sm font-medium text-foreground hover:bg-muted inline-flex items-center gap-1.5"
+                              >
+                                <Edit className="w-3.5 h-3.5" />
+                                Rename
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Recently Added Items Modal */}
+      {showRecentModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-card rounded-2xl shadow-xl w-full max-w-2xl max-h-[85vh] overflow-y-auto">
+            <div className="sticky top-0 bg-card border-b border-border px-6 py-4 flex items-center justify-between z-10">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-primary/10 rounded-xl">
+                  <Sparkles className="w-5 h-5 text-primary" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-foreground">Recently Added Items</h2>
+                  <p className="text-sm text-muted-foreground">Items added in the last 7 days</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowRecentModal(false)}
+                className="p-2 hover:bg-muted rounded-xl transition-colors text-muted-foreground"
+                aria-label="Close recently added"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6">
+              {(() => {
+                const recentProducts = products
+                  .filter((p) => p.isRecent)
+                  .sort((a, b) => (b.addedDate || "").localeCompare(a.addedDate || ""));
+                if (recentProducts.length === 0) {
+                  return (
+                    <div className="py-12 flex flex-col items-center gap-3 text-center">
+                      <Package className="w-10 h-10 text-muted-foreground/40" />
+                      <p className="text-muted-foreground text-sm">No recently added items.</p>
+                    </div>
+                  );
+                }
+                return (
+                  <div className="space-y-2">
+                    {recentProducts.map((p) => (
+                      <div
+                        key={p.backendId ?? p.id}
+                        className="flex items-center gap-3 p-3 bg-muted/30 border border-border rounded-xl"
+                      >
+                        <Package className="w-5 h-5 text-primary flex-shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <p className="font-medium text-foreground text-sm truncate">{p.name}</p>
+                          <p className="text-xs text-muted-foreground truncate">{p.category}</p>
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          <p className="text-sm font-semibold text-foreground">
+                            {formatQuantity(p.stock)} {p.unit}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {p.addedDate ? getManilaDateKey(p.addedDate) : "—"}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Edit Modal */}
       {showEditModal && editingProduct && (
@@ -474,6 +904,20 @@ export function Inventory() {
                   >
                     <option value="">Select storage temperature</option>
                     {storageTemperatureOptions.map((option) => (
+                      <option key={option} value={option}>{option}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm mb-2 text-foreground">Expiry Period</label>
+                  <select
+                    value={editingProduct.expiryPeriod || ""}
+                    onChange={(e) => setEditingProduct({ ...editingProduct, expiryPeriod: e.target.value })}
+                    className="w-full px-4 py-3 bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                  >
+                    <option value="">Select expiry period</option>
+                    {EXPIRY_PERIOD_OPTIONS.map((option) => (
                       <option key={option} value={option}>{option}</option>
                     ))}
                   </select>
