@@ -112,10 +112,12 @@ export function getCurrentUser() {
 
 export const getCurrentSession = getCurrentUser;
 
-export function getInventory(params?: { search?: string; itemType?: string }) {
+export function getInventory(params?: { search?: string; itemType?: string; page?: number; limit?: number }) {
   const query = new URLSearchParams();
   if (params?.search) query.set('search', params.search);
   if (params?.itemType) query.set('itemType', params.itemType);
+  if (params?.page) query.set('page', String(params.page));
+  if (params?.limit) query.set('limit', String(params.limit));
   const suffix = query.toString() ? `?${query.toString()}` : '';
   return request<PagedResponse<ApiInventoryItem>>(`/api/inventory${suffix}`).then((r) => r.data);
 }
@@ -174,6 +176,8 @@ export function getStockMovements(params?: {
   type?: string;
   referenceType?: string;
   referenceId?: string;
+  page?: number;
+  limit?: number;
 }) {
   const query = new URLSearchParams();
   if (params?.module) query.set('module', params.module);
@@ -182,6 +186,8 @@ export function getStockMovements(params?: {
   if (params?.type) query.set('type', params.type);
   if (params?.referenceType) query.set('referenceType', params.referenceType);
   if (params?.referenceId) query.set('referenceId', params.referenceId);
+  if (params?.page) query.set('page', String(params.page));
+  if (params?.limit) query.set('limit', String(params.limit));
   const suffix = query.toString() ? `?${query.toString()}` : '';
   return request<PagedResponse<ApiStockMovement>>(`/api/stock-movements${suffix}`).then((r) => r.data);
 }
@@ -254,11 +260,13 @@ export interface IngredientConsumptionReport {
   items: IngredientConsumptionRow[];
 }
 
-export function getIngredientConsumptionReport(params?: { module?: BusinessModule; from?: string; to?: string }) {
+export function getIngredientConsumptionReport(params?: { module?: BusinessModule; from?: string; to?: string; page?: number; limit?: number }) {
   const query = new URLSearchParams();
   if (params?.module) query.set('module', params.module);
   if (params?.from) query.set('from', params.from);
   if (params?.to) query.set('to', params.to);
+  if (params?.page) query.set('page', String(params.page));
+  if (params?.limit) query.set('limit', String(params.limit));
   const suffix = query.toString() ? `?${query.toString()}` : '';
   return request<IngredientConsumptionReport>(`/api/reports/ingredient-consumption${suffix}`);
 }
@@ -284,11 +292,13 @@ export interface ItemsSoldReport {
   items: ItemsSoldRow[];
 }
 
-export function getItemsSoldReport(params?: { module?: BusinessModule; from?: string; to?: string }) {
+export function getItemsSoldReport(params?: { module?: BusinessModule; from?: string; to?: string; page?: number; limit?: number }) {
   const query = new URLSearchParams();
   if (params?.module) query.set('module', params.module);
   if (params?.from) query.set('from', params.from);
   if (params?.to) query.set('to', params.to);
+  if (params?.page) query.set('page', String(params.page));
+  if (params?.limit) query.set('limit', String(params.limit));
   const suffix = query.toString() ? `?${query.toString()}` : '';
   return request<ItemsSoldReport>(`/api/reports/items-sold${suffix}`);
 }

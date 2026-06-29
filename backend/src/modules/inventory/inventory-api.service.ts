@@ -71,6 +71,7 @@ export class InventoryApiService {
   async listInventory(headers: HeadersLike, query: Record<string, string | undefined>) {
     await this.ensureInventoryItemOperationalColumns();
     const scope = await this.resolveScope(headers);
+    const pagination = this.parsePagination(query, 250, 1000);
     const where = ['i."businessId" = $1'];
     const params: unknown[] = [scope.businessId];
 
@@ -84,6 +85,7 @@ export class InventoryApiService {
       where.push(`(i.name ILIKE $${params.length} OR i.sku ILIKE $${params.length} OR i.barcode ILIKE $${params.length})`);
     }
 
+    params.push(pagination.limit, pagination.offset);
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
         SELECT
@@ -105,11 +107,13 @@ export class InventoryApiService {
         LEFT JOIN "Location" l ON l.id = i."locationId"
         WHERE ${where.join(' AND ')}
         ORDER BY i."createdAt" DESC
+        LIMIT $${params.length - 1}
+        OFFSET $${params.length}
       `,
       params,
     );
 
-    return this.paged(rows);
+    return this.paged(rows, pagination.page, pagination.limit);
   }
 
   async createInventoryItem(headers: HeadersLike, body: Record<string, unknown>) {
@@ -902,13 +906,45 @@ export class InventoryApiService {
     await this.ensurePosKitchenEstimateColumns();
     const scope = await this.resolveScope(headers);
     const posUserId = this.headerValue(headers['x-pos-user-id']);
+    const pagination = this.parsePagination(query, 100, 300);
+    const dbLimit = pagination.limit + pagination.offset;
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
         SELECT
-          ko.*,
-          row_to_json(r.*) AS recipe,
-          row_to_json(l.*) AS location,
-          row_to_json(t.*) AS table
+          ko.id,
+          ko."receiptNo",
+          ko.quantity,
+          ko.status,
+          ko.notes,
+          ko."voidReason",
+          ko."voidedAt",
+          ko."recipeId",
+          ko."locationId",
+          ko."tableId",
+          ko."saleId",
+          ko."businessId",
+          ko."completedById",
+          ko."createdAt",
+          ko."updatedAt",
+          NULL::text AS "orderNumber",
+          NULL::text AS "customerName",
+          NULL::text AS "orderType",
+          NULL::text AS "tableNumber",
+          NULL::int AS "itemCount",
+          NULL::text AS "paymentStatus",
+          NULL::numeric AS "totalAmount",
+          NULL::timestamp AS "orderedAt",
+          NULL::timestamp AS "paymentAt",
+          NULL::timestamp AS "preparingStartedAt",
+          NULL::timestamp AS "readyAt",
+          NULL::timestamp AS "servedAt",
+          NULL::bigint AS "serviceDuration",
+          NULL::int AS "estimatedPrepMinutes",
+          NULL::timestamp AS "estimatedReadyAt",
+          NULL::timestamp AS "completedAt",
+          json_build_object('id', r.id, 'name', r.name, 'category', r.category) AS recipe,
+          json_build_object('id', l.id, 'name', l.name) AS location,
+          json_build_object('id', t.id, 'tableNumber', t."tableNumber") AS table
         FROM "KitchenOrder" ko
         JOIN "Recipe" r ON r.id = ko."recipeId"
         LEFT JOIN "Location" l ON l.id = ko."locationId"
@@ -916,8 +952,9 @@ export class InventoryApiService {
         WHERE ko."businessId" = $1
           AND ($2::text IS NULL OR ko.status = $2::"KitchenOrderStatus")
         ORDER BY ko."createdAt" DESC
+        LIMIT $3
       `,
-      [scope.businessId, query.status ?? null],
+      [scope.businessId, query.status ?? null, dbLimit],
     );
 
     const posRows =
@@ -1117,8 +1154,9 @@ export class InventoryApiService {
                 NULL::timestamp AS "voidedAt"
               FROM pos_orders
               ORDER BY COALESCE(completed_at, created_at) DESC
+              LIMIT $3
             `,
-            [posUserId ?? '', scope.user.email],
+            [posUserId ?? '', scope.user.email, dbLimit],
           )
         : [];
 
@@ -1127,7 +1165,7 @@ export class InventoryApiService {
       const bTime = new Date(String(b.createdAt ?? b.created_at ?? 0)).getTime();
       return bTime - aTime;
     });
-    return this.paged(combined);
+    return this.paged(combined.slice(pagination.offset, pagination.offset + pagination.limit), pagination.page, pagination.limit);
   }
 
   async updateKitchenOrderStatus(headers: HeadersLike, id: string, body: { status?: string }) {
@@ -1465,6 +1503,7 @@ export class InventoryApiService {
 
   async listPurchaseOrders(headers: HeadersLike, query: Record<string, string | undefined>) {
     const scope = await this.resolveScope(headers);
+    const pagination = this.parsePagination(query, 100, 500);
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
         SELECT
@@ -1482,14 +1521,17 @@ export class InventoryApiService {
           AND po.module = $2::"BusinessModule"
           AND ($3::text IS NULL OR po.status = $3::"PurchaseOrderStatus")
         ORDER BY po."createdAt" DESC
+        LIMIT $4
+        OFFSET $5
       `,
-      [scope.businessId, query.module ?? scope.module, query.status ?? null],
+      [scope.businessId, query.module ?? scope.module, query.status ?? null, pagination.limit, pagination.offset],
     );
-    return this.paged(rows);
+    return this.paged(rows, pagination.page, pagination.limit);
   }
 
   async listGoodsReceipts(headers: HeadersLike, query: Record<string, string | undefined>) {
     const scope = await this.resolveScope(headers);
+    const pagination = this.parsePagination(query, 100, 500);
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
         SELECT
@@ -1541,10 +1583,12 @@ export class InventoryApiService {
           AND gr.module = $2::"BusinessModule"
           AND ($3::text IS NULL OR gr."purchaseOrderId" = $3)
         ORDER BY gr."createdAt" DESC
+        LIMIT $4
+        OFFSET $5
       `,
-      [scope.businessId, query.module ?? scope.module, query.purchaseOrderId ?? null],
+      [scope.businessId, query.module ?? scope.module, query.purchaseOrderId ?? null, pagination.limit, pagination.offset],
     );
-    return this.paged(rows);
+    return this.paged(rows, pagination.page, pagination.limit);
   }
 
   private async getPurchaseOrderRow(scope: Scope, id: string) {
@@ -2552,20 +2596,38 @@ export class InventoryApiService {
 
   async listSales(headers: HeadersLike, query: Record<string, string | undefined>) {
     const scope = await this.resolveScope(headers);
+    const pagination = this.parsePagination(query, 100, 500);
+    const dbLimit = pagination.limit + pagination.offset;
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
-        SELECT s.*, COALESCE(items.items, '[]'::json) AS items
+        SELECT
+          s.id, s."transactionNumber", s."createdAt", s."updatedAt",
+          s.total, s.subtotal, s.discount, s.tax, s."amountPaid", s.change,
+          s."paymentMethod", s.status, s.customer, s."businessId", s.module,
+          COALESCE(items.items, '[]'::json) AS items
         FROM "Sale" s
         LEFT JOIN LATERAL (
-          SELECT json_agg(si.* ORDER BY si."createdAt") AS items
+          SELECT json_agg(
+            json_build_object(
+              'id', si.id,
+              'inventoryItemId', si."inventoryItemId",
+              'name', si.name,
+              'quantity', si.quantity,
+              'unitPrice', si."unitPrice",
+              'totalPrice', si."totalPrice",
+              'createdAt', si."createdAt"
+            )
+            ORDER BY si."createdAt"
+          ) AS items
           FROM "SaleItem" si
           WHERE si."saleId" = s.id
         ) items ON TRUE
         WHERE s."businessId" = $1
           AND s.module = $2::"BusinessModule"
         ORDER BY s."createdAt" DESC
+        LIMIT $3
       `,
-      [scope.businessId, query.module ?? scope.module],
+      [scope.businessId, query.module ?? scope.module, dbLimit],
     );
     const posRows = await this.safeQuery<Record<string, unknown>>(
       `
@@ -2624,22 +2686,38 @@ export class InventoryApiService {
             WHERE sl."transactionNumber" = CONCAT('POS-', o.order_number)
           )
         ORDER BY COALESCE(o.completed_at, o.created_at) DESC
+        LIMIT $3
       `,
-      [scope.user.email, query.module ?? scope.module],
+      [scope.user.email, query.module ?? scope.module, dbLimit],
     );
     const combined = [...rows, ...posRows].sort((a, b) => {
       const aTime = new Date(String(a.createdAt ?? a.created_at ?? 0)).getTime();
       const bTime = new Date(String(b.createdAt ?? b.created_at ?? 0)).getTime();
       return bTime - aTime;
     });
-    return this.paged(combined);
+    return this.paged(combined.slice(pagination.offset, pagination.offset + pagination.limit), pagination.page, pagination.limit);
   }
 
   async listStockMovements(headers: HeadersLike, query: Record<string, string | undefined>) {
     const scope = await this.resolveScope(headers);
+    const pagination = this.parsePagination(query, 200, 1000);
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
-        SELECT sm.*, row_to_json(i.*) AS item, row_to_json(l.*) AS location
+        SELECT
+          sm.id, sm.type, sm.quantity, sm."previousQuantity", sm."newQuantity",
+          sm.unit, sm.reason, sm."referenceType", sm."referenceId", sm.notes,
+          sm."itemId", sm."locationId", sm."businessId", sm.module, sm."createdById",
+          sm."createdAt",
+          json_build_object(
+            'id', i.id,
+            'name', i.name,
+            'category', i.category,
+            'unit', i.unit,
+            'price', i.price,
+            'costPrice', i."costPrice",
+            'quantity', i.quantity
+          ) AS item,
+          json_build_object('id', l.id, 'name', l.name) AS location
         FROM "StockMovement" sm
         LEFT JOIN "InventoryItem" i ON i.id = sm."itemId"
         LEFT JOIN "Location" l ON l.id = sm."locationId"
@@ -2647,10 +2725,12 @@ export class InventoryApiService {
           AND sm.module = $2::"BusinessModule"
           AND ($3::text IS NULL OR sm.type = $3::"StockMovementType")
         ORDER BY sm."createdAt" DESC
+        LIMIT $4
+        OFFSET $5
       `,
-      [scope.businessId, query.module ?? scope.module, query.type ?? null],
+      [scope.businessId, query.module ?? scope.module, query.type ?? null, pagination.limit, pagination.offset],
     );
-    return this.paged(rows);
+    return this.paged(rows, pagination.page, pagination.limit);
   }
 
   // Summary of ingredients consumed (RECIPE_CONSUMPTION) per item over a date range,
@@ -2660,6 +2740,7 @@ export class InventoryApiService {
     const scope = await this.resolveScope(headers);
     const from = query.from && /^\d{4}-\d{2}-\d{2}$/.test(query.from) ? query.from : null;
     const to = query.to && /^\d{4}-\d{2}-\d{2}$/.test(query.to) ? query.to : null;
+    const pagination = this.parsePagination(query, 100, 500);
 
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
@@ -2682,8 +2763,10 @@ export class InventoryApiService {
           AND ($4::date IS NULL OR sm."createdAt" < ($4::date + INTERVAL '1 day'))
         GROUP BY sm."itemId", i.name, i.category, COALESCE(sm.unit, i.unit), i.quantity
         ORDER BY SUM(sm.quantity) DESC
+        LIMIT $5
+        OFFSET $6
       `,
-      [scope.businessId, query.module ?? scope.module, from, to],
+      [scope.businessId, query.module ?? scope.module, from, to, pagination.limit, pagination.offset],
     );
 
     const items = rows.map((r) => ({ ...r, totalConsumed: Number(r.totalConsumed ?? 0) }));
@@ -2705,6 +2788,7 @@ export class InventoryApiService {
     const scope = await this.resolveScope(headers);
     const from = query.from && /^\d{4}-\d{2}-\d{2}$/.test(query.from) ? query.from : null;
     const to = query.to && /^\d{4}-\d{2}-\d{2}$/.test(query.to) ? query.to : null;
+    const pagination = this.parsePagination(query, 100, 500);
 
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
@@ -2728,8 +2812,10 @@ export class InventoryApiService {
           AND ($4::date IS NULL OR s."createdAt" < ($4::date + INTERVAL '1 day'))
         GROUP BY si."inventoryItemId", COALESCE(i.name, si.name, 'Unknown item'), i.category, i.unit, i.quantity
         ORDER BY SUM(si."totalPrice") DESC
+        LIMIT $5
+        OFFSET $6
       `,
-      [scope.businessId, query.module ?? scope.module, from, to],
+      [scope.businessId, query.module ?? scope.module, from, to, pagination.limit, pagination.offset],
     );
 
     const items = rows.map((r) => ({
@@ -3562,18 +3648,23 @@ export class InventoryApiService {
   async listNotifications(headers: HeadersLike, query: Record<string, string | undefined>) {
     const scope = await this.resolveScope(headers);
     const onlyUnread = query.unread === 'true';
+    const pagination = this.parsePagination(query, 50, 200);
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
-        SELECT *
+        SELECT
+          id, type, title, message, "entityType", "entityId",
+          "isRead", "readAt", "createdAt", "userId", "businessId"
         FROM "Notification"
         WHERE "userId" = $1
           AND "businessId" = $2
           AND ($3::boolean IS NOT TRUE OR "isRead" = false)
         ORDER BY "createdAt" DESC
+        LIMIT $4
+        OFFSET $5
       `,
-      [scope.user.id, scope.businessId, onlyUnread],
+      [scope.user.id, scope.businessId, onlyUnread, pagination.limit, pagination.offset],
     );
-    return this.paged(rows);
+    return this.paged(rows, pagination.page, pagination.limit);
   }
 
   async countUnreadNotifications(headers: HeadersLike) {
@@ -4035,12 +4126,26 @@ export class InventoryApiService {
     }
   }
 
-  private paged<T>(data: T[]): Paged<T> {
+  private parsePagination(
+    query: Record<string, string | undefined>,
+    defaultLimit = 100,
+    maxLimit = 500,
+  ) {
+    const page = Math.max(Number(query.page) || 1, 1);
+    const limit = Math.min(Math.max(Number(query.limit) || defaultLimit, 1), maxLimit);
+    return {
+      page,
+      limit,
+      offset: (page - 1) * limit,
+    };
+  }
+
+  private paged<T>(data: T[], page = 1, limit = data.length || 50): Paged<T> {
     return {
       data,
       total: data.length,
-      page: 1,
-      limit: data.length || 50,
+      page,
+      limit,
       totalPages: 1,
     };
   }

@@ -211,6 +211,8 @@ export function useStockMovementsQuery<TData = ApiStockMovement[]>(
     type?: string;
     referenceType?: string;
     referenceId?: string;
+    page?: number;
+    limit?: number;
   },
   options?: SelectOptions<ApiStockMovement[], TData>,
 ) {
