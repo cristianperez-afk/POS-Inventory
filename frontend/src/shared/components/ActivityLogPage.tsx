@@ -66,7 +66,7 @@ export function ActivityLogPage({ currentUser, storeBrand, onLogout, onNavigate 
 
       setLoading(true);
       try {
-        const params = new URLSearchParams({ user_id: String(currentUser.id) });
+        const params = new URLSearchParams();
         if (dateFrom) params.set('date_from', dateFrom);
         if (dateTo) params.set('date_to', dateTo);
         if (userFilter !== 'All') params.set('actor_user_id', userFilter);

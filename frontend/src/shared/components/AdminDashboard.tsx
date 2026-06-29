@@ -97,7 +97,7 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
       }
 
       try {
-        const response = await fetch(`${getApiBaseUrl()}/admin/staff?admin_user_id=${currentUser.id}`);
+        const response = await fetch(`${getApiBaseUrl()}/admin/staff`);
         const data = await response.json();
 
         if (!response.ok) {
@@ -161,7 +161,6 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
         method: editingUser ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          admin_user_id: currentUser.id,
           full_name: formName,
           email: formEmail,
           password: formPassword || undefined,
@@ -203,7 +202,7 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
     setError('');
 
     try {
-      const response = await fetch(`${getApiBaseUrl()}/admin/staff/${user.id}?admin_user_id=${currentUser.id}`, {
+      const response = await fetch(`${getApiBaseUrl()}/admin/staff/${user.id}`, {
         method: 'DELETE',
       });
       const data = await response.json();
@@ -230,7 +229,7 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
     setError('');
 
     try {
-      const response = await fetch(`${getApiBaseUrl()}/admin/staff/${user.id}/activate?admin_user_id=${currentUser.id}`, {
+      const response = await fetch(`${getApiBaseUrl()}/admin/staff/${user.id}/activate`, {
         method: 'PATCH',
       });
       const data = await response.json();
@@ -257,7 +256,7 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
     setError('');
 
     try {
-      const response = await fetch(`${getApiBaseUrl()}/admin/staff/${user.id}/permanent?admin_user_id=${currentUser.id}`, {
+      const response = await fetch(`${getApiBaseUrl()}/admin/staff/${user.id}/permanent`, {
         method: 'DELETE',
       });
       const data = await response.json();

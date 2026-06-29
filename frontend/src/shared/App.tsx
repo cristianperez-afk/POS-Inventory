@@ -106,7 +106,7 @@ export default function App() {
     let cancelled = false;
     const loadThemePreferences = async () => {
       try {
-        const response = await fetch(`${getApiBaseUrl()}/admin/theme-preferences?user_id=${currentUser.id}`);
+        const response = await fetch(`${getApiBaseUrl()}/admin/theme-preferences`);
         if (!response.ok) throw new Error('Unable to load theme preferences.');
         const data = await response.json();
         if (cancelled) return;
@@ -171,7 +171,7 @@ export default function App() {
       const shouldUseStrictDefaultLogo = currentUser.store_type === 'RESTAURANT' || currentUser.store_type === 'RETAIL_STORE';
 
       try {
-        const response = await fetch(`${getApiBaseUrl()}/admin/store-information?admin_user_id=${currentUser.id}`);
+        const response = await fetch(`${getApiBaseUrl()}/admin/store-information`);
         const data = await response.json();
 
         if (response.ok) {

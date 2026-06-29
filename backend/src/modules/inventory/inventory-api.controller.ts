@@ -2,10 +2,13 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, UseGuard
 import { AuthenticatedUser } from '../../shared/common/types';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { Permissions } from '../auth/permissions.decorator';
+import { RolesGuard } from '../auth/roles.guard';
 import { InventoryApiService } from './inventory-api.service';
 
 @Controller('api')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Permissions('inventory:manage')
 export class InventoryApiController {
   constructor(private readonly inventoryApiService: InventoryApiService) {}
 

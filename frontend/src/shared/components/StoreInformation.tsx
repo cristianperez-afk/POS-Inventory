@@ -69,7 +69,7 @@ export function StoreInformation({ currentUser, onLogout, onNavigate, onUserUpda
       }
 
       try {
-        const response = await fetch(`${getApiBaseUrl()}/admin/store-information?admin_user_id=${currentUser.id}`);
+        const response = await fetch(`${getApiBaseUrl()}/admin/store-information`);
         const data = await response.json();
 
         if (!response.ok) {
@@ -127,7 +127,6 @@ export function StoreInformation({ currentUser, onLogout, onNavigate, onUserUpda
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          admin_user_id: currentUser.id,
           business_name: storeInfo.business_name,
           business_description: textOrNull(storeInfo.business_description),
           address: textOrNull(storeInfo.address),

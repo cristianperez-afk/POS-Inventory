@@ -35,21 +35,12 @@ declare global {
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const baseUrl = getApiBaseUrl();
-  const bridgeHeaders: Record<string, string> = {};
-  if (typeof window !== 'undefined' && window.__POS_INVENTORY_USER__) {
-    bridgeHeaders['x-pos-user-id'] = window.__POS_INVENTORY_USER__.id;
-    bridgeHeaders['x-pos-bridge-email'] = window.__POS_INVENTORY_USER__.email;
-    bridgeHeaders['x-pos-bridge-name'] = window.__POS_INVENTORY_USER__.name;
-    bridgeHeaders['x-pos-bridge-role'] = window.__POS_INVENTORY_USER__.role;
-    bridgeHeaders['x-pos-store-type'] = window.__POS_STORE_TYPE__ ?? '';
-  }
 
   const response = await fetch(`${baseUrl}${path}`, {
     ...options,
     credentials: 'include', // sends the HttpOnly cookie automatically
     headers: {
       'Content-Type': 'application/json',
-      ...bridgeHeaders,
       ...options.headers,
     },
   });

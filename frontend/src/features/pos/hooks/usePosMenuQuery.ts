@@ -76,7 +76,7 @@ export function usePosMenuQuery(userId?: number | string | null) {
   return useQuery({
     queryKey: ['pos-menu', userId],
     enabled: Boolean(userId),
-    queryFn: () => apiClient<PosMenuProduct[]>(`/pos/menu?user_id=${userId}`),
+    queryFn: () => apiClient<PosMenuProduct[]>('/pos/menu'),
     refetchInterval: 60_000,
     refetchOnWindowFocus: true,
   });
@@ -86,7 +86,7 @@ export function usePosIngredientsQuery(userId?: number | string | null) {
   return useQuery({
     queryKey: ['pos-ingredients', userId],
     enabled: Boolean(userId),
-    queryFn: () => apiClient<PosIngredient[]>(`/pos/ingredients?user_id=${userId}`),
+    queryFn: () => apiClient<PosIngredient[]>('/pos/ingredients'),
     staleTime: 10 * 60_000,
     gcTime: 30 * 60_000,
     refetchOnWindowFocus: false,
@@ -97,7 +97,7 @@ export function useProductRecipeQuery(userId?: number | string | null, productId
   return useQuery({
     queryKey: ['pos-product-recipe', userId, productId],
     enabled: Boolean(userId && productId),
-    queryFn: () => apiClient(`/products/${productId}/recipe?user_id=${userId}`),
+    queryFn: () => apiClient(`/products/${productId}/recipe`),
     refetchOnWindowFocus: true,
   });
 }
@@ -110,8 +110,8 @@ export function useCreateOrderMutation() {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-    onSuccess: (_data, payload: any) => {
-      void queryClient.invalidateQueries({ queryKey: ['pos-menu', payload?.user_id] });
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['pos-menu'] });
     },
   });
 }

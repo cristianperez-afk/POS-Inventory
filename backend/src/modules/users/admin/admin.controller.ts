@@ -1,9 +1,11 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { Type } from 'class-transformer';
 import { IsArray, IsBoolean, IsEmail, IsIn, IsNumber, IsObject, IsOptional, IsString, MinLength } from 'class-validator';
 import { AuthenticatedUser } from '../../../shared/common/types';
 import { CurrentUser } from '../../auth/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
+import { Permissions } from '../../auth/permissions.decorator';
 import { Roles } from '../../auth/roles.decorator';
 import { RolesGuard } from '../../auth/roles.guard';
 import { AdminService } from './admin.service';
@@ -14,11 +16,6 @@ type StaffType = (typeof STAFF_TYPES)[number];
 type StaffRole = (typeof STAFF_ROLES)[number];
 
 class CreateStaffDto {
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
-  admin_user_id?: number;
-
   @IsString()
   full_name!: string;
 
@@ -43,11 +40,6 @@ class CreateStaffDto {
 }
 
 class UpdateStaffDto {
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
-  admin_user_id?: number;
-
   @IsString()
   full_name!: string;
 
@@ -73,27 +65,12 @@ class UpdateStaffDto {
 }
 
 class VerifyRetailVoidPinDto {
-  @Type(() => Number)
-  @IsNumber()
-  user_id!: number;
-
   @IsString()
   @MinLength(4)
   void_pin!: string;
 }
 
-class RetailManagerProfileDto {
-  @Type(() => Number)
-  @IsNumber()
-  user_id!: number;
-}
-
 class UpdateStoreInformationDto {
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
-  admin_user_id?: number;
-
   @IsString()
   business_name!: string;
 
@@ -149,11 +126,6 @@ class UpdateStoreInformationDto {
 }
 
 class UpdateStoreSettingsDto {
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
-  admin_user_id?: number;
-
   @IsOptional()
   @IsBoolean()
   enable_customer_recommendation?: boolean;
@@ -273,10 +245,6 @@ class UpdateStoreSettingsDto {
 }
 
 class ThemePreferencesDto {
-  @Type(() => Number)
-  @IsNumber()
-  user_id!: number;
-
   @IsOptional()
   @IsBoolean()
   compact_mode?: boolean;
@@ -315,11 +283,6 @@ class ThemePreferencesDto {
 }
 
 class DiscountSettingDto {
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
-  admin_user_id?: number;
-
   @IsString()
   discount_name!: string;
 
@@ -339,11 +302,15 @@ export class AdminController {
   constructor(private readonly adminService: AdminService) {}
 
   @Get('staff')
+  @Permissions('staff:manage')
   listStaff(@CurrentUser() user: AuthenticatedUser) {
     return this.adminService.listStaff(user.id);
   }
 
   @Post('staff')
+  @Permissions('staff:manage')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
   createStaff(@Body() body: CreateStaffDto, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.createStaff({
       adminUserId: user.id,
@@ -357,6 +324,9 @@ export class AdminController {
   }
 
   @Patch('staff/:id')
+  @Permissions('staff:manage')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 30, ttl: 60000 } })
   updateStaff(@Param('id') id: string, @Body() body: UpdateStaffDto, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.updateStaff({
       adminUserId: user.id,
@@ -371,24 +341,34 @@ export class AdminController {
   }
 
   @Post('retail/void-pin/verify')
-  verifyRetailVoidPin(@Body() body: VerifyRetailVoidPinDto) {
+  @Permissions('retail:void_authorize')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 8, ttl: 60000 } })
+  verifyRetailVoidPin(@Body() body: VerifyRetailVoidPinDto, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.verifyRetailVoidPin({
-      userId: Number(body.user_id),
+      userId: user.id,
       voidPin: body.void_pin,
     });
   }
 
   @Get('retail/manager-profile')
-  getRetailManagerProfile(@Query('user_id') userId: string) {
-    return this.adminService.getRetailManagerProfile(Number(userId));
+  @Permissions('retail:void_authorize')
+  getRetailManagerProfile(@CurrentUser() user: AuthenticatedUser) {
+    return this.adminService.getRetailManagerProfile(user.id);
   }
 
   @Post('retail/manager-profile/unique-pin')
-  generateRetailManagerUniquePin(@Body() body: RetailManagerProfileDto) {
-    return this.adminService.generateRetailManagerUniquePin(Number(body.user_id));
+  @Permissions('retail:void_authorize')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  generateRetailManagerUniquePin(@CurrentUser() user: AuthenticatedUser) {
+    return this.adminService.generateRetailManagerUniquePin(user.id);
   }
 
   @Delete('staff/:id')
+  @Permissions('staff:manage')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 30, ttl: 60000 } })
   deleteStaff(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.deleteStaff({
       adminUserId: user.id,
@@ -397,6 +377,9 @@ export class AdminController {
   }
 
   @Delete('staff/:id/permanent')
+  @Permissions('staff:manage')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   permanentlyDeleteStaff(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.permanentlyDeleteStaff({
       adminUserId: user.id,
@@ -405,6 +388,9 @@ export class AdminController {
   }
 
   @Patch('staff/:id/activate')
+  @Permissions('staff:manage')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 30, ttl: 60000 } })
   activateStaff(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.activateStaff({
       adminUserId: user.id,
@@ -418,6 +404,9 @@ export class AdminController {
   }
 
   @Post('store-information')
+  @Permissions('settings:manage')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
   updateStoreInformation(@Body() body: UpdateStoreInformationDto, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.updateStoreInformation({
       adminUserId: user.id,
@@ -443,6 +432,9 @@ export class AdminController {
   }
 
   @Post('store-settings')
+  @Permissions('settings:manage')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
   updateStoreSettings(@Body() body: UpdateStoreSettingsDto, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.updateStoreSettings({
       adminUserId: user.id,
@@ -476,36 +468,42 @@ export class AdminController {
   }
 
   @Get('theme-preferences')
-  getThemePreferences(@Query('user_id') userId: string) {
-    return this.adminService.getThemePreferences(Number(userId));
+  getThemePreferences(@CurrentUser() user: AuthenticatedUser) {
+    return this.adminService.getThemePreferences(user.id);
   }
 
   @Post('theme-preferences/personal')
-  updatePersonalThemePreferences(@Body() body: ThemePreferencesDto) {
-    const { user_id, ...preferences } = body;
+  @Permissions('theme:manage_personal')
+  updatePersonalThemePreferences(@Body() preferences: ThemePreferencesDto, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.updatePersonalThemePreferences({
-      userId: Number(user_id),
-      preferences,
+      userId: user.id,
+      preferences: preferences as unknown as Record<string, unknown>,
     });
   }
 
   @Delete('theme-preferences/personal')
-  clearPersonalThemePreferences(@Query('user_id') userId: string) {
-    return this.adminService.clearPersonalThemePreferences(Number(userId));
+  @Permissions('theme:manage_personal')
+  clearPersonalThemePreferences(@CurrentUser() user: AuthenticatedUser) {
+    return this.adminService.clearPersonalThemePreferences(user.id);
   }
 
   @Post('theme-preferences/store')
-  updateStoreThemePreferences(@Body() body: ThemePreferencesDto) {
-    const { user_id, ...preferences } = body;
+  @Permissions('theme:manage_store')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
+  updateStoreThemePreferences(@Body() preferences: ThemePreferencesDto, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.updateStoreThemePreferences({
-      userId: Number(user_id),
-      preferences,
+      userId: user.id,
+      preferences: preferences as unknown as Record<string, unknown>,
     });
   }
 
   @Delete('theme-preferences/store')
-  clearStoreThemePreferences(@Query('user_id') userId: string) {
-    return this.adminService.clearStoreThemePreferences(Number(userId));
+  @Permissions('theme:manage_store')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
+  clearStoreThemePreferences(@CurrentUser() user: AuthenticatedUser) {
+    return this.adminService.clearStoreThemePreferences(user.id);
   }
 
   @Get('discount-settings')
@@ -514,8 +512,9 @@ export class AdminController {
   }
 
   @Get('activity-logs')
+  @Permissions('activity:read_store')
   listActivityLogs(
-    @Query('user_id') userId: string,
+    @CurrentUser() user: AuthenticatedUser,
     @Query('date_from') dateFrom?: string,
     @Query('date_to') dateTo?: string,
     @Query('actor_user_id') actorUserId?: string,
@@ -524,7 +523,7 @@ export class AdminController {
     @Query('search') search?: string,
   ) {
     return this.adminService.listActivityLogs({
-      userId: Number(userId),
+      userId: user.id,
       dateFrom,
       dateTo,
       actorUserId: actorUserId ? Number(actorUserId) : undefined,
@@ -535,9 +534,12 @@ export class AdminController {
   }
 
   @Post('activity-logs')
-  recordActivityLog(@Body() body: any) {
+  @Permissions('activity:read_store')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 60, ttl: 60000 } })
+  recordActivityLog(@Body() body: any, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.recordActivityLog({
-      userId: Number(body.user_id),
+      userId: user.id,
       module: String(body.module ?? ''),
       action: String(body.action ?? ''),
       details: String(body.details ?? ''),
@@ -545,6 +547,9 @@ export class AdminController {
   }
 
   @Post('discount-settings')
+  @Permissions('discounts:manage')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
   createDiscountSetting(@Body() body: DiscountSettingDto, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.createDiscountSetting({
       adminUserId: user.id,
@@ -555,6 +560,9 @@ export class AdminController {
   }
 
   @Patch('discount-settings/:id')
+  @Permissions('discounts:manage')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 30, ttl: 60000 } })
   updateDiscountSetting(@Param('id') id: string, @Body() body: DiscountSettingDto, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.updateDiscountSetting({
       adminUserId: user.id,
@@ -566,6 +574,9 @@ export class AdminController {
   }
 
   @Delete('discount-settings/:id')
+  @Permissions('discounts:manage')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 30, ttl: 60000 } })
   deleteDiscountSetting(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.deleteDiscountSetting({
       adminUserId: user.id,
@@ -584,14 +595,17 @@ export class AdminController {
   }
 
   @Get('pos/tables')
-  listDiningTables(@Query('user_id') userId: string) {
-    return this.adminService.listDiningTables(Number(userId));
+  listDiningTables(@CurrentUser() user: AuthenticatedUser) {
+    return this.adminService.listDiningTables(user.id);
   }
 
   @Post('pos/tables')
-  createDiningTable(@Body() body: any) {
+  @Permissions('pos:manage')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 30, ttl: 60000 } })
+  createDiningTable(@Body() body: any, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.createDiningTable({
-      userId: Number(body.user_id),
+      userId: user.id,
       tableNumber: String(body.table_number ?? body.table_name ?? ''),
       totalSeats: Number(body.total_seats),
       isShared: Boolean(body.is_shared),
@@ -599,9 +613,12 @@ export class AdminController {
   }
 
   @Patch('pos/tables/:id')
-  updateDiningTable(@Param('id') id: string, @Body() body: any) {
+  @Permissions('pos:manage')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 60, ttl: 60000 } })
+  updateDiningTable(@Param('id') id: string, @Body() body: any, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.updateDiningTable({
-      userId: Number(body.user_id),
+      userId: user.id,
       tableId: id,
       tableNumber: String(body.table_number ?? body.table_name ?? ''),
       totalSeats: Number(body.total_seats),
@@ -610,17 +627,23 @@ export class AdminController {
   }
 
   @Delete('pos/tables/:id')
-  deleteDiningTable(@Param('id') id: string, @Query('user_id') userId: string) {
+  @Permissions('pos:manage')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 30, ttl: 60000 } })
+  deleteDiningTable(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.deleteDiningTable({
-      userId: Number(userId),
+      userId: user.id,
       tableId: id,
     });
   }
 
   @Patch('pos/tables/:id/occupancy')
-  setDiningTableOccupancy(@Param('id') id: string, @Body() body: any) {
+  @Permissions('pos:manage')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 120, ttl: 60000 } })
+  setDiningTableOccupancy(@Param('id') id: string, @Body() body: any, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.setDiningTableOccupancy({
-      userId: Number(body.user_id),
+      userId: user.id,
       tableId: id,
       occupiedSeats: Number(body.occupied_seats),
     });
@@ -632,6 +655,9 @@ export class AdminController {
   }
 
   @Post('pos/orders')
+  @Permissions('pos:manage')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 60, ttl: 60000 } })
   createPaidPosOrder(@Body() body: any, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.createPaidPosOrder({
       ...body,
@@ -640,6 +666,9 @@ export class AdminController {
   }
 
   @Patch('pos/orders/:orderNumber')
+  @Permissions('pos:manage')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 120, ttl: 60000 } })
   updatePosOrder(@Param('orderNumber') orderNumber: string, @Body() body: any, @CurrentUser() user: AuthenticatedUser) {
     return this.adminService.updatePosOrder({
       ...body,

@@ -1,10 +1,12 @@
 import { Global, Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { EmailModule } from '../../shared/email/email.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { CsrfGuard } from './csrf.guard';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { getJwtSecret } from './jwt-secret';
 import { RolesGuard } from './roles.guard';
@@ -25,7 +27,20 @@ import { RolesGuard } from './roles.guard';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtAuthGuard, RolesGuard],
+  providers: [
+    AuthService,
+    JwtAuthGuard,
+    CsrfGuard,
+    RolesGuard,
+    {
+      provide: APP_GUARD,
+      useClass: JwtAuthGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: CsrfGuard,
+    },
+  ],
   exports: [JwtModule, JwtAuthGuard, RolesGuard],
 })
 export class AuthModule {}

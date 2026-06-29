@@ -49,7 +49,7 @@ export function ManagerProfile({ currentUser, storeBrand, onLogout, onNavigate, 
       const response = await fetch(`${getApiBaseUrl()}/admin/retail/manager-profile/unique-pin`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: currentUser.id }),
+        body: JSON.stringify({}),
       });
       const data = await response.json();
 
@@ -85,7 +85,7 @@ export function ManagerProfile({ currentUser, storeBrand, onLogout, onNavigate, 
       }
 
       try {
-        const response = await fetch(`${getApiBaseUrl()}/admin/retail/manager-profile?user_id=${currentUser.id}`);
+        const response = await fetch(`${getApiBaseUrl()}/admin/retail/manager-profile`);
         const data = await response.json();
 
         if (!response.ok) {

@@ -151,7 +151,7 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
       if (!currentUser?.id) return;
 
       try {
-        const response = await fetch(`${getApiBaseUrl()}/admin/pos/next-order-number?user_id=${currentUser.id}`);
+        const response = await fetch(`${getApiBaseUrl()}/admin/pos/next-order-number`);
         const data = await response.json();
         const nextOrderNumber = Number(data?.order_number);
 
@@ -400,7 +400,6 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          user_id: currentUser.id,
           void_pin: voidPasscode,
         }),
       });
@@ -568,7 +567,6 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
     try {
       if (currentUser?.id) {
         const data: any = await completePaymentMutation.mutateAsync({
-          user_id: currentUser.id,
           orderNumber: `RET-${transactionNumber}`,
           customerName: order.customer ?? null,
           orderType: 'RETAIL',

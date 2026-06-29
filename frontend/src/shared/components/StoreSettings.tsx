@@ -134,7 +134,6 @@ export function StoreSettings({ currentUser, storeBrand, onLogout, onNavigate }:
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          admin_user_id: currentUser.id,
           enable_customer_recommendation: settings.enable_customer_recommendation,
           enable_table_management: settings.enable_table_management,
           enable_refund: settings.enable_refund,
@@ -237,7 +236,6 @@ export function StoreSettings({ currentUser, storeBrand, onLogout, onNavigate }:
         method: discountForm.id ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          admin_user_id: currentUser.id,
           discount_name: discountForm.discount_name,
           discount_rate: discountForm.discount_rate,
           is_enabled: true,
@@ -260,7 +258,7 @@ export function StoreSettings({ currentUser, storeBrand, onLogout, onNavigate }:
     if (!currentUser?.id) return;
     setSaving(true);
     try {
-      const response = await fetch(`${getApiBaseUrl()}/admin/discount-settings/${discount.id}?admin_user_id=${currentUser.id}`, {
+      const response = await fetch(`${getApiBaseUrl()}/admin/discount-settings/${discount.id}`, {
         method: 'DELETE',
       });
       const data = await response.json();

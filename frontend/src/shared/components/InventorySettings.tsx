@@ -48,7 +48,6 @@ export function InventorySettings({ currentUser }: InventorySettingsProps) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          admin_user_id: currentUser.id,
           auto_deduct_inventory_on_sale: settings.auto_deduct_inventory_on_sale,
           allow_negative_stock: settings.allow_negative_stock,
           default_low_stock_threshold: settings.default_low_stock_threshold,
