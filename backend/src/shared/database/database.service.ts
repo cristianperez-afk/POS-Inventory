@@ -3801,9 +3801,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         );
         const orderId = orderRows[0].id;
         const inventorySaleMovements: PosSaleMovement[] = [];
-        const inventorySyncSettings = isPaid
-          ? await this.getInventorySyncSettingsForStore(client, user.store_id!)
-          : null;
+        const inventorySyncSettings = await this.getInventorySyncSettingsForStore(client, user.store_id!);
 
       for (const item of input.items ?? []) {
         const itemRows = await this.queryWithClient<{ id: number }>(
@@ -3835,7 +3833,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         );
         const orderItemId = itemRows[0].id;
 
-        if (isPaid && inventorySyncSettings?.autoDeductInventoryOnSale) {
+        if (inventorySyncSettings.autoDeductInventoryOnSale) {
           if (user.store_type === 'RETAIL_STORE') {
             await this.deductRetailProduct(client, user.store_id!, orderId, orderItemId, item, item.productId ?? item.id, item.variantId ?? item.variant_id, item.quantity ?? 1, inventorySaleMovements, inventorySyncSettings);
           } else {
@@ -3846,7 +3844,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
-      if (isPaid && inventorySyncSettings?.autoDeductInventoryOnSale) {
+      if (inventorySyncSettings.autoDeductInventoryOnSale) {
         await this.writeInventorySaleRecords(client, { user, orderNumber, input, movements: inventorySaleMovements });
       }
 
@@ -4181,10 +4179,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ],
         );
 
-        // Deferred payment (e.g. dine-in / open tab paid later): deduct stock and
-        // mirror into the inventory "Sale"/"StockMovement" tables, just like a paid-
-        // at-creation order. Guarded so it never double-deducts.
-        await this.applyInventoryForPaidPosOrder(client, user, order, input.payment);
+        // Inventory is reserved/deducted when the order is confirmed. Payment only
+        // records settlement and must not replay deduction for Pay Later orders.
       }
 
       const nextTableName = input.tableName ?? priorRows[0]?.table_name ?? null;
