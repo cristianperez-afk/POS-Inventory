@@ -21,6 +21,13 @@ import logoImage from "../../imports/ims-logo.png";
 import { NotificationBell } from "../../app/components/NotificationBell";
 import "./restaurantLegacyTheme.css";
 
+// Maps a notification's entity to the restaurant view that shows it.
+const NOTIFICATION_ENTITY_TO_VIEW: Record<string, string> = {
+  TRANSFER: "restaurant-transfers",
+  StockAdjustment: "restaurant-transfers",
+  INVENTORY_ITEM: "restaurant-stock-control",
+};
+
 const navItems = [
   { view: "restaurant-dashboard", icon: LayoutDashboard, label: "Dashboard", roles: ["Admin", "Staff"] },
   { view: "restaurant-stock-control", icon: Package, label: "Stock Control & Alerts", roles: ["Admin", "Staff"] },
@@ -161,7 +168,13 @@ export function RestaurantLayout({
 
       <main className="flex-1 overflow-auto scrollbar-none [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
         <div className="flex items-center justify-end px-6 py-2.5 border-b border-border bg-card">
-          <NotificationBell buttonClassName="text-muted-foreground hover:text-foreground hover:bg-muted" />
+          <NotificationBell
+            buttonClassName="text-muted-foreground hover:text-foreground hover:bg-muted"
+            onSelectNotification={(n) => {
+              const view = n.entityType ? NOTIFICATION_ENTITY_TO_VIEW[n.entityType] : undefined;
+              if (view) onNavigate(view);
+            }}
+          />
         </div>
         {dataError && (
           <div className="flex items-center justify-between gap-4 border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">

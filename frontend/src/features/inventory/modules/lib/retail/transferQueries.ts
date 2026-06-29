@@ -89,7 +89,7 @@ export function useCompleteRetailTransferMutation() {
 
 export function useCancelRetailTransferMutation() {
   return useRetailMutation(
-    (id: string) => cancelTransfer(id, 'RETAIL'),
+    ({ id, reason }: { id: string; reason?: string }) => cancelTransfer(id, 'RETAIL', reason),
     [retailQueryKeys.transfers],
   );
 }

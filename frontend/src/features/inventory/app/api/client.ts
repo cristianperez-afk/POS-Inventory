@@ -30,6 +30,9 @@ declare global {
   interface Window {
     __POS_INVENTORY_USER__?: AuthUser | null;
     __POS_STORE_TYPE__?: string | null;
+    // Breadcrumb set when a notification is clicked, so the destination page can
+    // focus the right tab/entity on arrival. Consumed-and-cleared by the target.
+    __INVENTORY_DEEPLINK__?: { entityType?: string | null; entityId?: string | null; type?: string | null } | null;
   }
 }
 
@@ -589,8 +592,11 @@ export function completeTransfer(id: string, module?: BusinessModule) {
   return request<ApiTransfer>(`/api/transfers/${id}/complete${moduleSuffix(module)}`, { method: 'PATCH' });
 }
 
-export function cancelTransfer(id: string, module?: BusinessModule) {
-  return request<ApiTransfer>(`/api/transfers/${id}/cancel${moduleSuffix(module)}`, { method: 'PATCH' });
+export function cancelTransfer(id: string, module?: BusinessModule, reason?: string) {
+  return request<ApiTransfer>(`/api/transfers/${id}/cancel${moduleSuffix(module)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ reason: reason ?? '' }),
+  });
 }
 
 // ─── Sales ───────────────────────────────────────────────────────────────────

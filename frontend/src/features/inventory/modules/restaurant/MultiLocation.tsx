@@ -51,6 +51,7 @@ export function MultiLocation() {
 
   const [showAddLocation, setShowAddLocation] = useState(false);
   const [newName, setNewName] = useState("");
+  const [newType, setNewType] = useState<"warehouse" | "store" | "kitchen">("warehouse");
   const [newAddress, setNewAddress] = useState("");
   const [newManager, setNewManager] = useState("");
   const [newPhone, setNewPhone] = useState("");
@@ -64,6 +65,7 @@ export function MultiLocation() {
     try {
       await createLocationMutation.mutateAsync({
         name: newName.trim(),
+        type: newType,
         address: newAddress.trim(),
         manager: newManager.trim(),
         phone: newPhone.trim(),
@@ -71,6 +73,7 @@ export function MultiLocation() {
       toast.success(`Location "${newName.trim()}" added.`);
       setShowAddLocation(false);
       setNewName("");
+      setNewType("warehouse");
       setNewAddress("");
       setNewManager("");
       setNewPhone("");
@@ -212,7 +215,7 @@ export function MultiLocation() {
       .map(loc => ({
         id: loc.id,
         name: loc.name,
-        type: "warehouse" as const,
+        type: (["warehouse", "store", "kitchen"].includes(loc.type ?? "") ? loc.type : "warehouse") as Location["type"],
         address: loc.address || "—",
         manager: loc.manager || "Unassigned",
         totalProducts: loc.itemCount ?? 0,
@@ -619,6 +622,14 @@ export function MultiLocation() {
               <div>
                 <label className="mb-1 block text-sm font-medium text-foreground">Name<span className="text-red-500"> *</span></label>
                 <input value={newName} onChange={(e) => setNewName(e.target.value)} required placeholder="e.g. Main Warehouse" className="w-full rounded-lg border border-border bg-input-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary" />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-foreground">Type<span className="text-red-500"> *</span></label>
+                <select value={newType} onChange={(e) => setNewType(e.target.value as "warehouse" | "store" | "kitchen")} className="w-full rounded-lg border border-border bg-input-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary">
+                  <option value="warehouse">Warehouse</option>
+                  <option value="store">Store</option>
+                  <option value="kitchen">Kitchen</option>
+                </select>
               </div>
               <div>
                 <label className="mb-1 block text-sm font-medium text-foreground">Address</label>

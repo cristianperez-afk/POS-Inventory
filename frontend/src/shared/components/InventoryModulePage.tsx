@@ -4,8 +4,17 @@ import { Toaster, toast } from 'sonner';
 import { appQueryClient } from '../../query/appQueryClient';
 import { SessionProvider } from '@inventory/app/hooks/useSession';
 import { NotificationBell } from '@inventory/app/components/NotificationBell';
+import type { ApiNotification } from '@inventory/app/api/domainTypes';
 import type { AuthenticatedUser } from '../../auth/types/auth';
 import type { Page } from '../App';
+
+// Maps a notification's entity to the inventory page that shows it.
+const NOTIFICATION_ENTITY_TO_PAGE: Record<string, Page> = {
+  TRANSFER: 'inventory-transfers',
+  StockAdjustment: 'inventory-transfers',
+  INVENTORY_ITEM: 'inventory-stock-alerts',
+  BundlePackage: 'inventory-item-bundling',
+};
 import { InventorySettings } from './InventorySettings';
 import '@inventory/modules/restaurant/restaurantLegacyTheme.css';
 
@@ -119,7 +128,13 @@ export function InventoryModulePage({
             )}
             {/* Slim bell bar — its own row so it never overlaps page content. */}
             <div className="flex h-10 shrink-0 items-center justify-end border-b border-black/5 px-6">
-              <NotificationBell buttonClassName="text-[#6b7280] hover:bg-white hover:text-[#323B42]" />
+              <NotificationBell
+                buttonClassName="text-[#6b7280] hover:bg-white hover:text-[#323B42]"
+                onSelectNotification={(n: ApiNotification) => {
+                  const page = n.entityType ? NOTIFICATION_ENTITY_TO_PAGE[n.entityType] : undefined;
+                  if (page) onNavigate?.(page);
+                }}
+              />
             </div>
             <div className="flex-1 overflow-y-auto px-6 pb-6 pt-4">
               <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-slate-500">Loading inventory...</div>}>

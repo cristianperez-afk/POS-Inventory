@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { ArrowLeftRight, Plus, Search, TrendingUp, TrendingDown, AlertCircle, CheckCircle, Clock, X, FileText, Trash2, PhilippinePeso, BarChart3, Calendar } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ArrowLeftRight, Plus, Search, TrendingUp, TrendingDown, AlertCircle, CheckCircle, Clock, X, FileText, Trash2, PhilippinePeso, BarChart3, Calendar, Eye, ClipboardCheck } from "lucide-react";
 import { toast } from "sonner";
 import {
   useCreateRestaurantStockMovementMutation,
@@ -13,6 +13,7 @@ import {
 import { StockAdjustments } from "./StockAdjustments";
 import { getLocalDateKey } from "../../../../shared/utils/date";
 import { InlineDataLoading } from "../shared/InlineDataLoading";
+import { useSession } from "../../app/hooks/useSession";
 
 type TransferStatus = "pending" | "approved" | "in-transit" | "completed" | "rejected";
 type AdjustmentType = "damage" | "shrinkage" | "waste" | "found" | "correction";
@@ -26,6 +27,7 @@ type Transfer = {
   from: string;
   to: string;
   requestedBy: string;
+  requestedByEmail?: string;
   requestDate: string;
   status: TransferStatus;
   approvedBy?: string;
@@ -62,6 +64,9 @@ type WasteLog = {
 };
 
 export function Transfers() {
+  const { currentUser } = useSession();
+  const isAdmin = currentUser?.role === "Admin";
+  const currentUserEmail = (currentUser?.email ?? "").toLowerCase();
   const [activeTab, setActiveTab] = useState<"transfers" | "adjustments" | "waste">("transfers");
   const [wasteView, setWasteView] = useState<"logs" | "report">("logs");
   const [searchQuery, setSearchQuery] = useState("");
@@ -69,6 +74,9 @@ export function Transfers() {
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [showWasteModal, setShowWasteModal] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [showApprovalModal, setShowApprovalModal] = useState(false);
+  const [approvalTransfer, setApprovalTransfer] = useState<Transfer | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
   const [selectedItem, setSelectedItem] = useState<Transfer | Adjustment | WasteLog | null>(null);
   const [dateRange, setDateRange] = useState({ start: "2026-05-01", end: "2026-05-31" });
 
@@ -121,6 +129,32 @@ export function Transfers() {
   const moveTransfer = useRestaurantTransferActionMutation();
   const saveMovement = useCreateRestaurantStockMovementMutation();
 
+  // Focus the right tab when arriving from a notification deep-link (handles both
+  // navigating in fresh and the page already being mounted).
+  useEffect(() => {
+    const applyDeeplink = () => {
+      const hint = window.__INVENTORY_DEEPLINK__;
+      if (!hint) return;
+      if (hint.entityType === "StockAdjustment") {
+        setActiveTab("adjustments");
+        // Leave the breadcrumb for the embedded StockAdjustments panel to consume.
+        return;
+      }
+      if (hint.entityType === "TRANSFER") {
+        setActiveTab("transfers");
+        if (hint.entityId) {
+          // Isolate the exact transfer row (search matches the transfer id).
+          setStatusFilter("all");
+          setSearchQuery(hint.entityId);
+        }
+      }
+      window.__INVENTORY_DEEPLINK__ = null;
+    };
+    applyDeeplink();
+    window.addEventListener("inventory:deeplink", applyDeeplink);
+    return () => window.removeEventListener("inventory:deeplink", applyDeeplink);
+  }, []);
+
   const filteredTransfers = transfers.filter(transfer => {
     const matchesSearch = (transfer.item || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
                          (transfer.id || '').toLowerCase().includes(searchQuery.toLowerCase());
@@ -171,16 +205,50 @@ export function Transfers() {
     }
   };
 
-  const handleApproveTransfer = async (id: string) => {
-    await moveTransfer.mutateAsync({ id, action: "dispatch" });
+  const openApproval = (transfer: Transfer) => {
+    setApprovalTransfer(transfer);
+    setRejectReason("");
+    setShowApprovalModal(true);
   };
 
-  const handleRejectTransfer = async (id: string) => {
-    await moveTransfer.mutateAsync({ id, action: "cancel" });
+  const closeApproval = () => {
+    setShowApprovalModal(false);
+    setApprovalTransfer(null);
+    setRejectReason("");
+  };
+
+  const handleApproveTransfer = async (id: string) => {
+    try {
+      await moveTransfer.mutateAsync({ id, action: "dispatch" });
+      toast.success("Transfer approved and dispatched");
+      closeApproval();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to approve transfer");
+    }
+  };
+
+  const handleRejectTransfer = async (id: string, reason: string, requireReason: boolean) => {
+    const trimmed = reason.trim();
+    if (requireReason && !trimmed) {
+      toast.error("Please provide a reason for rejecting this request.");
+      return;
+    }
+    try {
+      await moveTransfer.mutateAsync({ id, action: "cancel", reason: trimmed });
+      toast.success(requireReason ? "Transfer request rejected" : "Request withdrawn");
+      closeApproval();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to cancel transfer");
+    }
   };
 
   const handleCompleteTransfer = async (id: string) => {
-    await moveTransfer.mutateAsync({ id, action: "complete" });
+    try {
+      await moveTransfer.mutateAsync({ id, action: "complete" });
+      toast.success("Transfer marked as completed");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to complete transfer");
+    }
   };
 
   const getStatusBadge = (status: TransferStatus) => {
@@ -520,31 +588,39 @@ export function Transfers() {
                             setSelectedItem(transfer);
                             setShowDetailsModal(true);
                           }}
-                          className="text-primary hover:text-primary/80 text-xs"
+                          className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-foreground hover:bg-muted/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 transition-all"
                         >
+                          <Eye className="w-3.5 h-3.5" />
                           View
                         </button>
                         {transfer.status === "pending" && (
-                          <>
+                          isAdmin ? (
                             <button
-                              onClick={() => handleApproveTransfer(transfer.id)}
-                              className="text-green-600 hover:text-green-700 text-xs"
+                              onClick={() => openApproval(transfer)}
+                              className="inline-flex items-center gap-1 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 px-2.5 py-1.5 text-xs font-semibold text-white hover:shadow-md hover:shadow-amber-500/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/50 active:translate-y-0 transition-all"
                             >
-                              Approve
+                              <ClipboardCheck className="w-3.5 h-3.5" />
+                              Review
                             </button>
+                          ) : currentUserEmail && (transfer.requestedByEmail ?? "").toLowerCase() === currentUserEmail ? (
                             <button
-                              onClick={() => handleRejectTransfer(transfer.id)}
-                              className="text-red-600 hover:text-red-700 text-xs"
+                              onClick={() => openApproval(transfer)}
+                              className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-2.5 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400/40 transition-all dark:border-red-800 dark:text-red-300 dark:hover:bg-red-950/40"
                             >
-                              Reject
+                              <X className="w-3.5 h-3.5" />
+                              Withdraw
                             </button>
-                          </>
+                          ) : (
+                            <span className="px-2 text-xs italic text-muted-foreground">Awaiting approval</span>
+                          )
                         )}
-                        {transfer.status === "in-transit" && (
+                        {transfer.status === "in-transit" && isAdmin && (
                           <button
                             onClick={() => handleCompleteTransfer(transfer.id)}
-                            className="text-blue-600 hover:text-blue-700 text-xs"
+                            disabled={moveTransfer.isPending}
+                            className="inline-flex items-center gap-1 rounded-lg bg-blue-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/50 transition-all"
                           >
+                            <CheckCircle className="w-3.5 h-3.5" />
                             Complete
                           </button>
                         )}
@@ -951,6 +1027,142 @@ export function Transfers() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Transfer Approval Modal */}
+      {showApprovalModal && approvalTransfer && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-card rounded-xl shadow-xl w-full max-w-md border border-border max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between p-4 border-b border-border sticky top-0 bg-card">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center">
+                  <ClipboardCheck className="w-4 h-4 text-white" />
+                </div>
+                <h2 className="text-lg font-bold text-foreground">{isAdmin ? "Review Transfer Request" : "Withdraw Transfer Request"}</h2>
+              </div>
+              <button onClick={closeApproval} className="text-muted-foreground hover:text-foreground">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-3">
+              <div className="flex items-center justify-between rounded-lg border border-border bg-muted/40 p-3">
+                <span className="text-xs text-muted-foreground">Transfer ID</span>
+                <span className="text-sm font-semibold text-primary">{approvalTransfer.id}</span>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Item</p>
+                <p className="text-sm font-medium text-foreground">{approvalTransfer.item}</p>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <p className="text-xs text-muted-foreground">Quantity</p>
+                  <p className="text-sm font-medium text-foreground">{approvalTransfer.quantity} {approvalTransfer.unit}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Status</p>
+                  {getStatusBadge(approvalTransfer.status)}
+                </div>
+              </div>
+              <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 p-3">
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs text-muted-foreground">From</p>
+                  <p className="truncate text-sm font-medium text-foreground">{approvalTransfer.from}</p>
+                </div>
+                <ArrowLeftRight className="w-4 h-4 shrink-0 text-muted-foreground" />
+                <div className="min-w-0 flex-1 text-right">
+                  <p className="text-xs text-muted-foreground">To</p>
+                  <p className="truncate text-sm font-medium text-foreground">{approvalTransfer.to}</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <p className="text-xs text-muted-foreground">Requested By</p>
+                  <p className="text-sm font-medium text-foreground">{approvalTransfer.requestedBy}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Request Date</p>
+                  <p className="text-sm font-medium text-foreground">{approvalTransfer.requestDate}</p>
+                </div>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Notes</p>
+                <p className="text-sm text-foreground">{approvalTransfer.notes || "No notes"}</p>
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-foreground">
+                  {isAdmin ? (
+                    <>Reason for rejection <span className="font-normal text-muted-foreground">(required to reject)</span></>
+                  ) : (
+                    <>Reason for withdrawing <span className="font-normal text-muted-foreground">(optional)</span></>
+                  )}
+                </label>
+                <textarea
+                  value={rejectReason}
+                  onChange={(e) => setRejectReason(e.target.value)}
+                  placeholder="e.g. Insufficient stock at source, duplicate request, wrong destination…"
+                  rows={2}
+                  className="w-full rounded-lg border border-input bg-input-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400/50"
+                />
+              </div>
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-700 dark:bg-amber-950/30">
+                <p className="text-xs text-amber-800 dark:text-amber-200">
+                  {isAdmin ? (
+                    <>Approving dispatches the stock and moves this request to <span className="font-semibold">In Transit</span>. Rejecting cancels the request and records the reason on the transfer and audit trail.</>
+                  ) : (
+                    <>Withdrawing cancels your own pending request. You'll need to submit a new request if this was a mistake.</>
+                  )}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex gap-2 p-4 border-t border-border sticky bottom-0 bg-card">
+              {isAdmin ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => handleRejectTransfer(approvalTransfer.id, rejectReason, true)}
+                    disabled={moveTransfer.isPending || rejectReason.trim().length === 0}
+                    title={rejectReason.trim().length === 0 ? "Enter a reason to reject" : undefined}
+                    className="flex-1 inline-flex items-center justify-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100 disabled:opacity-60 disabled:cursor-not-allowed transition-all dark:border-red-800 dark:bg-red-950/40 dark:text-red-200"
+                  >
+                    <X className="w-4 h-4" />
+                    Reject
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleApproveTransfer(approvalTransfer.id)}
+                    disabled={moveTransfer.isPending}
+                    className="flex-1 inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-green-600 to-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:shadow-lg hover:shadow-green-600/30 disabled:opacity-60 disabled:cursor-not-allowed transition-all"
+                  >
+                    <CheckCircle className="w-4 h-4" />
+                    {moveTransfer.isPending ? "Processing…" : "Approve & Dispatch"}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={closeApproval}
+                    disabled={moveTransfer.isPending}
+                    className="flex-1 px-4 py-2 rounded-lg bg-muted text-foreground text-sm font-medium hover:bg-muted/80 disabled:opacity-60 disabled:cursor-not-allowed transition-all"
+                  >
+                    Keep Request
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleRejectTransfer(approvalTransfer.id, rejectReason, false)}
+                    disabled={moveTransfer.isPending}
+                    className="flex-1 inline-flex items-center justify-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100 disabled:opacity-60 disabled:cursor-not-allowed transition-all dark:border-red-800 dark:bg-red-950/40 dark:text-red-200"
+                  >
+                    <X className="w-4 h-4" />
+                    {moveTransfer.isPending ? "Processing…" : "Withdraw Request"}
+                  </button>
+                </>
+              )}
+            </div>
           </div>
         </div>
       )}
