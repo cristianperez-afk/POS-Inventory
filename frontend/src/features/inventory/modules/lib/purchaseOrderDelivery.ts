@@ -35,6 +35,25 @@ export function formatExpectedDelivery(value?: string | null) {
   });
 }
 
+// Lower bound for the expected-delivery picker: now. Past dates/times are for a
+// future delivery, so they must not be selectable. Computed fresh per call so it
+// stays current while a form is open.
+export function getMinExpectedDeliveryInput() {
+  return toDateTimeLocalInput(new Date());
+}
+
+// Rejects an expected-delivery datetime that is in the past. Used on create only —
+// editing an existing order may legitimately retain an already-past delivery date.
+export function getExpectedDeliveryPastError(value?: string | null, now = new Date()) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null; // invalid/empty handled by the window + required checks
+  if (date.getTime() < now.getTime()) {
+    return 'Expected delivery must be a future date and time.';
+  }
+  return null;
+}
+
 export function getExpectedDeliveryTimeWindowError(value?: string | null) {
   if (!value) return null;
   const date = new Date(value);

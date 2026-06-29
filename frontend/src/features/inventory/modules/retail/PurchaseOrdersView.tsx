@@ -23,6 +23,8 @@ import {
   EXPECTED_DELIVERY_TIME_WINDOW_LABEL,
   formatExpectedDelivery,
   getExpectedDeliveryTimeWindowError,
+  getExpectedDeliveryPastError,
+  getMinExpectedDeliveryInput,
   getDeliveryDelayLabel,
   isPurchaseOrderDelayed,
 } from '../lib/purchaseOrderDelivery';
@@ -290,6 +292,11 @@ export default function PurchaseOrdersView({
       toast.error('Create a location before ordering a new item');
       return;
     }
+    const deliveryPastError = getExpectedDeliveryPastError(poForm.expectedDelivery);
+    if (deliveryPastError) {
+      toast.error(deliveryPastError);
+      return;
+    }
     const deliveryTimeError = getExpectedDeliveryTimeWindowError(poForm.expectedDelivery);
     if (deliveryTimeError) {
       toast.error(deliveryTimeError);
@@ -555,6 +562,7 @@ export default function PurchaseOrdersView({
                   type="datetime-local"
                   value={poForm.expectedDelivery}
                   onChange={(e) => setPOForm({ ...poForm, expectedDelivery: e.target.value })}
+                  min={getMinExpectedDeliveryInput()}
                   className="w-full px-[12.8px] py-[8.8px] bg-card border-[0.8px] border-transparent rounded-[10px] text-[14px] focus:outline-none focus:border-primary"
                 />
                 <p className="mt-1 text-[11px] text-muted-foreground">
