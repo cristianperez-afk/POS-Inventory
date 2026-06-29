@@ -87,6 +87,9 @@ export function usePosIngredientsQuery(userId?: number | string | null) {
     queryKey: ['pos-ingredients', userId],
     enabled: Boolean(userId),
     queryFn: () => apiClient<PosIngredient[]>(`/pos/ingredients?user_id=${userId}`),
+    staleTime: 10 * 60_000,
+    gcTime: 30 * 60_000,
+    refetchOnWindowFocus: false,
   });
 }
 

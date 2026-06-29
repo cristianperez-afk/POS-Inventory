@@ -1567,12 +1567,35 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
   const hoveredProductServings = hoveredProduct
     ? finiteNumberIncludingZeroOrUndefined(hoveredRecipeDetails?.servings ?? hoveredProduct.servings)
     : undefined;
+  const showPosStaffLoadingOverlay =
+    staffType === 'POS_STAFF' &&
+    (
+      posMenuQuery.isLoading ||
+      posMenuQuery.isFetching ||
+      posIngredientsQuery.isLoading ||
+      posIngredientsQuery.isFetching ||
+      completePaymentMutation.isPending ||
+      isPaymentSubmitting
+    );
 
   return (
     <div className="flex h-screen bg-background">
       <Sidebar currentPage="create-order" onNavigate={onNavigate} onLogout={onLogout} storeBrand={storeBrand} userName={userName} storeType={storeType} staffType={staffType} />
 
-      <div className="flex-1 min-w-0 overflow-auto bg-gray-50">
+      <div className="relative flex-1 min-w-0 overflow-auto bg-gray-50">
+        {showPosStaffLoadingOverlay && (
+          <div
+            className="absolute inset-0 z-40 flex items-center justify-center bg-gray-50/80 backdrop-blur-[1px]"
+            role="status"
+            aria-live="polite"
+            aria-label="Loading create order data"
+          >
+            <div className="flex flex-col items-center gap-3 rounded-lg border border-border bg-white px-6 py-5 shadow-lg">
+              <LoaderCircle className="size-8 animate-spin text-primary" aria-hidden="true" />
+              <p className="text-sm font-medium text-foreground">Loading order data...</p>
+            </div>
+          </div>
+        )}
         <div className="p-5">
           <h2 className="text-lg mb-4">Menu</h2>
 
