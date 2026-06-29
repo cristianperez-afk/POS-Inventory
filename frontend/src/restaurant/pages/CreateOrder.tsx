@@ -143,6 +143,27 @@ function getCartItemDisplayDetails(item: CartItem) {
   };
 }
 
+function getCartItemVariantTags(item: CartItem): string[] {
+  const details = getCartItemDisplayDetails(item);
+  const noteTags = (item.modifiers ?? [])
+    .filter((modifier) => modifier.type === 'note' && (item.selectedModifierIds ?? []).includes(modifier.id))
+    .map((modifier) => modifier.name);
+  return [
+    ...noteTags,
+    ...details.addedIngredients.map((entry) => `+${entry}`),
+    ...details.removedIngredients.map((entry) => `-${entry}`),
+    ...details.changedIngredients,
+    ...details.replacedIngredients,
+    ...(item.notes ? [`Note: ${item.notes}`] : []),
+  ];
+}
+
+function getSizeVariantChoices(item: CartItem) {
+  const sizeVariants = (item.modifiers ?? []).filter((modifier) => modifier.type === 'size_variant');
+  const selectedId = sizeVariants.find((modifier) => (item.selectedModifierIds ?? []).includes(modifier.id))?.id ?? null;
+  return { sizeVariants, selectedId };
+}
+
 function modifierTargetsIngredient(modifier: Modifier, ingredient: Ingredient) {
   return Boolean(
     (modifier.itemId && String(modifier.itemId) === String(ingredient.itemId ?? ingredient.inventory_item_id ?? '')) ||
@@ -1870,6 +1891,39 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                               <p className="text-xs truncate">{item.name}</p>
                               <p className="text-xs text-muted-foreground">₱ {item.price.toFixed(2)} each</p>
                               <p className="text-xs text-primary font-medium">₱ {itemLineTotal(item).toFixed(2)}</p>
+                              {getSizeVariantChoices(item).sizeVariants.length > 0 && (() => {
+                                const { sizeVariants, selectedId } = getSizeVariantChoices(item);
+                                return (
+                                  <div className="flex flex-wrap gap-1 mt-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => selectSizeVariant(index, null)}
+                                      className={`text-[10px] px-1.5 py-0.5 rounded border ${!selectedId ? 'bg-violet-600 text-white border-violet-600' : 'bg-white text-muted-foreground border-border'}`}
+                                    >
+                                      Regular
+                                    </button>
+                                    {sizeVariants.map((variant) => (
+                                      <button
+                                        key={variant.id}
+                                        type="button"
+                                        onClick={() => selectSizeVariant(index, variant.id)}
+                                        className={`text-[10px] px-1.5 py-0.5 rounded border ${selectedId === variant.id ? 'bg-violet-600 text-white border-violet-600' : 'bg-white text-muted-foreground border-border'}`}
+                                      >
+                                        {variant.name}
+                                      </button>
+                                    ))}
+                                  </div>
+                                );
+                              })()}
+                              {getCartItemVariantTags(item).length > 0 && (
+                                <div className="flex flex-wrap gap-1 mt-1">
+                                  {getCartItemVariantTags(item).map((tag, tagIndex) => (
+                                    <span key={tagIndex} className="text-[10px] bg-primary/10 text-primary px-1.5 py-0.5 rounded">
+                                      {tag}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                             <div className="flex items-center gap-1">
                               <button
@@ -1919,6 +1973,39 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                               <p className="text-xs truncate">{item.name}</p>
                               <p className="text-xs text-muted-foreground">₱ {item.price.toFixed(2)} each</p>
                               <p className="text-xs text-secondary font-medium">₱ {itemLineTotal(item).toFixed(2)}</p>
+                              {getSizeVariantChoices(item).sizeVariants.length > 0 && (() => {
+                                const { sizeVariants, selectedId } = getSizeVariantChoices(item);
+                                return (
+                                  <div className="flex flex-wrap gap-1 mt-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => selectSizeVariant(index, null)}
+                                      className={`text-[10px] px-1.5 py-0.5 rounded border ${!selectedId ? 'bg-violet-600 text-white border-violet-600' : 'bg-white text-muted-foreground border-border'}`}
+                                    >
+                                      Regular
+                                    </button>
+                                    {sizeVariants.map((variant) => (
+                                      <button
+                                        key={variant.id}
+                                        type="button"
+                                        onClick={() => selectSizeVariant(index, variant.id)}
+                                        className={`text-[10px] px-1.5 py-0.5 rounded border ${selectedId === variant.id ? 'bg-violet-600 text-white border-violet-600' : 'bg-white text-muted-foreground border-border'}`}
+                                      >
+                                        {variant.name}
+                                      </button>
+                                    ))}
+                                  </div>
+                                );
+                              })()}
+                              {getCartItemVariantTags(item).length > 0 && (
+                                <div className="flex flex-wrap gap-1 mt-1">
+                                  {getCartItemVariantTags(item).map((tag, tagIndex) => (
+                                    <span key={tagIndex} className="text-[10px] bg-secondary/10 text-secondary px-1.5 py-0.5 rounded">
+                                      {tag}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                             <div className="flex items-center gap-1">
                               <button
@@ -1967,6 +2054,39 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                           <p className="text-xs truncate">{item.name}</p>
                           <p className="text-xs text-muted-foreground">₱ {item.price.toFixed(2)} each</p>
                           <p className="text-xs font-medium">₱ {itemLineTotal(item).toFixed(2)}</p>
+                          {getSizeVariantChoices(item).sizeVariants.length > 0 && (() => {
+                            const { sizeVariants, selectedId } = getSizeVariantChoices(item);
+                            return (
+                              <div className="flex flex-wrap gap-1 mt-1">
+                                <button
+                                  type="button"
+                                  onClick={() => selectSizeVariant(index, null)}
+                                  className={`text-[10px] px-1.5 py-0.5 rounded border ${!selectedId ? 'bg-violet-600 text-white border-violet-600' : 'bg-white text-muted-foreground border-border'}`}
+                                >
+                                  Regular
+                                </button>
+                                {sizeVariants.map((variant) => (
+                                  <button
+                                    key={variant.id}
+                                    type="button"
+                                    onClick={() => selectSizeVariant(index, variant.id)}
+                                    className={`text-[10px] px-1.5 py-0.5 rounded border ${selectedId === variant.id ? 'bg-violet-600 text-white border-violet-600' : 'bg-white text-muted-foreground border-border'}`}
+                                  >
+                                    {variant.name}
+                                  </button>
+                                ))}
+                              </div>
+                            );
+                          })()}
+                          {getCartItemVariantTags(item).length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {getCartItemVariantTags(item).map((tag, tagIndex) => (
+                                <span key={tagIndex} className="text-[10px] bg-muted text-muted-foreground px-1.5 py-0.5 rounded">
+                                  {tag}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                         </div>
                         <div className="flex items-center gap-1">
                           <button
