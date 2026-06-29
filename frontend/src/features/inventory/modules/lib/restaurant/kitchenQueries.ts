@@ -110,7 +110,7 @@ export function useRestaurantRecipesQuery(params?: { archived?: boolean }) {
           availableOrders: calculateAvailableOrders(ingredients),
           archivedAt: recipe.archivedAt ?? null,
           modifiers: Array.isArray((recipe as any).modifiers)
-            ? (recipe as any).modifiers.map((modifier: any) => ({
+            ? (recipe as any).modifiers.filter((modifier: any) => modifier?.type !== 'size_variant').map((modifier: any) => ({
                 id: modifier.id,
                 name: modifier.name,
                 group: modifier.group ?? 'Modifiers',
@@ -127,10 +127,34 @@ export function useRestaurantRecipesQuery(params?: { archived?: boolean }) {
                 levelPercent: modifier.levelPercent == null ? undefined : Number(modifier.levelPercent),
                 sizeMultiplier: modifier.sizeMultiplier == null ? undefined : Number(modifier.sizeMultiplier),
                 sellingPrice: modifier.sellingPrice == null ? undefined : Number(modifier.sellingPrice),
+                ingredientQuantities: modifier.ingredientQuantities && typeof modifier.ingredientQuantities === 'object'
+                  ? modifier.ingredientQuantities
+                  : undefined,
                 priceDelta: Number(modifier.priceDelta ?? 0),
                 priceDeltaPercent: Number(modifier.priceDeltaPercent ?? 0),
               }))
             : [],
+          sizeVariants: (Array.isArray((recipe as any).sizeVariants)
+            ? (recipe as any).sizeVariants
+            : Array.isArray((recipe as any).modifiers)
+              ? (recipe as any).modifiers.filter((modifier: any) => modifier?.type === 'size_variant')
+              : []).map((variant: any) => ({
+                id: String(variant.id),
+                name: String(variant.name),
+                group: 'Size Variants',
+                type: 'size_variant' as const,
+                sizeMultiplier: Number(variant.sizeMultiplier ?? 1),
+                sellingPrice: Number(variant.sellingPrice ?? 0),
+                ingredientQuantities: variant.ingredientQuantities && typeof variant.ingredientQuantities === 'object'
+                  && Object.keys(variant.ingredientQuantities).length > 0
+                  ? variant.ingredientQuantities
+                  : Object.fromEntries(ingredients.map((ingredient) => [
+                      String(ingredient.itemBackendId),
+                      Number(ingredient.inventoryQuantity ?? ingredient.quantity) * Number(variant.sizeMultiplier ?? 1),
+                    ])),
+                priceDelta: Number(variant.priceDelta ?? (Number(variant.sellingPrice ?? 0) - Number(recipe.sellingPrice ?? 0))),
+                priceDeltaPercent: 0,
+              })),
           instructions: recipe.instructions ?? '',
         };
       }),

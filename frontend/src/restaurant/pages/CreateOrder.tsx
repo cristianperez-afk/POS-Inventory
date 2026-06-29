@@ -62,6 +62,7 @@ interface Modifier {
   levelPercent?: number;
   sizeMultiplier?: number;
   sellingPrice?: number;
+  ingredientQuantities?: Record<string, number>;
   priceDelta?: number;
   priceDeltaPercent?: number;
 }
@@ -313,6 +314,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
             levelPercent: finiteNumberIncludingZeroOrUndefined(modifier.levelPercent ?? (modifier.type === 'less' ? 50 : undefined)),
             sizeMultiplier: finiteNumberOrUndefined(modifier.sizeMultiplier),
             sellingPrice: finiteNumberIncludingZeroOrUndefined(modifier.sellingPrice),
+            ingredientQuantities: modifier.ingredientQuantities && typeof modifier.ingredientQuantities === 'object' ? modifier.ingredientQuantities : undefined,
             priceDelta: Number(modifier.priceDelta ?? 0),
             priceDeltaPercent: Number(modifier.priceDeltaPercent ?? 0),
           }))
@@ -416,6 +418,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
               levelPercent: finiteNumberIncludingZeroOrUndefined(modifier.levelPercent ?? (modifier.type === 'less' ? 50 : undefined)),
               sizeMultiplier: finiteNumberOrUndefined(modifier.sizeMultiplier),
               sellingPrice: finiteNumberIncludingZeroOrUndefined(modifier.sellingPrice),
+              ingredientQuantities: modifier.ingredientQuantities && typeof modifier.ingredientQuantities === 'object' ? modifier.ingredientQuantities : undefined,
               priceDelta: Number(modifier.priceDelta ?? 0),
               priceDeltaPercent: Number(modifier.priceDeltaPercent ?? 0),
             }))
@@ -866,7 +869,12 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
         return { ...ingredient, quantity: 0, removed: true, customization_type: 'REMOVE', notes: adjustment.name };
       }
       const ingredientLevel = adjustment?.type === 'ingredient_level' ? Number(adjustment.levelPercent ?? 100) / 100 : 1;
-      const quantity = originalQuantity * sizeMultiplier * ingredientLevel;
+      const ingredientItemId = String(ingredient.itemId ?? ingredient.inventory_item_id ?? '');
+      const exactVariantQuantity = selectedSizeVariant?.ingredientQuantities?.[ingredientItemId];
+      const variantQuantity = exactVariantQuantity != null && Number.isFinite(Number(exactVariantQuantity))
+        ? Number(exactVariantQuantity)
+        : originalQuantity * sizeMultiplier;
+      const quantity = variantQuantity * ingredientLevel;
       const changed = Math.abs(quantity - originalQuantity) > 0.000001;
       return {
         ...ingredient,

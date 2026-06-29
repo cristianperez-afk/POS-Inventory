@@ -4685,11 +4685,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         const configuredOriginalQuantity = Number(inventoryRows[0]?.quantity_required ?? originalQuantity);
         const isIngredientLevel = configured.type === 'ingredient_level' || configured.type === 'less';
         const levelPercent = configured.type === 'less' ? 50 : Number(configured.levelPercent ?? 100);
+        const exactSizeQuantity = selectedSizeVariant?.ingredientQuantities?.[String(configured.itemId ?? '')];
+        const configuredVariantQuantity = exactSizeQuantity != null && Number.isFinite(Number(exactSizeQuantity))
+          ? Number(exactSizeQuantity)
+          : configuredOriginalQuantity * selectedSizeMultiplier;
         const validAdjustment = isIngredientLevel
           ? originalQuantity > 0
             && sameNumber(originalQuantity, configuredOriginalQuantity)
             && levelPercent >= 0 && levelPercent <= 100
-            && sameNumber(submittedQuantity, originalQuantity * selectedSizeMultiplier * (levelPercent / 100))
+            && sameNumber(submittedQuantity, configuredVariantQuantity * (levelPercent / 100))
           : submittedIngredient.removed === true || submittedQuantity <= 0;
         if (!validAdjustment) {
           throw new BadRequestException(`${configured.name ?? 'Ingredient adjustment'} does not match its configured action.`);
@@ -4698,11 +4702,12 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (selectedSizeVariant) {
-      const baseIngredients = await this.queryWithClient<{ ingredient_id: number; quantity_required: string | number }>(
+      const baseIngredients = await this.queryWithClient<{ ingredient_id: number; inventory_item_id: string | null; quantity_required: string | number }>(
         client,
-        `SELECT ingredient_id, quantity_required
-         FROM product_ingredients
-         WHERE store_id = $1 AND product_id = $2 AND ingredient_id IS NOT NULL`,
+        `SELECT pi.ingredient_id, ii.inventory_item_id, pi.quantity_required
+         FROM product_ingredients pi
+         JOIN ingredients_inventory ii ON ii.id = pi.ingredient_id AND ii.store_id = pi.store_id
+         WHERE pi.store_id = $1 AND pi.product_id = $2 AND pi.ingredient_id IS NOT NULL`,
         [storeId, productId],
       );
       for (const baseIngredient of baseIngredients) {
@@ -4717,9 +4722,13 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         }
         const originalQuantity = Number(submittedIngredient.original_quantity ?? submittedIngredient.originalQuantity ?? 0);
         const configuredOriginalQuantity = Number(baseIngredient.quantity_required ?? 0);
+        const exactSizeQuantity = selectedSizeVariant.ingredientQuantities?.[String(baseIngredient.inventory_item_id ?? '')];
+        const configuredVariantQuantity = exactSizeQuantity != null && Number.isFinite(Number(exactSizeQuantity))
+          ? Number(exactSizeQuantity)
+          : configuredOriginalQuantity * selectedSizeMultiplier;
         if (!sameNumber(originalQuantity, configuredOriginalQuantity)
-          || !sameNumber(submittedIngredient.quantity, configuredOriginalQuantity * selectedSizeMultiplier)) {
-          throw new BadRequestException(`${selectedSizeVariant.name ?? 'Size variant'} does not match its configured BOM multiplier.`);
+          || !sameNumber(submittedIngredient.quantity, configuredVariantQuantity)) {
+          throw new BadRequestException(`${selectedSizeVariant.name ?? 'Size variant'} does not match its configured ingredient quantities.`);
         }
       }
     }

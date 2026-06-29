@@ -27,6 +27,7 @@ export type PosMenuModifier = {
   levelPercent?: number;
   sizeMultiplier?: number;
   sellingPrice?: number;
+  ingredientQuantities?: Record<string, number>;
   priceDelta?: number;
   priceDeltaPercent?: number;
   quantityAvailable?: number | null;

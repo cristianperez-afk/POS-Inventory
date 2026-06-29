@@ -694,7 +694,14 @@ export class InventoryApiService {
       `,
       [scope.businessId, query.active ?? null, query.archived ?? null],
     );
-    return this.paged(rows);
+    return this.paged(rows.map((row) => {
+      const configuredOptions = Array.isArray(row.modifiers) ? row.modifiers as Record<string, unknown>[] : [];
+      return {
+        ...row,
+        modifiers: configuredOptions.filter((option) => String(option.type ?? '') !== 'size_variant'),
+        sizeVariants: configuredOptions.filter((option) => String(option.type ?? '') === 'size_variant'),
+      };
+    }));
   }
 
   async createRecipe(headers: HeadersLike, body: Record<string, unknown>) {
@@ -827,7 +834,19 @@ export class InventoryApiService {
 
   private async saveRecipe(scope: Scope, recipeId: string | undefined, body: Record<string, unknown>) {
     const ingredients = Array.isArray(body.ingredients) ? body.ingredients as Record<string, unknown>[] : [];
-    const submittedModifiers = Array.isArray(body.modifiers) ? body.modifiers as Record<string, unknown>[] : [];
+    const submittedMenuModifiers = Array.isArray(body.modifiers) ? body.modifiers as Record<string, unknown>[] : [];
+    const submittedSizeVariants = Array.isArray(body.sizeVariants) ? body.sizeVariants as Record<string, unknown>[] : [];
+    // Accept old clients that still submit sizes inside modifiers, but persist one
+    // combined JSON list so the existing POS reader remains backward compatible.
+    const legacySizeVariants = submittedMenuModifiers.filter((modifier) => String(modifier.type ?? '') === 'size_variant');
+    const submittedModifiers: Record<string, unknown>[] = [
+      ...submittedMenuModifiers.filter((modifier) => String(modifier.type ?? '') !== 'size_variant'),
+      ...(submittedSizeVariants.length > 0 ? submittedSizeVariants : legacySizeVariants).map((variant): Record<string, unknown> => ({
+        ...variant,
+        type: 'size_variant',
+        group: 'Size Variants',
+      })),
+    ];
     const baseSellingPrice = Number(body.sellingPrice ?? 0);
     const modifiers = submittedModifiers.map((modifier) => {
       const submittedType = String(modifier.type ?? 'note');
@@ -842,6 +861,14 @@ export class InventoryApiService {
       const levelPercent = Number(modifier.levelPercent ?? (submittedType === 'less' ? 50 : 100));
       const sizeMultiplier = Number(modifier.sizeMultiplier ?? 1);
       const sizeSellingPrice = Number(modifier.sellingPrice ?? 0);
+      const ingredientQuantities = isSizeVariant
+        ? modifier.ingredientQuantities && typeof modifier.ingredientQuantities === 'object'
+          ? Object.fromEntries(Object.entries(modifier.ingredientQuantities as Record<string, unknown>).map(([itemId, quantity]) => [itemId, Number(quantity)]))
+          : Object.fromEntries(ingredients.map((ingredient) => [
+              String(ingredient.itemId ?? ''),
+              Number(ingredient.quantity ?? 0) * sizeMultiplier,
+            ]).filter(([itemId]) => Boolean(itemId)))
+        : undefined;
       const normalized: Record<string, unknown> = {
         ...modifier,
         type,
@@ -861,6 +888,7 @@ export class InventoryApiService {
         levelPercent: isIngredientLevel ? levelPercent : undefined,
         sizeMultiplier: isSizeVariant ? sizeMultiplier : undefined,
         sellingPrice: isSizeVariant ? sizeSellingPrice : undefined,
+        ingredientQuantities,
         priceDelta: isSizeVariant && Number.isFinite(sizeSellingPrice) && Number.isFinite(baseSellingPrice)
           ? sizeSellingPrice - baseSellingPrice
           : isAddOn && Number.isFinite(priceDelta) && priceDelta >= 0 ? priceDelta : 0,
@@ -892,10 +920,21 @@ export class InventoryApiService {
     const invalidSizeVariant = modifiers.find((modifier) =>
       String(modifier.type ?? '') === 'size_variant'
       && (!Number.isFinite(Number(modifier.sizeMultiplier)) || Number(modifier.sizeMultiplier) <= 0
-        || !Number.isFinite(Number(modifier.sellingPrice)) || Number(modifier.sellingPrice) < 0),
+        || !Number.isFinite(Number(modifier.sellingPrice)) || Number(modifier.sellingPrice) < 0
+        || !modifier.ingredientQuantities || typeof modifier.ingredientQuantities !== 'object'
+        || [...recipeIngredientIds].some((itemId) => {
+          const quantity = Number((modifier.ingredientQuantities as Record<string, unknown>)[itemId]);
+          return !Number.isFinite(quantity) || quantity < 0;
+        })),
     );
     if (invalidSizeVariant) {
-      throw new BadRequestException(`${String(invalidSizeVariant.name ?? 'Size variant')} must have a valid BOM multiplier and selling price.`);
+      throw new BadRequestException(`${String(invalidSizeVariant.name ?? 'Size variant')} must have a valid multiplier, selling price, and quantity for every recipe ingredient.`);
+    }
+    const sizeVariantNames = modifiers
+      .filter((modifier) => String(modifier.type ?? '') === 'size_variant')
+      .map((modifier) => String(modifier.name ?? '').trim().toLowerCase());
+    if (sizeVariantNames.some((name, index) => !name || sizeVariantNames.indexOf(name) !== index)) {
+      throw new BadRequestException('Every size variant must have a unique name.');
     }
     const addOnsWithoutMaximum = modifiers.filter((modifier) => {
       if (String(modifier.type ?? '') !== 'add_on') return false;

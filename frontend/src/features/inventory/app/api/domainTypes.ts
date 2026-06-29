@@ -310,6 +310,15 @@ export interface ApiRecipe {
   menuItemId?: string | null;
   menuItem?: ApiInventoryItem | null;
   ingredients: ApiRecipeIngredient[];
+  modifiers?: Record<string, unknown>[];
+  sizeVariants?: Array<{
+    id: string;
+    name: string;
+    sizeMultiplier: number;
+    sellingPrice: number;
+    ingredientQuantities: Record<string, number>;
+    priceDelta?: number;
+  }>;
   availableOrders: number;
   createdAt: string;
   updatedAt?: string;

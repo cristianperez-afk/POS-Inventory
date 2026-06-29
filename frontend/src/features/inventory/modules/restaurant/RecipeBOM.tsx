@@ -53,8 +53,16 @@ type RecipeModifier = {
   levelPercent?: number;
   sizeMultiplier?: number;
   sellingPrice?: number;
+  ingredientQuantities?: Record<string, number>;
   priceDelta?: number;
   priceDeltaPercent?: number;
+};
+
+type RecipeSizeVariant = RecipeModifier & {
+  type: "size_variant";
+  sizeMultiplier: number;
+  sellingPrice: number;
+  ingredientQuantities: Record<string, number>;
 };
 
 type Recipe = {
@@ -82,6 +90,7 @@ type Recipe = {
   availableOrders?: number;
   archivedAt?: string | null;
   modifiers?: RecipeModifier[];
+  sizeVariants?: RecipeSizeVariant[];
   instructions: string;
 };
 
@@ -518,6 +527,7 @@ export function RecipeBOM() {
 
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
   const [modifiers, setModifiers] = useState<RecipeModifier[]>([]);
+  const [sizeVariants, setSizeVariants] = useState<RecipeSizeVariant[]>([]);
   const [modifierGroup, setModifierGroup] = useState(MODIFIER_GROUPS[0]);
   const [modifierItemId, setModifierItemId] = useState("");
   const [modifierItemSearch, setModifierItemSearch] = useState("");
@@ -529,6 +539,11 @@ export function RecipeBOM() {
   const [modifierLevelPercent, setModifierLevelPercent] = useState("50");
   const [modifierSizeMultiplier, setModifierSizeMultiplier] = useState("1");
   const [modifierSizeSellingPrice, setModifierSizeSellingPrice] = useState("");
+  const [sizeVariantName, setSizeVariantName] = useState("");
+  const [sizeVariantMultiplier, setSizeVariantMultiplier] = useState("1");
+  const [sizeVariantSellingPrice, setSizeVariantSellingPrice] = useState("");
+  const [sizeVariantIngredientQuantities, setSizeVariantIngredientQuantities] = useState<Record<string, string>>({});
+  const [editingSizeVariantId, setEditingSizeVariantId] = useState<string | null>(null);
   const recipeSubmitLockRef = useRef(false);
   const [isRecipeSubmitting, setIsRecipeSubmitting] = useState(false);
   const [currentIngredient, setCurrentIngredient] = useState({
@@ -581,6 +596,15 @@ export function RecipeBOM() {
   };
   const selectedModifierStockItem = findInventoryItem(modifierItemId);
   const selectedModifierBaseUnit = selectedModifierStockItem?.unit?.trim() || "unit";
+  const menuModifiers = modifiers.filter((modifier) => modifier.type !== "size_variant");
+  useEffect(() => {
+    const multiplier = Number(sizeVariantMultiplier);
+    setSizeVariantIngredientQuantities((current) => Object.fromEntries(ingredients.map((ingredient) => {
+      const key = String(ingredient.itemBackendId ?? ingredient.productId ?? ingredient.id);
+      const suggested = (ingredient.inventoryQuantity ?? ingredient.quantity) * (Number.isFinite(multiplier) && multiplier > 0 ? multiplier : 1);
+      return [key, current[key] ?? String(Math.round((suggested + Number.EPSILON) * 1000) / 1000)];
+    })));
+  }, [ingredients]);
   const recipeIngredientStockItems = Array.from(new Map(
     ingredients
       .map((ingredient) => findInventoryItem(ingredient.itemBackendId ?? ingredient.productId))
@@ -733,6 +757,12 @@ export function RecipeBOM() {
     setIngredients(ingredients.filter(ing => ing.id !== id));
     if (removed) {
       setModifiers(modifiers.filter(modifier => modifier.productId !== removed.productId));
+      const removedKey = ingredientVariantKey(removed);
+      setSizeVariants((current) => current.map((variant) => {
+        const ingredientQuantities = { ...variant.ingredientQuantities };
+        delete ingredientQuantities[removedKey];
+        return { ...variant, ingredientQuantities };
+      }));
     }
   };
 
@@ -857,7 +887,7 @@ export function RecipeBOM() {
       return;
     }
 
-    setModifiers(preset.options.map((option, index): RecipeModifier => {
+    const presetMenuModifiers = preset.options.map((option, index): RecipeModifier => {
       const isRemove = /^(no|less)\b/i.test(option.name);
       const isLess = /^less\b/i.test(option.name);
       const isSizeVariant = /^(portion size|serving size|size)$/i.test(option.group);
@@ -894,7 +924,8 @@ export function RecipeBOM() {
         priceDelta: isSizeVariant ? baseSellingPrice * (sizeMultiplier - 1) : isAddOn && stockItem ? option.priceDelta ?? 0 : 0,
         priceDeltaPercent: isAddOn && stockItem ? option.priceDeltaPercent ?? 0 : 0,
       };
-    }).filter((modifier) => !(modifier.type === "size_variant" && modifier.name === "Regular" && modifier.sizeMultiplier === 1)));
+    }).filter((modifier) => modifier.type !== "size_variant");
+    setModifiers(presetMenuModifiers);
   };
 
   const calculateTotalCost = () => {
@@ -928,6 +959,80 @@ export function RecipeBOM() {
   const calculateGrossMarginPercent = () => {
     const menuSellingPrice = calculateMenuSellingPrice();
     return menuSellingPrice > 0 ? (calculateGrossMargin() / menuSellingPrice) * 100 : 0;
+  };
+
+  const ingredientVariantKey = (ingredient: Ingredient) => String(ingredient.itemBackendId ?? ingredient.productId ?? ingredient.id);
+  const buildSizeIngredientSuggestions = (multiplier: number) => Object.fromEntries(
+    ingredients.map((ingredient) => [
+      ingredientVariantKey(ingredient),
+      String(Math.round(((ingredient.inventoryQuantity ?? ingredient.quantity) * multiplier + Number.EPSILON) * 1000) / 1000),
+    ]),
+  );
+  const calculateSizeVariantCost = (quantities: Record<string, string>) => ingredients.reduce((sum, ingredient) => {
+    const quantity = Number(quantities[ingredientVariantKey(ingredient)] ?? 0);
+    return sum + (Number.isFinite(quantity) ? quantity : 0) * Number(ingredient.unitCost ?? 0);
+  }, 0);
+  const resetSizeVariantDraft = () => {
+    setEditingSizeVariantId(null);
+    setSizeVariantName("");
+    setSizeVariantMultiplier("1");
+    setSizeVariantSellingPrice("");
+    setSizeVariantIngredientQuantities(buildSizeIngredientSuggestions(1));
+  };
+  const handleSizeVariantMultiplierChange = (value: string) => {
+    setSizeVariantMultiplier(value);
+    const multiplier = Number(value);
+    if (Number.isFinite(multiplier) && multiplier > 0) {
+      setSizeVariantIngredientQuantities(buildSizeIngredientSuggestions(multiplier));
+    }
+  };
+  const handleEditSizeVariant = (variant: RecipeModifier) => {
+    const multiplier = Number(variant.sizeMultiplier ?? 1);
+    setEditingSizeVariantId(variant.id);
+    setSizeVariantName(variant.name);
+    setSizeVariantMultiplier(String(multiplier));
+    setSizeVariantSellingPrice(String(variant.sellingPrice ?? calculateMenuSellingPrice() + Number(variant.priceDelta ?? 0)));
+    setSizeVariantIngredientQuantities(Object.fromEntries(ingredients.map((ingredient) => {
+      const key = ingredientVariantKey(ingredient);
+      const exactQuantity = variant.ingredientQuantities?.[key];
+      return [key, String(exactQuantity ?? (ingredient.inventoryQuantity ?? ingredient.quantity) * multiplier)];
+    })));
+  };
+  const handleSaveSizeVariant = () => {
+    const name = sizeVariantName.trim();
+    const multiplier = Number(sizeVariantMultiplier);
+    const sellingPrice = Number(sizeVariantSellingPrice);
+    if (!name) return toast.error("Size variant name is required");
+    if (!Number.isFinite(multiplier) || multiplier <= 0) return toast.error("BOM multiplier must be greater than zero");
+    if (!Number.isFinite(sellingPrice) || sellingPrice < 0) return toast.error("Size selling price must be zero or greater");
+    if (sizeVariants.some((variant) => variant.id !== editingSizeVariantId && variant.name.trim().toLowerCase() === name.toLowerCase())) {
+      return toast.error("A size variant with this name already exists");
+    }
+    const ingredientQuantities: Record<string, number> = {};
+    for (const ingredient of ingredients) {
+      const key = ingredientVariantKey(ingredient);
+      const quantity = Number(sizeVariantIngredientQuantities[key]);
+      if (!Number.isFinite(quantity) || quantity < 0) {
+        return toast.error(`Enter a valid ${ingredient.inventoryUnit || ingredient.unit} quantity for ${ingredient.name}`);
+      }
+      ingredientQuantities[key] = quantity;
+    }
+    const variant: RecipeSizeVariant = {
+      id: editingSizeVariantId ?? `SIZE-${Date.now()}`,
+      name,
+      group: "Size Variants",
+      type: "size_variant",
+      requiresStock: false,
+      sizeMultiplier: multiplier,
+      sellingPrice,
+      ingredientQuantities,
+      priceDelta: sellingPrice - calculateMenuSellingPrice(),
+      priceDeltaPercent: 0,
+    };
+    setSizeVariants((current) => editingSizeVariantId
+      ? current.map((currentVariant) => currentVariant.id === editingSizeVariantId ? variant : currentVariant)
+      : [...current, variant]);
+    resetSizeVariantDraft();
   };
 
   const handleCreateRecipe = async (e: React.FormEvent) => {
@@ -1004,6 +1109,7 @@ export function RecipeBOM() {
       grossMargin,
       isActive: newRecipe.isActive,
       modifiers,
+      sizeVariants,
       instructions: newRecipe.instructions,
     };
 
@@ -1024,7 +1130,7 @@ export function RecipeBOM() {
           targetFoodCost: recipeToAdd.targetFoodCost,
           sellingPrice: recipeToAdd.sellingPrice,
           isActive: recipeToAdd.isActive,
-          modifiers: modifiers.map((modifier) => {
+          modifiers: menuModifiers.map((modifier) => {
             const inventoryItem = findInventoryItem(modifier.productId ?? modifier.itemId);
             if (modifier.itemId && !inventoryItem?.backendId) {
               throw new Error(`Inventory link is missing for modifier ${modifier.name}`);
@@ -1033,8 +1139,8 @@ export function RecipeBOM() {
               id: modifier.id,
               name: modifier.name,
               group: modifier.group ?? "Modifiers",
-              type: modifier.type === "size_variant" || modifier.type === "note"
-                ? modifier.type
+              type: modifier.type === "note"
+                ? "note"
                 : inventoryItem?.backendId ? modifier.type : "note",
               itemId: inventoryItem?.backendId,
               itemName: inventoryItem?.name ?? modifier.itemName,
@@ -1045,12 +1151,26 @@ export function RecipeBOM() {
                 ? Math.floor(Number(modifier.maxQuantity))
                 : undefined,
               levelPercent: modifier.type === "ingredient_level" ? Number(modifier.levelPercent ?? 50) : undefined,
-              sizeMultiplier: modifier.type === "size_variant" ? Number(modifier.sizeMultiplier ?? 1) : undefined,
-              sellingPrice: modifier.type === "size_variant" ? Number(modifier.sellingPrice ?? 0) : undefined,
-              priceDelta: modifier.type === "add_on" || modifier.type === "size_variant" ? Number(modifier.priceDelta ?? 0) : 0,
+              priceDelta: modifier.type === "add_on" ? Number(modifier.priceDelta ?? 0) : 0,
               priceDeltaPercent: modifier.type === "add_on" ? Number(modifier.priceDeltaPercent ?? 0) : 0,
             };
           }),
+          sizeVariants: sizeVariants.map((variant) => ({
+            id: variant.id,
+            name: variant.name,
+            sizeMultiplier: Number(variant.sizeMultiplier),
+            sellingPrice: Number(variant.sellingPrice),
+            ingredientQuantities: Object.fromEntries(ingredients.map((ingredient) => {
+              const inventoryItem = findInventoryItem(ingredient.productId ?? ingredient.itemBackendId);
+              if (!inventoryItem?.backendId) {
+                throw new Error(`Inventory link is missing for ${ingredient.name}`);
+              }
+              return [
+                inventoryItem.backendId,
+                Number(variant.ingredientQuantities[ingredientVariantKey(ingredient)] ?? 0),
+              ];
+            })),
+          })),
           ingredients: recipeToAdd.ingredients.map((ingredient) => {
             const inventoryItem = findInventoryItem(ingredient.productId ?? ingredient.itemBackendId);
             if (!inventoryItem?.backendId) {
@@ -1082,6 +1202,7 @@ export function RecipeBOM() {
       });
       setIngredients([]);
       setModifiers([]);
+      setSizeVariants([]);
       setModifierGroup(MODIFIER_GROUPS[0]);
       setModifierItemId("");
       setModifierItemSearch("");
@@ -1130,7 +1251,16 @@ export function RecipeBOM() {
       instructions: recipe.instructions,
     });
     setIngredients(recipe.ingredients);
-    setModifiers((recipe.modifiers ?? []).map((modifier) => ({ ...modifier, group: modifier.group ?? "Modifiers" })));
+    const legacySizeVariants = (recipe.modifiers ?? []).filter((modifier) => modifier.type === "size_variant") as RecipeSizeVariant[];
+    setModifiers((recipe.modifiers ?? []).filter((modifier) => modifier.type !== "size_variant").map((modifier) => ({ ...modifier, group: modifier.group ?? "Modifiers" })));
+    setSizeVariants((recipe.sizeVariants?.length ? recipe.sizeVariants : legacySizeVariants).map((variant) => ({
+      ...variant,
+      type: "size_variant",
+      group: "Size Variants",
+      sizeMultiplier: Number(variant.sizeMultiplier ?? 1),
+      sellingPrice: Number(variant.sellingPrice ?? 0),
+      ingredientQuantities: variant.ingredientQuantities ?? {},
+    })));
     setModifierGroup(MODIFIER_GROUPS[0]);
     setModifierItemId("");
     setModifierItemSearch("");
@@ -1266,6 +1396,7 @@ export function RecipeBOM() {
     setIsIngredientPickerOpen(false);
     setIngredients([]);
     setModifiers([]);
+    setSizeVariants([]);
     setModifierItemId("");
     setModifierItemSearch("");
     setModifierName("");
@@ -1947,6 +2078,96 @@ export function RecipeBOM() {
                 )}
               </div>
 
+              <div className="rounded-xl border border-violet-200 bg-violet-50/30 p-4">
+                <div className="mb-4 flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-lg font-semibold text-foreground">Size Variants</h3>
+                    <p className="text-xs text-muted-foreground">Create recipe sizes with exact per-ingredient quantities, computed cost, and a separate POS selling price.</p>
+                  </div>
+                  <span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-medium text-violet-700">{sizeVariants.length} size{sizeVariants.length !== 1 ? "s" : ""}</span>
+                </div>
+
+                <div className="mb-4 rounded-lg border border-violet-200 bg-white p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-foreground">Regular / Standard</p>
+                      <p className="text-[11px] text-muted-foreground">Uses the basic recipe quantities shown above.</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm font-semibold text-primary">{formatMoney(calculateMenuSellingPrice())}</p>
+                      <p className="text-[10px] text-muted-foreground">1× base BOM</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                  <div>
+                    <label htmlFor="sizeVariantName" className="mb-1 block text-xs text-foreground">Variant Name</label>
+                    <input id="sizeVariantName" value={sizeVariantName} onChange={(event) => setSizeVariantName(event.target.value)} placeholder="e.g., Large" className="w-full rounded-lg border border-input bg-input-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300" />
+                  </div>
+                  <div>
+                    <label htmlFor="sizeVariantMultiplier" className="mb-1 block text-xs text-foreground">Starting Multiplier</label>
+                    <input id="sizeVariantMultiplier" type="number" min="0.01" step="0.01" value={sizeVariantMultiplier} onChange={(event) => handleSizeVariantMultiplierChange(event.target.value)} className={`w-full rounded-lg border border-input bg-input-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300 ${numberInputClassName}`} />
+                    <p className="mt-1 text-[10px] text-muted-foreground">Generates starting quantities; each ingredient remains editable.</p>
+                  </div>
+                  <div>
+                    <label htmlFor="sizeVariantSellingPrice" className="mb-1 block text-xs text-foreground">Final Selling Price (₱)</label>
+                    <input id="sizeVariantSellingPrice" type="number" min="0" step="0.01" value={sizeVariantSellingPrice} onChange={(event) => setSizeVariantSellingPrice(event.target.value)} placeholder={(calculateSuggestedSellingPrice() * Number(sizeVariantMultiplier || 0)).toFixed(2)} className={`w-full rounded-lg border border-input bg-input-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300 ${numberInputClassName}`} />
+                  </div>
+                </div>
+
+                <div className="mt-4 overflow-hidden rounded-lg border border-border bg-white">
+                  <div className="grid grid-cols-[minmax(0,1fr)_100px_130px] gap-3 bg-muted/50 px-3 py-2 text-[11px] font-semibold text-muted-foreground">
+                    <span>Ingredient</span><span>Base</span><span>Variant Quantity</span>
+                  </div>
+                  {ingredients.length === 0 ? (
+                    <p className="px-3 py-4 text-center text-xs text-muted-foreground">Add basic recipe ingredients first.</p>
+                  ) : ingredients.map((ingredient) => {
+                    const key = ingredientVariantKey(ingredient);
+                    const baseQuantity = ingredient.inventoryQuantity ?? ingredient.quantity;
+                    const unit = ingredient.inventoryUnit || ingredient.unit;
+                    return (
+                      <div key={`size-${key}`} className="grid grid-cols-[minmax(0,1fr)_100px_130px] items-center gap-3 border-t border-border px-3 py-2">
+                        <span className="truncate text-sm text-foreground">{ingredient.name}</span>
+                        <span className="text-xs text-muted-foreground">{baseQuantity} {unit}</span>
+                        <div className="relative">
+                          <input type="number" min="0" step="0.001" value={sizeVariantIngredientQuantities[key] ?? ""} onChange={(event) => setSizeVariantIngredientQuantities((current) => ({ ...current, [key]: event.target.value }))} className={`w-full rounded-md border border-input bg-input-background py-1.5 pl-2 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300 ${numberInputClassName}`} aria-label={`${sizeVariantName || "Size"} quantity for ${ingredient.name}`} />
+                          <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">{unit}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-violet-100/60 px-3 py-2">
+                  <div className="text-xs text-foreground">
+                    Computed ingredient cost: <strong>{formatMoney(calculateSizeVariantCost(sizeVariantIngredientQuantities))}</strong>
+                  </div>
+                  <div className="flex gap-2">
+                    {editingSizeVariantId && <button type="button" onClick={resetSizeVariantDraft} className="rounded-lg border border-border bg-white px-3 py-2 text-xs font-medium">Cancel Edit</button>}
+                    <button type="button" onClick={handleSaveSizeVariant} disabled={ingredients.length === 0 || !sizeVariantName.trim()} className="rounded-lg bg-violet-600 px-4 py-2 text-xs font-semibold text-white hover:bg-violet-700 disabled:opacity-50">{editingSizeVariantId ? "Update Size" : "Add Size"}</button>
+                  </div>
+                </div>
+
+                {sizeVariants.length > 0 && (
+                  <div className="mt-4 space-y-2 border-t border-violet-200 pt-4">
+                    <h4 className="text-sm font-semibold text-foreground">Created Size Variants</h4>
+                    {sizeVariants.map((variant) => (
+                      <div key={variant.id} className="flex items-center justify-between gap-3 rounded-lg border border-violet-100 bg-white px-3 py-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-foreground">{variant.name} — {formatMoney(Number(variant.sellingPrice ?? calculateMenuSellingPrice() + Number(variant.priceDelta ?? 0)))}</p>
+                          <p className="text-[11px] text-muted-foreground">{variant.sizeMultiplier ?? 1}× starting multiplier • exact quantities saved for {Object.keys(variant.ingredientQuantities ?? {}).length || ingredients.length} ingredients</p>
+                        </div>
+                        <div className="flex shrink-0 gap-1">
+                          <button type="button" onClick={() => handleEditSizeVariant(variant)} className="rounded-md p-2 text-violet-700 hover:bg-violet-100" title="Edit size variant"><Edit className="size-4" /></button>
+                          <button type="button" onClick={() => setSizeVariants((current) => current.filter((item) => item.id !== variant.id))} className="rounded-md p-2 text-red-600 hover:bg-red-100" title="Remove size variant"><Trash2 className="size-4" /></button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               <div className="rounded-xl border border-border bg-card p-4">
                 <div className="mb-4 flex items-center justify-between gap-3">
                   <div>
@@ -1962,7 +2183,7 @@ export function RecipeBOM() {
                       Set defaults
                     </button>
                     <span className="rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
-                      {modifiers.length} option{modifiers.length !== 1 ? "s" : ""}
+                      {menuModifiers.length} option{menuModifiers.length !== 1 ? "s" : ""}
                     </span>
                   </div>
                 </div>
@@ -2005,8 +2226,6 @@ export function RecipeBOM() {
                           setModifierGroup("Instruction / Preferences");
                         } else if (nextType === "remove" || nextType === "ingredient_level") {
                           setModifierGroup("Basic Ingredients");
-                        } else if (nextType === "size_variant") {
-                          setModifierGroup("Size Variants");
                         } else {
                           setModifierGroup("Add-ons");
                         }
@@ -2017,7 +2236,6 @@ export function RecipeBOM() {
                       <option value="ingredient_level">Adjust ingredient level</option>
                       <option value="remove">Remove ingredient</option>
                       <option value="add_on">Add-on ingredient</option>
-                      <option value="size_variant">Size variant</option>
                     </select>
                     <p className="mt-1 text-[10px] text-muted-foreground">
                       {modifierType === "note"
@@ -2026,9 +2244,7 @@ export function RecipeBOM() {
                           ? "Sets the percentage of one linked recipe ingredient to use and deduct from stock."
                           : modifierType === "remove"
                             ? "Removes the linked basic ingredient and prevents its stock deduction for the order."
-                            : modifierType === "size_variant"
-                              ? "Scales the complete recipe BOM and uses a separate selling price for this size."
-                              : "Adds a fixed extra portion, price, and inventory deduction for every 1x selected in POS."}
+                            : "Adds a fixed extra portion, price, and inventory deduction for every 1x selected in POS."}
                     </p>
                   </div>
                   <div className={["remove", "ingredient_level", "add_on"].includes(modifierType) ? "md:order-3" : "hidden"}>
@@ -2215,23 +2431,23 @@ export function RecipeBOM() {
                 </div>
 
                 <div className="mt-4 space-y-2">
-                  {modifiers.length > 0 && (
+                  {menuModifiers.length > 0 && (
                     <div className="flex items-center justify-between gap-3 border-t border-border pt-4">
                       <div>
                         <h4 className="text-sm font-semibold text-foreground">Created Modifiers</h4>
                         <p className="text-[11px] text-muted-foreground">Configured options that will be available for this recipe in POS.</p>
                       </div>
                       <span className="shrink-0 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
-                        {modifiers.length} total
+                        {menuModifiers.length} total
                       </span>
                     </div>
                   )}
-                  {modifiers.length === 0 ? (
+                  {menuModifiers.length === 0 ? (
                     <p className="rounded-lg bg-muted/30 px-3 py-4 text-center text-sm text-muted-foreground">
                       No modifiers configured for this menu item
                     </p>
                   ) : (
-                    modifiers.map((modifier) => {
+                    menuModifiers.map((modifier) => {
                       const unavailable = isModifierUnavailable(modifier);
                       return (
                       <div key={modifier.id} className={`flex items-center justify-between rounded-lg px-3 py-2 ${unavailable ? "bg-gray-100 text-gray-400" : "bg-muted/40"}`}>
@@ -2439,6 +2655,27 @@ export function RecipeBOM() {
                 <div className="bg-muted/30 rounded-xl p-4">
                   <p className="text-xs text-muted-foreground mb-1">POS Status</p>
                   <p className={`text-lg font-bold ${(selectedRecipe.isActive ?? true) ? "text-green-600" : "text-muted-foreground"}`}>{(selectedRecipe.isActive ?? true) ? "Active" : "Inactive"}</p>
+                </div>
+              </div>
+
+              <div>
+                <h3 className="mb-3 text-lg font-semibold text-foreground">Size Variants</h3>
+                <div className="rounded-xl bg-violet-50/50 p-4">
+                  {selectedRecipe.sizeVariants?.length ? (
+                    <div className="space-y-2">
+                      {selectedRecipe.sizeVariants.map((variant) => (
+                        <div key={variant.id} className="flex items-center justify-between gap-3 rounded-lg border border-violet-100 bg-white px-3 py-2">
+                          <div>
+                            <p className="text-sm font-medium text-foreground">{variant.name}</p>
+                            <p className="text-[11px] text-muted-foreground">{variant.sizeMultiplier}× starting multiplier • exact BOM quantities saved</p>
+                          </div>
+                          <span className="text-sm font-semibold text-violet-700">{formatMoney(variant.sellingPrice)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No additional sizes configured; POS uses Regular / Standard.</p>
+                  )}
                 </div>
               </div>
 
