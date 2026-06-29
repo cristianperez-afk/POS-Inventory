@@ -29,6 +29,7 @@ interface Ingredient {
   itemId?: string;
   inventory_item_id?: string;
   ingredient_id?: number;
+  quantity_available?: number;
   product_ingredient_id?: number;
   original_quantity?: number;
   name: string;
@@ -48,7 +49,7 @@ interface Modifier {
   id: string;
   name: string;
   group?: string;
-  type: 'remove' | 'less' | 'note' | 'add_on';
+  type: 'remove' | 'ingredient_level' | 'size_variant' | 'note' | 'add_on';
   itemId?: string;
   ingredientId?: number;
   itemName?: string;
@@ -58,6 +59,9 @@ interface Modifier {
   requiresStock?: boolean;
   quantity?: number;
   maxQuantity?: number;
+  levelPercent?: number;
+  sizeMultiplier?: number;
+  sellingPrice?: number;
   priceDelta?: number;
   priceDeltaPercent?: number;
 }
@@ -121,7 +125,7 @@ const clampMinutes = (minutes: number, min: number, max: number) => {
 
 function getCartItemDisplayDetails(item: CartItem) {
   const selected = (item.modifiers ?? []).filter((modifier) => (item.selectedModifierIds ?? []).includes(modifier.id));
-  const lessPreferences = selected.filter((modifier) => modifier.type === 'less' || (modifier.type === 'remove' && /^less\b/i.test(modifier.name)));
+  const levelAdjustments = selected.filter((modifier) => modifier.type === 'ingredient_level');
   return {
     addedIngredients: selected.filter((modifier) => modifier.type === 'add_on').map((modifier) => {
       const count = Math.max(1, Number(item.modifierQuantities?.[modifier.id] ?? 1));
@@ -130,11 +134,11 @@ function getCartItemDisplayDetails(item: CartItem) {
     }),
     removedIngredients: selected.filter((modifier) => modifier.type === 'remove' && !/^less\b/i.test(modifier.name)).map((modifier) => modifier.itemName ?? modifier.name),
     changedIngredients: [
-      ...lessPreferences.map((modifier) => modifier.name),
-      ...item.ingredients.filter((ingredient) => ingredient.customization_type === 'CHANGE_QUANTITY' && !lessPreferences.some((modifier) => modifierTargetsIngredient(modifier, ingredient))).map((ingredient) => `${ingredient.name} ${ingredient.quantity} ${ingredient.unit ?? ''}`.trim()),
+      ...levelAdjustments.map((modifier) => modifier.name),
+      ...item.ingredients.filter((ingredient) => ingredient.customization_type === 'CHANGE_QUANTITY' && !levelAdjustments.some((modifier) => modifierTargetsIngredient(modifier, ingredient))).map((ingredient) => `${ingredient.name} ${ingredient.quantity} ${ingredient.unit ?? ''}`.trim()),
     ],
     replacedIngredients: item.ingredients.filter((ingredient) => ingredient.customization_type === 'REPLACE').map((ingredient) => `${ingredient.name} -> ${ingredient.replacement_name ?? 'Replacement'}`),
-    modifiers: selected.filter((modifier) => modifier.type === 'note').map((modifier) => modifier.name),
+    modifiers: selected.filter((modifier) => modifier.type === 'note' || modifier.type === 'size_variant').map((modifier) => modifier.name),
   };
 }
 
@@ -283,6 +287,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
         inventory_item_id: ingredient.inventory_item_id,
         product_ingredient_id: finiteNumberOrUndefined(ingredient.product_ingredient_id ?? ingredient.id),
         ingredient_id: finiteNumberOrUndefined(ingredient.ingredient_id),
+        quantity_available: finiteNumberIncludingZeroOrUndefined(ingredient.quantity_available),
         name: ingredient.name,
         quantity: Number(ingredient.quantity ?? 0),
         original_quantity: Number(ingredient.quantity ?? 0),
@@ -295,7 +300,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
             id: String(modifier.id),
             name: String(modifier.name),
             group: String(modifier.group ?? 'Modifiers'),
-            type: modifier.type === 'add_on' ? 'add_on' : modifier.type === 'note' ? 'note' : modifier.type === 'less' ? 'less' : 'remove',
+            type: modifier.type === 'add_on' ? 'add_on' : modifier.type === 'note' ? 'note' : modifier.type === 'size_variant' ? 'size_variant' : modifier.type === 'ingredient_level' || modifier.type === 'less' ? 'ingredient_level' : 'remove',
             itemId: modifier.itemId,
             ingredientId: finiteNumberOrUndefined(modifier.ingredientId),
             itemName: modifier.itemName,
@@ -305,6 +310,9 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
             requiresStock: modifier.requiresStock,
             quantity: Number(modifier.quantity ?? 1),
             maxQuantity: Number.isInteger(Number(modifier.maxQuantity)) && Number(modifier.maxQuantity) > 0 ? Math.floor(Number(modifier.maxQuantity)) : undefined,
+            levelPercent: finiteNumberIncludingZeroOrUndefined(modifier.levelPercent ?? (modifier.type === 'less' ? 50 : undefined)),
+            sizeMultiplier: finiteNumberOrUndefined(modifier.sizeMultiplier),
+            sellingPrice: finiteNumberIncludingZeroOrUndefined(modifier.sellingPrice),
             priceDelta: Number(modifier.priceDelta ?? 0),
             priceDeltaPercent: Number(modifier.priceDeltaPercent ?? 0),
           }))
@@ -374,6 +382,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
           inventory_item_id: ingredient.inventory_item_id,
           product_ingredient_id: finiteNumberOrUndefined(ingredient.product_ingredient_id ?? ingredient.id),
           ingredient_id: finiteNumberOrUndefined(ingredientId),
+          quantity_available: finiteNumberIncludingZeroOrUndefined(ingredient.quantity_available),
           name: ingredient.name,
           quantity: Number(ingredient.quantity ?? 0),
           original_quantity: Number(ingredient.quantity ?? 0),
@@ -394,7 +403,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
               id: String(modifier.id),
               name: String(modifier.name),
               group: String(modifier.group ?? 'Modifiers'),
-              type: modifier.type === 'add_on' ? 'add_on' : modifier.type === 'note' ? 'note' : modifier.type === 'less' ? 'less' : 'remove',
+              type: modifier.type === 'add_on' ? 'add_on' : modifier.type === 'note' ? 'note' : modifier.type === 'size_variant' ? 'size_variant' : modifier.type === 'ingredient_level' || modifier.type === 'less' ? 'ingredient_level' : 'remove',
               itemId: modifier.itemId,
               ingredientId: finiteNumberOrUndefined(modifier.ingredientId),
               itemName: modifier.itemName,
@@ -404,6 +413,9 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
               requiresStock: modifier.requiresStock,
               quantity: Number(modifier.quantity ?? 1),
               maxQuantity: Number.isInteger(Number(modifier.maxQuantity)) && Number(modifier.maxQuantity) > 0 ? Math.floor(Number(modifier.maxQuantity)) : undefined,
+              levelPercent: finiteNumberIncludingZeroOrUndefined(modifier.levelPercent ?? (modifier.type === 'less' ? 50 : undefined)),
+              sizeMultiplier: finiteNumberOrUndefined(modifier.sizeMultiplier),
+              sellingPrice: finiteNumberIncludingZeroOrUndefined(modifier.sellingPrice),
               priceDelta: Number(modifier.priceDelta ?? 0),
               priceDeltaPercent: Number(modifier.priceDeltaPercent ?? 0),
             }))
@@ -636,13 +648,22 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
     setCart((items) => items.map((item, itemIndex) => {
       if (itemIndex !== index) return item;
       const ingredientModifierIds = (item.modifiers ?? [])
-        .filter((modifier) => (modifier.type === 'remove' || modifier.type === 'less') && modifierTargetsIngredient(modifier, ingredient))
+        .filter((modifier) => (modifier.type === 'remove' || modifier.type === 'ingredient_level') && modifierTargetsIngredient(modifier, ingredient))
         .map((modifier) => modifier.id);
       const retained = (item.selectedModifierIds ?? []).filter((id) => !ingredientModifierIds.includes(id));
       return {
         ...item,
         selectedModifierIds: modifierId ? [...retained, modifierId] : retained,
       };
+    }));
+  };
+
+  const selectSizeVariant = (index: number, modifierId: string | null) => {
+    setCart((items) => items.map((item, itemIndex) => {
+      if (itemIndex !== index) return item;
+      const sizeVariantIds = (item.modifiers ?? []).filter((modifier) => modifier.type === 'size_variant').map((modifier) => modifier.id);
+      const retained = (item.selectedModifierIds ?? []).filter((id) => !sizeVariantIds.includes(id));
+      return { ...item, selectedModifierIds: modifierId ? [...retained, modifierId] : retained };
     }));
   };
 
@@ -826,21 +847,34 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
   const itemLineTotal = (item: CartItem) => (item.price * item.quantity) + itemAdditionalCost(item);
   function applySelectedModifiers(item: CartItem) {
     const selectedModifierIds = item.selectedModifierIds ?? [];
-    const selectedRemoveModifiers = (item.modifiers ?? []).filter((modifier) =>
-      (modifier.type === 'remove' || modifier.type === 'less') && selectedModifierIds.includes(modifier.id)
+    const selectedIngredientAdjustments = (item.modifiers ?? []).filter((modifier) =>
+      (modifier.type === 'remove' || modifier.type === 'ingredient_level') && selectedModifierIds.includes(modifier.id)
     );
+    const selectedSizeVariant = (item.modifiers ?? []).find((modifier) =>
+      modifier.type === 'size_variant' && selectedModifierIds.includes(modifier.id)
+    );
+    const sizeMultiplier = Math.max(Number(selectedSizeVariant?.sizeMultiplier ?? 1), 0.01);
 
     const adjustedIngredients = item.ingredients.map((ingredient): Ingredient => {
-      const removeModifier = selectedRemoveModifiers.find((modifier) =>
+      if (ingredient.customization_type === 'ADD') return ingredient;
+      const adjustment = selectedIngredientAdjustments.find((modifier) =>
         (modifier.itemId && modifier.itemId === (ingredient.itemId ?? ingredient.inventory_item_id)) ||
         (modifier.itemName && modifier.itemName === ingredient.name)
       );
-
-      if (!removeModifier) return ingredient;
-
-      return removeModifier.type === 'less' || /^less\b/i.test(removeModifier.name)
-        ? { ...ingredient, quantity: Number(ingredient.quantity ?? 0) / 2, customization_type: 'CHANGE_QUANTITY', notes: removeModifier.name }
-        : { ...ingredient, quantity: 0, removed: true, customization_type: 'REMOVE', notes: removeModifier.name };
+      const originalQuantity = Number(ingredient.original_quantity ?? ingredient.quantity ?? 0);
+      if (adjustment?.type === 'remove') {
+        return { ...ingredient, quantity: 0, removed: true, customization_type: 'REMOVE', notes: adjustment.name };
+      }
+      const ingredientLevel = adjustment?.type === 'ingredient_level' ? Number(adjustment.levelPercent ?? 100) / 100 : 1;
+      const quantity = originalQuantity * sizeMultiplier * ingredientLevel;
+      const changed = Math.abs(quantity - originalQuantity) > 0.000001;
+      return {
+        ...ingredient,
+        quantity,
+        removed: quantity <= 0,
+        customization_type: changed ? (quantity <= 0 ? 'REMOVE' : 'CHANGE_QUANTITY') : undefined,
+        notes: adjustment?.name ?? selectedSizeVariant?.name,
+      };
     });
 
     const selectedAddOns = (item.modifiers ?? []).filter((modifier) =>
@@ -887,7 +921,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
         const original = item.originalIngredients.find((originalIngredient) => originalIngredient.name === ingredient.name);
         return original && !ingredient.removed && !ingredient.replacement_name && Number(ingredient.quantity) !== Number(original.quantity);
       }),
-      selectedModifiers: (item.modifiers ?? []).filter((modifier) => modifier.type === 'note' && (item.selectedModifierIds ?? []).includes(modifier.id)),
+      selectedModifiers: (item.modifiers ?? []).filter((modifier) => (modifier.type === 'note' || modifier.type === 'size_variant') && (item.selectedModifierIds ?? []).includes(modifier.id)),
     };
   };
   const hasItemCustomization = (item: CartItem) => {
@@ -1091,6 +1125,22 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
 
   const handleConfirmOrder = () => {
     console.log('Confirm Order clicked'); // Debug log
+
+    const insufficientAdjustedStock = cart.flatMap((item) => applySelectedModifiers(item)
+      .filter((ingredient) => ingredient.customization_type !== 'ADD' && !ingredient.removed)
+      .map((ingredient) => {
+        const required = Number(ingredient.quantity ?? 0) * Number(item.quantity ?? 1);
+        const available = ingredient.quantity_available;
+        return available != null && required > Number(available) + 0.000001
+          ? `${item.name}: ${ingredient.name} requires ${required} ${ingredient.unit}, only ${available} available`
+          : null;
+      }))
+      .find(Boolean);
+    if (insufficientAdjustedStock) {
+      setValidationError(`Not enough stock for ${insufficientAdjustedStock}.`);
+      setShowPreview(false);
+      return;
+    }
 
     const unavailableAddOn = cart.flatMap((item) => (item.modifiers ?? [])
       .filter((modifier) => modifier.type === 'add_on' && (item.selectedModifierIds ?? []).includes(modifier.id))
@@ -2279,13 +2329,15 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
             {(() => {
               const item = cart[customizeItemIndex];
               const addOns = (item.modifiers ?? []).filter((modifier) => modifier.type === 'add_on');
+              const sizeVariants = (item.modifiers ?? []).filter((modifier) => modifier.type === 'size_variant');
               const preferences = (item.modifiers ?? []).filter((modifier) => modifier.type === 'note');
               const selectedIds = item.selectedModifierIds ?? [];
-              const selectedRemovals = (item.modifiers ?? []).filter((modifier) => (modifier.type === 'remove' || modifier.type === 'less') && selectedIds.includes(modifier.id));
+              const selectedIngredientAdjustments = (item.modifiers ?? []).filter((modifier) => (modifier.type === 'remove' || modifier.type === 'ingredient_level') && selectedIds.includes(modifier.id));
               const selectedAddOns = addOns.filter((modifier) => selectedIds.includes(modifier.id));
               const selectedPreferences = preferences.filter((modifier) => selectedIds.includes(modifier.id));
-              const lessOptions = selectedRemovals.filter((modifier) => modifier.type === 'less' || /^less\b/i.test(modifier.name));
-              const removedOptions = selectedRemovals.filter((modifier) => modifier.type === 'remove' && !/^less\b/i.test(modifier.name));
+              const selectedSizeVariant = sizeVariants.find((modifier) => selectedIds.includes(modifier.id));
+              const levelOptions = selectedIngredientAdjustments.filter((modifier) => modifier.type === 'ingredient_level');
+              const removedOptions = selectedIngredientAdjustments.filter((modifier) => modifier.type === 'remove');
               const additionalCharge = modifierPrice(item) * item.quantity;
 
               return <>
@@ -2297,7 +2349,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                     </div>
                     <div className="space-y-2">
                       {item.originalIngredients.map((ingredient, ingredientIndex) => {
-                        const options = (item.modifiers ?? []).filter((modifier) => (modifier.type === 'remove' || modifier.type === 'less') && modifierTargetsIngredient(modifier, ingredient));
+                        const options = (item.modifiers ?? []).filter((modifier) => (modifier.type === 'remove' || modifier.type === 'ingredient_level') && modifierTargetsIngredient(modifier, ingredient));
                         const selectedOption = options.find((modifier) => selectedIds.includes(modifier.id));
                         return (
                           <div key={`basic-${ingredientIndex}-${ingredient.name}`} className="rounded-lg border border-border p-3">
@@ -2332,7 +2384,26 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
 
                   <section>
                     <div className="mb-2">
-                      <h3 className="text-sm font-semibold text-foreground">2. Available Add-ons</h3>
+                      <h3 className="text-sm font-semibold text-foreground">2. Size</h3>
+                      <p className="text-xs text-muted-foreground">A size changes the full recipe quantity, food cost, selling price, and stock deduction.</p>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <label className={`flex cursor-pointer items-center justify-between gap-2 rounded-lg border p-3 text-sm ${!selectedSizeVariant ? 'border-violet-300 bg-violet-50' : 'border-border'}`}>
+                        <span className="flex items-center gap-2"><input type="radio" name={`size-${customizeItemIndex}`} checked={!selectedSizeVariant} onChange={() => selectSizeVariant(customizeItemIndex, null)} />Regular / Standard</span>
+                        <span className="text-xs font-medium">₱{item.price.toFixed(2)}</span>
+                      </label>
+                      {sizeVariants.map((modifier) => (
+                        <label key={modifier.id} className={`flex cursor-pointer items-center justify-between gap-2 rounded-lg border p-3 text-sm ${selectedSizeVariant?.id === modifier.id ? 'border-violet-300 bg-violet-50' : 'border-border'}`}>
+                          <span className="flex items-center gap-2"><input type="radio" name={`size-${customizeItemIndex}`} checked={selectedSizeVariant?.id === modifier.id} onChange={() => selectSizeVariant(customizeItemIndex, modifier.id)} />{modifier.name}</span>
+                          <span className="text-right text-xs"><strong>₱{Number(modifier.sellingPrice ?? item.price + Number(modifier.priceDelta ?? 0)).toFixed(2)}</strong><span className="block text-muted-foreground">{modifier.sizeMultiplier ?? 1}× BOM</span></span>
+                        </label>
+                      ))}
+                    </div>
+                  </section>
+
+                  <section>
+                    <div className="mb-2">
+                      <h3 className="text-sm font-semibold text-foreground">3. Available Add-ons</h3>
                       <p className="text-xs text-muted-foreground">Only add-ons configured by the Admin/Kitchen for this recipe are shown.</p>
                     </div>
                     {addOns.length === 0 ? <p className="rounded-lg bg-muted/40 p-3 text-xs text-muted-foreground">No add-ons configured for this item.</p> : (
@@ -2371,7 +2442,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
 
                   <section>
                     <div className="mb-2">
-                      <h3 className="text-sm font-semibold text-foreground">3. Instruction / Preferences</h3>
+                      <h3 className="text-sm font-semibold text-foreground">4. Instruction / Preferences</h3>
                       <p className="text-xs text-muted-foreground">Kitchen-approved preparation preferences and a customer note.</p>
                     </div>
                     {preferences.length > 0 && <div className="mb-3 grid gap-2 sm:grid-cols-2">{preferences.map((modifier) => (
@@ -2384,18 +2455,19 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                   </section>
 
                   <section className="rounded-xl border-2 border-primary/20 bg-primary/5 p-4">
-                    <h3 className="text-sm font-bold text-foreground">4. Customer Confirmation</h3>
+                    <h3 className="text-sm font-bold text-foreground">5. Customer Confirmation</h3>
                     <p className="mb-3 text-xs text-muted-foreground">Repeat these changes to the customer before confirming.</p>
                     <div className="space-y-1 text-xs">
                       {removedOptions.length > 0 && <p><strong className="text-red-700">Removed:</strong> {removedOptions.map((modifier) => modifier.itemName ?? modifier.name).join(', ')}</p>}
-                      {lessOptions.length > 0 && <p><strong className="text-amber-700">Less:</strong> {lessOptions.map((modifier) => modifier.itemName ?? modifier.name).join(', ')}</p>}
+                      {levelOptions.length > 0 && <p><strong className="text-amber-700">Ingredient levels:</strong> {levelOptions.map((modifier) => `${modifier.itemName ?? modifier.name} ${modifier.levelPercent ?? 100}%`).join(', ')}</p>}
+                      {selectedSizeVariant && <p><strong className="text-violet-700">Size:</strong> {selectedSizeVariant.name} ({selectedSizeVariant.sizeMultiplier ?? 1}× BOM)</p>}
                       {selectedAddOns.length > 0 && <p><strong className="text-emerald-700">Add-ons:</strong> {selectedAddOns.map((modifier) => `${modifier.name} ×${item.modifierQuantities?.[modifier.id] ?? 1}`).join(', ')}</p>}
                       {selectedPreferences.length > 0 && <p><strong className="text-blue-700">Preferences:</strong> {selectedPreferences.map((modifier) => modifier.name).join(', ')}</p>}
                       {item.notes.trim() && <p><strong>Note:</strong> {item.notes.trim()}</p>}
-                      {selectedRemovals.length === 0 && selectedAddOns.length === 0 && selectedPreferences.length === 0 && !item.notes.trim() && <p className="text-muted-foreground">No changes selected. Standard recipe will be prepared.</p>}
+                      {selectedIngredientAdjustments.length === 0 && !selectedSizeVariant && selectedAddOns.length === 0 && selectedPreferences.length === 0 && !item.notes.trim() && <p className="text-muted-foreground">No changes selected. Standard recipe will be prepared.</p>}
                     </div>
                     <div className="mt-3 border-t border-primary/20 pt-3 text-xs">
-                      <div className="flex justify-between"><span>Additional charge</span><strong>₱{additionalCharge.toFixed(2)}</strong></div>
+                      <div className="flex justify-between"><span>Price adjustment</span><strong>{additionalCharge >= 0 ? '+' : '-'}₱{Math.abs(additionalCharge).toFixed(2)}</strong></div>
                       <div className="mt-1 flex justify-between text-sm"><span>Updated item total</span><strong className="text-primary">₱{itemLineTotal(item).toFixed(2)}</strong></div>
                     </div>
                   </section>

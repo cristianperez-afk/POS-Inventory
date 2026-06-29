@@ -3230,7 +3230,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           quantityAvailable: stock ? Number(stock.quantity_available ?? 0) : null,
           unit: stock?.unit ?? modifier.unit,
           suggestedPrice: modifier?.type === 'add_on' && stock ? weightedPortionPrice : undefined,
-          priceDelta: modifier?.type === 'add_on' ? Number(modifier?.priceDelta ?? 0) : 0,
+          priceDelta: modifier?.type === 'add_on' || modifier?.type === 'size_variant' ? Number(modifier?.priceDelta ?? 0) : 0,
           stockStatus: modifier.itemId || modifier.requiresStock ? (available ? 'available' : 'unavailable') : 'untracked',
         };
       }),
@@ -4483,7 +4483,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   private async recordRestaurantInstructionModifiers(client: PoolClient, storeId: number, orderItemId: number, item: any) {
     const modifiers = Array.isArray(item.modifiers) ? item.modifiers : [];
     for (const modifier of modifiers) {
-      if (String(modifier?.type ?? '').toLowerCase() !== 'note') continue;
+      if (!['note', 'size_variant'].includes(String(modifier?.type ?? '').toLowerCase())) continue;
       const label = String(modifier?.name ?? '').trim();
       if (!label) continue;
       await this.queryWithClient(
@@ -4553,6 +4553,18 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const approvedAdjustmentIngredientIds = new Set<number>();
     const configuredBasePrice = Number(rows[0]?.product_price ?? 0);
     let configuredSurchargePerItem = 0;
+    const configuredSelectedSizeVariants = selectedModifiers
+      .map((selected: any) => configuredById.get(String(selected?.id ?? '')))
+      .filter((modifier: any) => modifier?.type === 'size_variant');
+    if (configuredSelectedSizeVariants.length > 1) {
+      throw new BadRequestException('Only one size variant may be selected for a menu item.');
+    }
+    const selectedSizeVariant: any = configuredSelectedSizeVariants[0];
+    const selectedSizeMultiplier = selectedSizeVariant ? Number(selectedSizeVariant.sizeMultiplier ?? 1) : 1;
+    if (!Number.isFinite(selectedSizeMultiplier) || selectedSizeMultiplier <= 0) {
+      throw new BadRequestException('The selected size has an invalid BOM multiplier.');
+    }
+    const explicitlyAdjustedIngredientIds = new Set<number>();
 
     if (!sameNumber(item.price, configuredBasePrice)) {
       throw new BadRequestException('The menu item price changed. Please refresh the order and try again.');
@@ -4574,10 +4586,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       if (String(configured.type ?? 'note') !== String(selected.type ?? 'note')) {
         throw new BadRequestException(`Modifier ${configured.name ?? selected.name} has an invalid behavior.`);
       }
+      if (configured.type === 'size_variant'
+        && (!sameNumber(selected.sizeMultiplier, configured.sizeMultiplier)
+          || !sameNumber(selected.sellingPrice, configured.sellingPrice))) {
+        throw new BadRequestException(`Size variant ${configured.name ?? selected.name} does not match its configured multiplier or selling price.`);
+      }
       const selectedCount = configured.type === 'add_on' ? Number(selected.selectedQuantity ?? 1) : 1;
-      const configuredPrice = configured.type === 'remove' || configured.type === 'less'
-        ? 0
-        : Number(configured.priceDelta ?? 0);
+      const configuredPrice = configured.type === 'add_on' || configured.type === 'size_variant'
+        ? Number(configured.priceDelta ?? 0)
+        : 0;
       if (!sameNumber(selected.priceDeltaPercent, configured.priceDeltaPercent)) {
         throw new BadRequestException(`Modifier ${configured.name ?? selected.name} has an invalid percentage price.`);
       }
@@ -4640,17 +4657,23 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           || !sameNumber(submittedIngredient.additional_price ?? submittedIngredient.additionalCost, expectedAdditionalCost)) {
           throw new BadRequestException(`${configured.name ?? 'Add-on'} does not match its configured portion or price.`);
         }
-      } else if (configured.type === 'remove' || configured.type === 'less') {
+      } else if (configured.type === 'remove' || configured.type === 'ingredient_level' || configured.type === 'less') {
         if (!configured.itemId || String(selected.itemId ?? '') !== String(configured.itemId)) {
           throw new BadRequestException(`${configured.name ?? 'Ingredient adjustment'} is not linked to the configured recipe ingredient.`);
         }
-        const inventoryRows = await this.queryWithClient<{ id: number }>(
+        const inventoryRows = await this.queryWithClient<{ id: number; quantity_required: string | number | null }>(
           client,
-          `SELECT id FROM ingredients_inventory WHERE store_id = $1 AND inventory_item_id = $2 LIMIT 1`,
-          [storeId, configured.itemId],
+          `SELECT ii.id, pi.quantity_required
+           FROM ingredients_inventory ii
+           LEFT JOIN product_ingredients pi
+             ON pi.store_id = ii.store_id AND pi.product_id = $3 AND pi.ingredient_id = ii.id
+           WHERE ii.store_id = $1 AND ii.inventory_item_id = $2
+           LIMIT 1`,
+          [storeId, configured.itemId, productId],
         );
         const ingredientId = Number(inventoryRows[0]?.id ?? 0);
         approvedAdjustmentIngredientIds.add(ingredientId);
+        explicitlyAdjustedIngredientIds.add(ingredientId);
         const submittedIngredient = submittedIngredients.find((ingredient: any) =>
           Number(ingredient.ingredient_id ?? ingredient.ingredientId ?? 0) === ingredientId,
         );
@@ -4659,12 +4682,44 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         }
         const originalQuantity = Number(submittedIngredient.original_quantity ?? submittedIngredient.originalQuantity ?? 0);
         const submittedQuantity = Number(submittedIngredient.quantity ?? 0);
-        const isLess = configured.type === 'less' || /^less\b/i.test(String(configured.name ?? ''));
-        const validAdjustment = isLess
-          ? originalQuantity > 0 && sameNumber(submittedQuantity, originalQuantity / 2) && submittedIngredient.removed !== true
+        const configuredOriginalQuantity = Number(inventoryRows[0]?.quantity_required ?? originalQuantity);
+        const isIngredientLevel = configured.type === 'ingredient_level' || configured.type === 'less';
+        const levelPercent = configured.type === 'less' ? 50 : Number(configured.levelPercent ?? 100);
+        const validAdjustment = isIngredientLevel
+          ? originalQuantity > 0
+            && sameNumber(originalQuantity, configuredOriginalQuantity)
+            && levelPercent >= 0 && levelPercent <= 100
+            && sameNumber(submittedQuantity, originalQuantity * selectedSizeMultiplier * (levelPercent / 100))
           : submittedIngredient.removed === true || submittedQuantity <= 0;
         if (!validAdjustment) {
           throw new BadRequestException(`${configured.name ?? 'Ingredient adjustment'} does not match its configured action.`);
+        }
+      }
+    }
+
+    if (selectedSizeVariant) {
+      const baseIngredients = await this.queryWithClient<{ ingredient_id: number; quantity_required: string | number }>(
+        client,
+        `SELECT ingredient_id, quantity_required
+         FROM product_ingredients
+         WHERE store_id = $1 AND product_id = $2 AND ingredient_id IS NOT NULL`,
+        [storeId, productId],
+      );
+      for (const baseIngredient of baseIngredients) {
+        const ingredientId = Number(baseIngredient.ingredient_id);
+        approvedAdjustmentIngredientIds.add(ingredientId);
+        if (explicitlyAdjustedIngredientIds.has(ingredientId)) continue;
+        const submittedIngredient = submittedIngredients.find((ingredient: any) =>
+          Number(ingredient.ingredient_id ?? ingredient.ingredientId ?? 0) === ingredientId,
+        );
+        if (!submittedIngredient) {
+          throw new BadRequestException(`${selectedSizeVariant.name ?? 'Size variant'} is missing a recipe ingredient.`);
+        }
+        const originalQuantity = Number(submittedIngredient.original_quantity ?? submittedIngredient.originalQuantity ?? 0);
+        const configuredOriginalQuantity = Number(baseIngredient.quantity_required ?? 0);
+        if (!sameNumber(originalQuantity, configuredOriginalQuantity)
+          || !sameNumber(submittedIngredient.quantity, configuredOriginalQuantity * selectedSizeMultiplier)) {
+          throw new BadRequestException(`${selectedSizeVariant.name ?? 'Size variant'} does not match its configured BOM multiplier.`);
         }
       }
     }

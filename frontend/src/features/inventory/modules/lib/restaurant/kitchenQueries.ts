@@ -124,6 +124,9 @@ export function useRestaurantRecipesQuery(params?: { archived?: boolean }) {
                 maxQuantity: Number.isInteger(Number(modifier.maxQuantity)) && Number(modifier.maxQuantity) > 0
                   ? Math.floor(Number(modifier.maxQuantity))
                   : undefined,
+                levelPercent: modifier.levelPercent == null ? undefined : Number(modifier.levelPercent),
+                sizeMultiplier: modifier.sizeMultiplier == null ? undefined : Number(modifier.sizeMultiplier),
+                sellingPrice: modifier.sellingPrice == null ? undefined : Number(modifier.sellingPrice),
                 priceDelta: Number(modifier.priceDelta ?? 0),
                 priceDeltaPercent: Number(modifier.priceDeltaPercent ?? 0),
               }))

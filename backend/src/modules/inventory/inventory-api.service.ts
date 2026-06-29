@@ -828,27 +828,42 @@ export class InventoryApiService {
   private async saveRecipe(scope: Scope, recipeId: string | undefined, body: Record<string, unknown>) {
     const ingredients = Array.isArray(body.ingredients) ? body.ingredients as Record<string, unknown>[] : [];
     const submittedModifiers = Array.isArray(body.modifiers) ? body.modifiers as Record<string, unknown>[] : [];
+    const baseSellingPrice = Number(body.sellingPrice ?? 0);
     const modifiers = submittedModifiers.map((modifier) => {
       const submittedType = String(modifier.type ?? 'note');
-      const type = ['remove', 'less', 'add_on', 'note'].includes(submittedType) ? submittedType : 'note';
+      const type = submittedType === 'less'
+        ? 'ingredient_level'
+        : ['remove', 'ingredient_level', 'size_variant', 'add_on', 'note'].includes(submittedType) ? submittedType : 'note';
       const isAddOn = type === 'add_on';
       const isInstruction = type === 'note';
+      const isSizeVariant = type === 'size_variant';
+      const isIngredientLevel = type === 'ingredient_level';
       const priceDelta = Number(modifier.priceDelta ?? 0);
+      const levelPercent = Number(modifier.levelPercent ?? (submittedType === 'less' ? 50 : 100));
+      const sizeMultiplier = Number(modifier.sizeMultiplier ?? 1);
+      const sizeSellingPrice = Number(modifier.sellingPrice ?? 0);
       const normalized: Record<string, unknown> = {
         ...modifier,
         type,
         group: isAddOn
           ? String(modifier.group ?? 'Add-ons').trim() || 'Add-ons'
+          : isSizeVariant
+            ? 'Size Variants'
           : isInstruction
             ? 'Instruction / Preferences'
             : 'Basic Ingredients',
-        itemId: isInstruction ? undefined : modifier.itemId,
-        itemName: isInstruction ? undefined : modifier.itemName,
+        itemId: isInstruction || isSizeVariant ? undefined : modifier.itemId,
+        itemName: isInstruction || isSizeVariant ? undefined : modifier.itemName,
         requiresStock: isAddOn,
         quantity: isAddOn ? modifier.quantity : undefined,
         unit: isAddOn ? modifier.unit : undefined,
         maxQuantity: isAddOn ? modifier.maxQuantity : undefined,
-        priceDelta: isAddOn && Number.isFinite(priceDelta) && priceDelta >= 0 ? priceDelta : 0,
+        levelPercent: isIngredientLevel ? levelPercent : undefined,
+        sizeMultiplier: isSizeVariant ? sizeMultiplier : undefined,
+        sellingPrice: isSizeVariant ? sizeSellingPrice : undefined,
+        priceDelta: isSizeVariant && Number.isFinite(sizeSellingPrice) && Number.isFinite(baseSellingPrice)
+          ? sizeSellingPrice - baseSellingPrice
+          : isAddOn && Number.isFinite(priceDelta) && priceDelta >= 0 ? priceDelta : 0,
         priceDeltaPercent: 0,
       };
       return normalized;
@@ -861,11 +876,26 @@ export class InventoryApiService {
     }
     const recipeIngredientIds = new Set(ingredients.map((ingredient) => String(ingredient.itemId ?? '')).filter(Boolean));
     const invalidIngredientAdjustment = modifiers.find((modifier) =>
-      ['remove', 'less'].includes(String(modifier.type ?? ''))
+      ['remove', 'ingredient_level'].includes(String(modifier.type ?? ''))
       && !recipeIngredientIds.has(String(modifier.itemId ?? '')),
     );
     if (invalidIngredientAdjustment) {
       throw new BadRequestException(`${String(invalidIngredientAdjustment.name ?? 'Ingredient adjustment')} must link to an ingredient used by this recipe.`);
+    }
+    const invalidIngredientLevel = modifiers.find((modifier) =>
+      String(modifier.type ?? '') === 'ingredient_level'
+      && (!Number.isFinite(Number(modifier.levelPercent)) || Number(modifier.levelPercent) < 0 || Number(modifier.levelPercent) > 100),
+    );
+    if (invalidIngredientLevel) {
+      throw new BadRequestException(`${String(invalidIngredientLevel.name ?? 'Ingredient level')} must be from 0% to 100%.`);
+    }
+    const invalidSizeVariant = modifiers.find((modifier) =>
+      String(modifier.type ?? '') === 'size_variant'
+      && (!Number.isFinite(Number(modifier.sizeMultiplier)) || Number(modifier.sizeMultiplier) <= 0
+        || !Number.isFinite(Number(modifier.sellingPrice)) || Number(modifier.sellingPrice) < 0),
+    );
+    if (invalidSizeVariant) {
+      throw new BadRequestException(`${String(invalidSizeVariant.name ?? 'Size variant')} must have a valid BOM multiplier and selling price.`);
     }
     const addOnsWithoutMaximum = modifiers.filter((modifier) => {
       if (String(modifier.type ?? '') !== 'add_on') return false;

@@ -42,7 +42,7 @@ type RecipeModifier = {
   id: string;
   name: string;
   group?: string;
-  type: "remove" | "less" | "note" | "add_on";
+  type: "remove" | "ingredient_level" | "size_variant" | "note" | "add_on";
   itemId?: string;
   itemName?: string;
   productId?: number | string;
@@ -50,6 +50,9 @@ type RecipeModifier = {
   quantity?: number;
   unit?: string;
   maxQuantity?: number;
+  levelPercent?: number;
+  sizeMultiplier?: number;
+  sellingPrice?: number;
   priceDelta?: number;
   priceDeltaPercent?: number;
 };
@@ -377,9 +380,33 @@ const cleanModifierName = (name: string) =>
     .trim()
     .toLowerCase();
 
+const modifierNameMatchesItem = (modifierName: string, itemName: string) => {
+  const target = cleanModifierName(modifierName);
+  const item = cleanModifierName(itemName);
+  const singularTokens = (value: string) => value.split(/\s+/).filter(Boolean).map((token) =>
+    token.endsWith("ies") && token.length > 4
+      ? `${token.slice(0, -3)}y`
+      : token.endsWith("oes") && token.length > 4
+        ? token.slice(0, -2)
+        : token.endsWith("s") && token.length > 3 ? token.slice(0, -1) : token,
+  );
+  const targetTokens = singularTokens(target);
+  const itemTokens = singularTokens(item);
+  return Boolean(target) && (target === item || targetTokens.every((token) => itemTokens.includes(token)));
+};
+
 const modifierNeedsStock = (group: string, name: string) => {
   if (/^no\b|^less\b|^mild$|^spicy$|well done|room temperature|chilled|sugar|ice|sour|salty|sweet|original|separate|dry style/i.test(name)) return false;
   return /\(\+P\)|extra|plain rice|garlic rice|chicken|pork|shrimp|patty|cheese|lettuce|tomato|onion|garlic|chili|egg|mushroom|vegetables|bacon|gravy|butter|lemon|caramel|cream|fruits|breast|thigh|leg|wing|lean|fatty|mixed/i.test(`${group} ${name}`);
+};
+
+const sizeMultiplierForName = (name: string) => {
+  if (/half/i.test(name)) return 0.5;
+  if (/extra large/i.test(name)) return 2;
+  if (/family/i.test(name)) return 3;
+  if (/large/i.test(name)) return 1.5;
+  if (/small/i.test(name)) return 0.75;
+  return 1;
 };
 
 const normalizeUnit = (unit: string | undefined) => {
@@ -499,6 +526,9 @@ export function RecipeBOM() {
   const [modifierQuantity, setModifierQuantity] = useState("1");
   const [modifierMaxQuantity, setModifierMaxQuantity] = useState("");
   const [modifierPrice, setModifierPrice] = useState("");
+  const [modifierLevelPercent, setModifierLevelPercent] = useState("50");
+  const [modifierSizeMultiplier, setModifierSizeMultiplier] = useState("1");
+  const [modifierSizeSellingPrice, setModifierSizeSellingPrice] = useState("");
   const recipeSubmitLockRef = useRef(false);
   const [isRecipeSubmitting, setIsRecipeSubmitting] = useState(false);
   const [currentIngredient, setCurrentIngredient] = useState({
@@ -532,21 +562,25 @@ export function RecipeBOM() {
   const findModifierInventoryItem = (group: string, name: string) => {
     const cleaned = cleanModifierName(name);
     if (!cleaned) return undefined;
-    const directMatch = inventoryItems.find((item) => {
-      const itemName = item.name.toLowerCase();
-      return itemName === cleaned || itemName.includes(cleaned) || cleaned.includes(itemName);
-    });
-    if (directMatch) return directMatch;
+    const exactMatch = inventoryItems.find((item) => cleanModifierName(item.name) === cleaned);
+    if (exactMatch) return exactMatch;
     const aliases: Record<string, string[]> = {
       caramel: ["white sugar", "brown sugar"],
       "fresh fruits": ["strawberry"],
+      "boiled egg": ["eggs"],
+      "plain rice": ["white rice", "rice"],
+      rice: ["white rice", "rice"],
+      ice: ["ice"],
+      mayo: ["mayonnaise"],
     };
     const aliasNames = aliases[cleaned] ?? [];
-    return aliasNames
+    const aliasMatch = aliasNames
       .map((alias) => inventoryItems.find((item) => item.name.trim().toLowerCase() === alias))
       .find((item): item is InventoryItem => Boolean(item));
+    return aliasMatch ?? inventoryItems.find((item) => modifierNameMatchesItem(name, item.name));
   };
   const selectedModifierStockItem = findInventoryItem(modifierItemId);
+  const selectedModifierBaseUnit = selectedModifierStockItem?.unit?.trim() || "unit";
   const recipeIngredientStockItems = Array.from(new Map(
     ingredients
       .map((ingredient) => findInventoryItem(ingredient.itemBackendId ?? ingredient.productId))
@@ -556,19 +590,16 @@ export function RecipeBOM() {
   const findRecipeModifierInventoryItem = (name: string) => {
     const cleaned = cleanModifierName(name);
     if (!cleaned) return undefined;
-    const directMatch = recipeIngredientStockItems.find((item) => {
-      const itemName = item.name.toLowerCase();
-      return itemName === cleaned || itemName.includes(cleaned) || cleaned.includes(itemName);
-    });
+    const directMatch = recipeIngredientStockItems.find((item) => modifierNameMatchesItem(name, item.name));
     if (directMatch) return directMatch;
     const aliases: Record<string, string[]> = { caramel: ["white sugar", "brown sugar"] };
     return (aliases[cleaned] ?? [])
       .map((alias) => recipeIngredientStockItems.find((item) => item.name.trim().toLowerCase() === alias))
       .find((item): item is InventoryItem => Boolean(item));
   };
-  const modifierStockLinkItems = modifierType === "note"
+  const modifierStockLinkItems = modifierType === "note" || modifierType === "size_variant"
     ? []
-    : modifierType === "remove" || modifierType === "less"
+    : modifierType === "remove" || modifierType === "ingredient_level"
       ? recipeIngredientStockItems
       : inventoryItems;
   const suggestedModifierPrice = modifierType === "add_on" && selectedModifierStockItem
@@ -576,11 +607,19 @@ export function RecipeBOM() {
     : 0;
   const modifierNamePlaceholder = modifierType === "note"
     ? "e.g., Separate Sauce"
-    : modifierType === "less"
-      ? "e.g., Less Onion"
+    : modifierType === "ingredient_level"
+      ? "e.g., 25% Sweetness"
       : modifierType === "remove"
-        ? "e.g., No Onion"
-        : "e.g., Extra Cheese";
+        ? "e.g., Remove Onion"
+        : modifierType === "size_variant"
+          ? "e.g., Large"
+          : "e.g., Extra Cheese";
+  const suggestedModifierNameForItem = (itemName: string) => {
+    if (modifierType === "remove") return `Remove ${itemName}`;
+    if (modifierType === "ingredient_level") return `${Number(modifierLevelPercent || 0)}% ${itemName}`;
+    if (modifierType === "add_on") return `Extra ${itemName}`;
+    return "";
+  };
   const isModifierUnavailable = (modifier: RecipeModifier) => {
     if (!modifier.requiresStock && !modifier.itemId && !modifier.productId) return false;
     const item = findInventoryItem(modifier.productId ?? modifier.itemId);
@@ -707,17 +746,17 @@ export function RecipeBOM() {
       toast.error("Please select a valid stock item");
       return;
     }
-    if ((modifierType === "add_on" || modifierType === "remove" || modifierType === "less") && !linkedItem) {
+    if ((modifierType === "add_on" || modifierType === "remove" || modifierType === "ingredient_level") && !linkedItem) {
       toast.error(`${modifierType === "add_on" ? "Add-on" : "Ingredient adjustment"} modifiers must be linked to an inventory item`);
       return;
     }
-    if ((modifierType === "remove" || modifierType === "less") && linkedItem && !ingredients.some((ingredient) => {
+    if ((modifierType === "remove" || modifierType === "ingredient_level") && linkedItem && !ingredients.some((ingredient) => {
       const ingredientInventoryItem = findInventoryItem(ingredient.itemBackendId ?? ingredient.productId);
       return String(ingredient.itemBackendId ?? ingredient.productId ?? "") === String(linkedItem.backendId ?? "")
         || String(ingredientInventoryItem?.backendId ?? "") === String(linkedItem.backendId ?? "")
         || String(ingredientInventoryItem?.id ?? "") === String(linkedItem.id);
     })) {
-      toast.error("Remove modifiers can only target an ingredient already used by this recipe");
+      toast.error("Ingredient adjustments can only target an ingredient already used by this recipe");
       return;
     }
     const quantity = Number(modifierQuantity);
@@ -730,13 +769,30 @@ export function RecipeBOM() {
       toast.error("Maximum add-on quantity must be a whole number greater than zero");
       return;
     }
-    const finalAdditionalPrice = modifierType !== "add_on"
-      ? 0
+    const levelPercent = Number(modifierLevelPercent);
+    if (modifierType === "ingredient_level" && (!Number.isFinite(levelPercent) || levelPercent < 0 || levelPercent > 100)) {
+      toast.error("Ingredient level must be from 0% to 100%");
+      return;
+    }
+    const sizeMultiplier = Number(modifierSizeMultiplier);
+    const sizeSellingPrice = Number(modifierSizeSellingPrice);
+    if (modifierType === "size_variant" && (!Number.isFinite(sizeMultiplier) || sizeMultiplier <= 0)) {
+      toast.error("Size BOM multiplier must be greater than zero");
+      return;
+    }
+    if (modifierType === "size_variant" && (!Number.isFinite(sizeSellingPrice) || sizeSellingPrice < 0)) {
+      toast.error("Size selling price must be zero or greater");
+      return;
+    }
+    const finalAdditionalPrice = modifierType === "size_variant"
+      ? sizeSellingPrice - calculateMenuSellingPrice()
+      : modifierType !== "add_on"
+        ? 0
       : modifierPrice.trim() === ""
         ? suggestedModifierPrice
         : Number(modifierPrice || 0);
-    if (!Number.isFinite(finalAdditionalPrice) || finalAdditionalPrice < 0) {
-      toast.error("Additional price must be zero or greater");
+    if (!Number.isFinite(finalAdditionalPrice) || (modifierType === "add_on" && finalAdditionalPrice < 0)) {
+      toast.error("Modifier price is invalid");
       return;
     }
 
@@ -749,7 +805,9 @@ export function RecipeBOM() {
           ? modifierGroup.trim() || "Add-ons"
           : modifierType === "note"
             ? "Instruction / Preferences"
-            : "Basic Ingredients",
+            : modifierType === "size_variant"
+              ? "Size Variants"
+              : "Basic Ingredients",
         type: modifierType,
         productId: linkedItem?.id,
         itemId: linkedItem?.backendId,
@@ -758,6 +816,9 @@ export function RecipeBOM() {
         quantity: modifierType === "add_on" ? quantity : undefined,
         unit: modifierType === "add_on" ? linkedItem?.unit : undefined,
         maxQuantity: modifierType === "add_on" ? maxQuantity : undefined,
+        levelPercent: modifierType === "ingredient_level" ? levelPercent : undefined,
+        sizeMultiplier: modifierType === "size_variant" ? sizeMultiplier : undefined,
+        sellingPrice: modifierType === "size_variant" ? sizeSellingPrice : undefined,
         priceDelta: finalAdditionalPrice,
         priceDeltaPercent: 0,
       },
@@ -769,6 +830,9 @@ export function RecipeBOM() {
     setModifierQuantity("1");
     setModifierMaxQuantity("");
     setModifierPrice("");
+    setModifierLevelPercent("50");
+    setModifierSizeMultiplier("1");
+    setModifierSizeSellingPrice("");
   };
 
   const handleRemoveModifier = (id: string) => {
@@ -793,10 +857,17 @@ export function RecipeBOM() {
       return;
     }
 
-    setModifiers(preset.options.map((option, index) => {
+    setModifiers(preset.options.map((option, index): RecipeModifier => {
       const isRemove = /^(no|less)\b/i.test(option.name);
       const isLess = /^less\b/i.test(option.name);
-      const adjustmentItem = isRemove ? findRecipeModifierInventoryItem(option.name) : undefined;
+      const isSizeVariant = /^(portion size|serving size|size)$/i.test(option.group);
+      const ingredientLevelMatch = option.group === "Sweetness" ? option.name.match(/^(0|25|50|75|100)%/) : null;
+      const ingredientLevelPercent = ingredientLevelMatch ? Number(ingredientLevelMatch[1]) : undefined;
+      const sizeMultiplier = sizeMultiplierForName(option.name);
+      const baseSellingPrice = calculateMenuSellingPrice();
+      const adjustmentItem = ingredientLevelMatch
+        ? findRecipeModifierInventoryItem("Sugar")
+        : isRemove ? findRecipeModifierInventoryItem(option.name) : undefined;
       const requiresStock = !isRemove && modifierNeedsStock(option.group, option.name);
       const stockItem = adjustmentItem ?? (requiresStock ? findRecipeModifierInventoryItem(option.name) ?? findModifierInventoryItem(option.group, option.name) : undefined);
       const isAddOn = !isRemove && (
@@ -807,9 +878,9 @@ export function RecipeBOM() {
       );
       return {
         id: `MOD-${Date.now()}-${index}`,
-        name: option.name,
-        group: option.group,
-        type: isLess && adjustmentItem ? "less" : isRemove && adjustmentItem ? "remove" : isAddOn && stockItem ? "add_on" : "note",
+        name: ingredientLevelPercent == null ? option.name : `${ingredientLevelPercent}% Sweetness`,
+        group: isSizeVariant ? "Size Variants" : ingredientLevelPercent == null ? option.group : "Basic Ingredients",
+        type: isSizeVariant ? "size_variant" : ingredientLevelPercent != null && adjustmentItem ? "ingredient_level" : isLess && adjustmentItem ? "ingredient_level" : isRemove && adjustmentItem ? "remove" : isAddOn && stockItem ? "add_on" : "note",
         productId: stockItem?.id,
         itemId: stockItem?.backendId,
         itemName: stockItem?.name,
@@ -817,10 +888,13 @@ export function RecipeBOM() {
         quantity: isAddOn && stockItem ? 1 : undefined,
         unit: isAddOn && stockItem ? stockItem.unit : undefined,
         maxQuantity: undefined,
-        priceDelta: isAddOn && stockItem ? option.priceDelta ?? 0 : 0,
+        levelPercent: ingredientLevelPercent ?? (isLess && adjustmentItem ? 50 : undefined),
+        sizeMultiplier: isSizeVariant ? sizeMultiplier : undefined,
+        sellingPrice: isSizeVariant ? baseSellingPrice * sizeMultiplier : undefined,
+        priceDelta: isSizeVariant ? baseSellingPrice * (sizeMultiplier - 1) : isAddOn && stockItem ? option.priceDelta ?? 0 : 0,
         priceDeltaPercent: isAddOn && stockItem ? option.priceDeltaPercent ?? 0 : 0,
       };
-    }));
+    }).filter((modifier) => !(modifier.type === "size_variant" && modifier.name === "Regular" && modifier.sizeMultiplier === 1)));
   };
 
   const calculateTotalCost = () => {
@@ -959,7 +1033,9 @@ export function RecipeBOM() {
               id: modifier.id,
               name: modifier.name,
               group: modifier.group ?? "Modifiers",
-              type: inventoryItem?.backendId ? modifier.type : "note",
+              type: modifier.type === "size_variant" || modifier.type === "note"
+                ? modifier.type
+                : inventoryItem?.backendId ? modifier.type : "note",
               itemId: inventoryItem?.backendId,
               itemName: inventoryItem?.name ?? modifier.itemName,
               requiresStock: Boolean(modifier.requiresStock),
@@ -968,7 +1044,10 @@ export function RecipeBOM() {
               maxQuantity: modifier.type === "add_on" && Number.isInteger(Number(modifier.maxQuantity)) && Number(modifier.maxQuantity) > 0
                 ? Math.floor(Number(modifier.maxQuantity))
                 : undefined,
-              priceDelta: modifier.type === "add_on" ? Number(modifier.priceDelta ?? 0) : 0,
+              levelPercent: modifier.type === "ingredient_level" ? Number(modifier.levelPercent ?? 50) : undefined,
+              sizeMultiplier: modifier.type === "size_variant" ? Number(modifier.sizeMultiplier ?? 1) : undefined,
+              sellingPrice: modifier.type === "size_variant" ? Number(modifier.sellingPrice ?? 0) : undefined,
+              priceDelta: modifier.type === "add_on" || modifier.type === "size_variant" ? Number(modifier.priceDelta ?? 0) : 0,
               priceDeltaPercent: modifier.type === "add_on" ? Number(modifier.priceDeltaPercent ?? 0) : 0,
             };
           }),
@@ -1011,6 +1090,9 @@ export function RecipeBOM() {
       setModifierQuantity("1");
       setModifierMaxQuantity("");
       setModifierPrice("");
+      setModifierLevelPercent("50");
+      setModifierSizeMultiplier("1");
+      setModifierSizeSellingPrice("");
       setIngredientSearch("");
       setIsIngredientPickerOpen(false);
     } catch (error) {
@@ -1057,6 +1139,9 @@ export function RecipeBOM() {
     setModifierQuantity("1");
     setModifierMaxQuantity("");
     setModifierPrice("");
+    setModifierLevelPercent("50");
+    setModifierSizeMultiplier("1");
+    setModifierSizeSellingPrice("");
     setIngredientSearch("");
     setIsIngredientPickerOpen(false);
     setShowCreateModal(true);
@@ -1188,6 +1273,9 @@ export function RecipeBOM() {
     setModifierQuantity("1");
     setModifierMaxQuantity("");
     setModifierPrice("");
+    setModifierLevelPercent("50");
+    setModifierSizeMultiplier("1");
+    setModifierSizeSellingPrice("");
     setCurrentIngredient({
       productId: "",
       name: "",
@@ -1908,12 +1996,17 @@ export function RecipeBOM() {
                         const nextType = event.target.value as RecipeModifier["type"];
                         setModifierType(nextType);
                         setModifierPrice("");
+                        setModifierLevelPercent("50");
+                        setModifierSizeMultiplier("1");
+                        setModifierSizeSellingPrice("");
                         setModifierItemId("");
                         setModifierItemSearch("");
                         if (nextType === "note") {
                           setModifierGroup("Instruction / Preferences");
-                        } else if (nextType === "remove" || nextType === "less") {
+                        } else if (nextType === "remove" || nextType === "ingredient_level") {
                           setModifierGroup("Basic Ingredients");
+                        } else if (nextType === "size_variant") {
+                          setModifierGroup("Size Variants");
                         } else {
                           setModifierGroup("Add-ons");
                         }
@@ -1921,21 +2014,24 @@ export function RecipeBOM() {
                       className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
                     >
                       <option value="note">Instruction / preference</option>
-                      <option value="less">Less ingredient (50%)</option>
+                      <option value="ingredient_level">Adjust ingredient level</option>
                       <option value="remove">Remove ingredient</option>
                       <option value="add_on">Add-on ingredient</option>
+                      <option value="size_variant">Size variant</option>
                     </select>
                     <p className="mt-1 text-[10px] text-muted-foreground">
                       {modifierType === "note"
                         ? "Sends an instruction to POS and Kitchen without changing inventory quantity."
-                        : modifierType === "less"
-                          ? "Uses 50% of the linked basic ingredient and deducts only that reduced amount."
+                        : modifierType === "ingredient_level"
+                          ? "Sets the percentage of one linked recipe ingredient to use and deduct from stock."
                           : modifierType === "remove"
                             ? "Removes the linked basic ingredient and prevents its stock deduction for the order."
-                            : "Adds a fixed extra portion, price, and inventory deduction for every 1x selected in POS."}
+                            : modifierType === "size_variant"
+                              ? "Scales the complete recipe BOM and uses a separate selling price for this size."
+                              : "Adds a fixed extra portion, price, and inventory deduction for every 1x selected in POS."}
                     </p>
                   </div>
-                  <div className={modifierType !== "note" ? "md:order-3" : "hidden"}>
+                  <div className={["remove", "ingredient_level", "add_on"].includes(modifierType) ? "md:order-3" : "hidden"}>
                     <label htmlFor="modifierItem" className="block text-xs mb-1 text-foreground">
                       Stock Link
                     </label>
@@ -1953,16 +2049,17 @@ export function RecipeBOM() {
                       onSelect={(item) => {
                         setModifierItemId(String(item.backendId ?? item.id));
                         setModifierItemSearch(item.name);
+                        setModifierName(suggestedModifierNameForItem(item.name));
                       }}
                     />
                     <p className="mt-1 text-[10px] text-muted-foreground">
                       {modifierType === "note"
                         ? "Optional for instructions because this behavior has no stock effect."
-                        : modifierType === "remove" || modifierType === "less"
+                        : modifierType === "remove" || modifierType === "ingredient_level"
                           ? "Only ingredients used by this specific recipe are listed, preventing unrelated inventory items from being reduced or removed."
                         : modifierType === "add_on"
                           ? "Select the inventory item that will be deducted whenever this add-on is ordered."
-                          : "Select the basic recipe ingredient affected by Less or Remove."}
+                        : "Select the basic recipe ingredient affected by this adjustment."}
                     </p>
                   </div>
                   <div className="md:order-4">
@@ -1976,23 +2073,95 @@ export function RecipeBOM() {
                       placeholder={modifierNamePlaceholder}
                       className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
                     />
-                    <p className="mt-1 text-[10px] text-muted-foreground">Customer-friendly option name shown in POS, Kitchen Orders, order history, and receipts.</p>
+                    <p className="mt-1 text-[10px] text-muted-foreground">
+                      {modifierType === "note"
+                        ? "Enter the instruction shown in POS, Kitchen Orders, order history, and receipts."
+                        : modifierType === "size_variant"
+                          ? "Enter the customer-facing size name shown in POS, Kitchen Orders, order history, and receipts."
+                          : "Suggested automatically from the selected Stock Link. Admin/Kitchen may edit this label before adding it."}
+                    </p>
                   </div>
-                  <div className={modifierType === "add_on" ? "md:order-5" : "hidden"}>
-                    <label htmlFor="modifierQuantity" className="block text-xs mb-1 text-foreground">
-                      Fixed Portion per 1x Add-on
+                  <div className={modifierType === "ingredient_level" ? "md:order-5" : "hidden"}>
+                    <label htmlFor="modifierLevelPercent" className="block text-xs mb-1 text-foreground">
+                      Ingredient Level (%)
                     </label>
                     <input
-                      id="modifierQuantity"
+                      id="modifierLevelPercent"
                       type="number"
-                      min="0.001"
-                      step="0.001"
-                      value={modifierQuantity}
-                      onChange={(event) => setModifierQuantity(event.target.value)}
-                      disabled={modifierType !== "add_on"}
-                      className={`w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${numberInputClassName} disabled:cursor-not-allowed disabled:opacity-50`}
+                      min="0"
+                      max="100"
+                      step="1"
+                      value={modifierLevelPercent}
+                      onChange={(event) => {
+                        setModifierLevelPercent(event.target.value);
+                        if (selectedModifierStockItem) setModifierName(`${event.target.value}% ${selectedModifierStockItem.name}`);
+                      }}
+                      className={`w-full rounded-lg border border-input bg-input-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 ${numberInputClassName}`}
                     />
-                    <p className="mt-1 text-[10px] text-muted-foreground">Available for Add-on behavior only. Kitchen/Admin sets the stock portion; POS staff sees only 1x, 2x, and so on.</p>
+                    <p className="mt-1 text-[10px] text-muted-foreground">0% removes the linked ingredient; 25%, 50%, 75%, or 100% deducts that percentage of its standard recipe quantity.</p>
+                  </div>
+                  <div className={modifierType === "size_variant" ? "md:order-5" : "hidden"}>
+                    <label htmlFor="modifierSizeMultiplier" className="block text-xs mb-1 text-foreground">
+                      Complete BOM Multiplier
+                    </label>
+                    <input
+                      id="modifierSizeMultiplier"
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      value={modifierSizeMultiplier}
+                      onChange={(event) => setModifierSizeMultiplier(event.target.value)}
+                      className={`w-full rounded-lg border border-input bg-input-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 ${numberInputClassName}`}
+                    />
+                    <p className="mt-1 text-[10px] text-muted-foreground">Example: Small 0.75×, Regular 1×, Large 1.5×. This scales every basic recipe ingredient.</p>
+                  </div>
+                  <div className={modifierType === "size_variant" ? "md:order-6" : "hidden"}>
+                    <label htmlFor="modifierSizeSellingPrice" className="block text-xs mb-1 text-foreground">
+                      Size Selling Price (₱)
+                    </label>
+                    <input
+                      id="modifierSizeSellingPrice"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={modifierSizeSellingPrice}
+                      onChange={(event) => setModifierSizeSellingPrice(event.target.value)}
+                      placeholder={(calculateSuggestedSellingPrice() * Number(modifierSizeMultiplier || 0)).toFixed(2)}
+                      className={`w-full rounded-lg border border-input bg-input-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 ${numberInputClassName}`}
+                    />
+                    <p className="mt-1 text-[10px] text-muted-foreground">Estimated food cost: {formatMoney(calculateCostPerServing() * Number(modifierSizeMultiplier || 0))}. Enter the final POS selling price for this size.</p>
+                  </div>
+                  <div className={modifierType === "add_on" ? "md:order-5" : "hidden"}>
+                    <label htmlFor="modifierQuantity" className="mb-1 flex items-center justify-between gap-2 text-xs text-foreground">
+                      <span>Fixed Portion per 1x Add-on</span>
+                      {selectedModifierStockItem && (
+                        <span className="rounded-full bg-primary/10 px-2 py-0.5 font-medium text-primary">
+                          Unit: {selectedModifierBaseUnit}
+                        </span>
+                      )}
+                    </label>
+                    <div className="relative">
+                      <input
+                        id="modifierQuantity"
+                        type="number"
+                        min="0.001"
+                        step="0.001"
+                        value={modifierQuantity}
+                        onChange={(event) => setModifierQuantity(event.target.value)}
+                        disabled={modifierType !== "add_on"}
+                        className={`w-full rounded-lg border border-input bg-input-background py-2 pl-3 pr-16 text-sm transition-all focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/50 ${numberInputClassName} disabled:cursor-not-allowed disabled:opacity-50`}
+                      />
+                      {selectedModifierStockItem && (
+                        <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-muted-foreground">
+                          {selectedModifierBaseUnit}
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-1 text-[10px] text-muted-foreground">
+                      {selectedModifierStockItem
+                        ? `Enter the fixed quantity in ${selectedModifierBaseUnit}. Every 1x selected in POS deducts this amount from inventory.`
+                        : "Select a Stock Link first to display its inventory base unit."}
+                    </p>
                   </div>
                   <div className={modifierType === "add_on" ? "md:order-6" : "hidden"}>
                     <label htmlFor="modifierPrice" className="block text-xs mb-1 text-foreground">
@@ -2010,11 +2179,11 @@ export function RecipeBOM() {
                       className={`w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${numberInputClassName} disabled:cursor-not-allowed disabled:opacity-50`}
                     />
                     <p className="mt-1 text-[10px] text-muted-foreground">
-                      {modifierType === "remove" || modifierType === "less"
+                      {modifierType === "remove" || modifierType === "ingredient_level"
                         ? "Disabled because removing or reducing a basic ingredient does not add a customer charge."
                         : modifierType === "add_on"
                         ? selectedModifierStockItem
-                          ? `Suggested ${formatMoney(suggestedModifierPrice)}: ${formatMoney(Number(selectedModifierStockItem.price ?? 0))}/${selectedModifierStockItem.unit} weighted average cost × ${Number(modifierQuantity || 0)} ${selectedModifierStockItem.unit}. Leave blank to use it, or enter your own selling price.`
+                          ? `Suggested ${formatMoney(suggestedModifierPrice)}: ${formatMoney(Number(selectedModifierStockItem.price ?? 0))}/${selectedModifierBaseUnit} weighted average cost × ${Number(modifierQuantity || 0)} ${selectedModifierBaseUnit}. Leave blank to use it, or enter your own selling price.`
                           : "Select a Stock Link and enter a fixed portion to compute the price automatically."
                         : "Optional price adjustment applied once when this modifier is selected."}
                     </p>
@@ -2076,11 +2245,13 @@ export function RecipeBOM() {
                               ? "Unavailable in stock - disabled in POS"
                               : modifier.type === "add_on"
                                 ? `Add-on • ${modifier.quantity ?? 1} ${modifier.unit ?? "unit"} each • max ${modifier.maxQuantity ?? "not set"} • linked to ${modifier.itemName ?? "inventory"}`
-                                : modifier.type === "less"
-                                  ? `Less (50%) • linked to ${modifier.itemName ?? "recipe ingredient"}`
+                                : modifier.type === "ingredient_level"
+                                  ? `Ingredient level ${modifier.levelPercent ?? 50}% • linked to ${modifier.itemName ?? "recipe ingredient"}`
                                 : modifier.type === "remove"
                                   ? `Remove • linked to ${modifier.itemName ?? "recipe ingredient"}`
-                                  : "Instruction only"}
+                                  : modifier.type === "size_variant"
+                                    ? `Size variant • ${modifier.sizeMultiplier ?? 1}× complete BOM • selling price ${formatMoney(Number(modifier.sellingPrice ?? 0))}`
+                                    : "Instruction only"}
                           </p>
                         </div>
                         {modifier.type === "add_on" && (

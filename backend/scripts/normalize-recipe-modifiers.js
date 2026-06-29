@@ -1,4 +1,4 @@
-// Align saved recipe modifiers with the four POS Modify sections.
+// Align saved recipe modifiers with the current POS Modify behaviors.
 // Dry-run by default. Pass --apply to persist the changes.
 
 const path = require('path');
@@ -7,7 +7,7 @@ require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
 const apply = process.argv.includes('--apply');
 const report = process.argv.includes('--report');
-const validTypes = new Set(['remove', 'less', 'add_on', 'note']);
+const validTypes = new Set(['remove', 'less', 'ingredient_level', 'size_variant', 'add_on', 'note']);
 
 function cleanName(value) {
   return String(value ?? '')
@@ -21,9 +21,19 @@ function cleanName(value) {
 function findByName(items, modifierName) {
   const target = cleanName(modifierName);
   if (!target) return undefined;
+  const singular = (token) => token.endsWith('ies') && token.length > 4
+    ? `${token.slice(0, -3)}y`
+    : token.endsWith('oes') && token.length > 4
+      ? token.slice(0, -2)
+      : token.endsWith('s') && token.length > 3 ? token.slice(0, -1) : token;
+  const targetTokens = target.split(/\s+/).map(singular);
+  const canonicalTarget = targetTokens.join(' ');
+  const exact = items.find((item) => cleanName(item.name).split(/\s+/).map(singular).join(' ') === canonicalTarget);
+  if (exact) return exact;
   return items.find((item) => {
     const itemName = cleanName(item.name);
-    return itemName === target || itemName.includes(target) || target.includes(itemName);
+    const itemTokens = itemName.split(/\s+/).map(singular);
+    return targetTokens.every((token) => itemTokens.includes(token));
   });
 }
 
@@ -31,6 +41,10 @@ function findAddOnAlias(items, modifierName) {
   const aliases = {
     caramel: ['white sugar', 'brown sugar'],
     'fresh fruits': ['strawberry'],
+    'boiled egg': ['eggs'],
+    'plain rice': ['white rice', 'rice'],
+    rice: ['white rice', 'rice'],
+    ice: ['ice'],
   };
   const candidates = aliases[cleanName(modifierName)] ?? [];
   return candidates
@@ -47,6 +61,23 @@ function isAddOnCandidate(modifier) {
     || /^(bacon|egg|boiled egg|mushroom)$/i.test(name);
 }
 
+function sizeMultiplierForName(name) {
+  if (/half/i.test(name)) return 0.5;
+  if (/extra large/i.test(name)) return 2;
+  if (/family/i.test(name)) return 3;
+  if (/large/i.test(name)) return 1.5;
+  if (/small/i.test(name)) return 0.75;
+  return 1;
+}
+
+function isKnownLegacySize(recipeName, modifierName) {
+  const recipe = String(recipeName ?? '');
+  const name = String(modifierName ?? '');
+  if (/^(half serving|family size)$/i.test(name)) return true;
+  if (!/^(regular|large)$/i.test(name)) return false;
+  return /chicken adobo|garlic butter(?:ed)? shrimp|pork adobo|iced tea|leche flan/i.test(recipe);
+}
+
 function alignModifier(modifier, ingredients, inventory) {
   const next = { ...modifier };
   const currentType = validTypes.has(String(next.type)) ? String(next.type) : 'note';
@@ -55,8 +86,26 @@ function alignModifier(modifier, ingredients, inventory) {
   const linkedIngredient = ingredients.find((item) => String(item.id) === String(next.itemId ?? ''));
   const adjustmentItem = linkedIngredient ?? ((isLessLabel || isRemoveLabel) ? findByName(ingredients, next.name) : undefined);
 
+  if (currentType === 'size_variant') {
+    next.type = 'size_variant';
+    next.group = 'Size Variants';
+    next.itemId = undefined;
+    next.itemName = undefined;
+    next.productId = undefined;
+    next.requiresStock = false;
+    next.quantity = undefined;
+    next.unit = undefined;
+    next.maxQuantity = undefined;
+    next.levelPercent = undefined;
+    next.sizeMultiplier = Number(next.sizeMultiplier) > 0 ? Number(next.sizeMultiplier) : 1;
+    next.sellingPrice = Math.max(0, Number(next.sellingPrice ?? 0));
+    next.priceDelta = Number.isFinite(Number(next.priceDelta)) ? Number(next.priceDelta) : 0;
+    next.priceDeltaPercent = 0;
+    return next;
+  }
+
   if ((isLessLabel || isRemoveLabel) && adjustmentItem) {
-    next.type = currentType === 'less' || isLessLabel ? 'less' : 'remove';
+    next.type = currentType === 'less' || currentType === 'ingredient_level' || isLessLabel ? 'ingredient_level' : 'remove';
     next.group = 'Basic Ingredients';
     next.itemId = adjustmentItem.id;
     next.itemName = adjustmentItem.name;
@@ -65,14 +114,18 @@ function alignModifier(modifier, ingredients, inventory) {
     next.quantity = undefined;
     next.unit = undefined;
     next.maxQuantity = undefined;
+    next.levelPercent = next.type === 'ingredient_level' ? Math.min(100, Math.max(0, Number(next.levelPercent ?? 50))) : undefined;
     next.priceDelta = 0;
     next.priceDeltaPercent = 0;
     return next;
   }
 
   const linkedInventory = inventory.find((item) => String(item.id) === String(next.itemId ?? ''));
-  const addOnItem = linkedInventory ?? (isAddOnCandidate(next)
-    ? findByName(inventory, next.name) ?? findAddOnAlias(ingredients, next.name) ?? findAddOnAlias(inventory, next.name)
+  const mustRepairLegacyLink = /^(extra rice|extra ice)$/i.test(String(next.name ?? ''));
+  const trustedLinkedInventory = currentType === 'add_on' && linkedInventory && !mustRepairLegacyLink ? linkedInventory : undefined;
+  const linkedInventoryMatchesName = linkedInventory && findByName([linkedInventory], next.name);
+  const addOnItem = trustedLinkedInventory ?? linkedInventoryMatchesName ?? (isAddOnCandidate(next)
+    ? findAddOnAlias(ingredients, next.name) ?? findAddOnAlias(inventory, next.name) ?? findByName(inventory, next.name)
     : undefined);
   if ((currentType === 'add_on' || isAddOnCandidate(next)) && addOnItem) {
     next.type = 'add_on';
@@ -93,8 +146,8 @@ function alignModifier(modifier, ingredients, inventory) {
     return next;
   }
 
-  if ((currentType === 'remove' || currentType === 'less') && adjustmentItem && !/^(single|regular)\b/i.test(String(next.name ?? ''))) {
-    next.type = currentType;
+  if ((currentType === 'remove' || currentType === 'less' || currentType === 'ingredient_level') && adjustmentItem && !/^(single|regular)\b/i.test(String(next.name ?? ''))) {
+    next.type = currentType === 'less' ? 'ingredient_level' : currentType;
     next.group = 'Basic Ingredients';
     next.itemId = adjustmentItem.id;
     next.itemName = adjustmentItem.name;
@@ -103,6 +156,7 @@ function alignModifier(modifier, ingredients, inventory) {
     next.quantity = undefined;
     next.unit = undefined;
     next.maxQuantity = undefined;
+    next.levelPercent = next.type === 'ingredient_level' ? Math.min(100, Math.max(0, Number(next.levelPercent ?? 50))) : undefined;
     next.priceDelta = 0;
     next.priceDeltaPercent = 0;
     return next;
@@ -123,7 +177,46 @@ function alignModifier(modifier, ingredients, inventory) {
 }
 
 function alignRecipeModifiers(recipe, modifiers, ingredients) {
-  let aligned = modifiers;
+  let aligned = modifiers
+    .filter((modifier) => !(modifier.type === 'note' && /^regular$/i.test(String(modifier.name ?? '')) && isKnownLegacySize(recipe.name, modifier.name)))
+    .map((modifier) => {
+    if (modifier.type !== 'note'
+      || (!/^(portion size|serving size|size)$/i.test(String(modifier.group ?? ''))
+        && !isKnownLegacySize(recipe.name, modifier.name))) return modifier;
+    const sizeMultiplier = sizeMultiplierForName(String(modifier.name ?? ''));
+    const baseSellingPrice = Math.max(0, Number(recipe.sellingPrice ?? 0));
+    return {
+      ...modifier,
+      type: 'size_variant',
+      group: 'Size Variants',
+      sizeMultiplier,
+      sellingPrice: baseSellingPrice * sizeMultiplier,
+      priceDelta: baseSellingPrice * (sizeMultiplier - 1),
+      priceDeltaPercent: 0,
+    };
+    });
+  if (/iced tea/i.test(String(recipe.name ?? ''))) {
+    const sugar = findByName(ingredients, 'Sugar');
+    if (sugar) {
+      aligned = aligned.map((modifier) => {
+        const match = String(modifier.name ?? '').match(/^(0|25|50|75|100)%/);
+        if (!match) return modifier;
+        const levelPercent = Number(match[1]);
+        return {
+          ...modifier,
+          name: `${levelPercent}% Sweetness`,
+          type: 'ingredient_level',
+          group: 'Basic Ingredients',
+          itemId: sugar.id,
+          itemName: sugar.name,
+          requiresStock: false,
+          levelPercent,
+          priceDelta: 0,
+          priceDeltaPercent: 0,
+        };
+      });
+    }
+  }
   if (/^leche flan$/i.test(recipe.name)) {
     aligned = aligned.filter((modifier) => !(modifier.type === 'note' && /^fresh fruits$/i.test(String(modifier.name ?? ''))));
   }
@@ -166,12 +259,12 @@ async function main() {
   try {
     await client.query('BEGIN');
     const { rows: recipes } = await client.query(
-      `SELECT id, name, "businessId", modifiers
+      `SELECT id, name, "businessId", "sellingPrice", modifiers
        FROM "Recipe"
        ORDER BY name`,
     );
     const { rows: items } = await client.query(
-      `SELECT id, name, unit, "businessId"
+      `SELECT id, name, unit, "itemType", "businessId"
        FROM "InventoryItem"`,
     );
     const { rows: links } = await client.query(
@@ -185,13 +278,13 @@ async function main() {
     for (const recipe of recipes) {
       const original = Array.isArray(recipe.modifiers) ? recipe.modifiers : [];
       const ingredients = links.filter((item) => item.recipeId === recipe.id);
-      const inventory = items.filter((item) => item.businessId === recipe.businessId);
+      const inventory = items.filter((item) => item.businessId === recipe.businessId && item.itemType !== 'MENU_ITEM');
       const aligned = alignRecipeModifiers(
         recipe,
         original.map((modifier) => alignModifier(modifier, ingredients, inventory)),
         ingredients,
       );
-      if (report && /^(leche flan|regular burger)$/i.test(recipe.name)) {
+      if (report) {
         console.log(`\n${recipe.name}`);
         for (const modifier of aligned) {
           console.log(`  [${modifier.type}] ${modifier.name}${modifier.itemName ? ` -> ${modifier.itemName}` : ''}`);

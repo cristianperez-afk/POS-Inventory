@@ -18,12 +18,15 @@ export type PosMenuIngredient = {
 export type PosMenuModifier = {
   id: string;
   name: string;
-  type: 'remove' | 'less' | 'note' | 'add_on';
+  type: 'remove' | 'ingredient_level' | 'size_variant' | 'note' | 'add_on';
   itemId?: string;
   itemName?: string;
   quantity?: number;
   unit?: string;
   maxQuantity?: number;
+  levelPercent?: number;
+  sizeMultiplier?: number;
+  sellingPrice?: number;
   priceDelta?: number;
   priceDeltaPercent?: number;
   quantityAvailable?: number | null;
