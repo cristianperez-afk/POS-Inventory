@@ -20,6 +20,7 @@ export interface ApiLocation {
   address: string;
   manager: string;
   phone: string;
+  type?: string;
   itemCount: number;
   _count?: { items: number };
 }
@@ -436,6 +437,8 @@ export interface ApiNotification {
   title: string;
   message: string;
   isRead: boolean;
+  entityType?: string | null;
+  entityId?: string | null;
   createdAt: string;
 }
 

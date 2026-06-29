@@ -36,6 +36,12 @@ enum NotificationType {
   BUNDLE_APPROVED
   BUNDLE_REJECTED
   KITCHEN_ORDER_READY
+  TRANSFER_REQUESTED
+  TRANSFER_APPROVED
+  TRANSFER_REJECTED
+  ADJUSTMENT_SUBMITTED
+  ADJUSTMENT_APPROVED
+  ADJUSTMENT_REJECTED
 }
 
 enum InventoryItemType {
@@ -116,6 +122,7 @@ model Location {
   address        String
   manager        String
   phone          String
+  type           String          @default("warehouse")
   itemCount      Int             @default(0)
   businessId     String
   business       Business        @relation(fields: [businessId], references: [id])

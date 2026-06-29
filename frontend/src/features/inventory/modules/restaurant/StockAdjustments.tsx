@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Check, Clock, Search, ShieldAlert, SlidersHorizontal, X } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "../../app/hooks/useSession";
@@ -66,6 +66,7 @@ export function StockAdjustments({ embedded = false }: { embedded?: boolean } = 
   const [statusFilter, setStatusFilter] = useState<"ALL" | "PENDING" | "APPROVED" | "REJECTED">("PENDING");
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState("");
+  const [highlightId, setHighlightId] = useState<string | null>(null);
 
   const selectedItem = items.find((i) => i.backendId === backendId);
   const currentQty = Number(selectedItem?.stock ?? 0);
@@ -100,6 +101,32 @@ export function StockAdjustments({ embedded = false }: { embedded?: boolean } = 
   }, [adjustments, statusFilter]);
 
   const pendingCount = useMemo(() => adjustments.filter((a) => a.status === "PENDING").length, [adjustments]);
+
+  // Focus a specific adjustment when arriving from a notification deep-link. The
+  // parent Transfers page switches to the adjustments tab and leaves the breadcrumb
+  // for this embedded panel to consume (handles both fresh navigation and the panel
+  // already being mounted).
+  useEffect(() => {
+    const apply = () => {
+      const hint = window.__INVENTORY_DEEPLINK__;
+      if (!hint || hint.entityType !== "StockAdjustment" || !hint.entityId) return;
+      setStatusFilter("ALL");
+      setHighlightId(hint.entityId);
+      window.__INVENTORY_DEEPLINK__ = null;
+    };
+    apply();
+    window.addEventListener("inventory:deeplink", apply);
+    return () => window.removeEventListener("inventory:deeplink", apply);
+  }, []);
+
+  useEffect(() => {
+    if (!highlightId) return;
+    const el = document.getElementById(`adj-${highlightId}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    const timer = setTimeout(() => setHighlightId(null), 4000);
+    return () => clearTimeout(timer);
+  }, [highlightId, visibleAdjustments]);
 
   const selectItem = (id: string) => {
     setBackendId(id);
@@ -336,6 +363,7 @@ export function StockAdjustments({ embedded = false }: { embedded?: boolean } = 
                 onApprove={() => handleApprove(adj.id)}
                 onReject={() => { setRejectingId(adj.id); setRejectReason(""); }}
                 approving={approveMutation.isPending}
+                highlighted={adj.id === highlightId}
               />
             ))}
             {visibleAdjustments.length === 0 && (
@@ -382,17 +410,19 @@ function AdjustmentCard({
   onApprove,
   onReject,
   approving,
+  highlighted = false,
 }: {
   adj: RestaurantStockAdjustment;
   canReview: boolean;
   onApprove: () => void;
   onReject: () => void;
   approving: boolean;
+  highlighted?: boolean;
 }) {
   const line = adj.items[0];
   const change = line?.quantityChange ?? 0;
   return (
-    <div className="rounded-lg border border-border p-3">
+    <div id={`adj-${adj.id}`} className={`rounded-lg border border-border p-3 ${highlighted ? "ring-2 ring-primary ring-offset-2" : ""}`}>
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="flex items-center gap-2">

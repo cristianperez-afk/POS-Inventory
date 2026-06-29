@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell } from "recharts";
-import { ChevronDown, ChevronRight, Clock, Download, TrendingUp, PhilippinePeso, ShoppingCart, Eye, AlertTriangle, ClipboardList, Search, Activity } from "lucide-react";
+import { ChevronDown, ChevronRight, Clock, Download, TrendingUp, PhilippinePeso, ShoppingCart, Eye, ClipboardList, Search } from "lucide-react";
 import {
   useRestaurantAdjustmentsQuery,
   useRestaurantGoodsRecordsQuery,
@@ -106,7 +106,6 @@ export function Reports() {
   const { currentUser } = useSession();
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [expandedPosTransactions, setExpandedPosTransactions] = useState<Record<string, boolean>>({});
-  const [auditModuleFilter, setAuditModuleFilter] = useState('all');
   const [activityQuery, setActivityQuery] = useState('');
   const [activityDateFrom, setActivityDateFrom] = useState('');
   const [activityDateTo, setActivityDateTo] = useState('');
@@ -345,19 +344,34 @@ export function Reports() {
     return { byModule, latest };
   }, [visibleAuditTrail]);
 
-  // Summary cards filter the activity table below by module; clicking the active
-  // card (or Total Events) clears it back to "all".
+  // Summary cards toggle the same Module filter the dropdown uses; clicking the
+  // active card (or Total Events) clears it back to "All".
   const toggleAuditModule = (module: string) => {
-    setAuditModuleFilter((current) => (current === module ? 'all' : module));
+    setActivityModuleFilter((current) => (current === module ? 'All' : module));
   };
 
-  const filteredAuditTrail = useMemo(
-    () =>
-      auditModuleFilter === 'all'
-        ? visibleAuditTrail
-        : visibleAuditTrail.filter((entry) => entry.module === auditModuleFilter),
-    [visibleAuditTrail, auditModuleFilter],
-  );
+  // Single audit feed shared by the summary cards and the full filter bar (date
+  // range, user, module, action, free-text search), scoped to what the current
+  // user is allowed to see.
+  const filteredAuditTrail = useMemo(() => {
+    const query = activityQuery.trim().toLowerCase();
+    return visibleAuditTrail.filter((entry) => {
+      if (activityUserFilter !== 'All' && normalizeAuditActor(entry.performedBy) !== normalizeAuditActor(activityUserFilter)) return false;
+      if (activityModuleFilter !== 'All' && entry.module !== activityModuleFilter) return false;
+      if (activityActionFilter !== 'All' && entry.action !== activityActionFilter) return false;
+      const day = (entry.date || '').slice(0, 10);
+      if (activityDateFrom && (!day || day < activityDateFrom)) return false;
+      if (activityDateTo && (!day || day > activityDateTo)) return false;
+      if (query) {
+        const haystack = [
+          entry.performedByName, entry.performedBy, entry.module, entry.action,
+          entry.item, entry.quantity, entry.details,
+        ].join(' ').toLowerCase();
+        if (!haystack.includes(query)) return false;
+      }
+      return true;
+    });
+  }, [visibleAuditTrail, activityUserFilter, activityModuleFilter, activityActionFilter, activityDateFrom, activityDateTo, activityQuery]);
 
   // ── Confidential ────────────────────────────────────────────────────────────
   const confidentialData = useMemo(() => {
@@ -393,48 +407,26 @@ export function Reports() {
     return { byRole, byStatus, criticalEvents };
   }, [isAdmin, users, wasteLogs, adjustments]);
 
-  // Activity Log — a POS-style event feed over the real audit trail, with the same
-  // filter set as the POS Activity Log page (date range, user, module, action,
-  // free-text search).
+  // Filter options for the audit trail, scoped to the visible (role-limited) rows.
   const activityUsers = useMemo(() => {
     const map = new Map<string, string>();
-    auditTrail.forEach((entry) => {
+    visibleAuditTrail.forEach((entry) => {
       const value = (entry.performedBy || '').trim();
       if (value && !map.has(value)) map.set(value, entry.performedByName || value);
     });
     return Array.from(map.entries())
       .map(([value, label]) => ({ value, label }))
       .sort((a, b) => a.label.localeCompare(b.label));
-  }, [auditTrail]);
+  }, [visibleAuditTrail]);
 
   const activityModules = useMemo(
-    () => ['All', ...Array.from(new Set(auditTrail.map((e) => e.module).filter(Boolean))).sort()],
-    [auditTrail],
+    () => ['All', ...Array.from(new Set(visibleAuditTrail.map((e) => e.module).filter(Boolean))).sort()],
+    [visibleAuditTrail],
   );
   const activityActions = useMemo(
-    () => ['All', ...Array.from(new Set(auditTrail.map((e) => e.action).filter(Boolean))).sort()],
-    [auditTrail],
+    () => ['All', ...Array.from(new Set(visibleAuditTrail.map((e) => e.action).filter(Boolean))).sort()],
+    [visibleAuditTrail],
   );
-
-  const activityLog = useMemo(() => {
-    const query = activityQuery.trim().toLowerCase();
-    return auditTrail.filter((entry) => {
-      if (activityUserFilter !== 'All' && normalizeAuditActor(entry.performedBy) !== normalizeAuditActor(activityUserFilter)) return false;
-      if (activityModuleFilter !== 'All' && entry.module !== activityModuleFilter) return false;
-      if (activityActionFilter !== 'All' && entry.action !== activityActionFilter) return false;
-      const day = (entry.date || '').slice(0, 10);
-      if (activityDateFrom && (!day || day < activityDateFrom)) return false;
-      if (activityDateTo && (!day || day > activityDateTo)) return false;
-      if (query) {
-        const haystack = [
-          entry.performedByName, entry.performedBy, entry.module, entry.action,
-          entry.item, entry.quantity, entry.details,
-        ].join(' ').toLowerCase();
-        if (!haystack.includes(query)) return false;
-      }
-      return true;
-    });
-  }, [auditTrail, activityUserFilter, activityModuleFilter, activityActionFilter, activityDateFrom, activityDateTo, activityQuery]);
 
   // ── Export ──────────────────────────────────────────────────────────────────
   const handleExport = () => {
@@ -492,15 +484,16 @@ export function Reports() {
       csv += `Total Waste Logs,${wasteLogs.length}\n`;
       csv += `Goods Received,${goodsReceived.length}\n`;
     } else if (activeTab === 'audit') {
-      csv = 'Date,Module,Action,Item,Quantity,Performed By,Reference,Status,Details\n';
-      visibleAuditTrail.forEach(entry => {
+      csv = 'Date,User,Role,Module,Action,Item,Quantity,Reference,Status,Details\n';
+      filteredAuditTrail.forEach(entry => {
         csv += [
           formatAuditDate(entry.date),
+          entry.performedByName || entry.performedBy,
+          entry.performedByRole,
           entry.module,
           entry.action,
           entry.item,
           entry.quantity,
-          entry.performedBy,
           entry.reference,
           entry.status,
           entry.details,
@@ -579,10 +572,12 @@ export function Reports() {
         <button onClick={() => setActiveTab('consumption')} className={tabCls('consumption')}>Ingredients Used</button>
         <button onClick={() => setActiveTab('orders')} className={tabCls('orders')}>Purchase Orders</button>
         <button onClick={() => setActiveTab('operations')} className={tabCls('operations')}>Operations Report</button>
-        <button onClick={() => setActiveTab('audit')} className={tabCls('audit')}>
-          <ClipboardList className="w-4 h-4" />
-          Audit Trail
-        </button>
+        {isAdmin && (
+          <button onClick={() => setActiveTab('audit')} className={tabCls('audit')}>
+            <ClipboardList className="w-4 h-4" />
+            Audit Trail
+          </button>
+        )}
         {isAdmin && (
           <button onClick={() => setActiveTab('admin')} className={tabCls('admin')}>
             <Eye className="w-4 h-4" />
@@ -1141,8 +1136,8 @@ export function Reports() {
         </div>
       )}
 
-      {/* ── Financial Report (admin only) ─────────────────────────────────────── */}
-      {activeTab === 'audit' && (
+      {/* ── Audit Trail (admin only) ──────────────────────────────────────────── */}
+      {activeTab === 'audit' && isAdmin && (
         <div>
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-xl font-semibold text-foreground">Audit Trail</h3>
@@ -1153,11 +1148,11 @@ export function Reports() {
 
           <div className="grid grid-cols-4 gap-4 mb-4">
             {[
-              { label: 'Total Events', value: visibleAuditTrail.length, valueClass: 'text-foreground', module: 'all' },
+              { label: 'Total Events', value: visibleAuditTrail.length, valueClass: 'text-foreground', module: 'All' },
               { label: 'Inventory Events', value: auditSummary.byModule.Inventory || 0, valueClass: 'text-primary', module: 'Inventory' },
               { label: 'Receiving Events', value: auditSummary.byModule['Goods Received'] || 0, valueClass: 'text-green-700', module: 'Goods Received' },
             ].map((card) => {
-              const isActive = auditModuleFilter === card.module;
+              const isActive = activityModuleFilter === card.module;
               return (
                 <button
                   key={card.label}
@@ -1184,37 +1179,60 @@ export function Reports() {
             <div className="flex items-center justify-between mb-4">
               <h4 className="text-base font-semibold text-foreground">Recent Activity</h4>
               <p className="text-xs text-muted-foreground">
-                {auditModuleFilter === 'all' ? '' : `${auditModuleFilter} • `}
+                {activityModuleFilter === 'All' ? '' : `${activityModuleFilter} • `}
                 {filteredAuditTrail.length} record{filteredAuditTrail.length !== 1 ? 's' : ''}
               </p>
             </div>
+
+            <div className="mb-4 grid gap-3 md:grid-cols-5">
+              <input type="date" value={activityDateFrom} onChange={(e) => setActivityDateFrom(e.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm bg-background" />
+              <input type="date" value={activityDateTo} onChange={(e) => setActivityDateTo(e.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm bg-background" />
+              <select value={activityUserFilter} onChange={(e) => setActivityUserFilter(e.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm bg-background">
+                <option value="All">All Users</option>
+                {activityUsers.map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}
+              </select>
+              <select value={activityModuleFilter} onChange={(e) => setActivityModuleFilter(e.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm bg-background">
+                {activityModules.map((m) => <option key={m} value={m}>{m === 'All' ? 'All Modules' : m}</option>)}
+              </select>
+              <select value={activityActionFilter} onChange={(e) => setActivityActionFilter(e.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm bg-background">
+                {activityActions.map((a) => <option key={a} value={a}>{a === 'All' ? 'All Actions' : a}</option>)}
+              </select>
+              <div className="relative md:col-span-5">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <input value={activityQuery} onChange={(e) => setActivityQuery(e.target.value)} placeholder="Search activity details..." className="w-full rounded-lg border border-border py-2 pl-9 pr-3 text-sm bg-background" />
+              </div>
+            </div>
+
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[900px]">
+              <table className="w-full min-w-[1040px]">
                 <thead className="bg-muted/40">
                   <tr>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">Date</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">User</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">Role</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">Module</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">Action</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">Item</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">Qty</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">By</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">Reference</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">Details</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
                   {auditTrailLoading ? (
-                    <tr><td colSpan={8}><InlineDataLoading label="Loading audit trail…" /></td></tr>
+                    <tr><td colSpan={9}><InlineDataLoading label="Loading audit trail…" /></td></tr>
                   ) : filteredAuditTrail.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="px-4 py-8 text-center text-sm text-muted-foreground">
+                      <td colSpan={9} className="px-4 py-8 text-center text-sm text-muted-foreground">
                         No audit trail records found
                       </td>
                     </tr>
                   ) : (
-                    filteredAuditTrail.slice(0, 100).map(entry => (
+                    filteredAuditTrail.slice(0, 200).map(entry => (
                       <tr key={entry.id} className="hover:bg-muted/30 transition-colors">
                         <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">{formatAuditDate(entry.date)}</td>
+                        <td className="px-4 py-3 text-sm text-foreground">{entry.performedByName || entry.performedBy || 'System'}</td>
+                        <td className="px-4 py-3 text-sm text-muted-foreground capitalize">{entry.performedByRole || '—'}</td>
                         <td className="px-4 py-3">
                           <span className="inline-flex px-2 py-1 rounded-lg text-xs font-medium bg-muted text-foreground">
                             {entry.module}
@@ -1223,7 +1241,6 @@ export function Reports() {
                         <td className="px-4 py-3 text-sm font-medium text-foreground capitalize">{entry.action.toLowerCase()}</td>
                         <td className="px-4 py-3 text-sm text-foreground">{entry.item}</td>
                         <td className="px-4 py-3 text-sm text-muted-foreground whitespace-nowrap">{entry.quantity || '-'}</td>
-                        <td className="px-4 py-3 text-sm text-muted-foreground">{entry.performedBy || 'System'}</td>
                         <td className="px-4 py-3 text-xs text-primary font-medium whitespace-nowrap">{entry.reference}</td>
                         <td className="px-4 py-3 text-sm text-muted-foreground max-w-[260px] truncate">{entry.details || '-'}</td>
                       </tr>
@@ -1344,26 +1361,6 @@ export function Reports() {
       {/* ── Confidential / Security (part of the merged Admin Report) ───────────── */}
       {activeTab === 'admin' && isAdmin && confidentialData && (
         <div className="mt-6 pt-6 border-t border-border">
-          {/* Badge + export */}
-          <div className="flex items-center gap-3 mb-4">
-            <div className="bg-red-600 text-white px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-2">
-              <Eye className="w-3 h-3" />
-              CONFIDENTIAL — ADMIN ONLY
-            </div>
-          </div>
-
-          {/* Warning banner */}
-          <div className="flex items-start gap-3 rounded-2xl border-2 border-red-300 bg-red-50 p-4 mb-6 dark:border-red-700 dark:bg-red-950/40">
-            <AlertTriangle className="w-5 h-5 text-red-700 flex-shrink-0 mt-0.5 dark:text-red-200" />
-            <div>
-              <p className="text-sm font-semibold text-red-800 dark:text-red-200">Warning</p>
-              <p className="text-xs text-red-900 mt-1 dark:text-red-100">
-                This report contains sensitive operational and user data. Access is restricted to administrators only.
-                Do not share this information with unauthorized personnel.
-              </p>
-            </div>
-          </div>
-
           {/* System Audit */}
           <div className="bg-card border border-border rounded-2xl p-6 mb-4">
             <h4 className="text-base font-semibold text-foreground mb-4">System Audit Summary</h4>
@@ -1386,69 +1383,6 @@ export function Reports() {
                   {(confidentialData.byRole['staff'] || 0) + (confidentialData.byRole['manager'] || 0)}
                 </p>
               </div>
-            </div>
-          </div>
-
-          {/* Activity Log */}
-          <div className="bg-card border border-border rounded-2xl p-6 mb-4">
-            <div className="flex items-center gap-2 mb-1">
-              <Activity className="w-4 h-4 text-primary" />
-              <h4 className="text-base font-semibold text-foreground">Activity Log</h4>
-            </div>
-            <p className="text-xs text-muted-foreground mb-4">
-              Review recorded inventory actions and staff activity. {activityLog.length} of {auditTrail.length} entr{auditTrail.length === 1 ? 'y' : 'ies'}.
-            </p>
-
-            <div className="mb-4 grid gap-3 md:grid-cols-5">
-              <input type="date" value={activityDateFrom} onChange={(e) => setActivityDateFrom(e.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm bg-background" />
-              <input type="date" value={activityDateTo} onChange={(e) => setActivityDateTo(e.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm bg-background" />
-              <select value={activityUserFilter} onChange={(e) => setActivityUserFilter(e.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm bg-background">
-                <option value="All">All Users</option>
-                {activityUsers.map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}
-              </select>
-              <select value={activityModuleFilter} onChange={(e) => setActivityModuleFilter(e.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm bg-background">
-                {activityModules.map((m) => <option key={m} value={m}>{m === 'All' ? 'All Modules' : m}</option>)}
-              </select>
-              <select value={activityActionFilter} onChange={(e) => setActivityActionFilter(e.target.value)} className="rounded-lg border border-border px-3 py-2 text-sm bg-background">
-                {activityActions.map((a) => <option key={a} value={a}>{a === 'All' ? 'All Actions' : a}</option>)}
-              </select>
-              <div className="relative md:col-span-5">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <input value={activityQuery} onChange={(e) => setActivityQuery(e.target.value)} placeholder="Search activity details..." className="w-full rounded-lg border border-border py-2 pl-9 pr-3 text-sm bg-background" />
-              </div>
-            </div>
-
-            <div className="overflow-x-auto rounded-lg border border-border">
-              <table className="w-full text-sm min-w-[760px]">
-                <thead className="bg-muted/50">
-                  <tr>
-                    <th className="px-4 py-3 text-left font-semibold text-foreground">Date &amp; Time</th>
-                    <th className="px-4 py-3 text-left font-semibold text-foreground">User</th>
-                    <th className="px-4 py-3 text-left font-semibold text-foreground">Role</th>
-                    <th className="px-4 py-3 text-left font-semibold text-foreground">Module</th>
-                    <th className="px-4 py-3 text-left font-semibold text-foreground">Action</th>
-                    <th className="px-4 py-3 text-left font-semibold text-foreground">Details</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {auditTrailLoading ? (
-                    <tr><td colSpan={6}><InlineDataLoading label="Loading activity…" /></td></tr>
-                  ) : activityLog.length === 0 ? (
-                    <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">No activity found.</td></tr>
-                  ) : activityLog.slice(0, 200).map((entry) => (
-                    <tr key={entry.id} className="align-top hover:bg-muted/30 transition-colors">
-                      <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">{formatAuditDate(entry.date)}</td>
-                      <td className="px-4 py-3 text-foreground">{entry.performedByName || 'System'}</td>
-                      <td className="px-4 py-3"><span className="capitalize">{entry.performedByRole || '—'}</span></td>
-                      <td className="px-4 py-3"><span className="inline-flex rounded-lg bg-muted px-2 py-1 text-xs font-medium text-foreground">{entry.module}</span></td>
-                      <td className="px-4 py-3 capitalize text-foreground">{entry.action.toLowerCase()}</td>
-                      <td className="px-4 py-3 text-muted-foreground">
-                        {[entry.item && `${entry.item}${entry.quantity ? ` (${entry.quantity})` : ''}`, entry.details].filter(Boolean).join(' — ') || '—'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
             </div>
           </div>
 

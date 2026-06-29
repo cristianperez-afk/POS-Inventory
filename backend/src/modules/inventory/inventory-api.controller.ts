@@ -5,13 +5,30 @@ type RequestLike = {
   headers: Record<string, string | string[] | undefined>;
 };
 
+// Captured once when this module is loaded, so /api reveals when the running
+// process last (re)started — the quickest way to confirm a deploy/restart took
+// effect instead of guessing whether old code is still running.
+const SERVER_STARTED_AT = new Date().toISOString();
+
 @Controller('api')
 export class InventoryApiController {
   constructor(private readonly inventoryApiService: InventoryApiService) {}
 
   @Get()
   health() {
-    return { message: 'Unified POS + Inventory API' };
+    return {
+      message: 'Unified POS + Inventory API',
+      startedAt: SERVER_STARTED_AT,
+      uptimeSeconds: Math.floor(process.uptime()),
+    };
+  }
+
+  // Read-only configuration diagnostics — surfaces data-mapping gaps that cause
+  // features (expiry alerts, low-stock thresholds, store settings) to silently
+  // no-op. Intended for an Admin to spot misconfiguration at a glance.
+  @Get('diagnostics')
+  diagnostics(@Req() request: RequestLike) {
+    return this.inventoryApiService.getSystemDiagnostics(request.headers);
   }
 
   @Get('auth/me')
@@ -231,8 +248,8 @@ export class InventoryApiController {
   }
 
   @Patch('transfers/:id/cancel')
-  cancelTransfer(@Req() request: RequestLike, @Param('id') id: string) {
-    return this.inventoryApiService.cancelTransfer(request.headers, id);
+  cancelTransfer(@Req() request: RequestLike, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.cancelTransfer(request.headers, id, body?.reason as string | undefined);
   }
 
   @Get('sales')
