@@ -36,6 +36,7 @@ export function Sidebar({ currentPage, onNavigate, onLogout, isAdmin = false, st
   const isPosManagerRole = userRole === 'POS_MANAGER' || userRole === 'POS_ADMIN' || (userRole === 'ADMIN' && staffType !== 'INVENTORY_STAFF');
   const isActualPosManagerRole = userRole === 'POS_MANAGER' || userRole === 'POS_ADMIN';
   const isInventoryManagerRole = userRole === 'INVENTORY_MANAGER' || userRole === 'INVENTORY_ADMIN' || (userRole === 'ADMIN' && staffType === 'INVENTORY_STAFF');
+  const isKitchenRole = userRole === 'KITCHEN' || staffType === 'KITCHEN_STAFF';
   const canManageStaffAccounts = userRole === 'ADMIN';
   const { settings } = useStoreSettings();
 
@@ -45,8 +46,8 @@ export function Sidebar({ currentPage, onNavigate, onLogout, isAdmin = false, st
   ];
 
   const storePages = storeItems.map((item) => item.page);
-  const canUsePos = isAdmin || isPosManagerRole || staffType === 'POS_STAFF';
-  const canUseInventory = inventoryEnabled && (isAdmin || (!isPosManagerRole && (isInventoryManagerRole || staffType === 'INVENTORY_STAFF')));
+  const canUsePos = !isKitchenRole && (isAdmin || isPosManagerRole || staffType === 'POS_STAFF');
+  const canUseInventory = inventoryEnabled && !isKitchenRole && (isAdmin || (!isPosManagerRole && (isInventoryManagerRole || staffType === 'INVENTORY_STAFF')));
   const canViewManagerProfile = isRetail && isActualPosManagerRole;
   const canViewGeneralSettings = Boolean(isAdmin || userRole || userName);
   const inventoryItems = getInventoryItems(isRetail, isAdmin);
@@ -114,7 +115,11 @@ export function Sidebar({ currentPage, onNavigate, onLogout, isAdmin = false, st
         return item.page !== 'table-management' || settings.enable_table_management;
       })
     : [];
-  const flattenedInventoryItems = canUseInventory ? inventoryItems : [];
+  const kitchenItems: MenuItem['children'] = [
+    { icon: ReceiptText, label: 'Kitchen Orders', page: 'inventory-pos-kitchen' as Page },
+    { icon: ChefHat, label: 'Recipe & BOM', page: 'inventory-recipe-bom' as Page },
+  ];
+  const flattenedInventoryItems = isKitchenRole ? kitchenItems : canUseInventory ? inventoryItems : [];
   const defaultTitle = isRetail ? 'Retail Store' : 'The Restaurant';
   const headerTitle = storeBrand?.name || defaultTitle;
   const defaultLogo = getDefaultStoreLogo(storeType);
@@ -420,6 +425,7 @@ function getUserRoleLabel(role: string | null | undefined, isAdmin: boolean, sta
   if (role === 'INVENTORY_ADMIN') return `${prefix}Inventory Manager`;
   if (role === 'POS_MANAGER') return `${prefix}POS Manager`;
   if (role === 'INVENTORY_MANAGER') return `${prefix}Inventory Manager`;
+  if (role === 'KITCHEN' || staffType === 'KITCHEN_STAFF') return `${prefix}Kitchen Account`;
   if (role === 'ADMIN') return staffType === 'INVENTORY_STAFF' ? `${prefix}Inventory Manager` : `${prefix}Admin`;
   if (role === 'STAFF') return getStaffTypeLabel(staffType, storeType);
   if (isAdmin) return `${prefix}Admin`;

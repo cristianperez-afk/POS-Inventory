@@ -177,7 +177,7 @@ export function useRestaurantKitchenOrdersQuery() {
         recipeId: order.recipeId,
         recipeName: order.recipe?.name ?? 'Recipe',
         quantity: order.quantity,
-        status: order.status === 'VOIDED' ? 'cancelled' : order.status.toLowerCase(),
+        status: getRestaurantKitchenStatus(order),
         orderedAt: order.orderedAt ?? '',
         createdAt: order.createdAt ?? null,
         updatedAt: order.updatedAt ?? order.createdAt,
@@ -229,6 +229,13 @@ export function useRestaurantKitchenOrdersQuery() {
         voidedAt: order.voidedAt,
       })),
   });
+}
+
+function getRestaurantKitchenStatus(order: ApiKitchenOrder) {
+  const status = String(order.status ?? '').toUpperCase();
+  if (status === 'VOIDED') return 'cancelled';
+  if (status === 'COMPLETED' && order.servedAt) return 'served';
+  return status.toLowerCase();
 }
 
 export function useCreateRestaurantRecipeMutation() {

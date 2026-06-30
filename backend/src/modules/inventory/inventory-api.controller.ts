@@ -85,7 +85,11 @@ export class InventoryApiController {
     return this.inventoryApiService.listUsers(user);
   }
 
+  // Kitchen accounts may view Recipe/BOM; the class-level inventory:manage is
+  // relaxed here so kitchen:read (held by kitchen staff, admins, inventory
+  // managers) is sufficient to read recipes. Recipe writes below stay manage-only.
   @Get('recipes')
+  @Permissions('kitchen:read')
   listRecipes(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string | undefined>) {
     return this.inventoryApiService.listRecipes(user, query);
   }
@@ -119,11 +123,13 @@ export class InventoryApiController {
   }
 
   @Get('kitchen-orders')
+  @Permissions('kitchen:read')
   listKitchenOrders(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string | undefined>) {
     return this.inventoryApiService.listKitchenOrders(user, query);
   }
 
   @Patch('kitchen-orders/:id/status')
+  @Permissions('kitchen:update_status')
   updateKitchenOrderStatus(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,

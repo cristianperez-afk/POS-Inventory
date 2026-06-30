@@ -135,10 +135,11 @@ export function mapRestaurantInventoryMovements(movements: ApiStockMovement[]) {
 
 export function useRestaurantInventoryQuery<
   TData = ReturnType<typeof mapRestaurantInventory>,
->(select?: (items: ReturnType<typeof mapRestaurantInventory>) => TData) {
+>(select?: (items: ReturnType<typeof mapRestaurantInventory>) => TData, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: [...domainQueryKeys.inventory, { module: 'RESTAURANT' }],
     queryFn: getRestaurantInventory,
+    enabled: options?.enabled ?? true,
     select: (items) => {
       const mapped = mapRestaurantInventory(items);
       return select ? select(mapped) : (mapped as TData);

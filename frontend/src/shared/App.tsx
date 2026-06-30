@@ -211,6 +211,11 @@ export default function App() {
       return;
     }
 
+    if (isKitchenUser(user)) {
+      navigateTo(getDefaultPageForUser(user));
+      return;
+    }
+
     if (user.role === 'STAFF' && user.store_type === 'RETAIL_STORE') {
       navigateTo(getDefaultPageForUser(user));
       return;
@@ -457,6 +462,7 @@ function SessionRefreshScreen() {
 
 function getDefaultPageForUser(user: AuthenticatedUser): Page {
   if (user.role === 'SUPERADMIN') return 'superadmin-dashboard';
+  if (isKitchenUser(user)) return INVENTORY_MODULES_ENABLED ? 'inventory-pos-kitchen' : 'login';
   if (user.role === 'ADMIN') return getAdminDefaultWorkspacePage(user);
   if (isInventoryManagerUser(user)) return INVENTORY_MODULES_ENABLED ? 'inventory-dashboard' : 'login';
   if (isPosManagerUser(user) && user.store_type === 'RETAIL_STORE') return 'retail-pos-dashboard';
@@ -501,6 +507,10 @@ function isInventoryManagerUser(user: AuthenticatedUser | null | undefined) {
   return user.role === 'ADMIN' && user.staff_type === 'INVENTORY_STAFF';
 }
 
+function isKitchenUser(user: AuthenticatedUser | null | undefined) {
+  return user?.role === 'KITCHEN' || user?.staff_type === 'KITCHEN_STAFF';
+}
+
 function normalizePageForUserStore(user: AuthenticatedUser, page: Page): Page {
   if (user.store_type === 'RETAIL_STORE' && page === 'reports') return 'retail-reports';
   if (user.store_type === 'RESTAURANT' && page === 'retail-reports') return 'reports';
@@ -522,6 +532,13 @@ function canAccessPage(user: AuthenticatedUser, page: Page) {
 
   if (page === 'login') return true;
   if (page === 'general-settings') return true;
+  if (isKitchenUser(user)) {
+    return user.store_type === 'RESTAURANT' && [
+      'inventory-pos-kitchen',
+      'inventory-recipe-bom',
+      'general-settings',
+    ].includes(page);
+  }
   if (user.role === 'SUPERADMIN') return page === 'superadmin-dashboard' || page === 'activity-log';
   if (page === 'manager-profile') {
     return user.store_type === 'RETAIL_STORE' && isActualPosManagerUser(user);

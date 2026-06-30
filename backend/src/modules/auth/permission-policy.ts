@@ -7,6 +7,8 @@ export const ROLE_PERMISSIONS: Record<string, string[]> = {
     'discounts:manage',
     'inventory:manage',
     'inventory:read',
+    'kitchen:read',
+    'kitchen:update_status',
     'pos:manage',
     'pos:read',
     'retail:void_authorize',
@@ -27,6 +29,8 @@ export const ROLE_PERMISSIONS: Record<string, string[]> = {
     'activity:read_store',
     'inventory:manage',
     'inventory:read',
+    'kitchen:read',
+    'kitchen:update_status',
     'theme:manage_personal',
   ],
   STAFF: ['pos:read', 'pos:create_order', 'theme:manage_personal'],
@@ -40,6 +44,15 @@ export function getPermissionsForUser(user: AuthenticatedUser | undefined) {
     permissions.delete('pos:create_order');
     permissions.add('inventory:read');
     permissions.add('inventory:manage');
+  }
+
+  // Kitchen accounts are limited to viewing Kitchen Orders / Recipe-BOM and
+  // updating preparation status — they get no POS or general inventory access.
+  if (user?.role === 'STAFF' && user.staff_type === 'KITCHEN_STAFF') {
+    permissions.delete('pos:read');
+    permissions.delete('pos:create_order');
+    permissions.add('kitchen:read');
+    permissions.add('kitchen:update_status');
   }
 
   return permissions;

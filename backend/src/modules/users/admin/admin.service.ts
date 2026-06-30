@@ -2,8 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { ActivityLogRepository } from '../../../shared/activity-log.repository';
 import { DatabaseService } from '../../../shared/database/database.service';
 
-type StaffType = 'POS_STAFF' | 'INVENTORY_STAFF';
-type StaffRole = 'STAFF' | 'POS_MANAGER' | 'INVENTORY_MANAGER';
+type StaffType = 'POS_STAFF' | 'INVENTORY_STAFF' | 'KITCHEN_STAFF';
+type StaffRole = 'STAFF' | 'POS_MANAGER' | 'INVENTORY_MANAGER' | 'KITCHEN';
 
 @Injectable()
 export class AdminService {

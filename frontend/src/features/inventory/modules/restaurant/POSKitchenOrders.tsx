@@ -4,6 +4,7 @@ import {
   useRestaurantKitchenOrdersQuery,
   useUpdateRestaurantKitchenOrderStatusMutation,
 } from "../lib/restaurant";
+import { useSession } from "../../app/hooks/useSession";
 import { formatManilaDateTime, parseDatabaseTimestamp } from "../../../../shared/utils/date";
 
 type KitchenStatus = "pending" | "preparing" | "ready" | "served" | "completed" | "cancelled";
@@ -57,6 +58,7 @@ type KitchenOrder = {
 };
 
 const ACTIVE_QUEUE_STATUSES = new Set<KitchenStatus>(["pending", "preparing", "ready"]);
+const KITCHEN_ACTIVE_STATUSES = new Set<KitchenStatus>(["pending", "preparing", "ready"]);
 
 const getQueueTimestamp = (order: KitchenOrder) => {
   const parsed = parseDatabaseTimestamp(order.orderedAt || order.createdAt || "").getTime();
@@ -103,7 +105,6 @@ const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
   { value: "pending", label: "New" },
   { value: "preparing", label: "Preparing" },
   { value: "ready", label: "Ready to Serve" },
-  { value: "served", label: "Served" },
   { value: "completed", label: "Completed" },
   { value: "cancelled", label: "Cancelled" },
 ];
@@ -139,10 +140,10 @@ const formatPaymentStatus = (value?: string) => {
   return normalized.replace(/\b\w/g, (letter) => letter.toUpperCase());
 };
 
-const secondsBetween = (start?: string | null, end?: string | null) => {
+const secondsBetween = (start?: string | null, end?: string | null, nowMs = Date.now()) => {
   if (!start) return 0;
   const startTime = parseDatabaseTimestamp(start).getTime();
-  const endTime = end ? parseDatabaseTimestamp(end).getTime() : Date.now();
+  const endTime = end ? parseDatabaseTimestamp(end).getTime() : nowMs;
   if (Number.isNaN(startTime) || Number.isNaN(endTime)) return 0;
   return Math.max(0, Math.floor((endTime - startTime) / 1000));
 };
@@ -215,8 +216,8 @@ function getSavedServiceSeconds(order: KitchenOrder) {
   return Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : null;
 }
 
-function getServeTimeStart(order: KitchenOrder, end?: string | null) {
-  const endTime = end ? parseDatabaseTimestamp(end).getTime() : Date.now();
+function getServeTimeStart(order: KitchenOrder, end?: string | null, nowMs = Date.now()) {
+  const endTime = end ? parseDatabaseTimestamp(end).getTime() : nowMs;
   const candidates = [order.orderedAt, order.runningTimeStart, order.preparingStartedAt, order.createdAt];
   return candidates.find((value) => {
     if (!value) return false;
@@ -238,18 +239,18 @@ function getServeTimeEnd(order: KitchenOrder) {
   return undefined;
 }
 
-function getRunningTime(order: KitchenOrder) {
+function getRunningTime(order: KitchenOrder, nowMs = Date.now()) {
   const end = getServeTimeEnd(order);
   const savedSeconds = getSavedServiceSeconds(order);
   if ((order.status === "served" || order.status === "completed") && savedSeconds !== null && savedSeconds > 0) {
     return formatServeTime(savedSeconds);
   }
-  const start = getServeTimeStart(order, end);
-  if (start) return formatServeTime(secondsBetween(start, end));
+  const start = getServeTimeStart(order, end, nowMs);
+  if (start) return formatServeTime(secondsBetween(start, end, nowMs));
   return formatServeTime(savedSeconds ?? 0);
 }
 
-function getCustomerStayDuration(order: KitchenOrder) {
+function getCustomerStayDuration(order: KitchenOrder, nowMs = Date.now()) {
   const normalizedType = order.orderType.replace(/_/g, "-").toLowerCase();
   if (normalizedType === "takeout") return "-";
   const stayEnd = order.tableEndedAt ?? getLifecycleEnd(order);
@@ -257,14 +258,14 @@ function getCustomerStayDuration(order: KitchenOrder) {
   if (stayEnd && Number.isFinite(savedSeconds) && savedSeconds > 0) {
     return formatServeTime(savedSeconds);
   }
-  const endTime = stayEnd ? parseDatabaseTimestamp(stayEnd).getTime() : Date.now();
+  const endTime = stayEnd ? parseDatabaseTimestamp(stayEnd).getTime() : nowMs;
   const stayStartedAt = [order.tableStartedAt, order.orderedAt, order.runningTimeStart, order.createdAt].find((value) => {
     if (!value) return false;
     const startTime = parseDatabaseTimestamp(value).getTime();
     return Number.isFinite(startTime) && (!Number.isFinite(endTime) || startTime <= endTime);
   });
   if (!order.tableNumber || !stayStartedAt) return "No table selected";
-  return formatServeTime(secondsBetween(stayStartedAt, stayEnd));
+  return formatServeTime(secondsBetween(stayStartedAt, stayEnd, nowMs));
 }
 
 function KitchenTicketItems({ orderId, items }: { orderId: string; items: KitchenOrderItem[] }) {
@@ -343,9 +344,13 @@ function KitchenTicketItems({ orderId, items }: { orderId: string; items: Kitche
 }
 
 export function POSKitchenOrders() {
+  const { currentUser } = useSession();
+  const normalizedRole = String(currentUser?.role ?? "").replace(/\s+/g, "").toLowerCase();
+  const isKitchenAccount = normalizedRole === "kitchenstaff" || normalizedRole === "kitchen";
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [selectedOrder, setSelectedOrder] = useState<KitchenOrder | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   // Cards toggle the shared status filter that drives the order lanes below;
   // clicking the active card (or Total Orders) clears it back to "all".
@@ -370,6 +375,17 @@ export function POSKitchenOrders() {
   );
 
   useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (isKitchenAccount && (statusFilter === "completed" || statusFilter === "cancelled")) {
+      setStatusFilter("all");
+    }
+  }, [isKitchenAccount, statusFilter]);
+
+  useEffect(() => {
     setSelectedOrder((current) => {
       if (!current) return current;
       return orders.find((order) => order.id === current.id) ?? current;
@@ -377,7 +393,10 @@ export function POSKitchenOrders() {
   }, [orders]);
 
   const orderStats = useMemo(() => {
-    const counts = orders.reduce<Record<KitchenStatus, number>>(
+    const statOrders = isKitchenAccount
+      ? orders.filter((order) => KITCHEN_ACTIVE_STATUSES.has(order.status) || order.status === "served")
+      : orders;
+    const counts = statOrders.reduce<Record<KitchenStatus, number>>(
       (acc, order) => {
         acc[order.status] += 1;
         return acc;
@@ -385,21 +404,29 @@ export function POSKitchenOrders() {
       { pending: 0, preparing: 0, ready: 0, served: 0, completed: 0, cancelled: 0 },
     );
 
-    return [
-      { label: "Total Orders", value: orders.length, filter: "all" as StatusFilter, icon: ReceiptText, color: "from-teal-500 to-cyan-500" },
+    const stats = [
+      { label: isKitchenAccount ? "Kitchen Orders" : "Total Orders", value: statOrders.length, filter: "all" as StatusFilter, icon: ReceiptText, color: "from-teal-500 to-cyan-500" },
       { label: "Pending", value: counts.pending, filter: "pending" as StatusFilter, icon: ClipboardList, color: "from-slate-500 to-slate-600" },
       { label: "Preparing", value: counts.preparing, filter: "preparing" as StatusFilter, icon: Play, color: "from-amber-500 to-orange-500" },
       { label: "Ready", value: counts.ready, filter: "ready" as StatusFilter, icon: CheckCircle2, color: "from-emerald-500 to-green-500" },
-      { label: "Served", value: counts.served, filter: "served" as StatusFilter, icon: ClipboardCheck, color: "from-sky-500 to-cyan-500" },
+      { label: "Served Orders", value: counts.served, filter: "served" as StatusFilter, icon: ClipboardCheck, color: "from-sky-500 to-cyan-500" },
       { label: "Completed", value: counts.completed, filter: "completed" as StatusFilter, icon: ClipboardCheck, color: "from-blue-500 to-sky-500" },
       { label: "Cancelled", value: counts.cancelled, filter: "cancelled" as StatusFilter, icon: X, color: "from-red-500 to-rose-500" },
     ];
-  }, [orders]);
+    return isKitchenAccount ? stats.filter((stat) => !["completed", "cancelled"].includes(stat.filter)) : stats;
+  }, [isKitchenAccount, orders]);
 
   const filteredOrders = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
 
     return orders.filter((order) => {
+      if (isKitchenAccount) {
+        if (statusFilter === "served") {
+          if (order.status !== "served") return false;
+        } else if (!KITCHEN_ACTIVE_STATUSES.has(order.status)) {
+          return false;
+        }
+      }
       const matchesStatus = statusFilter === "all" || order.status === statusFilter;
       if (!matchesStatus) return false;
       if (!query) return true;
@@ -415,7 +442,7 @@ export function POSKitchenOrders() {
       ].join(" ").toLowerCase();
       return haystack.includes(query);
     });
-  }, [orders, searchQuery, statusFilter]);
+  }, [isKitchenAccount, orders, searchQuery, statusFilter]);
 
   const handleStatus = async (order: KitchenOrder, nextStatus: KitchenStatus) => {
     await updateStatus.mutateAsync({ id: order.id, status: API_STATUS[nextStatus] });
@@ -454,14 +481,29 @@ export function POSKitchenOrders() {
     ticketWindow.print();
   };
 
-  const statusLanes: Array<{ status: KitchenStatus; title: string; helper: string }> = [
+  const activeKitchenLanes: Array<{ status: KitchenStatus; title: string; helper: string }> = [
     { status: "pending", title: "New Orders", helper: "Received by kitchen" },
     { status: "preparing", title: "Preparing Orders", helper: "Currently cooking" },
     { status: "ready", title: "Ready to Serve Orders", helper: "Needs pickup/service" },
-    { status: "served", title: "Served Orders", helper: "Waiting for customer session close" },
-    { status: "completed", title: "Completed Orders", helper: "Customer session closed" },
-    { status: "cancelled", title: "Cancelled Orders", helper: "Stopped or voided" },
   ];
+  const statusLanes: Array<{ status: KitchenStatus; title: string; helper: string }> = isKitchenAccount
+    ? statusFilter === "served"
+      ? [{ status: "served", title: "Served Orders", helper: "Orders already marked served" }]
+      : activeKitchenLanes
+    : [
+      ...activeKitchenLanes,
+      { status: "served", title: "Served Orders", helper: "Waiting for customer session close" },
+      { status: "completed" as KitchenStatus, title: "Completed Orders", helper: "Customer session closed" },
+      { status: "cancelled" as KitchenStatus, title: "Cancelled Orders", helper: "Stopped or voided" },
+    ];
+  const statsGridClass = isKitchenAccount
+    ? "mb-8 grid grid-cols-1 gap-4 md:grid-cols-3 xl:grid-cols-5"
+    : "mb-8 grid grid-cols-1 gap-4 md:grid-cols-3 xl:grid-cols-6";
+  const lanesGridClass = isKitchenAccount
+    ? statusFilter === "served"
+      ? "grid gap-4"
+      : "grid gap-4 lg:grid-cols-3"
+    : "grid gap-4 xl:grid-cols-5";
 
   return (
     <div className="p-8">
@@ -470,7 +512,7 @@ export function POSKitchenOrders() {
         <p className="text-muted-foreground">Record kitchen receipts and deduct ingredients from inventory via Recipe &amp; BOM.</p>
       </div>
 
-      <div className="mb-8 grid grid-cols-1 gap-4 md:grid-cols-3 xl:grid-cols-6">
+      <div className={statsGridClass}>
         {orderStats.map((stat) => {
           const Icon = stat.icon;
           const isActive = statusFilter === stat.filter;
@@ -503,9 +545,29 @@ export function POSKitchenOrders() {
         <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-2">
             <ClipboardList className="h-5 w-5 text-primary" />
-            <h2 className="text-xl font-semibold text-foreground">Kitchen Receipt History</h2>
+            <div>
+              <h2 className="text-xl font-semibold text-foreground">
+                {isKitchenAccount && statusFilter === "served" ? "Served Orders" : "Kitchen Receipt History"}
+              </h2>
+              {isKitchenAccount && statusFilter === "served" && (
+                <p className="text-xs text-muted-foreground">List of orders already marked as served.</p>
+              )}
+            </div>
           </div>
-          <div className="flex w-full flex-col gap-3 sm:flex-row lg:w-auto">
+          <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-start lg:w-auto">
+            {isKitchenAccount && (
+              <button
+                type="button"
+                onClick={() => setStatusFilter((current) => (current === "served" ? "all" : "served"))}
+                className={`inline-flex h-10 items-center justify-center px-1 text-sm font-medium transition ${
+                  statusFilter === "served"
+                    ? "text-primary underline underline-offset-4"
+                    : "text-primary hover:underline hover:underline-offset-4"
+                }`}
+              >
+                {statusFilter === "served" ? "Back" : "Served Orders"}
+              </button>
+            )}
             <div className="relative w-full lg:w-72">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <input
@@ -522,7 +584,7 @@ export function POSKitchenOrders() {
                 onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
                 className="w-full appearance-none rounded-lg border border-input bg-input-background py-2 pl-9 pr-8 text-sm outline-none focus:border-primary"
               >
-                {STATUS_FILTERS.map((filter) => (
+                {STATUS_FILTERS.filter((filter) => !isKitchenAccount || !["completed", "cancelled"].includes(filter.value)).map((filter) => (
                   <option key={filter.value} value={filter.value}>
                     {filter.label}
                   </option>
@@ -540,8 +602,54 @@ export function POSKitchenOrders() {
           <div className="rounded-lg border border-dashed border-border px-4 py-12 text-center text-sm text-muted-foreground">
             No kitchen orders found.
           </div>
+        ) : isKitchenAccount && statusFilter === "served" ? (
+          <div className="overflow-hidden rounded-xl border border-border">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[900px] text-left text-sm">
+                <thead className="border-b border-border bg-muted/40 text-xs uppercase text-muted-foreground">
+                  <tr>
+                    <th className="px-4 py-3 font-semibold">Order No.</th>
+                    <th className="px-4 py-3 font-semibold">Customer</th>
+                    <th className="px-4 py-3 font-semibold">Order Type</th>
+                    <th className="px-4 py-3 font-semibold">Table</th>
+                    <th className="px-4 py-3 font-semibold">Order Time</th>
+                    <th className="px-4 py-3 font-semibold">Served At</th>
+                    <th className="px-4 py-3 font-semibold">Serve Time</th>
+                    <th className="px-4 py-3 text-right font-semibold">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {filteredOrders.map((order) => (
+                    <tr key={order.id} className="bg-card transition hover:bg-muted/30">
+                      <td className="px-4 py-3">
+                        <span className="font-semibold text-primary">#{order.orderNumber}</span>
+                      </td>
+                      <td className="px-4 py-3 text-foreground">{order.customerName || "Walk-in Customer"}</td>
+                      <td className="px-4 py-3 text-muted-foreground">{formatOrderType(order.orderType)}</td>
+                      <td className="px-4 py-3 text-muted-foreground">{order.tableNumber || "-"}</td>
+                      <td className="px-4 py-3 text-muted-foreground">{formatDateTime(order.orderedAt)}</td>
+                      <td className="px-4 py-3 text-muted-foreground">{order.servedAt ? formatDateTime(order.servedAt) : "-"}</td>
+                      <td className="px-4 py-3 text-muted-foreground">{getRunningTime(order, nowMs)}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedOrder(order)}
+                            className="inline-flex items-center gap-1.5 rounded border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground transition hover:bg-muted"
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                            View
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
         ) : (
-          <div className="grid gap-4 xl:grid-cols-5">
+          <div className={lanesGridClass}>
             {statusLanes.map((lane) => {
               const laneOrders = filteredOrders.filter((order) => order.status === lane.status);
               return (
@@ -558,7 +666,7 @@ export function POSKitchenOrders() {
                     {laneOrders.map((order) => {
                       const action = nextAction(order.status, order.orderType);
                       const ActionIcon = action?.icon;
-                      const showCancelAction = canCancel(order.status);
+                      const showCancelAction = !isKitchenAccount && canCancel(order.status);
                       const isExpanded = expandedOrders[order.id] ?? false;
                       const hasAnyModification = order.items.some(hasModifications);
                       const queuePosition = pendingQueuePositions.get(order.id);
@@ -605,8 +713,8 @@ export function POSKitchenOrders() {
                               <div className="font-medium text-primary">Ready Around: {formatDateTime(order.estimatedReadyAt)}</div>
                             )}
                             <div className="flex items-center justify-between gap-2">
-                              <span>Serve Time: {getRunningTime(order)}</span>
-                              <span>Stay: {getCustomerStayDuration(order)}</span>
+                              <span>Serve Time: {getRunningTime(order, nowMs)}</span>
+                              <span>Stay: {getCustomerStayDuration(order, nowMs)}</span>
                             </div>
                           </div>
 
@@ -623,7 +731,7 @@ export function POSKitchenOrders() {
                               className="inline-flex items-center gap-1 rounded border border-border bg-card px-2.5 py-1.5 text-xs font-medium text-foreground transition hover:bg-muted"
                             >
                               <Eye className="h-3.5 w-3.5" />
-                              View
+                              {order.status === "served" ? "Show" : "View"}
                             </button>
                             <button
                               type="button"
@@ -747,7 +855,7 @@ export function POSKitchenOrders() {
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Serve Time</p>
-                  <p className="mt-1 text-lg text-foreground">{getRunningTime(selectedOrder)}</p>
+                  <p className="mt-1 text-lg text-foreground">{getRunningTime(selectedOrder, nowMs)}</p>
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Served At</p>
@@ -755,7 +863,7 @@ export function POSKitchenOrders() {
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Stay Time</p>
-                  <p className="mt-1 text-lg text-foreground">{getCustomerStayDuration(selectedOrder)}</p>
+                  <p className="mt-1 text-lg text-foreground">{getCustomerStayDuration(selectedOrder, nowMs)}</p>
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Payment Time</p>
