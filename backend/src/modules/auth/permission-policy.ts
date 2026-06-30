@@ -45,6 +45,9 @@ export function getPermissionsForUser(user: AuthenticatedUser | undefined) {
     permissions.delete('pos:create_order');
     permissions.add('inventory:read');
     permissions.add('inventory:manage');
+    // kitchen:read is the shared "view recipes / kitchen orders / module-shell
+    // reads (notifications, settings)" grant — inventory staff need it too.
+    permissions.add('kitchen:read');
   }
 
   // Kitchen accounts are limited to viewing Kitchen Orders / Recipe-BOM and

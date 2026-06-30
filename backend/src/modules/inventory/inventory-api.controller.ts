@@ -366,12 +366,17 @@ export class InventoryApiController {
     return this.inventoryApiService.rejectAdjustment(user, id, body);
   }
 
+  // Module-shell reads (notification bell + badge): relaxed to kitchen:read so a
+  // kitchen account can render the shared layout without 403s. Marking read below
+  // stays inventory:manage.
   @Get('notifications')
+  @Permissions('kitchen:read')
   listNotifications(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string | undefined>) {
     return this.inventoryApiService.listNotifications(user, query);
   }
 
   @Get('notifications/unread-count')
+  @Permissions('kitchen:read')
   countUnreadNotifications(@CurrentUser() user: AuthenticatedUser) {
     return this.inventoryApiService.countUnreadNotifications(user);
   }
@@ -386,7 +391,10 @@ export class InventoryApiController {
     return this.inventoryApiService.markNotificationRead(user, id);
   }
 
+  // Read-only store settings (currency/display) the shared layout needs to render;
+  // kitchen accounts may read them. Writing a setting below stays inventory:manage.
   @Get('restaurant-settings')
+  @Permissions('kitchen:read')
   listRestaurantSettings(@CurrentUser() user: AuthenticatedUser) {
     return this.inventoryApiService.listRestaurantSettings(user);
   }
