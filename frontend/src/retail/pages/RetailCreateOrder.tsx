@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { Sidebar } from '../../shared/components/Sidebar';
 import { Page, type StoreBrand } from '../../shared/App';
 import type { StaffType, StoreType } from '../../auth/types/auth';
-import { Barcode, Minus, Plus, Search, X, AlertCircle, ShoppingBag, Trash2, Printer } from 'lucide-react';
+import { Barcode, Minus, Plus, Search, X, AlertCircle, ShoppingBag, Trash2, Printer, LoaderCircle } from 'lucide-react';
 import { useOrders } from '../context/RetailOrderContext';
 import { ThermalReceipt } from './RetailThermalReceipt';
 import { useStoreSettings } from '../../shared/context/StoreSettingsContext';
@@ -476,6 +476,8 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
   const discountRate = settings.enable_discount && selectedDiscount ? selectedDiscountRate / 100 : 0;
   const discount = subtotal * discountRate;
   const total = subtotal + serviceFee - discount;
+  const isMenuLoading = posMenuQuery.isLoading || (posMenuQuery.isFetching && posProducts.length === 0);
+  const hasMenuError = posMenuQuery.isError;
 
   const validateOrder = (): boolean => {
     if (cart.length === 0) {
@@ -632,6 +634,21 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
         <div className="p-5">
           <h2 className="mb-4 text-lg font-semibold">Product Menu</h2>
 
+          <div className="mb-3 rounded-lg border border-border bg-white px-3 py-2 text-xs text-muted-foreground">
+            {isMenuLoading ? (
+              <span className="inline-flex items-center gap-2">
+                <LoaderCircle className="size-4 animate-spin text-primary" />
+                Loading retail POS data...
+              </span>
+            ) : hasMenuError ? (
+              <span className="text-destructive">Unable to load retail POS data. Please try refreshing.</span>
+            ) : posProducts.length > 0 ? (
+              <span>{posProducts.length} product variant{posProducts.length === 1 ? '' : 's'} loaded.</span>
+            ) : (
+              <span>No retail POS data found for this store yet.</span>
+            )}
+          </div>
+
           <div className="mb-4">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -723,7 +740,31 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredProducts.map((product) => {
+                  {isMenuLoading ? (
+                    <tr>
+                      <td colSpan={5} className="px-4 py-10 text-center text-sm text-muted-foreground">
+                        <span className="inline-flex items-center gap-2">
+                          <LoaderCircle className="size-4 animate-spin text-primary" />
+                          Loading products...
+                        </span>
+                      </td>
+                    </tr>
+                  ) : hasMenuError ? (
+                    <tr>
+                      <td colSpan={5} className="px-4 py-10 text-center text-sm text-destructive">
+                        Unable to load products.
+                      </td>
+                    </tr>
+                  ) : filteredProducts.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="px-4 py-10 text-center text-sm text-muted-foreground">
+                        {searchQuery || selectedCategory !== 'all'
+                          ? 'No products match your filters.'
+                          : 'No products have been added for this store yet.'}
+                      </td>
+                    </tr>
+                  ) : (
+                  filteredProducts.map((product) => {
                     const inCart = cart.some((item) => item.variantId === product.variantId);
                     const isOutOfStock = product.stockQuantity !== undefined && product.stockQuantity <= 0;
 
@@ -755,12 +796,10 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
                         <td className="px-4 py-2.5">{product.stockQuantity !== undefined ? Math.trunc(product.stockQuantity) : 'N/A'}</td>
                       </tr>
                     );
-                  })}
+                  })
+                  )}
                 </tbody>
               </table>
-              {filteredProducts.length === 0 && (
-                <div className="px-4 py-8 text-center text-sm text-muted-foreground">No inventory items found.</div>
-              )}
             </div>
           </div>
           <p className="mt-4 px-4 text-xs text-muted-foreground">

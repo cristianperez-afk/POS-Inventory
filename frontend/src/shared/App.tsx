@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { QueryClientProvider } from '@tanstack/react-query';
+import { LoaderCircle } from 'lucide-react';
 import { LoginPage } from '../auth/pages/LoginPage';
 import { AdminDashboard } from './components/AdminDashboard';
 import { SuperadminDashboard } from '../superadmin/pages/SuperadminDashboard';
@@ -287,7 +288,7 @@ export default function App() {
     <QueryClientProvider client={appQueryClient}>
       <div className="size-full bg-background">
         {authRestoring ? (
-          <LoginPage onLogin={handleLogin} />
+          <SessionRefreshScreen />
         ) : (
         <StoreSettingsProvider currentUser={currentUser}>
           <AppAlertProvider>
@@ -437,6 +438,20 @@ export default function App() {
         )}
       </div>
     </QueryClientProvider>
+  );
+}
+
+function SessionRefreshScreen() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-background px-6">
+      <div className="w-full max-w-sm rounded-lg border border-border bg-white px-6 py-8 text-center shadow-sm">
+        <LoaderCircle className="mx-auto size-8 animate-spin text-primary" />
+        <h1 className="mt-5 text-lg font-semibold text-foreground">Checking your session</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          You refreshed the page, so we are reconnecting your account before showing the app.
+        </p>
+      </div>
+    </div>
   );
 }
 
