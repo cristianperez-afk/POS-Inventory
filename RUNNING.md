@@ -14,7 +14,7 @@ Frontend:     http://127.0.0.1:3003
 ```powershell
 cd C:\Users\jelyl\POS-Inventory\backend
 npm.cmd run start:dev
-```
+```..
 
 ```powershell
 cd C:\Users\jelyl\POS-Inventory\frontend
