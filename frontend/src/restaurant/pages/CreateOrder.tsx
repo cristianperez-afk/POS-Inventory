@@ -8,10 +8,10 @@ import { useTables } from '../../shared/context/TableContext';
 import { useStoreSettings } from '../../shared/context/StoreSettingsContext';
 import { ThermalReceipt } from '../../shared/components/ThermalReceipt';
 import { DeleteConfirmDialog } from '../../shared/components/DeleteConfirmDialog';
-import { getApiBaseUrl } from '../../auth/services/auth';
 import type { AuthenticatedUser } from '../../auth/types/auth';
 import { formatManilaTime, getLocalDateKey, getManilaTime } from '../../shared/utils/date';
 import { useCompletePaymentMutation, usePosIngredientsQuery, usePosMenuQuery, useProductRecipeQuery } from '../../features/pos/hooks/usePosMenuQuery';
+import { posApi } from '../../shared/api/posApi';
 
 interface CreateOrderProps {
   currentUser: AuthenticatedUser | null;
@@ -365,11 +365,10 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       if (!currentUser?.id) return;
 
       try {
-        const response = await fetch(`${getApiBaseUrl()}/admin/pos/next-order-number`);
-        const data = await response.json();
-        const nextOrderNumber = Number(data?.order_number);
+        const data = await posApi.getNextOrderNumber();
+        const nextOrderNumber = Number(data?.order_number ?? data?.orderNumber);
 
-        if (response.ok && Number.isFinite(nextOrderNumber)) {
+        if (Number.isFinite(nextOrderNumber)) {
           orderNumberRef.current = Math.max(orderNumberRef.current, nextOrderNumber);
         }
       } catch {
@@ -1587,16 +1586,13 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
   const hoveredProductServings = hoveredProduct
     ? finiteNumberIncludingZeroOrUndefined(hoveredRecipeDetails?.servings ?? hoveredProduct.servings)
     : undefined;
+  const isMenuLoading = posMenuQuery.isLoading || (posMenuQuery.isFetching && posProducts.length === 0);
+  const hasMenuError = posMenuQuery.isError;
   const showPosStaffLoadingOverlay =
-    staffType === 'POS_STAFF' &&
-    (
-      posMenuQuery.isLoading ||
-      posMenuQuery.isFetching ||
-      posIngredientsQuery.isLoading ||
-      posIngredientsQuery.isFetching ||
-      completePaymentMutation.isPending ||
-      isPaymentSubmitting
-    );
+    posMenuQuery.isLoading ||
+    posIngredientsQuery.isLoading ||
+    completePaymentMutation.isPending ||
+    isPaymentSubmitting;
 
   return (
     <div className="flex h-screen bg-background">
@@ -1618,6 +1614,21 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
         )}
         <div className="p-5">
           <h2 className="text-lg mb-4">Menu</h2>
+
+          <div className="mb-3 rounded-lg border border-border bg-white px-3 py-2 text-xs text-muted-foreground">
+            {isMenuLoading ? (
+              <span className="inline-flex items-center gap-2">
+                <LoaderCircle className="size-4 animate-spin text-primary" />
+                Loading POS menu data...
+              </span>
+            ) : hasMenuError ? (
+              <span className="text-destructive">Unable to load POS menu data. Please try refreshing.</span>
+            ) : posProducts.length > 0 ? (
+              <span>{posProducts.length} menu item{posProducts.length === 1 ? '' : 's'} loaded.</span>
+            ) : (
+              <span>No POS menu data found for this store yet.</span>
+            )}
+          </div>
 
           <div className="relative mb-4">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -1676,6 +1687,17 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
             ))}
           </div>
 
+          {isMenuLoading || hasMenuError || filteredProducts.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-border bg-white p-8 text-center text-sm text-muted-foreground">
+              {isMenuLoading
+                ? 'Loading menu items...'
+                : hasMenuError
+                  ? 'Unable to load menu items.'
+                  : searchQuery || selectedCategory !== 'all'
+                    ? 'No menu items match your filters.'
+                    : 'No menu items have been added for this store yet.'}
+            </div>
+          ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
             {filteredProducts.map(product => {
               const availableOrders = finiteNumberIncludingZeroOrUndefined(product.availableOrders ?? product.availableQuantity);
@@ -1736,6 +1758,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
               );
             })}
           </div>
+          )}
         </div>
       </div>
 

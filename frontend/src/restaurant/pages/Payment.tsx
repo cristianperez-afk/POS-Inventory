@@ -3,7 +3,7 @@ import { Sidebar } from '../../shared/components/Sidebar';
 import { Page, type StoreBrand } from '../../shared/App';
 import type { AuthenticatedUser, StaffType, StoreType } from '../../auth/types/auth';
 import { CreditCard, Wallet, Banknote } from 'lucide-react';
-import { getApiBaseUrl } from '../../auth/services/auth';
+import { posApi } from '../../shared/api/posApi';
 
 interface PaymentProps {
   currentUser: AuthenticatedUser | null;
@@ -35,10 +35,8 @@ export function Payment({ currentUser, onNavigate, currentOrder, onLogout, store
       if (paymentTiming === 'now' && currentUser?.id && currentOrder?.items?.length) {
         const total = currentOrder.total ?? currentOrder.subtotal ?? 0;
         const orderNumber = currentOrder.orderNumber ?? currentOrder.order_number ?? Date.now();
-        const response = await fetch(`${getApiBaseUrl()}/pos/orders`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
+        try {
+          await posApi.createOrder({
             orderNumber: `REST-${orderNumber}`,
             customerName: currentOrder.customerName ?? null,
             orderType: currentOrder.orderType ?? 'DINE_IN',
@@ -59,11 +57,9 @@ export function Payment({ currentUser, onNavigate, currentOrder, onLogout, store
               amountPaid: total,
               changeAmount: 0,
             },
-          }),
-        });
-        const data = await response.json();
-        if (!response.ok) {
-          alert(data?.message ?? 'Unable to process payment. Inventory may be insufficient.');
+          });
+        } catch (error) {
+          alert(error instanceof Error ? error.message : 'Unable to process payment. Inventory may be insufficient.');
           return;
         }
       }

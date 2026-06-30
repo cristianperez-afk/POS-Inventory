@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Boxes, ClipboardCheck, Save } from 'lucide-react';
-import { getApiBaseUrl } from '../../auth/services/auth';
 import type { AuthenticatedUser } from '../../auth/types/auth';
 import { normalizeStoreSettings, useStoreSettings } from '../context/StoreSettingsContext';
 import { SettingToggle } from './GeneralSettings';
+import { adminApi } from '../api/adminApi';
 
 interface InventorySettingsProps {
   currentUser: AuthenticatedUser | null;
@@ -44,10 +44,7 @@ export function InventorySettings({ currentUser }: InventorySettingsProps) {
     setMessage('');
 
     try {
-      const response = await fetch(`${getApiBaseUrl()}/admin/store-settings`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const data = await adminApi.saveStoreSettings({
           auto_deduct_inventory_on_sale: settings.auto_deduct_inventory_on_sale,
           allow_negative_stock: settings.allow_negative_stock,
           default_low_stock_threshold: settings.default_low_stock_threshold,
@@ -56,11 +53,8 @@ export function InventorySettings({ currentUser }: InventorySettingsProps) {
           auto_reorder_threshold_percent: settings.auto_reorder_threshold_percent,
           enable_expiry_tracking: settings.enable_expiry_tracking,
           default_markup_percent: settings.default_markup_percent,
-        }),
       });
-      const data = await response.json();
 
-      if (!response.ok) throw new Error(data?.message ?? 'Unable to save inventory settings.');
       setSettings(normalizeStoreSettings(data));
       await reload();
       setMessage('Inventory settings saved.');
