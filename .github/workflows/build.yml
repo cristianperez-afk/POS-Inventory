@@ -3,7 +3,7 @@ name: Development Build
 on:
   push:
     branches:
-      - master
+      - main
   workflow_dispatch:
 
 env:
