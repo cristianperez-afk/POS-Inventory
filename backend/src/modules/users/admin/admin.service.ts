@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ActivityLogRepository } from '../../../shared/activity-log.repository';
-import { DatabaseService } from '../../../shared/database/database.service';
+import { PosOrderRepository } from './pos-order.repository';
 import { DiscountRepository } from './discount.repository';
 import { PosRepository } from './pos.repository';
 import { StaffRepository } from './staff.repository';
@@ -13,13 +13,13 @@ type StaffRole = 'STAFF' | 'POS_MANAGER' | 'INVENTORY_MANAGER';
 @Injectable()
 export class AdminService {
   constructor(
-    private readonly databaseService: DatabaseService,
     private readonly activityLogRepository: ActivityLogRepository,
     private readonly staffRepository: StaffRepository,
     private readonly discountRepository: DiscountRepository,
     private readonly themeRepository: ThemeRepository,
     private readonly storeSettingsRepository: StoreSettingsRepository,
     private readonly posRepository: PosRepository,
+    private readonly posOrderRepository: PosOrderRepository,
   ) {}
 
   listStaff(adminUserId: number) {
@@ -188,23 +188,23 @@ export class AdminService {
   }
 
   listPosProducts(userId: number) {
-    return this.databaseService.listPosProducts(userId);
+    return this.posRepository.listProducts(userId);
   }
 
   createPaidPosOrder(input: any) {
-    return this.databaseService.createPaidPosOrder(input);
+    return this.posOrderRepository.createPaidOrder(input);
   }
 
   updatePosOrder(input: any) {
-    return this.databaseService.updatePosOrder(input);
+    return this.posOrderRepository.updateOrder(input);
   }
 
   getNextPosOrderNumber(userId: number) {
-    return this.posRepository.getNextPosOrderNumber(userId);
+    return this.posOrderRepository.getNextOrderNumber(userId);
   }
 
   listPosOrders(userId: number) {
-    return this.databaseService.listPosOrders(userId);
+    return this.posOrderRepository.listOrders(userId);
   }
 
   listDiningTables(userId: number) {
@@ -224,6 +224,6 @@ export class AdminService {
   }
 
   setDiningTableOccupancy(input: { userId: number; tableId: string; occupiedSeats: number }) {
-    return this.databaseService.setDiningTableOccupancy(input);
+    return this.posRepository.setDiningTableOccupancy(input);
   }
 }

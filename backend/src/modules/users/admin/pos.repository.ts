@@ -1,4 +1,4 @@
-import { Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { ActivityLogRepository } from '../../../shared/activity-log.repository';
 import { DatabaseService } from '../../../shared/database/database.service';
@@ -10,32 +10,12 @@ export class PosRepository {
     private readonly activityLogRepository: ActivityLogRepository,
   ) {}
 
-  async getNextPosOrderNumber(userId: number) {
-    const user = await this.databaseService.getUserStoreScope(userId);
+  listProducts(userId: number) {
+    return this.databaseService.listPosProducts(userId);
+  }
 
-    if (!user.store_id || !user.store_type) {
-      throw new InternalServerErrorException('User account is not linked to a store.');
-    }
-
-    const rows = await this.databaseService.query<{ next_order_number: string | number }>(
-      `
-        SELECT COALESCE(MAX(order_number), 100000) + 1 AS next_order_number
-        FROM (
-          SELECT NULLIF(regexp_replace(order_number, '\\D', '', 'g'), '')::BIGINT AS order_number
-          FROM orders
-          WHERE store_id = $1
-
-          UNION ALL
-
-          SELECT NULLIF(regexp_replace("transactionNumber", '\\D', '', 'g'), '')::BIGINT AS order_number
-          FROM "Sale"
-          WHERE "transactionNumber" LIKE 'POS-%'
-        ) used_numbers
-      `,
-      [user.store_id],
-    );
-
-    return { order_number: String(rows[0]?.next_order_number ?? 100001).padStart(6, '0') };
+  setDiningTableOccupancy(input: { userId: number; tableId: string; occupiedSeats: number }) {
+    return this.databaseService.setDiningTableOccupancy(input);
   }
 
   async listDiningTables(userId: number) {
