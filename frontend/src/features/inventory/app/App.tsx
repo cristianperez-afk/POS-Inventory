@@ -5,7 +5,6 @@ import {
   FileText,
   Layers,
   LayoutDashboard,
-  LoaderCircle,
   LogOut,
   MapPin,
   Package,
@@ -125,14 +124,8 @@ export default function App() {
 
   if (isRestoringSession) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background px-6">
-        <div className="w-full max-w-sm rounded-lg border border-border bg-white px-6 py-8 text-center shadow-sm">
-          <LoaderCircle className="mx-auto size-8 animate-spin text-primary" />
-          <h1 className="mt-5 text-lg font-semibold text-foreground">Checking your session</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            You refreshed the page, so we are reconnecting your account before showing the app.
-          </p>
-        </div>
+      <div className="flex h-screen items-center justify-center bg-background text-muted-foreground">
+        Loading...
       </div>
     );
   }

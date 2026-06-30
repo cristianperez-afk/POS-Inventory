@@ -1,12 +1,23 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { History, LogOut, PanelLeftClose, PanelLeftOpen, Search, Settings, StoreIcon, UserPlus } from 'lucide-react';
+import { getApiBaseUrl } from '../../auth/services/auth';
 import type { AuthenticatedUser } from '../../auth/types/auth';
 import type { Page, StoreBrand } from '../App';
-import { listActivityLogs, type ActivityLog } from '../api/activityApi';
 import { Sidebar } from './Sidebar';
 import { formatManilaFullDateTime } from '../utils/date';
 import logoImage from '../../imports/logo1.png';
 import { LogoutConfirmDialog } from './LogoutConfirmDialog';
+
+type ActivityLog = {
+  id: string | number;
+  user_id: number | null;
+  user_name: string;
+  user_role: string;
+  module: string;
+  action: string;
+  details: string;
+  created_at: string;
+};
 
 type Props = {
   currentUser: AuthenticatedUser | null;
@@ -63,7 +74,15 @@ export function ActivityLogPage({ currentUser, storeBrand, onLogout, onNavigate 
         if (actionFilter !== 'All') params.set('action', actionFilter);
         if (search.trim()) params.set('search', search.trim());
 
-        setLogs(await listActivityLogs(isSuperadmin ? 'superadmin' : 'admin', params));
+        const routePrefix = isSuperadmin ? 'superadmin' : 'admin';
+        const response = await fetch(`${getApiBaseUrl()}/${routePrefix}/activity-logs?${params.toString()}`);
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data?.message ?? 'Unable to load activity logs.');
+        }
+
+        setLogs(data);
         setError('');
       } catch (loadError) {
         setError(loadError instanceof Error ? loadError.message : 'Unable to load activity logs.');

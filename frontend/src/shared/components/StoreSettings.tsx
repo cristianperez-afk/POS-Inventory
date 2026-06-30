@@ -2,10 +2,10 @@ import { useEffect, useState } from 'react';
 import { Banknote, Building2, Pencil, Plus, Save, Smartphone, Trash2, Wallet } from 'lucide-react';
 import { Sidebar } from './Sidebar';
 import { Page, type StoreBrand } from '../App';
+import { getApiBaseUrl } from '../../auth/services/auth';
 import type { AuthenticatedUser } from '../../auth/types/auth';
 import { normalizeStoreSettings, useStoreSettings, type DiscountSetting, type PaymentMethodAccount, type StoreSettingValues } from '../context/StoreSettingsContext';
 import { DeleteConfirmDialog } from './DeleteConfirmDialog';
-import { adminApi } from '../api/adminApi';
 
 interface StoreSettingsProps {
   currentUser: AuthenticatedUser | null;
@@ -130,7 +130,10 @@ export function StoreSettings({ currentUser, storeBrand, onLogout, onNavigate }:
     setMessage('');
 
     try {
-      const data = await adminApi.saveStoreSettings({
+      const response = await fetch(`${getApiBaseUrl()}/admin/store-settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           enable_customer_recommendation: settings.enable_customer_recommendation,
           enable_table_management: settings.enable_table_management,
           enable_refund: settings.enable_refund,
@@ -145,8 +148,11 @@ export function StoreSettings({ currentUser, storeBrand, onLogout, onNavigate }:
           customization_prep_time_minutes: settings.customization_prep_time_minutes,
           enabled_payment_methods: settings.enabled_payment_methods.length > 0 ? settings.enabled_payment_methods : ['Cash'],
           payment_method_accounts: settings.payment_method_accounts,
+        }),
       });
+      const data = await response.json();
 
+      if (!response.ok) throw new Error(data?.message ?? 'Unable to save store settings.');
       setSettings(normalizeStoreSettings(data));
       await reload();
       setMessage('Store settings saved.');
@@ -223,16 +229,21 @@ export function StoreSettings({ currentUser, storeBrand, onLogout, onNavigate }:
     setMessage('');
 
     try {
-      const payload = {
+      const endpoint = discountForm.id
+        ? `${getApiBaseUrl()}/admin/discount-settings/${discountForm.id}`
+        : `${getApiBaseUrl()}/admin/discount-settings`;
+      const response = await fetch(endpoint, {
+        method: discountForm.id ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           discount_name: discountForm.discount_name,
           discount_rate: discountForm.discount_rate,
           is_enabled: true,
-      };
-      if (discountForm.id) {
-        await adminApi.updateDiscountSetting(discountForm.id, payload);
-      } else {
-        await adminApi.createDiscountSetting(payload);
-      }
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) throw new Error(data?.message ?? 'Unable to save discount.');
       setDiscountForm(blankDiscountForm);
       await reload();
       setMessage('Discount settings saved.');
@@ -247,7 +258,12 @@ export function StoreSettings({ currentUser, storeBrand, onLogout, onNavigate }:
     if (!currentUser?.id) return;
     setSaving(true);
     try {
-      await adminApi.deleteDiscountSetting(discount.id);
+      const response = await fetch(`${getApiBaseUrl()}/admin/discount-settings/${discount.id}`, {
+        method: 'DELETE',
+      });
+      const data = await response.json();
+
+      if (!response.ok) throw new Error(data?.message ?? 'Unable to delete discount.');
       await reload();
       setMessage('Discount deleted.');
       setDeletingDiscount(null);

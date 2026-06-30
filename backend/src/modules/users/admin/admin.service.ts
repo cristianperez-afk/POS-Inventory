@@ -1,5 +1,4 @@
 import { Injectable } from '@nestjs/common';
-import { ActivityLogRepository } from '../../../shared/activity-log.repository';
 import { DatabaseService } from '../../../shared/database/database.service';
 
 type StaffType = 'POS_STAFF' | 'INVENTORY_STAFF';
@@ -7,10 +6,7 @@ type StaffRole = 'STAFF' | 'POS_MANAGER' | 'INVENTORY_MANAGER';
 
 @Injectable()
 export class AdminService {
-  constructor(
-    private readonly databaseService: DatabaseService,
-    private readonly activityLogRepository: ActivityLogRepository,
-  ) {}
+  constructor(private readonly databaseService: DatabaseService) {}
 
   listStaff(adminUserId: number) {
     return this.databaseService.listStaffForAdmin(adminUserId);
@@ -169,11 +165,11 @@ export class AdminService {
     action?: string;
     search?: string;
   }) {
-    return this.activityLogRepository.listForUser(input);
+    return this.databaseService.listActivityLogsForUser(input);
   }
 
   async recordActivityLog(input: { userId: number; module: string; action: string; details: string }) {
-    await this.activityLogRepository.recordForUser(input.userId, input.module, input.action, input.details);
+    await this.databaseService.recordActivityForUser(input.userId, input.module, input.action, input.details);
     return { ok: true };
   }
 

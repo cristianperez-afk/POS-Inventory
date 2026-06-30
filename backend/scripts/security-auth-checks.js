@@ -46,9 +46,7 @@ assertContains('backend/src/modules/auth/auth.module.ts', 'useClass: JwtAuthGuar
 assertContains('backend/src/modules/auth/auth.module.ts', 'useClass: CsrfGuard', 'global CsrfGuard');
 assertContains('backend/src/modules/auth/jwt-auth.guard.ts', 'IS_PUBLIC_KEY', 'Public route bypass metadata support');
 assertContains('backend/src/modules/auth/roles.guard.ts', 'PERMISSIONS_KEY', 'permission metadata enforcement');
-assertContains('backend/src/modules/auth/roles.guard.ts', 'getPermissionsForUser', 'permission policy usage');
-assertContains('backend/src/modules/auth/permission-policy.ts', 'ROLE_PERMISSIONS', 'central role-to-permission map');
-assertContains('backend/src/modules/auth/permission-policy.ts', 'getPermissionsForUser', 'permission policy helper');
+assertContains('backend/src/modules/auth/roles.guard.ts', 'ROLE_PERMISSIONS', 'central role-to-permission map');
 assertContains('backend/src/modules/auth/permissions.decorator.ts', 'Permissions', 'permission decorator');
 assertContains('backend/src/modules/auth/csrf.guard.ts', "request.headers['x-csrf-token']", 'CSRF header validation');
 assertContains('backend/src/modules/auth/csrf.guard.ts', 'request.cookies?.csrf_token', 'CSRF cookie validation');
@@ -68,32 +66,17 @@ for (const route of ["@Post('login')", "@Post('refresh')", "@Post('forgot-passwo
 }
 
 [
-  'backend/src/modules/users/admin/admin-activity.controller.ts',
-  'backend/src/modules/users/admin/admin-discount.controller.ts',
-  'backend/src/modules/users/admin/admin-pos.controller.ts',
-  'backend/src/modules/users/admin/admin-settings.controller.ts',
-  'backend/src/modules/users/admin/admin-staff.controller.ts',
-  'backend/src/modules/users/admin/admin-theme.controller.ts',
-  'backend/src/modules/users/admin/retail-authorization.controller.ts',
+  'backend/src/modules/users/admin/admin.controller.ts',
   'backend/src/modules/users/superadmin/superadmin.controller.ts',
   'backend/src/modules/pos/pos.controller.ts',
 ].forEach(assertNoRequestIdentity);
 
 assertContains('backend/src/modules/inventory/inventory-api.controller.ts', "@Permissions('inventory:manage')", 'inventory permission gate');
 assertContains('backend/src/modules/pos/pos.controller.ts', "@Permissions('pos:create_order')", 'POS order creation permission gate');
-assertContains('backend/src/modules/users/admin/retail-authorization.controller.ts', "@Permissions('retail:void_authorize')", 'retail void authorization permission gate');
-assertContains('backend/src/modules/users/admin/admin-staff.controller.ts', '@Throttle', 'authenticated sensitive admin throttling');
+assertContains('backend/src/modules/users/admin/admin.controller.ts', "@Permissions('retail:void_authorize')", 'retail void authorization permission gate');
+assertContains('backend/src/modules/users/admin/admin.controller.ts', '@Throttle', 'authenticated sensitive admin throttling');
 assertContains('backend/src/modules/users/superadmin/superadmin.controller.ts', '@Throttle', 'authenticated sensitive superadmin throttling');
 assertContains('backend/src/modules/pos/pos.controller.ts', '@Throttle', 'authenticated POS order throttling');
-
-[
-  'backend/src/modules/users/admin/admin-activity.controller.ts',
-  'backend/src/modules/users/admin/admin-discount.controller.ts',
-  'backend/src/modules/users/admin/admin-pos.controller.ts',
-  'backend/src/modules/users/admin/admin-settings.controller.ts',
-  'backend/src/modules/users/admin/admin-theme.controller.ts',
-  'backend/src/modules/users/admin/retail-authorization.controller.ts',
-].forEach((file) => assertNotContains(file, "@Roles('ADMIN')", 'admin-only class gate on shared store data routes'));
 
 [
   'frontend/src/shared/App.tsx',

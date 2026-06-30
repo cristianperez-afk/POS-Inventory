@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { QueryClientProvider } from '@tanstack/react-query';
-import { LoaderCircle } from 'lucide-react';
 import { LoginPage } from '../auth/pages/LoginPage';
 import { AdminDashboard } from './components/AdminDashboard';
 import { SuperadminDashboard } from '../superadmin/pages/SuperadminDashboard';
@@ -27,9 +26,8 @@ import { Sidebar } from './components/Sidebar';
 import { OrderProvider } from './context/OrderContext';
 import { TableProvider } from './context/TableContext';
 import { StoreSettingsProvider, useStoreSettings } from './context/StoreSettingsContext';
-import { getCurrentSession, logout as logoutSession } from '../auth/services/auth';
+import { getApiBaseUrl, getCurrentSession, logout as logoutSession } from '../auth/services/auth';
 import type { AuthenticatedUser } from '../auth/types/auth';
-import { adminApi } from './api/adminApi';
 import { getDefaultStoreLogo } from './utils/defaultStoreLogo';
 import { AppAlertProvider } from './components/AppAlertProvider';
 import { appQueryClient } from '../query/appQueryClient';
@@ -107,7 +105,9 @@ export default function App() {
     let cancelled = false;
     const loadThemePreferences = async () => {
       try {
-        const data = await adminApi.getThemePreferences();
+        const response = await fetch(`${getApiBaseUrl()}/admin/theme-preferences`);
+        if (!response.ok) throw new Error('Unable to load theme preferences.');
+        const data = await response.json();
         if (cancelled) return;
 
         const personalPreferences = fromRemoteUserPreferences(data.user_preferences);
@@ -170,18 +170,22 @@ export default function App() {
       const shouldUseStrictDefaultLogo = currentUser.store_type === 'RESTAURANT' || currentUser.store_type === 'RETAIL_STORE';
 
       try {
-        const data = await adminApi.getStoreInformation();
-        setStoreBrand({
-          name: data.business_name ?? currentUser.store_name ?? null,
-          logo: shouldUseStrictDefaultLogo ? defaultLogo : data.logo || defaultLogo,
-          business_description: data.business_description ?? null,
-          address: data.address ?? null,
-          contact_number: data.contact_number ?? null,
-          email: data.email ?? null,
-          receipt_thank_you_message: data.receipt_thank_you_message ?? null,
-          receipt_footer_message: data.receipt_footer_message ?? null,
-          operating_hours: data.operating_hours ?? null,
-        });
+        const response = await fetch(`${getApiBaseUrl()}/admin/store-information`);
+        const data = await response.json();
+
+        if (response.ok) {
+          setStoreBrand({
+            name: data.business_name ?? currentUser.store_name ?? null,
+            logo: shouldUseStrictDefaultLogo ? defaultLogo : data.logo || defaultLogo,
+            business_description: data.business_description ?? null,
+            address: data.address ?? null,
+            contact_number: data.contact_number ?? null,
+            email: data.email ?? null,
+            receipt_thank_you_message: data.receipt_thank_you_message ?? null,
+            receipt_footer_message: data.receipt_footer_message ?? null,
+            operating_hours: data.operating_hours ?? null,
+          });
+        }
       } catch {
         setStoreBrand({ name: currentUser.store_name ?? null, logo: defaultLogo });
       }
@@ -288,7 +292,7 @@ export default function App() {
     <QueryClientProvider client={appQueryClient}>
       <div className="size-full bg-background">
         {authRestoring ? (
-          <SessionRefreshScreen />
+          <LoginPage onLogin={handleLogin} />
         ) : (
         <StoreSettingsProvider currentUser={currentUser}>
           <AppAlertProvider>
@@ -438,20 +442,6 @@ export default function App() {
         )}
       </div>
     </QueryClientProvider>
-  );
-}
-
-function SessionRefreshScreen() {
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-6">
-      <div className="w-full max-w-sm rounded-lg border border-border bg-white px-6 py-8 text-center shadow-sm">
-        <LoaderCircle className="mx-auto size-8 animate-spin text-primary" />
-        <h1 className="mt-5 text-lg font-semibold text-foreground">Checking your session</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          You refreshed the page, so we are reconnecting your account before showing the app.
-        </p>
-      </div>
-    </div>
   );
 }
 

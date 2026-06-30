@@ -1,23 +1,23 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { createHash, randomBytes } from 'crypto';
+import { DatabaseService } from '../../shared/database/database.service';
 import { AuthenticatedUser } from '../../shared/common/types';
 import { EmailService } from '../../shared/email/email.service';
-import { AuthRepository } from './auth.repository';
 
 @Injectable()
 export class AuthService {
   constructor(
-    private readonly authRepository: AuthRepository,
+    private readonly databaseService: DatabaseService,
     private readonly jwtService: JwtService,
     private readonly emailService: EmailService,
   ) {}
 
   async login(email: string, password: string, rememberMe = false) {
-    const user = await this.authRepository.getLoginUserByEmail(email);
+    const user = await this.databaseService.getLoginUserByEmail(email);
 
     if (!user) {
-      await this.authRepository.recordActivity({
+      await this.databaseService.recordActivity({
         module: 'Authentication',
         action: 'Failed Login Attempt',
         details: `Failed login attempt for ${email}.`,
@@ -27,10 +27,10 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email or password.');
     }
 
-    const passwordMatches = await this.authRepository.comparePassword(password, user.password_hash);
+    const passwordMatches = await this.databaseService.comparePassword(password, user.password_hash);
 
     if (!passwordMatches) {
-      await this.authRepository.recordActivity({
+      await this.databaseService.recordActivity({
         storeId: user.store_id,
         userId: user.id,
         userName: user.full_name,
@@ -43,7 +43,7 @@ export class AuthService {
     }
 
     const { password_hash: _passwordHash, ...sanitizedUser } = user;
-    await this.authRepository.recordActivity({
+    await this.databaseService.recordActivity({
       storeId: sanitizedUser.store_id,
       userId: sanitizedUser.id,
       userName: sanitizedUser.full_name,
@@ -57,13 +57,13 @@ export class AuthService {
     const refreshToken = rememberMe ? this.generateToken() : null;
 
     if (refreshToken) {
-      await this.authRepository.setRefreshToken(
+      await this.databaseService.setRefreshToken(
         sanitizedUser.id,
         this.hashToken(refreshToken),
         new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
       );
     } else {
-      await this.authRepository.clearRefreshToken(sanitizedUser.id);
+      await this.databaseService.clearRefreshToken(sanitizedUser.id);
     }
 
     return { user: sanitizedUser, accessToken, refreshToken };
@@ -74,13 +74,13 @@ export class AuthService {
       throw new UnauthorizedException('Missing refresh token.');
     }
 
-    const user = await this.authRepository.findUserByRefreshTokenHash(this.hashToken(refreshToken));
+    const user = await this.databaseService.findUserByRefreshTokenHash(this.hashToken(refreshToken));
     if (!user) {
       throw new UnauthorizedException('Invalid refresh token.');
     }
 
     const nextRefreshToken = this.generateToken();
-    await this.authRepository.setRefreshToken(
+    await this.databaseService.setRefreshToken(
       user.id,
       this.hashToken(nextRefreshToken),
       new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
@@ -95,7 +95,7 @@ export class AuthService {
 
   async logout(user: AuthenticatedUser | undefined) {
     if (user?.id) {
-      await this.authRepository.clearRefreshToken(user.id);
+      await this.databaseService.clearRefreshToken(user.id);
     }
 
     return { message: 'Logged out' };
@@ -106,14 +106,14 @@ export class AuthService {
       throw new UnauthorizedException('Invalid session.');
     }
 
-    return { user: await this.authRepository.getActiveAuthUserById(user.id) };
+    return { user: await this.databaseService.getActiveAuthUserById(user.id) };
   }
 
   async forgotPassword(email: string) {
-    const user = await this.authRepository.getLoginUserByEmail(email);
+    const user = await this.databaseService.getLoginUserByEmail(email);
     if (user) {
       const token = this.generateToken();
-      await this.authRepository.setResetToken(
+      await this.databaseService.setResetToken(
         user.id,
         this.hashToken(token),
         new Date(Date.now() + 60 * 60 * 1000),
@@ -125,12 +125,12 @@ export class AuthService {
   }
 
   async resetPassword(token: string, password: string) {
-    const user = await this.authRepository.findUserByResetTokenHash(this.hashToken(token));
+    const user = await this.databaseService.findUserByResetTokenHash(this.hashToken(token));
     if (!user) {
       throw new UnauthorizedException('Invalid or expired password reset token.');
     }
 
-    await this.authRepository.updatePasswordAndClearAuthTokens(user.id, password);
+    await this.databaseService.updatePasswordAndClearAuthTokens(user.id, password);
     return { message: 'Password has been reset.' };
   }
 

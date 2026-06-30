@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import type { AuthenticatedUser } from '../../auth/types/auth';
+import { getApiBaseUrl } from '../../auth/services/auth';
 import logoImage from '../../imports/logo1.png';
 import {
   CalendarDays,
@@ -28,9 +29,17 @@ import {
 import { LogoutConfirmDialog } from '../../shared/components/LogoutConfirmDialog';
 import { DeleteConfirmDialog } from '../../shared/components/DeleteConfirmDialog';
 import { getLocalDateKey, getManilaDateKey } from '../../shared/utils/date';
-import { superadminApi, type SuperadminAdminSummary } from '../api/superadminApi';
 
-type AdminSummary = SuperadminAdminSummary;
+interface AdminSummary {
+  id: number;
+  full_name: string;
+  email: string;
+  role: string;
+  store_id: number | null;
+  store_type: string | null;
+  store_name: string | null;
+  status?: string | null;
+}
 
 interface SuperadminDashboardProps {
   currentUser: AuthenticatedUser | null;
@@ -96,7 +105,14 @@ export function SuperadminDashboard({ currentUser, onLogout, onNavigate }: Super
   useEffect(() => {
     const loadAdmins = async () => {
       try {
-        setAdmins(await superadminApi.listAdmins());
+        const response = await fetch(`${getApiBaseUrl()}/superadmin/admins`);
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data?.message ?? 'Unable to load admin accounts.');
+        }
+
+        setAdmins(data);
       } catch (loadError) {
         setError(loadError instanceof Error ? loadError.message : 'Unable to load admin accounts.');
       } finally {
@@ -152,20 +168,26 @@ export function SuperadminDashboard({ currentUser, onLogout, onNavigate }: Super
         throw new Error('Password and confirm password do not match.');
       }
 
-      const payload = {
+      const response = await fetch(`${getApiBaseUrl()}/superadmin/admins${editingAdmin ? `/${editingAdmin.id}` : ''}`, {
+        method: editingAdmin ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           full_name: formFullName,
           email: formEmail,
           password: formPassword || undefined,
           store_type: formStoreType,
-      };
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.message ?? 'Unable to save admin account.');
+      }
+
       const wasEditing = Boolean(editingAdmin);
 
-      if (editingAdmin) {
-        const data = await superadminApi.updateAdmin(editingAdmin.id, payload);
-        setAdmins((current) => current.map((admin) => (admin.id === data.id ? data : admin)));
-      } else {
-        const data = await superadminApi.createAdmin(payload);
-        setAdmins((current) => [...current, data.user]);
+      setAdmins((current) => (wasEditing ? current.map((admin) => (admin.id === data.id ? data : admin)) : [...current, data.user]));
+      if (!wasEditing) {
         setCreatedPassword(data.temporary_password || formPassword);
       }
       setEditingAdmin(null);
@@ -225,7 +247,15 @@ export function SuperadminDashboard({ currentUser, onLogout, onNavigate }: Super
     setError('');
 
     try {
-      await superadminApi.deactivateAdmin(admin.id);
+      const response = await fetch(`${getApiBaseUrl()}/superadmin/admins/${admin.id}`, {
+        method: 'DELETE',
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.message ?? 'Unable to deactivate admin account.');
+      }
+
       setAdmins((current) => current.map((item) => (item.id === admin.id ? { ...item, status: 'INACTIVE' } : item)));
       setAdminActionPreview(null);
     } catch (deleteError) {
@@ -240,7 +270,15 @@ export function SuperadminDashboard({ currentUser, onLogout, onNavigate }: Super
     setError('');
 
     try {
-      await superadminApi.activateAdmin(admin.id);
+      const response = await fetch(`${getApiBaseUrl()}/superadmin/admins/${admin.id}/activate`, {
+        method: 'PATCH',
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.message ?? 'Unable to activate admin account.');
+      }
+
       setAdmins((current) => current.map((item) => (item.id === admin.id ? { ...item, status: 'ACTIVE' } : item)));
       setActivatingAdmin(null);
     } catch (activateError) {
@@ -255,7 +293,15 @@ export function SuperadminDashboard({ currentUser, onLogout, onNavigate }: Super
     setError('');
 
     try {
-      await superadminApi.permanentlyDeleteAdmin(admin.id);
+      const response = await fetch(`${getApiBaseUrl()}/superadmin/admins/${admin.id}/permanent`, {
+        method: 'DELETE',
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.message ?? 'Unable to delete admin account.');
+      }
+
       setAdmins((current) => current.filter((item) => item.id !== admin.id));
       setPermanentlyDeletingAdmin(null);
     } catch (deleteError) {

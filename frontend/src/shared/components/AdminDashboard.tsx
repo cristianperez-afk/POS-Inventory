@@ -2,9 +2,9 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { Sidebar } from './Sidebar';
 import { Ban, CircleCheck, Eye, EyeOff, KeyRound, Pencil, Trash2, UserPlus, X } from 'lucide-react';
 import { Page, type StoreBrand } from '../App';
+import { getApiBaseUrl } from '../../auth/services/auth';
 import type { AuthenticatedUser, StaffType } from '../../auth/types/auth';
 import { DeleteConfirmDialog } from './DeleteConfirmDialog';
-import { adminApi, type AdminStaffUser } from '../api/adminApi';
 
 function getStaffTypeOptions(storeType?: string | null): Array<{ value: Exclude<StaffType, null>; label: string }> {
   const storeLabel = storeType === 'RESTAURANT' ? 'Restaurant' : 'Retail';
@@ -49,7 +49,17 @@ function getAccessRoleLabel(user: StaffUser, storeType?: string | null) {
   return getAccessRoleOptions(storeType).find((option) => option.value === getAccessRoleFromUser(user))?.label ?? user.role;
 }
 
-type StaffUser = AdminStaffUser;
+interface StaffUser {
+  id: number;
+  full_name: string;
+  email: string;
+  role: string;
+  store_id: number | null;
+  store_type: string | null;
+  staff_type: StaffType;
+  status?: string | null;
+  void_pin_configured?: boolean;
+}
 
 interface AdminDashboardProps {
   currentUser: AuthenticatedUser | null;
@@ -87,7 +97,14 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
       }
 
       try {
-        setUsers(await adminApi.listStaff());
+        const response = await fetch(`${getApiBaseUrl()}/admin/staff`);
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data?.message ?? 'Unable to load staff accounts.');
+        }
+
+        setUsers(data);
         setError('');
       } catch (loadError) {
         setError(loadError instanceof Error ? loadError.message : 'Unable to load staff accounts.');
@@ -140,23 +157,23 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
 
     try {
       const accessRolePayload = getAccessRolePayload(formAccessRole);
-      const data = editingUser
-        ? await adminApi.updateStaff(editingUser.id, {
+      const response = await fetch(`${getApiBaseUrl()}/admin/staff${editingUser ? `/${editingUser.id}` : ''}`, {
+        method: editingUser ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           full_name: formName,
           email: formEmail,
           password: formPassword || undefined,
           void_pin: formVoidPin || undefined,
           staff_type: accessRolePayload.staff_type,
           role: accessRolePayload.role,
-        })
-        : await adminApi.createStaff({
-          full_name: formName,
-          email: formEmail,
-          password: formPassword || undefined,
-          void_pin: formVoidPin || undefined,
-          staff_type: accessRolePayload.staff_type,
-          role: accessRolePayload.role,
-        });
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.message ?? (editingUser ? 'Unable to update staff account.' : 'Unable to create staff account.'));
+      }
 
       setUsers((current) => editingUser ? current.map((user) => (user.id === data.id ? data : user)) : [...current, data]);
       setShowModal(false);
@@ -185,7 +202,15 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
     setError('');
 
     try {
-      await adminApi.deactivateStaff(user.id);
+      const response = await fetch(`${getApiBaseUrl()}/admin/staff/${user.id}`, {
+        method: 'DELETE',
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.message ?? 'Unable to deactivate staff account.');
+      }
+
       setUsers((current) => current.map((staff) => (staff.id === user.id ? { ...staff, status: 'INACTIVE' } : staff)));
       setDeactivatingUser(null);
     } catch (deleteError) {
@@ -204,7 +229,15 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
     setError('');
 
     try {
-      await adminApi.activateStaff(user.id);
+      const response = await fetch(`${getApiBaseUrl()}/admin/staff/${user.id}/activate`, {
+        method: 'PATCH',
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.message ?? 'Unable to activate staff account.');
+      }
+
       setUsers((current) => current.map((staff) => (staff.id === user.id ? { ...staff, status: 'ACTIVE' } : staff)));
       setActivatingUser(null);
     } catch (activateError) {
@@ -223,7 +256,15 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
     setError('');
 
     try {
-      await adminApi.permanentlyDeleteStaff(user.id);
+      const response = await fetch(`${getApiBaseUrl()}/admin/staff/${user.id}/permanent`, {
+        method: 'DELETE',
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.message ?? 'Unable to delete staff account.');
+      }
+
       setUsers((current) => current.filter((staff) => staff.id !== user.id));
       setDeletingUser(null);
     } catch (deleteError) {

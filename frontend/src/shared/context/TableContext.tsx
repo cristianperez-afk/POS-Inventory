@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { useOrders } from './OrderContext';
+import { getApiBaseUrl } from '../../auth/services/auth';
 import type { AuthenticatedUser } from '../../auth/types/auth';
-import { posApi } from '../api/posApi';
 
 export interface Table {
   id: string;
@@ -113,7 +113,8 @@ export function TableProvider({ children, currentUser }: { children: ReactNode; 
       setTables([]);
       return;
     }
-    const data = await posApi.listTables<any>();
+    const response = await fetch(`${getApiBaseUrl()}/admin/pos/tables`);
+    const data = await response.json();
     setTables(Array.isArray(data) ? data.map(mapApiTable) : []);
   };
 
@@ -295,47 +296,47 @@ export function TableProvider({ children, currentUser }: { children: ReactNode; 
 
   const addTable = async (tableNumber: string, seats: number, isShared: boolean): Promise<boolean> => {
     if (!currentUser?.id || tables.some(t => t.number === tableNumber)) return false;
-    try {
-      await posApi.createTable({ table_number: tableNumber, total_seats: seats, is_shared: isShared });
-      await loadTables();
-      return true;
-    } catch {
-      return false;
-    }
+    const response = await fetch(`${getApiBaseUrl()}/admin/pos/tables`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ table_number: tableNumber, total_seats: seats, is_shared: isShared }),
+    });
+    if (!response.ok) return false;
+    await loadTables();
+    return true;
   };
 
   const deleteTable = async (tableId: string): Promise<boolean> => {
     if (!currentUser?.id) return false;
-    try {
-      await posApi.deleteTable(tableId);
-      await loadTables();
-      return true;
-    } catch {
-      return false;
-    }
+    const response = await fetch(`${getApiBaseUrl()}/admin/pos/tables/${tableId}`, { method: 'DELETE' });
+    if (!response.ok) return false;
+    await loadTables();
+    return true;
   };
 
   const updateTable = async (tableId: string, tableNumber: string, seats: number, isShared: boolean): Promise<boolean> => {
     const numberExists = tables.some(t => t.id !== tableId && t.number === tableNumber);
     if (!currentUser?.id || numberExists) return false;
-    try {
-      await posApi.updateTable(tableId, { table_number: tableNumber, total_seats: seats, is_shared: isShared });
-      await loadTables();
-      return true;
-    } catch {
-      return false;
-    }
+    const response = await fetch(`${getApiBaseUrl()}/admin/pos/tables/${tableId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ table_number: tableNumber, total_seats: seats, is_shared: isShared }),
+    });
+    if (!response.ok) return false;
+    await loadTables();
+    return true;
   };
 
   const setTableOccupancy = async (tableId: string, occupiedSeats: number): Promise<boolean> => {
     if (!currentUser?.id) return false;
-    try {
-      await posApi.updateTableOccupancy(tableId, occupiedSeats);
-      await loadTables();
-      return true;
-    } catch {
-      return false;
-    }
+    const response = await fetch(`${getApiBaseUrl()}/admin/pos/tables/${tableId}/occupancy`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ occupied_seats: occupiedSeats }),
+    });
+    if (!response.ok) return false;
+    await loadTables();
+    return true;
   };
 
   const dismissAssignmentNotification = () => {

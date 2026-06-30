@@ -11,7 +11,6 @@
     "test:security": "node backend/scripts/security-auth-checks.js",
     "test:security:runtime": "npm --prefix backend run build && node backend/scripts/security-runtime-checks.js",
     "test:security:e2e": "npm --prefix backend run build && node backend/scripts/security-e2e-checks.js",
-    "test:security:formal": "node --test backend/test/security/*.test.js",
     "test:security:all": "npm run test:security && npm run test:security:runtime && npm run test:security:e2e",
     "db:local": "npm --prefix backend run db:local",
     "db:supabase": "npm --prefix backend run db:supabase",

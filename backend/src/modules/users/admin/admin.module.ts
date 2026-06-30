@@ -1,24 +1,9 @@
 import { Module } from '@nestjs/common';
-import { ActivityLogRepository } from '../../../shared/activity-log.repository';
-import { AdminActivityController } from './admin-activity.controller';
-import { AdminDiscountController } from './admin-discount.controller';
-import { AdminPosController } from './admin-pos.controller';
-import { AdminSettingsController } from './admin-settings.controller';
-import { AdminStaffController } from './admin-staff.controller';
-import { AdminThemeController } from './admin-theme.controller';
+import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
-import { RetailAuthorizationController } from './retail-authorization.controller';
 
 @Module({
-  controllers: [
-    AdminActivityController,
-    AdminDiscountController,
-    AdminPosController,
-    AdminSettingsController,
-    AdminStaffController,
-    AdminThemeController,
-    RetailAuthorizationController,
-  ],
-  providers: [AdminService, ActivityLogRepository],
+  controllers: [AdminController],
+  providers: [AdminService],
 })
 export class AdminModule {}

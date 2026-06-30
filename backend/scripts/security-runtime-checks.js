@@ -164,20 +164,6 @@ async function checkRolesGuard() {
     true,
   );
 
-  assert.equal(
-    new RolesGuard(createReflector({ [PERMISSIONS_KEY]: ['pos:read'] })).canActivate(
-      createContext({ user: { role: 'POS_MANAGER', staff_type: 'POS_STAFF' } }),
-    ),
-    true,
-  );
-
-  assert.equal(
-    new RolesGuard(createReflector({ [PERMISSIONS_KEY]: ['pos:create_order'] })).canActivate(
-      createContext({ user: { role: 'POS_MANAGER', staff_type: 'POS_STAFF' } }),
-    ),
-    true,
-  );
-
   throwsWithName(
     () =>
       new RolesGuard(createReflector({ [PERMISSIONS_KEY]: ['pos:create_order'] })).canActivate(

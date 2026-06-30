@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState, useRef, ReactNode } from 'react';
+import { getApiBaseUrl } from '../../auth/services/auth';
 import type { AuthenticatedUser } from '../../auth/types/auth';
 import { getLocalDateKey, getManilaTime, parseDatabaseTimestamp } from '../../shared/utils/date';
-import { posApi } from '../../shared/api/posApi';
 
 export interface OrderItem {
   id?: number;
@@ -88,8 +88,9 @@ export function RetailOrderProvider({ children, currentUser }: { children: React
       }
 
       try {
-        const data = await posApi.listOrders<any>();
-        if (!Array.isArray(data)) {
+        const response = await fetch(`${getApiBaseUrl()}/admin/pos/orders`);
+        const data = await response.json();
+        if (!response.ok || !Array.isArray(data)) {
           setOrders([]);
           return;
         }
@@ -158,11 +159,19 @@ export function RetailOrderProvider({ children, currentUser }: { children: React
       .filter((id): id is number => typeof id === 'number');
 
     try {
-      await posApi.updateOrder(order.transactionNumber, {
+      const response = await fetch(`${getApiBaseUrl()}/admin/pos/orders/${encodeURIComponent(order.transactionNumber)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           paymentStatus: allRefunded ? 'REFUNDED' : 'PARTIALLY_REFUNDED',
           refundReason: reason,
           restockOrderItemIds,
+        }),
       });
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.message ?? 'Unable to process refund.');
+      }
     } catch (error) {
       setOrders(prev => prev.map(o => (o.id === orderId ? order : o)));
       throw error;
@@ -193,12 +202,20 @@ export function RetailOrderProvider({ children, currentUser }: { children: React
       .filter((id): id is number => typeof id === 'number');
 
     try {
-      await posApi.updateOrder(order.transactionNumber, {
+      const response = await fetch(`${getApiBaseUrl()}/admin/pos/orders/${encodeURIComponent(order.transactionNumber)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           paymentStatus: 'VOIDED',
           orderStatus: 'COMPLETED',
           voidReason: voidReason || 'Transaction voided',
           restockOrderItemIds,
+        }),
       });
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.message ?? 'Unable to void transaction.');
+      }
     } catch (error) {
       setOrders(prev => prev.map(o => (o.id === orderId ? order : o)));
       throw error;

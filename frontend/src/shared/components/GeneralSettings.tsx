@@ -5,7 +5,7 @@ import { Page, type StoreBrand } from '../App';
 import type { AuthenticatedUser } from '../../auth/types/auth';
 import logoImage from '../../imports/logo1.png';
 import { LogoutConfirmDialog } from './LogoutConfirmDialog';
-import { adminApi, type ThemePreferencesResponse } from '../api/adminApi';
+import { getApiBaseUrl } from '../../auth/services/auth';
 import {
   applyUserPreferences,
   applyThemePreset,
@@ -123,7 +123,9 @@ export function GeneralSettings({ currentUser, storeBrand, onLogout, onNavigate 
     let cancelled = false;
     const loadSettings = async () => {
       try {
-        const data = await adminApi.getThemePreferences();
+        const response = await fetch(`${getApiBaseUrl()}/admin/theme-preferences`);
+        if (!response.ok) throw new Error('Unable to load settings.');
+        const data = await response.json();
         if (cancelled) return;
 
         const storeTheme = fromRemoteThemePreferences(data.store_theme);
@@ -178,7 +180,13 @@ export function GeneralSettings({ currentUser, storeBrand, onLogout, onNavigate 
       const body = themeScope === 'store'
         ? toRemoteThemePreferences(userPreferences)
         : toRemoteUserPreferences(userPreferences);
-      const data = await adminApi.saveThemePreferences(endpoint, body);
+      const response = await fetch(`${getApiBaseUrl()}/admin/theme-preferences/${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(data?.message ?? 'Unable to save settings.');
 
       if (themeScope === 'store') {
         const nextStore = mergeUserPreferencesWithTheme(personalPreferences, fromRemoteThemePreferences(data));
@@ -207,7 +215,11 @@ export function GeneralSettings({ currentUser, storeBrand, onLogout, onNavigate 
 
     try {
       const endpoint = themeScope === 'store' ? 'store' : 'personal';
-      const data = await adminApi.resetThemePreferences(endpoint) as ThemePreferencesResponse;
+      const response = await fetch(`${getApiBaseUrl()}/admin/theme-preferences/${endpoint}`, {
+        method: 'DELETE',
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(data?.message ?? 'Unable to reset theme.');
 
       const storeTheme = fromRemoteThemePreferences(data.store_theme);
       const effectiveTheme = fromRemoteThemePreferences(data.effective_theme);

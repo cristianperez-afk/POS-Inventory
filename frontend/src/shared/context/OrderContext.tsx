@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, useRef, ReactNode } from 'react';
+import { getApiBaseUrl } from '../../auth/services/auth';
 import type { AuthenticatedUser } from '../../auth/types/auth';
 import { formatManilaTime, getManilaDateKey, parseDatabaseTimestamp } from '../utils/date';
-import { posApi } from '../api/posApi';
 
 export interface OrderItem {
   name: string;
@@ -120,8 +120,9 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
     }
 
     try {
-      const data = await posApi.listOrders<any>();
-      if (!Array.isArray(data)) {
+      const response = await fetch(`${getApiBaseUrl()}/admin/pos/orders`);
+      const data = await response.json();
+      if (!response.ok || !Array.isArray(data)) {
         setOrders([]);
         return;
       }
@@ -223,11 +224,19 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
     if (!currentUser?.id || !order.orderNumber) return;
 
     try {
-      await posApi.updateOrder(order.orderNumber, {
+      const response = await fetch(`${getApiBaseUrl()}/admin/pos/orders/${encodeURIComponent(order.orderNumber)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           paymentStatus: 'VOIDED',
           orderStatus: 'COMPLETED',
           restock,
+        }),
       });
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.message ?? 'Unable to void order.');
+      }
     } catch (error) {
       setOrders(prev => prev.map(o => o.id === orderId ? order : o));
       throw error;
@@ -249,11 +258,19 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
     if (!currentUser?.id || !order.orderNumber) return;
 
     try {
-      await posApi.updateOrder(order.orderNumber, {
+      const response = await fetch(`${getApiBaseUrl()}/admin/pos/orders/${encodeURIComponent(order.orderNumber)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           paymentStatus: 'REFUNDED',
           orderStatus: 'COMPLETED',
           restock,
+        }),
       });
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.message ?? 'Unable to refund order.');
+      }
     } catch (error) {
       setOrders(prev => prev.map(o => o.id === orderId ? order : o));
       throw error;
@@ -288,10 +305,18 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
     if (!currentUser?.id || !order.orderNumber) return;
 
     try {
-      await posApi.updateOrder(order.orderNumber, {
+      const response = await fetch(`${getApiBaseUrl()}/admin/pos/orders/${encodeURIComponent(order.orderNumber)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           tableName: table,
           orderStatus: toDatabaseOrderStatus(orderStatus),
+        }),
       });
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.message ?? 'Unable to update table assignment.');
+      }
     } catch (error) {
       setOrders(prev => prev.map(o => o.id === id ? order : o));
       throw error;
@@ -329,7 +354,10 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
 
     if (currentUser?.id && order.orderNumber) {
       try {
-        await posApi.updateOrder(order.orderNumber, {
+        const response = await fetch(`${getApiBaseUrl()}/admin/pos/orders/${encodeURIComponent(order.orderNumber)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
             paymentStatus: 'PAID',
             payment: {
               paymentNumber: paymentId,
@@ -337,7 +365,12 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
               amountPaid: paymentData.cashReceived,
               changeAmount: paymentData.changeGiven,
             },
+          }),
         });
+        if (!response.ok) {
+          const data = await response.json().catch(() => null);
+          throw new Error(data?.message ?? 'Unable to complete payment.');
+        }
       } catch (error) {
         setOrders(prev => prev.map(o => o.id === orderId ? order : o));
         throw error;
@@ -372,9 +405,17 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
     if (!currentUser?.id || !order.orderNumber) return;
 
     try {
-      await posApi.updateOrder(order.orderNumber, {
+      const response = await fetch(`${getApiBaseUrl()}/admin/pos/orders/${encodeURIComponent(order.orderNumber)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           orderStatus: 'COMPLETED',
+        }),
       });
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.message ?? 'Unable to release table.');
+      }
     } catch (error) {
       setOrders(prev => prev.map(o => o.id === orderId ? order : o));
       throw error;
