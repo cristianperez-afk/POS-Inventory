@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { getApiBaseUrl } from '../../auth/services/auth';
 import type { AuthenticatedUser } from '../../auth/types/auth';
+import { adminApi } from '../api/adminApi';
 
 export interface StoreSettingValues {
   store_id: number | null;
@@ -101,21 +101,16 @@ export function StoreSettingsProvider({ currentUser, children }: { currentUser: 
 
     setLoading(true);
     try {
-      const [settingsResponse, discountsResponse, storeInfoResponse] = await Promise.all([
-        fetch(`${getApiBaseUrl()}/admin/store-settings`),
-        fetch(`${getApiBaseUrl()}/admin/discount-settings`),
-        fetch(`${getApiBaseUrl()}/admin/store-information`),
+      const [settingsData, discountsData, storeInfoData] = await Promise.all([
+        adminApi.getStoreSettings().catch(() => null),
+        adminApi.listDiscountSettings().catch(() => []),
+        adminApi.getStoreInformation().catch(() => null),
       ]);
-      const settingsData = await settingsResponse.json();
-      const discountsData = await discountsResponse.json();
-      const storeInfoData = await storeInfoResponse.json();
 
-      if (settingsResponse.ok) {
-        setSettings(normalizeStoreSettings({ ...settingsData, theme_color: storeInfoResponse.ok ? storeInfoData?.theme_color : undefined }));
+      if (settingsData) {
+        setSettings(normalizeStoreSettings({ ...settingsData, theme_color: storeInfoData?.theme_color }));
       }
-      if (discountsResponse.ok) {
-        setDiscounts(Array.isArray(discountsData) ? discountsData : []);
-      }
+      setDiscounts(Array.isArray(discountsData) ? discountsData : []);
     } finally {
       setLoading(false);
     }

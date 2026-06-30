@@ -2,29 +2,13 @@ import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from '
 import { Info, Mail, MapPin, Phone, Save, Trash2, Upload } from 'lucide-react';
 import { Sidebar } from './Sidebar';
 import { Page, type StoreBrand } from '../App';
-import { getApiBaseUrl } from '../../auth/services/auth';
 import type { AuthenticatedUser } from '../../auth/types/auth';
 import { useStoreSettings } from '../context/StoreSettingsContext';
 import { ThermalReceipt } from './ThermalReceipt';
 import { ThermalReceipt as RetailThermalReceipt } from '../../retail/pages/RetailThermalReceipt';
 import { getDefaultStoreLogo, getStoreLogoForWhiteBackground } from '../utils/defaultStoreLogo';
 import { DeleteConfirmDialog } from './DeleteConfirmDialog';
-
-interface StoreInformationData {
-  id: number;
-  store_id: number;
-  business_name: string;
-  business_description: string | null;
-  address: string | null;
-  contact_number: string | null;
-  email: string | null;
-  logo: string | null;
-  receipt_thank_you_message: string | null;
-  receipt_footer_message: string | null;
-  operating_hours: string | null;
-  currency: string | null;
-  theme_color: string | null;
-}
+import { adminApi, type StoreInformationData } from '../api/adminApi';
 
 interface StoreInformationProps {
   currentUser: AuthenticatedUser | null;
@@ -69,13 +53,7 @@ export function StoreInformation({ currentUser, onLogout, onNavigate, onUserUpda
       }
 
       try {
-        const response = await fetch(`${getApiBaseUrl()}/admin/store-information`);
-        const data = await response.json();
-
-        if (!response.ok) {
-          throw new Error(data?.message ?? 'Unable to load store information.');
-        }
-
+        const data = await adminApi.getStoreInformation();
         setStoreInfo(normalizeStoreInfo(data));
       } catch (loadError) {
         setError(loadError instanceof Error ? loadError.message : 'Unable to load store information.');
@@ -123,10 +101,7 @@ export function StoreInformation({ currentUser, onLogout, onNavigate, onUserUpda
     setError('');
 
     try {
-      const response = await fetch(`${getApiBaseUrl()}/admin/store-information`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const data = await adminApi.saveStoreInformation({
           business_name: storeInfo.business_name,
           business_description: textOrNull(storeInfo.business_description),
           address: textOrNull(storeInfo.address),
@@ -137,13 +112,7 @@ export function StoreInformation({ currentUser, onLogout, onNavigate, onUserUpda
           receipt_footer_message: textOrNull(storeInfo.receipt_footer_message),
           operating_hours: textOrNull(storeInfo.operating_hours),
           currency: textOrNull(storeInfo.currency),
-        }),
       });
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data?.message ?? 'Unable to save store information.');
-      }
 
       const normalized = normalizeStoreInfo(data);
       setStoreInfo(normalized);

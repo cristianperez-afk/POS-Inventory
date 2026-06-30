@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Eye, EyeOff, KeyRound, Mail, ShieldCheck, Store, UserRound, type LucideIcon } from 'lucide-react';
 import { Page, type StoreBrand } from '../App';
-import { getApiBaseUrl } from '../../auth/services/auth';
 import type { AuthenticatedUser } from '../../auth/types/auth';
+import { adminApi, type ManagerProfileData } from '../api/adminApi';
 import { Sidebar } from './Sidebar';
 
 interface ManagerProfileProps {
@@ -12,12 +12,6 @@ interface ManagerProfileProps {
   onNavigate: (page: Page) => void;
   onUserUpdate?: (updates: Partial<AuthenticatedUser>) => void;
 }
-
-type ManagerProfileData = AuthenticatedUser & {
-  void_pin?: string | null;
-  void_pin_configured?: boolean;
-  status?: string | null;
-};
 
 export function ManagerProfile({ currentUser, storeBrand, onLogout, onNavigate, onUserUpdate }: ManagerProfileProps) {
   const [profile, setProfile] = useState<ManagerProfileData | null>(null);
@@ -46,17 +40,7 @@ export function ManagerProfile({ currentUser, storeBrand, onLogout, onNavigate, 
     setError('');
 
     try {
-      const response = await fetch(`${getApiBaseUrl()}/admin/retail/manager-profile/unique-pin`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      });
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data?.message ?? 'Unable to generate Unique PIN.');
-      }
-
+      const data = await adminApi.generateRetailManagerUniquePin();
       const uniquePin = String(data?.void_pin ?? '');
       if (!uniquePin) {
         throw new Error('Unable to generate Unique PIN.');
@@ -85,13 +69,7 @@ export function ManagerProfile({ currentUser, storeBrand, onLogout, onNavigate, 
       }
 
       try {
-        const response = await fetch(`${getApiBaseUrl()}/admin/retail/manager-profile`);
-        const data = await response.json();
-
-        if (!response.ok) {
-          throw new Error(data?.message ?? 'Unable to load manager profile.');
-        }
-
+        const data = await adminApi.getRetailManagerProfile();
         setProfile(data);
         setError('');
         if (!data?.void_pin?.trim() && !currentUser?.void_pin?.trim()) {
