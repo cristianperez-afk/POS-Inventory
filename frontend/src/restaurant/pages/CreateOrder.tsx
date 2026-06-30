@@ -8,10 +8,10 @@ import { useTables } from '../../shared/context/TableContext';
 import { useStoreSettings } from '../../shared/context/StoreSettingsContext';
 import { ThermalReceipt } from '../../shared/components/ThermalReceipt';
 import { DeleteConfirmDialog } from '../../shared/components/DeleteConfirmDialog';
-import { getApiBaseUrl } from '../../auth/services/auth';
 import type { AuthenticatedUser } from '../../auth/types/auth';
 import { formatManilaTime, getLocalDateKey, getManilaTime } from '../../shared/utils/date';
 import { useCompletePaymentMutation, usePosIngredientsQuery, usePosMenuQuery, useProductRecipeQuery } from '../../features/pos/hooks/usePosMenuQuery';
+import { posApi } from '../../shared/api/posApi';
 
 interface CreateOrderProps {
   currentUser: AuthenticatedUser | null;
@@ -344,11 +344,10 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       if (!currentUser?.id) return;
 
       try {
-        const response = await fetch(`${getApiBaseUrl()}/admin/pos/next-order-number`);
-        const data = await response.json();
-        const nextOrderNumber = Number(data?.order_number);
+        const data = await posApi.getNextOrderNumber();
+        const nextOrderNumber = Number(data?.order_number ?? data?.orderNumber);
 
-        if (response.ok && Number.isFinite(nextOrderNumber)) {
+        if (Number.isFinite(nextOrderNumber)) {
           orderNumberRef.current = Math.max(orderNumberRef.current, nextOrderNumber);
         }
       } catch {

@@ -7,10 +7,11 @@ import { useOrders } from '../context/RetailOrderContext';
 import { ThermalReceipt } from './RetailThermalReceipt';
 import { useStoreSettings } from '../../shared/context/StoreSettingsContext';
 import { DeleteConfirmDialog } from '../../shared/components/DeleteConfirmDialog';
-import { getApiBaseUrl } from '../../auth/services/auth';
 import type { AuthenticatedUser } from '../../auth/types/auth';
 import { getLocalDateKey, getManilaTime } from '../../shared/utils/date';
 import { useCompletePaymentMutation, usePosMenuQuery } from '../../features/pos/hooks/usePosMenuQuery';
+import { posApi } from '../../shared/api/posApi';
+import { adminApi } from '../../shared/api/adminApi';
 
 interface RetailCreateOrderProps {
   currentUser: AuthenticatedUser | null;
@@ -151,11 +152,10 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
       if (!currentUser?.id) return;
 
       try {
-        const response = await fetch(`${getApiBaseUrl()}/admin/pos/next-order-number`);
-        const data = await response.json();
-        const nextOrderNumber = Number(data?.order_number);
+        const data = await posApi.getNextOrderNumber();
+        const nextOrderNumber = Number(data?.order_number ?? data?.orderNumber);
 
-        if (response.ok && Number.isFinite(nextOrderNumber)) {
+        if (Number.isFinite(nextOrderNumber)) {
           transactionNumberRef.current = Math.max(transactionNumberRef.current, nextOrderNumber);
         }
       } catch {
@@ -396,19 +396,7 @@ export function RetailCreateOrder({ currentUser, onNavigate, onOrderCreated, onL
     setVoidAuthorizationError('');
 
     try {
-      const response = await fetch(`${getApiBaseUrl()}/admin/retail/void-pin/verify`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          void_pin: voidPasscode,
-        }),
-      });
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data?.message ?? 'Invalid retail POS manager Unique PIN.');
-      }
-
+      const data = await adminApi.verifyRetailVoidPin(voidPasscode);
       const authorizedBy = data?.manager?.full_name ? ` by ${data.manager.full_name}` : '';
       setCart((items) => items.filter((_, index) => !selectedCartItemSet.has(index)));
       setSelectedCartItemIndexes([]);

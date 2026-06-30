@@ -26,8 +26,9 @@ import { Sidebar } from './components/Sidebar';
 import { OrderProvider } from './context/OrderContext';
 import { TableProvider } from './context/TableContext';
 import { StoreSettingsProvider, useStoreSettings } from './context/StoreSettingsContext';
-import { getApiBaseUrl, getCurrentSession, logout as logoutSession } from '../auth/services/auth';
+import { getCurrentSession, logout as logoutSession } from '../auth/services/auth';
 import type { AuthenticatedUser } from '../auth/types/auth';
+import { adminApi } from './api/adminApi';
 import { getDefaultStoreLogo } from './utils/defaultStoreLogo';
 import { AppAlertProvider } from './components/AppAlertProvider';
 import { appQueryClient } from '../query/appQueryClient';
@@ -105,9 +106,7 @@ export default function App() {
     let cancelled = false;
     const loadThemePreferences = async () => {
       try {
-        const response = await fetch(`${getApiBaseUrl()}/admin/theme-preferences`);
-        if (!response.ok) throw new Error('Unable to load theme preferences.');
-        const data = await response.json();
+        const data = await adminApi.getThemePreferences();
         if (cancelled) return;
 
         const personalPreferences = fromRemoteUserPreferences(data.user_preferences);
@@ -170,22 +169,18 @@ export default function App() {
       const shouldUseStrictDefaultLogo = currentUser.store_type === 'RESTAURANT' || currentUser.store_type === 'RETAIL_STORE';
 
       try {
-        const response = await fetch(`${getApiBaseUrl()}/admin/store-information`);
-        const data = await response.json();
-
-        if (response.ok) {
-          setStoreBrand({
-            name: data.business_name ?? currentUser.store_name ?? null,
-            logo: shouldUseStrictDefaultLogo ? defaultLogo : data.logo || defaultLogo,
-            business_description: data.business_description ?? null,
-            address: data.address ?? null,
-            contact_number: data.contact_number ?? null,
-            email: data.email ?? null,
-            receipt_thank_you_message: data.receipt_thank_you_message ?? null,
-            receipt_footer_message: data.receipt_footer_message ?? null,
-            operating_hours: data.operating_hours ?? null,
-          });
-        }
+        const data = await adminApi.getStoreInformation();
+        setStoreBrand({
+          name: data.business_name ?? currentUser.store_name ?? null,
+          logo: shouldUseStrictDefaultLogo ? defaultLogo : data.logo || defaultLogo,
+          business_description: data.business_description ?? null,
+          address: data.address ?? null,
+          contact_number: data.contact_number ?? null,
+          email: data.email ?? null,
+          receipt_thank_you_message: data.receipt_thank_you_message ?? null,
+          receipt_footer_message: data.receipt_footer_message ?? null,
+          operating_hours: data.operating_hours ?? null,
+        });
       } catch {
         setStoreBrand({ name: currentUser.store_name ?? null, logo: defaultLogo });
       }
