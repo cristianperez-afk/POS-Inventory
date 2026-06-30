@@ -102,9 +102,9 @@ export function StoreSettingsProvider({ currentUser, children }: { currentUser: 
     setLoading(true);
     try {
       const [settingsResponse, discountsResponse, storeInfoResponse] = await Promise.all([
-        fetch(`${getApiBaseUrl()}/admin/store-settings?admin_user_id=${currentUser.id}`),
-        fetch(`${getApiBaseUrl()}/admin/discount-settings?admin_user_id=${currentUser.id}`),
-        fetch(`${getApiBaseUrl()}/admin/store-information?admin_user_id=${currentUser.id}`),
+        fetch(`${getApiBaseUrl()}/admin/store-settings`),
+        fetch(`${getApiBaseUrl()}/admin/discount-settings`),
+        fetch(`${getApiBaseUrl()}/admin/store-information`),
       ]);
       const settingsData = await settingsResponse.json();
       const discountsData = await discountsResponse.json();

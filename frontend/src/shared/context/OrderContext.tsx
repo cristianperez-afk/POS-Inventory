@@ -120,7 +120,7 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
     }
 
     try {
-      const response = await fetch(`${getApiBaseUrl()}/admin/pos/orders?user_id=${currentUser.id}`);
+      const response = await fetch(`${getApiBaseUrl()}/admin/pos/orders`);
       const data = await response.json();
       if (!response.ok || !Array.isArray(data)) {
         setOrders([]);
@@ -228,7 +228,6 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          user_id: currentUser.id,
           paymentStatus: 'VOIDED',
           orderStatus: 'COMPLETED',
           restock,
@@ -263,7 +262,6 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          user_id: currentUser.id,
           paymentStatus: 'REFUNDED',
           orderStatus: 'COMPLETED',
           restock,
@@ -311,7 +309,6 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          user_id: currentUser.id,
           tableName: table,
           orderStatus: toDatabaseOrderStatus(orderStatus),
         }),
@@ -361,7 +358,6 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            user_id: currentUser.id,
             paymentStatus: 'PAID',
             payment: {
               paymentNumber: paymentId,
@@ -413,7 +409,6 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          user_id: currentUser.id,
           orderStatus: 'COMPLETED',
         }),
       });

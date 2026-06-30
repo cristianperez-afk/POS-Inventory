@@ -8,9 +8,14 @@
     "dev:backend": "npm --prefix backend run start:dev",
     "build": "npm --prefix frontend run build",
     "build:backend": "npm --prefix backend run build",
+    "test:security": "node backend/scripts/security-auth-checks.js",
+    "test:security:runtime": "npm --prefix backend run build && node backend/scripts/security-runtime-checks.js",
+    "test:security:e2e": "npm --prefix backend run build && node backend/scripts/security-e2e-checks.js",
+    "test:security:all": "npm run test:security && npm run test:security:runtime && npm run test:security:e2e",
     "db:local": "npm --prefix backend run db:local",
     "db:supabase": "npm --prefix backend run db:supabase",
-    "db:fix-sequences": "npm --prefix backend run db:fix-sequences"
+    "db:fix-sequences": "npm --prefix backend run db:fix-sequences",
+    "db:repair-identity-links": "npm --prefix backend run db:repair-identity-links"
   },
   "devDependencies": {
     "concurrently": "^10.0.3"

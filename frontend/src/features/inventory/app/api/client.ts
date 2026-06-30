@@ -38,21 +38,12 @@ declare global {
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const baseUrl = getApiBaseUrl();
-  const bridgeHeaders: Record<string, string> = {};
-  if (typeof window !== 'undefined' && window.__POS_INVENTORY_USER__) {
-    bridgeHeaders['x-pos-user-id'] = window.__POS_INVENTORY_USER__.id;
-    bridgeHeaders['x-pos-bridge-email'] = window.__POS_INVENTORY_USER__.email;
-    bridgeHeaders['x-pos-bridge-name'] = window.__POS_INVENTORY_USER__.name;
-    bridgeHeaders['x-pos-bridge-role'] = window.__POS_INVENTORY_USER__.role;
-    bridgeHeaders['x-pos-store-type'] = window.__POS_STORE_TYPE__ ?? '';
-  }
 
   const response = await fetch(`${baseUrl}${path}`, {
     ...options,
     credentials: 'include', // sends the HttpOnly cookie automatically
     headers: {
       'Content-Type': 'application/json',
-      ...bridgeHeaders,
       ...options.headers,
     },
   });
@@ -102,19 +93,19 @@ export function clearStoredToken() {
 }
 
 export function loginUser(email: string, password: string) {
-  return request<AuthResponse>('/api/auth/login', {
+  return request<AuthResponse>('/auth/login', {
     method: 'POST',
     body: JSON.stringify({ email, password }),
   });
 }
 
 export function logoutUser() {
-  return request<{ message: string }>('/api/auth/logout', { method: 'POST' });
+  return request<{ message: string }>('/auth/logout', { method: 'POST' });
 }
 
 // Re-hydrate the session from the HttpOnly cookie (used on app load / refresh).
 export function getCurrentUser() {
-  return request<{ user: AuthUser }>('/api/auth/me');
+  return request<{ user: AuthUser }>('/auth/me');
 }
 
 export const getCurrentSession = getCurrentUser;

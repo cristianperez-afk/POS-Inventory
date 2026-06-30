@@ -55,6 +55,7 @@ enum InventoryItemType {
 model Business {
   id                 String              @id @default(uuid())
   name               String              @unique
+  posStoreId         Int?                @unique
   modules            BusinessModule[]    @default([RETAIL])
   users              User[]
   locations          Location[]
@@ -92,6 +93,7 @@ model RestaurantSetting {
 
 model User {
   id                     String          @id @default(uuid())
+  posUserId              Int?            @unique
   name                   String
   email                  String          @unique
   passwordHash           String

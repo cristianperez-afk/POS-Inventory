@@ -113,7 +113,7 @@ export function TableProvider({ children, currentUser }: { children: ReactNode; 
       setTables([]);
       return;
     }
-    const response = await fetch(`${getApiBaseUrl()}/admin/pos/tables?user_id=${currentUser.id}`);
+    const response = await fetch(`${getApiBaseUrl()}/admin/pos/tables`);
     const data = await response.json();
     setTables(Array.isArray(data) ? data.map(mapApiTable) : []);
   };
@@ -299,7 +299,7 @@ export function TableProvider({ children, currentUser }: { children: ReactNode; 
     const response = await fetch(`${getApiBaseUrl()}/admin/pos/tables`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: currentUser.id, table_number: tableNumber, total_seats: seats, is_shared: isShared }),
+      body: JSON.stringify({ table_number: tableNumber, total_seats: seats, is_shared: isShared }),
     });
     if (!response.ok) return false;
     await loadTables();
@@ -308,7 +308,7 @@ export function TableProvider({ children, currentUser }: { children: ReactNode; 
 
   const deleteTable = async (tableId: string): Promise<boolean> => {
     if (!currentUser?.id) return false;
-    const response = await fetch(`${getApiBaseUrl()}/admin/pos/tables/${tableId}?user_id=${currentUser.id}`, { method: 'DELETE' });
+    const response = await fetch(`${getApiBaseUrl()}/admin/pos/tables/${tableId}`, { method: 'DELETE' });
     if (!response.ok) return false;
     await loadTables();
     return true;
@@ -320,7 +320,7 @@ export function TableProvider({ children, currentUser }: { children: ReactNode; 
     const response = await fetch(`${getApiBaseUrl()}/admin/pos/tables/${tableId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: currentUser.id, table_number: tableNumber, total_seats: seats, is_shared: isShared }),
+      body: JSON.stringify({ table_number: tableNumber, total_seats: seats, is_shared: isShared }),
     });
     if (!response.ok) return false;
     await loadTables();
@@ -332,7 +332,7 @@ export function TableProvider({ children, currentUser }: { children: ReactNode; 
     const response = await fetch(`${getApiBaseUrl()}/admin/pos/tables/${tableId}/occupancy`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: currentUser.id, occupied_seats: occupiedSeats }),
+      body: JSON.stringify({ occupied_seats: occupiedSeats }),
     });
     if (!response.ok) return false;
     await loadTables();

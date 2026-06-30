@@ -1,9 +1,10 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { AuthenticatedUser } from '../../shared/common/types';
+import { CurrentUser } from '../auth/current-user.decorator';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { Permissions } from '../auth/permissions.decorator';
+import { RolesGuard } from '../auth/roles.guard';
 import { InventoryApiService } from './inventory-api.service';
-
-type RequestLike = {
-  headers: Record<string, string | string[] | undefined>;
-};
 
 // Captured once when this module is loaded, so /api reveals when the running
 // process last (re)started — the quickest way to confirm a deploy/restart took
@@ -11,6 +12,8 @@ type RequestLike = {
 const SERVER_STARTED_AT = new Date().toISOString();
 
 @Controller('api')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Permissions('inventory:manage')
 export class InventoryApiController {
   constructor(private readonly inventoryApiService: InventoryApiService) {}
 
@@ -27,380 +30,368 @@ export class InventoryApiController {
   // features (expiry alerts, low-stock thresholds, store settings) to silently
   // no-op. Intended for an Admin to spot misconfiguration at a glance.
   @Get('diagnostics')
-  diagnostics(@Req() request: RequestLike) {
-    return this.inventoryApiService.getSystemDiagnostics(request.headers);
+  diagnostics(@CurrentUser() user: AuthenticatedUser) {
+    return this.inventoryApiService.getSystemDiagnostics(user);
   }
 
-  @Get('auth/me')
-  getCurrentUser(@Req() request: RequestLike) {
-    return this.inventoryApiService.getCurrentUser(request.headers);
-  }
-
-  @Post('auth/logout')
-  logout() {
-    return { message: 'Logged out' };
-  }
 
   @Get('inventory')
-  listInventory(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
-    return this.inventoryApiService.listInventory(request.headers, query);
+  listInventory(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string | undefined>) {
+    return this.inventoryApiService.listInventory(user, query);
   }
 
   @Post('inventory')
-  createInventoryItem(@Req() request: RequestLike, @Body() body: Record<string, unknown>) {
-    return this.inventoryApiService.createInventoryItem(request.headers, body);
+  createInventoryItem(@CurrentUser() user: AuthenticatedUser, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.createInventoryItem(user, body);
   }
 
   @Get('inventory/:id/cost-history')
-  getItemCostHistory(@Req() request: RequestLike, @Param('id') id: string) {
-    return this.inventoryApiService.getItemCostHistory(request.headers, id);
+  getItemCostHistory(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.getItemCostHistory(user, id);
   }
 
   @Patch('inventory/:id')
-  updateInventoryItem(
-    @Req() request: RequestLike,
-    @Param('id') id: string,
-    @Body() body: Record<string, unknown>,
-  ) {
-    return this.inventoryApiService.updateInventoryItem(request.headers, id, body);
+  updateInventoryItem(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.updateInventoryItem(user, id, body);
   }
 
   @Delete('inventory/:id')
-  deleteInventoryItem(@Req() request: RequestLike, @Param('id') id: string) {
-    return this.inventoryApiService.deleteInventoryItem(request.headers, id);
+  deleteInventoryItem(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.deleteInventoryItem(user, id);
   }
 
   @Get('locations')
-  listLocations(@Req() request: RequestLike) {
-    return this.inventoryApiService.listLocations(request.headers);
+  listLocations(@CurrentUser() user: AuthenticatedUser) {
+    return this.inventoryApiService.listLocations(user);
   }
 
   @Post('locations')
-  createLocation(@Req() request: RequestLike, @Body() body: Record<string, unknown>) {
-    return this.inventoryApiService.createLocation(request.headers, body);
+  createLocation(@CurrentUser() user: AuthenticatedUser, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.createLocation(user, body);
   }
 
   @Get('categories')
-  listCategories(@Req() request: RequestLike, @Query('module') module?: string) {
-    return this.inventoryApiService.listCategories(request.headers, module);
+  listCategories(@CurrentUser() user: AuthenticatedUser, @Query('module') module?: string) {
+    return this.inventoryApiService.listCategories(user, module);
   }
 
   @Post('categories')
-  createCategory(@Req() request: RequestLike, @Body() body: Record<string, unknown>) {
-    return this.inventoryApiService.createCategory(request.headers, body);
+  createCategory(@CurrentUser() user: AuthenticatedUser, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.createCategory(user, body);
   }
 
   @Get('users')
-  listUsers(@Req() request: RequestLike) {
-    return this.inventoryApiService.listUsers(request.headers);
+  listUsers(@CurrentUser() user: AuthenticatedUser) {
+    return this.inventoryApiService.listUsers(user);
   }
 
   @Get('recipes')
-  listRecipes(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
-    return this.inventoryApiService.listRecipes(request.headers, query);
+  listRecipes(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string | undefined>) {
+    return this.inventoryApiService.listRecipes(user, query);
   }
 
   @Post('recipes')
-  createRecipe(@Req() request: RequestLike, @Body() body: Record<string, unknown>) {
-    return this.inventoryApiService.createRecipe(request.headers, body);
+  createRecipe(@CurrentUser() user: AuthenticatedUser, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.createRecipe(user, body);
   }
 
   @Patch('recipes/:id')
   updateRecipe(
-    @Req() request: RequestLike,
+    @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
   ) {
-    return this.inventoryApiService.updateRecipe(request.headers, id, body);
+    return this.inventoryApiService.updateRecipe(user, id, body);
   }
 
   @Post('recipes/:id/restore')
-  restoreRecipe(@Req() request: RequestLike, @Param('id') id: string) {
-    return this.inventoryApiService.restoreRecipe(request.headers, id);
+  restoreRecipe(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.restoreRecipe(user, id);
   }
 
   @Delete('recipes/:id')
   deleteRecipe(
-    @Req() request: RequestLike,
+    @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
     @Query('permanent') permanent?: string,
   ) {
-    return this.inventoryApiService.deleteRecipe(request.headers, id, permanent === 'true');
+    return this.inventoryApiService.deleteRecipe(user, id, permanent === 'true');
   }
 
   @Get('kitchen-orders')
-  listKitchenOrders(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
-    return this.inventoryApiService.listKitchenOrders(request.headers, query);
+  listKitchenOrders(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string | undefined>) {
+    return this.inventoryApiService.listKitchenOrders(user, query);
   }
 
   @Patch('kitchen-orders/:id/status')
   updateKitchenOrderStatus(
-    @Req() request: RequestLike,
+    @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
     @Body() body: { status?: string },
   ) {
-    return this.inventoryApiService.updateKitchenOrderStatus(request.headers, id, body);
+    return this.inventoryApiService.updateKitchenOrderStatus(user, id, body);
   }
 
   @Get('suppliers')
-  listSuppliers(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
-    return this.inventoryApiService.listSuppliers(request.headers, query);
+  listSuppliers(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string | undefined>) {
+    return this.inventoryApiService.listSuppliers(user, query);
   }
 
   @Post('suppliers')
-  createSupplier(@Req() request: RequestLike, @Body() body: Record<string, unknown>) {
-    return this.inventoryApiService.createSupplier(request.headers, body);
+  createSupplier(@CurrentUser() user: AuthenticatedUser, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.createSupplier(user, body);
   }
 
   @Patch('suppliers/:id')
-  updateSupplier(@Req() request: RequestLike, @Param('id') id: string, @Body() body: Record<string, unknown>) {
-    return this.inventoryApiService.updateSupplier(request.headers, id, body);
+  updateSupplier(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.updateSupplier(user, id, body);
   }
 
   @Delete('suppliers/:id')
-  deleteSupplier(@Req() request: RequestLike, @Param('id') id: string) {
-    return this.inventoryApiService.deleteSupplier(request.headers, id);
+  deleteSupplier(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.deleteSupplier(user, id);
   }
 
   @Get('purchase-orders')
-  listPurchaseOrders(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
-    return this.inventoryApiService.listPurchaseOrders(request.headers, query);
+  listPurchaseOrders(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string | undefined>) {
+    return this.inventoryApiService.listPurchaseOrders(user, query);
   }
 
   @Get('purchase-orders/goods-receipts')
-  listGoodsReceipts(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
-    return this.inventoryApiService.listGoodsReceipts(request.headers, query);
+  listGoodsReceipts(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string | undefined>) {
+    return this.inventoryApiService.listGoodsReceipts(user, query);
   }
 
   @Post('purchase-orders')
-  createPurchaseOrder(@Req() request: RequestLike, @Body() body: Record<string, unknown>) {
-    return this.inventoryApiService.createPurchaseOrder(request.headers, body);
+  createPurchaseOrder(@CurrentUser() user: AuthenticatedUser, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.createPurchaseOrder(user, body);
   }
 
   @Get('purchase-orders/:id')
-  getPurchaseOrder(@Req() request: RequestLike, @Param('id') id: string) {
-    return this.inventoryApiService.getPurchaseOrder(request.headers, id);
+  getPurchaseOrder(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.getPurchaseOrder(user, id);
   }
 
   @Patch('purchase-orders/:id')
-  updatePurchaseOrder(@Req() request: RequestLike, @Param('id') id: string, @Body() body: Record<string, unknown>) {
-    return this.inventoryApiService.updatePurchaseOrder(request.headers, id, body);
+  updatePurchaseOrder(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.updatePurchaseOrder(user, id, body);
   }
 
   @Patch('purchase-orders/:id/submit')
-  submitPurchaseOrder(@Req() request: RequestLike, @Param('id') id: string) {
-    return this.inventoryApiService.submitPurchaseOrder(request.headers, id);
+  submitPurchaseOrder(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.submitPurchaseOrder(user, id);
   }
 
   @Patch('purchase-orders/:id/approve')
-  approvePurchaseOrder(@Req() request: RequestLike, @Param('id') id: string) {
-    return this.inventoryApiService.approvePurchaseOrder(request.headers, id);
+  approvePurchaseOrder(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.approvePurchaseOrder(user, id);
   }
 
   @Patch('purchase-orders/:id/reject')
-  rejectPurchaseOrder(@Req() request: RequestLike, @Param('id') id: string, @Body() body: { reason?: string }) {
-    return this.inventoryApiService.rejectPurchaseOrder(request.headers, id, body);
+  rejectPurchaseOrder(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() body: { reason?: string }) {
+    return this.inventoryApiService.rejectPurchaseOrder(user, id, body);
   }
 
   @Patch('purchase-orders/:id/cancel')
-  cancelPurchaseOrder(@Req() request: RequestLike, @Param('id') id: string) {
-    return this.inventoryApiService.cancelPurchaseOrder(request.headers, id);
+  cancelPurchaseOrder(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.cancelPurchaseOrder(user, id);
   }
 
   @Patch('purchase-orders/:id/receive')
-  receivePurchaseOrder(@Req() request: RequestLike, @Param('id') id: string, @Body() body: Record<string, unknown>) {
-    return this.inventoryApiService.receivePurchaseOrder(request.headers, id, body);
+  receivePurchaseOrder(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.receivePurchaseOrder(user, id, body);
   }
 
   @Patch('purchase-orders/:id/goods-receipt/reject')
-  rejectGoodsReceipt(@Req() request: RequestLike, @Param('id') id: string, @Body() body: Record<string, unknown>) {
-    return this.inventoryApiService.quickActionGoodsReceipt(request.headers, id, body, 'reject');
+  rejectGoodsReceipt(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.quickActionGoodsReceipt(user, id, body, 'reject');
   }
 
   @Patch('purchase-orders/:id/goods-receipt/cancel')
-  cancelGoodsReceipt(@Req() request: RequestLike, @Param('id') id: string, @Body() body: Record<string, unknown>) {
-    return this.inventoryApiService.quickActionGoodsReceipt(request.headers, id, body, 'cancel');
+  cancelGoodsReceipt(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.quickActionGoodsReceipt(user, id, body, 'cancel');
   }
 
   @Get('transfers')
-  listTransfers(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
-    return this.inventoryApiService.listTransfers(request.headers, query);
+  listTransfers(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string | undefined>) {
+    return this.inventoryApiService.listTransfers(user, query);
   }
 
   @Post('transfers')
-  createTransfer(@Req() request: RequestLike, @Body() body: Record<string, unknown>) {
-    return this.inventoryApiService.createTransfer(request.headers, body);
+  createTransfer(@CurrentUser() user: AuthenticatedUser, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.createTransfer(user, body);
   }
 
   @Get('transfers/:id')
-  getTransfer(@Req() request: RequestLike, @Param('id') id: string) {
-    return this.inventoryApiService.getTransfer(request.headers, id);
+  getTransfer(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.getTransfer(user, id);
   }
 
   @Patch('transfers/:id/dispatch')
-  dispatchTransfer(@Req() request: RequestLike, @Param('id') id: string) {
-    return this.inventoryApiService.dispatchTransfer(request.headers, id);
+  dispatchTransfer(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.dispatchTransfer(user, id);
   }
 
   @Patch('transfers/:id/complete')
-  completeTransfer(@Req() request: RequestLike, @Param('id') id: string) {
-    return this.inventoryApiService.completeTransfer(request.headers, id);
+  completeTransfer(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.completeTransfer(user, id);
   }
 
   @Patch('transfers/:id/cancel')
-  cancelTransfer(@Req() request: RequestLike, @Param('id') id: string, @Body() body: Record<string, unknown>) {
-    return this.inventoryApiService.cancelTransfer(request.headers, id, body?.reason as string | undefined);
+  cancelTransfer(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.cancelTransfer(user, id, body?.reason as string | undefined);
   }
 
   @Get('sales')
-  listSales(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
-    return this.inventoryApiService.listSales(request.headers, query);
+  listSales(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string | undefined>) {
+    return this.inventoryApiService.listSales(user, query);
   }
 
   @Get('stock-movements')
-  listStockMovements(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
-    return this.inventoryApiService.listStockMovements(request.headers, query);
+  listStockMovements(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string | undefined>) {
+    return this.inventoryApiService.listStockMovements(user, query);
   }
 
   @Get('audit-logs')
-  listAuditLogs(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
-    return this.inventoryApiService.listAuditLogs(request.headers, query);
+  listAuditLogs(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string | undefined>) {
+    return this.inventoryApiService.listAuditLogs(user, query);
   }
 
   @Get('reports/ingredient-consumption')
-  ingredientConsumptionReport(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
-    return this.inventoryApiService.ingredientConsumptionReport(request.headers, query);
+  ingredientConsumptionReport(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string | undefined>) {
+    return this.inventoryApiService.ingredientConsumptionReport(user, query);
   }
 
   @Get('reports/items-sold')
-  itemsSoldReport(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
-    return this.inventoryApiService.itemsSoldReport(request.headers, query);
+  itemsSoldReport(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string | undefined>) {
+    return this.inventoryApiService.itemsSoldReport(user, query);
   }
 
   @Post('stock-movements')
-  createStockMovement(@Req() request: RequestLike, @Body() body: Record<string, unknown>) {
-    return this.inventoryApiService.createStockMovement(request.headers, body);
+  createStockMovement(@CurrentUser() user: AuthenticatedUser, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.createStockMovement(user, body);
   }
 
   @Get('bundles')
-  listBundles(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
-    return this.inventoryApiService.listBundles(request.headers, query);
+  listBundles(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string | undefined>) {
+    return this.inventoryApiService.listBundles(user, query);
   }
 
   @Post('bundles')
-  createBundle(@Req() request: RequestLike, @Body() body: Record<string, unknown>) {
-    return this.inventoryApiService.createBundle(request.headers, body);
+  createBundle(@CurrentUser() user: AuthenticatedUser, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.createBundle(user, body);
   }
 
   @Get('bundles/:id')
-  getBundle(@Req() request: RequestLike, @Param('id') id: string) {
-    return this.inventoryApiService.getBundle(request.headers, id);
+  getBundle(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.getBundle(user, id);
   }
 
   @Patch('bundles/:id')
-  updateBundle(@Req() request: RequestLike, @Param('id') id: string, @Body() body: Record<string, unknown>) {
-    return this.inventoryApiService.updateBundle(request.headers, id, body);
+  updateBundle(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.updateBundle(user, id, body);
   }
 
   @Patch('bundles/:id/approve')
-  approveBundle(@Req() request: RequestLike, @Param('id') id: string) {
-    return this.inventoryApiService.approveBundle(request.headers, id);
+  approveBundle(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.approveBundle(user, id);
   }
 
   @Patch('bundles/:id/reject')
   rejectBundle(
-    @Req() request: RequestLike,
+    @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
     @Body() body: { rejectionReason?: string; reason?: string },
   ) {
-    return this.inventoryApiService.rejectBundle(request.headers, id, body);
+    return this.inventoryApiService.rejectBundle(user, id, body);
   }
 
   @Patch('bundles/:id/activate')
-  activateBundle(@Req() request: RequestLike, @Param('id') id: string) {
-    return this.inventoryApiService.activateBundle(request.headers, id);
+  activateBundle(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.activateBundle(user, id);
   }
 
   @Patch('bundles/:id/deactivate')
-  deactivateBundle(@Req() request: RequestLike, @Param('id') id: string) {
-    return this.inventoryApiService.deactivateBundle(request.headers, id);
+  deactivateBundle(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.deactivateBundle(user, id);
   }
 
   @Patch('bundles/:id/archive')
-  archiveBundle(@Req() request: RequestLike, @Param('id') id: string) {
-    return this.inventoryApiService.archiveBundle(request.headers, id);
+  archiveBundle(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.archiveBundle(user, id);
   }
 
   @Post('bundles/:id/restore')
-  restoreBundle(@Req() request: RequestLike, @Param('id') id: string) {
-    return this.inventoryApiService.restoreBundle(request.headers, id);
+  restoreBundle(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.restoreBundle(user, id);
   }
 
   @Delete('bundles/:id')
-  deleteBundle(@Req() request: RequestLike, @Param('id') id: string) {
-    return this.inventoryApiService.deleteBundle(request.headers, id);
+  deleteBundle(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.deleteBundle(user, id);
   }
 
   @Get('adjustments')
-  listAdjustments(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
-    return this.inventoryApiService.listAdjustments(request.headers, query);
+  listAdjustments(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string | undefined>) {
+    return this.inventoryApiService.listAdjustments(user, query);
   }
 
   @Post('adjustments')
-  createAdjustment(@Req() request: RequestLike, @Body() body: Record<string, unknown>) {
-    return this.inventoryApiService.createAdjustment(request.headers, body);
+  createAdjustment(@CurrentUser() user: AuthenticatedUser, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.createAdjustment(user, body);
   }
 
   @Get('adjustments/:id')
-  getAdjustment(@Req() request: RequestLike, @Param('id') id: string) {
-    return this.inventoryApiService.getAdjustment(request.headers, id);
+  getAdjustment(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.getAdjustment(user, id);
   }
 
   @Patch('adjustments/:id/approve')
-  approveAdjustment(@Req() request: RequestLike, @Param('id') id: string) {
-    return this.inventoryApiService.approveAdjustment(request.headers, id);
+  approveAdjustment(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.approveAdjustment(user, id);
   }
 
   @Patch('adjustments/:id/reject')
   rejectAdjustment(
-    @Req() request: RequestLike,
+    @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
     @Body() body: { reason?: string },
   ) {
-    return this.inventoryApiService.rejectAdjustment(request.headers, id, body);
+    return this.inventoryApiService.rejectAdjustment(user, id, body);
   }
 
   @Get('notifications')
-  listNotifications(@Req() request: RequestLike, @Query() query: Record<string, string | undefined>) {
-    return this.inventoryApiService.listNotifications(request.headers, query);
+  listNotifications(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string | undefined>) {
+    return this.inventoryApiService.listNotifications(user, query);
   }
 
   @Get('notifications/unread-count')
-  countUnreadNotifications(@Req() request: RequestLike) {
-    return this.inventoryApiService.countUnreadNotifications(request.headers);
+  countUnreadNotifications(@CurrentUser() user: AuthenticatedUser) {
+    return this.inventoryApiService.countUnreadNotifications(user);
   }
 
   @Patch('notifications/read-all')
-  markAllNotificationsRead(@Req() request: RequestLike) {
-    return this.inventoryApiService.markAllNotificationsRead(request.headers);
+  markAllNotificationsRead(@CurrentUser() user: AuthenticatedUser) {
+    return this.inventoryApiService.markAllNotificationsRead(user);
   }
 
   @Patch('notifications/:id/read')
-  markNotificationRead(@Req() request: RequestLike, @Param('id') id: string) {
-    return this.inventoryApiService.markNotificationRead(request.headers, id);
+  markNotificationRead(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.inventoryApiService.markNotificationRead(user, id);
   }
 
   @Get('restaurant-settings')
-  listRestaurantSettings(@Req() request: RequestLike) {
-    return this.inventoryApiService.listRestaurantSettings(request.headers);
+  listRestaurantSettings(@CurrentUser() user: AuthenticatedUser) {
+    return this.inventoryApiService.listRestaurantSettings(user);
   }
 
   @Put('restaurant-settings/:key')
   upsertRestaurantSetting(
-    @Req() request: RequestLike,
+    @CurrentUser() user: AuthenticatedUser,
     @Param('key') key: string,
     @Body() body: { value?: unknown },
   ) {
-    return this.inventoryApiService.upsertRestaurantSetting(request.headers, key, body.value);
+    return this.inventoryApiService.upsertRestaurantSetting(user, key, body.value);
   }
 }
+

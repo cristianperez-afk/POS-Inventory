@@ -88,7 +88,7 @@ export function RetailOrderProvider({ children, currentUser }: { children: React
       }
 
       try {
-        const response = await fetch(`${getApiBaseUrl()}/admin/pos/orders?user_id=${currentUser.id}`);
+        const response = await fetch(`${getApiBaseUrl()}/admin/pos/orders`);
         const data = await response.json();
         if (!response.ok || !Array.isArray(data)) {
           setOrders([]);
@@ -163,7 +163,6 @@ export function RetailOrderProvider({ children, currentUser }: { children: React
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          user_id: currentUser.id,
           paymentStatus: allRefunded ? 'REFUNDED' : 'PARTIALLY_REFUNDED',
           refundReason: reason,
           restockOrderItemIds,
@@ -207,7 +206,6 @@ export function RetailOrderProvider({ children, currentUser }: { children: React
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          user_id: currentUser.id,
           paymentStatus: 'VOIDED',
           orderStatus: 'COMPLETED',
           voidReason: voidReason || 'Transaction voided',

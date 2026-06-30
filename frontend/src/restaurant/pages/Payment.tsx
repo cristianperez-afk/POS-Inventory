@@ -39,7 +39,6 @@ export function Payment({ currentUser, onNavigate, currentOrder, onLogout, store
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            user_id: currentUser.id,
             orderNumber: `REST-${orderNumber}`,
             customerName: currentOrder.customerName ?? null,
             orderType: currentOrder.orderType ?? 'DINE_IN',

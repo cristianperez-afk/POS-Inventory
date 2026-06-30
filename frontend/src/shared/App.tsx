@@ -26,7 +26,7 @@ import { Sidebar } from './components/Sidebar';
 import { OrderProvider } from './context/OrderContext';
 import { TableProvider } from './context/TableContext';
 import { StoreSettingsProvider, useStoreSettings } from './context/StoreSettingsContext';
-import { getApiBaseUrl } from '../auth/services/auth';
+import { getApiBaseUrl, getCurrentSession, logout as logoutSession } from '../auth/services/auth';
 import type { AuthenticatedUser } from '../auth/types/auth';
 import { getDefaultStoreLogo } from './utils/defaultStoreLogo';
 import { AppAlertProvider } from './components/AppAlertProvider';
@@ -91,6 +91,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<AuthenticatedUser | null>(null);
   const [currentOrder, setCurrentOrder] = useState<any>(null);
   const [storeBrand, setStoreBrand] = useState<StoreBrand>({ name: null, logo: null });
+  const [authRestoring, setAuthRestoring] = useState(true);
 
   useEffect(() => {
     if (!currentUser?.id) {
@@ -104,7 +105,7 @@ export default function App() {
     let cancelled = false;
     const loadThemePreferences = async () => {
       try {
-        const response = await fetch(`${getApiBaseUrl()}/admin/theme-preferences?user_id=${currentUser.id}`);
+        const response = await fetch(`${getApiBaseUrl()}/admin/theme-preferences`);
         if (!response.ok) throw new Error('Unable to load theme preferences.');
         const data = await response.json();
         if (cancelled) return;
@@ -128,21 +129,34 @@ export default function App() {
 
   useEffect(() => {
     const savedUser = window.sessionStorage.getItem(SESSION_USER_KEY);
-    if (!savedUser) return;
+    const restore = async () => {
+      try {
+        const user = await getCurrentSession();
+        const savedPage = window.sessionStorage.getItem(SESSION_PAGE_KEY) as Page | null;
+        setCurrentUser(user);
+        window.sessionStorage.setItem(SESSION_USER_KEY, JSON.stringify(user));
+        setCurrentPage(savedPage && savedPage !== 'login' && canAccessPage(user, savedPage) ? savedPage : getDefaultPageForUser(user));
+      } catch {
+        window.sessionStorage.removeItem(SESSION_USER_KEY);
+        window.sessionStorage.removeItem(SESSION_PAGE_KEY);
+        if (savedUser) {
+          setCurrentUser(null);
+          setCurrentPage('login');
+        }
+      } finally {
+        setAuthRestoring(false);
+      }
+    };
 
-    try {
-      const parsedUser = JSON.parse(savedUser) as AuthenticatedUser;
-      const savedPage = window.sessionStorage.getItem(SESSION_PAGE_KEY) as Page | null;
-      const defaultPage = getDefaultPageForUser(parsedUser);
-      const normalizedSavedPage = savedPage && savedPage !== 'login' ? normalizePageForUserStore(parsedUser, savedPage) : savedPage;
-      const nextPage = normalizedSavedPage && normalizedSavedPage !== 'login' && canAccessPage(parsedUser, normalizedSavedPage) ? normalizedSavedPage : defaultPage;
-      setCurrentUser(parsedUser);
-      setCurrentPage(nextPage);
-      window.sessionStorage.setItem(SESSION_PAGE_KEY, nextPage);
-    } catch {
-      window.sessionStorage.removeItem(SESSION_USER_KEY);
-      window.sessionStorage.removeItem(SESSION_PAGE_KEY);
-    }
+    void restore();
+  }, []);
+
+  useEffect(() => {
+    const handleExpired = () => {
+      handleLogout();
+    };
+    window.addEventListener('auth-session-expired', handleExpired);
+    return () => window.removeEventListener('auth-session-expired', handleExpired);
   }, []);
 
   useEffect(() => {
@@ -156,7 +170,7 @@ export default function App() {
       const shouldUseStrictDefaultLogo = currentUser.store_type === 'RESTAURANT' || currentUser.store_type === 'RETAIL_STORE';
 
       try {
-        const response = await fetch(`${getApiBaseUrl()}/admin/store-information?admin_user_id=${currentUser.id}`);
+        const response = await fetch(`${getApiBaseUrl()}/admin/store-information`);
         const data = await response.json();
 
         if (response.ok) {
@@ -215,24 +229,14 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    if (currentUser?.id) {
-      void fetch(`${getApiBaseUrl()}/admin/activity-logs`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user_id: currentUser.id,
-          module: 'Authentication',
-          action: 'User Logged Out',
-          details: 'User logged out of the POS system.',
-        }),
-      }).catch(() => undefined);
-    }
+    void logoutSession();
     window.sessionStorage.removeItem(SESSION_USER_KEY);
     window.sessionStorage.removeItem(SESSION_PAGE_KEY);
     setCurrentUser(null);
     setCurrentPage('login');
     setCurrentOrder(null);
     setStoreBrand({ name: null, logo: null });
+    setAuthRestoring(false);
   };
 
   const navigateTo = (page: Page) => {
@@ -287,6 +291,9 @@ export default function App() {
   return (
     <QueryClientProvider client={appQueryClient}>
       <div className="size-full bg-background">
+        {authRestoring ? (
+          <LoginPage onLogin={handleLogin} />
+        ) : (
         <StoreSettingsProvider currentUser={currentUser}>
           <AppAlertProvider>
             <OrderProvider currentUser={currentUser}>
@@ -432,6 +439,7 @@ export default function App() {
             </OrderProvider>
           </AppAlertProvider>
         </StoreSettingsProvider>
+        )}
       </div>
     </QueryClientProvider>
   );

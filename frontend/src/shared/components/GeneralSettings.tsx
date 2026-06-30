@@ -123,7 +123,7 @@ export function GeneralSettings({ currentUser, storeBrand, onLogout, onNavigate 
     let cancelled = false;
     const loadSettings = async () => {
       try {
-        const response = await fetch(`${getApiBaseUrl()}/admin/theme-preferences?user_id=${currentUser.id}`);
+        const response = await fetch(`${getApiBaseUrl()}/admin/theme-preferences`);
         if (!response.ok) throw new Error('Unable to load settings.');
         const data = await response.json();
         if (cancelled) return;
@@ -178,8 +178,8 @@ export function GeneralSettings({ currentUser, storeBrand, onLogout, onNavigate 
       applyUserPreferences(userPreferences);
       const endpoint = themeScope === 'store' ? 'store' : 'personal';
       const body = themeScope === 'store'
-        ? { user_id: currentUser.id, ...toRemoteThemePreferences(userPreferences) }
-        : { user_id: currentUser.id, ...toRemoteUserPreferences(userPreferences) };
+        ? toRemoteThemePreferences(userPreferences)
+        : toRemoteUserPreferences(userPreferences);
       const response = await fetch(`${getApiBaseUrl()}/admin/theme-preferences/${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -215,7 +215,7 @@ export function GeneralSettings({ currentUser, storeBrand, onLogout, onNavigate 
 
     try {
       const endpoint = themeScope === 'store' ? 'store' : 'personal';
-      const response = await fetch(`${getApiBaseUrl()}/admin/theme-preferences/${endpoint}?user_id=${currentUser.id}`, {
+      const response = await fetch(`${getApiBaseUrl()}/admin/theme-preferences/${endpoint}`, {
         method: 'DELETE',
       });
       const data = await response.json().catch(() => null);

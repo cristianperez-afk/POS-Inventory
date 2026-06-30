@@ -344,7 +344,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       if (!currentUser?.id) return;
 
       try {
-        const response = await fetch(`${getApiBaseUrl()}/admin/pos/next-order-number?user_id=${currentUser.id}`);
+        const response = await fetch(`${getApiBaseUrl()}/admin/pos/next-order-number`);
         const data = await response.json();
         const nextOrderNumber = Number(data?.order_number);
 
@@ -1058,7 +1058,6 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
     if (!currentUser?.id) return null;
 
     return completePaymentMutation.mutateAsync({
-      user_id: currentUser.id,
       orderNumber: orderDetails.orderNumber,
       customerName: orderDetails.customerName || null,
       orderType: getOrderTypeForPayload(orderDetails.items),

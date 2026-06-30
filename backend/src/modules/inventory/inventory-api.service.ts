@@ -1,10 +1,11 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
-import { hashSync } from 'bcryptjs';
 import { QueryResultRow } from 'pg';
+import { AuthenticatedUser } from '../../shared/common/types';
 import { DatabaseService } from '../../shared/database/database.service';
+import { InventoryIdentityService, type InventoryScope } from './inventory-identity.service';
 
-type HeadersLike = Record<string, string | string[] | undefined>;
+type HeadersLike = AuthenticatedUser;
 type BusinessModule = 'RETAIL' | 'RESTAURANT';
 
 // Raw item types presented through the restaurant inventory "Main > Sub" category
@@ -16,20 +17,7 @@ const NORMALIZED_CATEGORY_ITEM_TYPES = ['INGREDIENT', 'SUPPLY'];
 // identity also depends on size/condition/target customer.
 const DEDUP_BY_NAME_ITEM_TYPES = ['INGREDIENT', 'SUPPLY'];
 
-type Scope = {
-  businessId: string;
-  module: BusinessModule;
-  user: {
-    id: string;
-    name: string;
-    email: string;
-    role: string;
-    status: string;
-    businessId: string;
-    modules: string[];
-    lastLogin: string;
-  };
-};
+type Scope = InventoryScope;
 
 type Paged<T> = {
   data: T[];
@@ -51,7 +39,10 @@ type LowStockCandidate = {
 
 @Injectable()
 export class InventoryApiService {
-  constructor(private readonly databaseService: DatabaseService) {}
+  constructor(
+    private readonly databaseService: DatabaseService,
+    private readonly inventoryIdentityService: InventoryIdentityService,
+  ) {}
 
   private async ensureInventoryItemOperationalColumns() {
     await this.safeQuery(
@@ -382,6 +373,7 @@ export class InventoryApiService {
           "conversionFactor" = COALESCE($27, "conversionFactor"),
           "updatedAt" = CURRENT_TIMESTAMP
         WHERE id = $1
+          AND "businessId" = $28
         RETURNING *
       `,
       [
@@ -412,6 +404,7 @@ export class InventoryApiService {
         purchaseUnit,
         baseUnit,
         conversionFactor,
+        scope.businessId,
       ],
     );
 
@@ -534,7 +527,6 @@ export class InventoryApiService {
   async listLocations(headers: HeadersLike) {
     const scope = await this.resolveScope(headers);
     await this.ensureLocationTypeColumn();
-    const posUserId = this.headerValue(headers['x-pos-user-id']);
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
         SELECT l.*, json_build_object('items', COUNT(i.id)::int) AS "_count"
@@ -1174,7 +1166,7 @@ export class InventoryApiService {
   async listKitchenOrders(headers: HeadersLike, query: Record<string, string | undefined>) {
     await this.ensurePosKitchenEstimateColumns();
     const scope = await this.resolveScope(headers);
-    const posUserId = this.headerValue(headers['x-pos-user-id']);
+    const posUserId = String(headers.id ?? '');
     const pagination = this.parsePagination(query, 100, 300);
     const dbLimit = pagination.limit + pagination.offset;
     const rows = await this.safeQuery<Record<string, unknown>>(
@@ -1458,7 +1450,7 @@ export class InventoryApiService {
 
   async updateKitchenOrderStatus(headers: HeadersLike, id: string, body: { status?: string }) {
     const scope = await this.resolveScope(headers);
-    const posUserId = this.headerValue(headers['x-pos-user-id']);
+    const posUserId = String(headers.id ?? '');
     const nextStatus = String(body?.status ?? '').toUpperCase();
     const allowed = new Set(['PENDING', 'PREPARING', 'READY', 'SERVED', 'COMPLETED', 'CANCELLED']);
     if (!allowed.has(nextStatus)) {
@@ -4960,137 +4952,8 @@ export class InventoryApiService {
     return this.paged(rows);
   }
 
-  private async resolveScope(headers: HeadersLike): Promise<Scope> {
-    const storeType = this.headerValue(headers['x-pos-store-type']);
-    const module: BusinessModule = storeType === 'RESTAURANT' ? 'RESTAURANT' : 'RETAIL';
-    const bridgedEmail = this.headerValue(headers['x-pos-bridge-email']);
-    const fallbackEmail = module === 'RESTAURANT' ? 'admin@restaurant.com' : 'admin@retail.com';
-    const email = bridgedEmail || fallbackEmail;
-
-    const userRows = await this.safeQuery<{
-      id: string;
-      name: string;
-      email: string;
-      role: string;
-      status: string;
-      businessId: string;
-      modules: BusinessModule[];
-      lastLogin: string;
-    }>(
-      `
-        SELECT
-          u.id, u.name, u.email, u.role, u.status,
-          u."businessId" AS "businessId",
-          b.modules,
-          u."lastLogin" AS "lastLogin"
-        FROM "User" u
-        JOIN "Business" b ON b.id = u."businessId"
-        WHERE lower(u.email) = lower($1)
-          AND u.status = 'Active'
-        LIMIT 1
-      `,
-      [email],
-    );
-
-    let user = userRows[0];
-    if (!user && email !== fallbackEmail) {
-      const fallbackRows = await this.safeQuery<typeof userRows[number]>(
-        `
-          SELECT
-            u.id, u.name, u.email, u.role, u.status,
-            u."businessId" AS "businessId",
-            b.modules,
-            u."lastLogin" AS "lastLogin"
-          FROM "User" u
-          JOIN "Business" b ON b.id = u."businessId"
-          WHERE lower(u.email) = lower($1)
-            AND u.status = 'Active'
-          LIMIT 1
-        `,
-        [fallbackEmail],
-      );
-      const fallbackUser = fallbackRows[0];
-      if (fallbackUser && bridgedEmail) {
-        const bridgedName = this.headerValue(headers['x-pos-bridge-name']) || bridgedEmail.split('@')[0];
-        const bridgedRole = (this.headerValue(headers['x-pos-bridge-role']) || '').toLowerCase();
-        const inventoryRole = ['admin', 'inventory_manager', 'inventory_admin'].includes(bridgedRole)
-          ? 'Admin'
-          : 'Staff';
-        const mirroredRows = await this.safeQuery<typeof userRows[number]>(
-          `
-            WITH mirrored AS (
-              INSERT INTO "User" (
-                id, name, email, "passwordHash", role, status, "businessId", "lastLogin", "updatedAt"
-              )
-              VALUES ($1, $2, $3, $4, $5::"UserRole", 'Active', $6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-              ON CONFLICT (email) DO UPDATE SET
-                name = EXCLUDED.name,
-                role = EXCLUDED.role,
-                status = 'Active',
-                "businessId" = EXCLUDED."businessId",
-                "lastLogin" = CURRENT_TIMESTAMP,
-                "updatedAt" = CURRENT_TIMESTAMP
-              RETURNING id, name, email, role, status, "businessId", "lastLogin"
-            )
-            SELECT
-              mirrored.id, mirrored.name, mirrored.email, mirrored.role, mirrored.status,
-              mirrored."businessId" AS "businessId",
-              b.modules,
-              mirrored."lastLogin" AS "lastLogin"
-            FROM mirrored
-            JOIN "Business" b ON b.id = mirrored."businessId"
-          `,
-          [
-            randomUUID(),
-            bridgedName,
-            bridgedEmail,
-            hashSync(randomUUID(), 10),
-            inventoryRole,
-            fallbackUser.businessId,
-          ],
-        );
-        user = mirroredRows[0];
-      }
-    }
-
-    if (user) {
-      return {
-        businessId: user.businessId,
-        module,
-        user: {
-          ...user,
-          modules: user.modules ?? [module],
-        },
-      };
-    }
-
-    const businessRows = await this.safeQuery<{ id: string; modules: BusinessModule[] }>(
-      `
-        SELECT id, modules
-        FROM "Business"
-        WHERE $1::"BusinessModule" = ANY(modules)
-        ORDER BY "createdAt" ASC
-        LIMIT 1
-      `,
-      [module],
-    );
-    const business = businessRows[0];
-    if (!business) throw new NotFoundException('No inventory business exists for this POS store type.');
-
-    return {
-      businessId: business.id,
-      module,
-      user: {
-        id: 'pos-bridge',
-        name: 'POS Bridge',
-        email,
-        role: 'Admin',
-        status: 'Active',
-        businessId: business.id,
-        modules: business.modules ?? [module],
-        lastLogin: new Date().toISOString(),
-      },
-    };
+  private async resolveScope(user: HeadersLike): Promise<Scope> {
+    return this.inventoryIdentityService.resolveScope(user);
   }
 
   private async safeQuery<T extends QueryResultRow>(sql: string, params: unknown[] = []): Promise<T[]> {
