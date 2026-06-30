@@ -1,2 +1,0 @@
-ALTER TABLE "Recipe"
-ADD COLUMN "modifiers" JSONB NOT NULL DEFAULT '[]';

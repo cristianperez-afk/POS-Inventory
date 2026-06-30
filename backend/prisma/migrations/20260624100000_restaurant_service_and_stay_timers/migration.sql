@@ -1,3 +1,0 @@
-ALTER TABLE orders
-  ADD COLUMN IF NOT EXISTS service_started_at TIMESTAMP,
-  ADD COLUMN IF NOT EXISTS service_duration BIGINT;
