@@ -8,6 +8,7 @@ import { AdminStaffController } from './admin-staff.controller';
 import { AdminThemeController } from './admin-theme.controller';
 import { AdminService } from './admin.service';
 import { DiscountRepository } from './discount.repository';
+import { PosRepository } from './pos.repository';
 import { RetailAuthorizationController } from './retail-authorization.controller';
 import { StaffRepository } from './staff.repository';
 import { StoreSettingsRepository } from './store-settings.repository';
@@ -23,6 +24,6 @@ import { ThemeRepository } from './theme.repository';
     AdminThemeController,
     RetailAuthorizationController,
   ],
-  providers: [AdminService, ActivityLogRepository, StaffRepository, DiscountRepository, ThemeRepository, StoreSettingsRepository],
+  providers: [AdminService, ActivityLogRepository, StaffRepository, DiscountRepository, ThemeRepository, StoreSettingsRepository, PosRepository],
 })
 export class AdminModule {}

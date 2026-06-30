@@ -2488,7 +2488,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return 'OCCUPIED';
   }
 
-  private async ensureDiningTableSchema(client?: PoolClient) {
+  async ensureDiningTableSchema(client?: PoolClient) {
     const run = client ? this.queryWithClient.bind(this, client) : this.query.bind(this);
     await run(`
       DO $$
@@ -2521,7 +2521,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     await run(`CREATE INDEX IF NOT EXISTS "DiningTable_locationId_idx" ON "DiningTable"("locationId")`);
   }
 
-  private async getDiningScope(user: AuthenticatedUser, client?: PoolClient) {
+  async getDiningScope(user: AuthenticatedUser, client?: PoolClient) {
     const businessId = await this.resolveInventoryBusinessIdForStoreScope(user, client);
     if (!businessId) {
       throw new InternalServerErrorException('Store is not linked to a restaurant business.');
@@ -2568,112 +2568,6 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       created_at: row.createdAt,
       updated_at: row.updatedAt,
     };
-  }
-
-  async listDiningTables(userId: number) {
-    await this.ensureDiningTableSchema();
-    const user = await this.getUserStoreScope(userId);
-    const scope = await this.getDiningScope(user);
-    const rows = await this.query<any>(
-      `
-        SELECT *
-        FROM "DiningTable"
-        WHERE "businessId" = $1 AND "locationId" = $2
-        ORDER BY "tableNumber" ASC
-      `,
-      [scope.businessId, scope.locationId],
-    );
-    return rows.map((row) => this.mapDiningTable(row));
-  }
-
-  async createDiningTable(input: { userId: number; tableNumber: string; totalSeats: number; isShared: boolean }) {
-    await this.ensureDiningTableSchema();
-    const user = await this.getUserStoreScope(input.userId);
-    const scope = await this.getDiningScope(user);
-    const totalSeats = Math.max(1, Math.floor(Number(input.totalSeats) || 1));
-    const rows = await this.query<any>(
-      `
-        INSERT INTO "DiningTable" (
-          id, "tableNumber", capacity, "occupiedSeats", "isShared", status, "locationId", "businessId", "createdAt", "updatedAt"
-        )
-        VALUES ($1, $2, $3, 0, $4, 'AVAILABLE', $5, $6, NOW(), NOW())
-        RETURNING *
-      `,
-      [randomUUID(), input.tableNumber.trim(), totalSeats, input.isShared, scope.locationId, scope.businessId],
-    );
-    const table = this.mapDiningTable(rows[0]);
-    await this.recordActivity({
-      userId: user.id,
-      storeId: user.store_id,
-      userName: user.full_name,
-      userRole: user.role,
-      module: 'Restaurant Table Management',
-      action: 'Table Created',
-      details: `Created Table ${table.table_number}\nSeats: ${table.total_seats}`,
-    });
-    return table;
-  }
-
-  async updateDiningTable(input: { userId: number; tableId: string; tableNumber: string; totalSeats: number; isShared: boolean }) {
-    await this.ensureDiningTableSchema();
-    const user = await this.getUserStoreScope(input.userId);
-    const scope = await this.getDiningScope(user);
-    const totalSeats = Math.max(1, Math.floor(Number(input.totalSeats) || 1));
-    const currentRows = await this.query<any>(
-      `SELECT * FROM "DiningTable" WHERE id = $1 AND "businessId" = $2 AND "locationId" = $3 LIMIT 1`,
-      [input.tableId, scope.businessId, scope.locationId],
-    );
-    if (!currentRows[0]) throw new NotFoundException('Table not found.');
-
-    const occupiedSeats = Math.min(Number(currentRows[0].occupiedSeats ?? 0), totalSeats);
-    const status = this.tableStatus(input.isShared, totalSeats, occupiedSeats);
-    const rows = await this.query<any>(
-      `
-        UPDATE "DiningTable"
-        SET "tableNumber" = $1, capacity = $2, "occupiedSeats" = $3, "isShared" = $4, status = $5::"DiningTableStatus", "updatedAt" = NOW()
-        WHERE id = $6 AND "businessId" = $7 AND "locationId" = $8
-        RETURNING *
-      `,
-      [input.tableNumber.trim(), totalSeats, occupiedSeats, input.isShared, status, input.tableId, scope.businessId, scope.locationId],
-    );
-    const table = this.mapDiningTable(rows[0]);
-    await this.recordActivity({
-      userId: user.id,
-      storeId: user.store_id,
-      userName: user.full_name,
-      userRole: user.role,
-      module: 'Restaurant Table Management',
-      action: 'Table Settings Updated',
-      details: `Updated Table ${table.table_number}\nSeats: ${table.total_seats}`,
-    });
-    return table;
-  }
-
-  async deleteDiningTable(input: { userId: number; tableId: string }) {
-    await this.ensureDiningTableSchema();
-    const user = await this.getUserStoreScope(input.userId);
-    const scope = await this.getDiningScope(user);
-    return this.withTransaction(async (client) => {
-      const tableRows = await this.queryWithClient<any>(
-        client,
-        `SELECT id FROM "DiningTable" WHERE id = $1 AND "businessId" = $2 AND "locationId" = $3 LIMIT 1`,
-        [input.tableId, scope.businessId, scope.locationId],
-      );
-      if (!tableRows[0]) throw new NotFoundException('Table not found.');
-
-      await this.queryWithClient(client, `UPDATE "KitchenOrder" SET "tableId" = NULL WHERE "tableId" = $1`, [input.tableId]);
-      await this.queryWithClient(client, `DELETE FROM "DiningTable" WHERE id = $1`, [input.tableId]);
-      await this.recordActivity({
-        userId: user.id,
-        storeId: user.store_id,
-        userName: user.full_name,
-        userRole: user.role,
-        module: 'Restaurant Table Management',
-        action: 'Table Deleted',
-        details: `Deleted table\nTable ID: ${input.tableId}`,
-      });
-      return { ok: true };
-    });
   }
 
   async setDiningTableOccupancy(input: { userId: number; tableId: string; occupiedSeats: number }) {
@@ -3124,34 +3018,6 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     } catch (error) {
       this.handleDatabaseWriteError(error, 'Unable to save order.');
     }
-  }
-
-  async getNextPosOrderNumber(userId: number) {
-    const user = await this.getUserStoreScope(userId);
-
-    if (!user.store_id || !user.store_type) {
-      throw new InternalServerErrorException('User account is not linked to a store.');
-    }
-
-    const rows = await this.query<{ next_order_number: string | number }>(
-      `
-        SELECT COALESCE(MAX(order_number), 100000) + 1 AS next_order_number
-        FROM (
-          SELECT NULLIF(regexp_replace(order_number, '\\D', '', 'g'), '')::BIGINT AS order_number
-          FROM orders
-          WHERE store_id = $1
-
-          UNION ALL
-
-          SELECT NULLIF(regexp_replace("transactionNumber", '\\D', '', 'g'), '')::BIGINT AS order_number
-          FROM "Sale"
-          WHERE "transactionNumber" LIKE 'POS-%'
-        ) used_numbers
-      `,
-      [user.store_id],
-    );
-
-    return { order_number: String(rows[0]?.next_order_number ?? 100001).padStart(6, '0') };
   }
 
   async updatePosOrder(input: any) {

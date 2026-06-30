@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { ActivityLogRepository } from '../../../shared/activity-log.repository';
 import { DatabaseService } from '../../../shared/database/database.service';
 import { DiscountRepository } from './discount.repository';
+import { PosRepository } from './pos.repository';
 import { StaffRepository } from './staff.repository';
 import { StoreSettingsRepository } from './store-settings.repository';
 import { ThemeRepository } from './theme.repository';
@@ -18,6 +19,7 @@ export class AdminService {
     private readonly discountRepository: DiscountRepository,
     private readonly themeRepository: ThemeRepository,
     private readonly storeSettingsRepository: StoreSettingsRepository,
+    private readonly posRepository: PosRepository,
   ) {}
 
   listStaff(adminUserId: number) {
@@ -198,7 +200,7 @@ export class AdminService {
   }
 
   getNextPosOrderNumber(userId: number) {
-    return this.databaseService.getNextPosOrderNumber(userId);
+    return this.posRepository.getNextPosOrderNumber(userId);
   }
 
   listPosOrders(userId: number) {
@@ -206,19 +208,19 @@ export class AdminService {
   }
 
   listDiningTables(userId: number) {
-    return this.databaseService.listDiningTables(userId);
+    return this.posRepository.listDiningTables(userId);
   }
 
   createDiningTable(input: { userId: number; tableNumber: string; totalSeats: number; isShared: boolean }) {
-    return this.databaseService.createDiningTable(input);
+    return this.posRepository.createDiningTable(input);
   }
 
   updateDiningTable(input: { userId: number; tableId: string; tableNumber: string; totalSeats: number; isShared: boolean }) {
-    return this.databaseService.updateDiningTable(input);
+    return this.posRepository.updateDiningTable(input);
   }
 
   deleteDiningTable(input: { userId: number; tableId: string }) {
-    return this.databaseService.deleteDiningTable(input);
+    return this.posRepository.deleteDiningTable(input);
   }
 
   setDiningTableOccupancy(input: { userId: number; tableId: string; occupiedSeats: number }) {
