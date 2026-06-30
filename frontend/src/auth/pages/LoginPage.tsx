@@ -26,6 +26,7 @@ const DEMO_ACCOUNT_GROUPS = [
       { role: 'Inventory Manager', email: 'inventoryadmin@example.com', pwd: 'password123', color: '#1d4ed8' },
       { role: 'POS Staff', email: 'resstaff@pos.com', pwd: 'resstaffpos123', color: '#0f766e' },
       { role: 'Inventory Staff', email: 'resstaff@inventory.com', pwd: 'resstaffinventory123', color: '#2563eb' },
+      { role: 'Kitchen Account', email: 'kitchen@restaurant.com', pwd: 'kitchen123', color: '#b45309' },
     ],
   },
   {

@@ -1,9 +1,37 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, Req } from '@nestjs/common';
+import { Body, CanActivate, Controller, Delete, ExecutionContext, ForbiddenException, Get, Injectable, Param, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { InventoryApiService } from './inventory-api.service';
 
 type RequestLike = {
   headers: Record<string, string | string[] | undefined>;
+  method?: string;
+  path?: string;
+  originalUrl?: string;
 };
+
+@Injectable()
+export class KitchenApiAccessGuard implements CanActivate {
+  canActivate(context: ExecutionContext): boolean {
+    const request = context.switchToHttp().getRequest<RequestLike>();
+    const role = this.headerValue(request.headers['x-pos-bridge-role']).replace(/\s+/g, '').toLowerCase();
+    if (role !== 'kitchen' && role !== 'kitchenstaff') return true;
+
+    const method = String(request.method ?? 'GET').toUpperCase();
+    const path = String(request.path ?? request.originalUrl ?? '').split('?')[0];
+    const allowed =
+      (method === 'GET' && (path === '/api/auth/me' || path === '/api/recipes' || path === '/api/kitchen-orders')) ||
+      (method === 'POST' && path === '/api/auth/logout') ||
+      (method === 'PATCH' && /^\/api\/kitchen-orders\/[^/]+\/status$/.test(path));
+
+    if (!allowed) {
+      throw new ForbiddenException('Kitchen accounts can only access Kitchen Orders, view Recipe/BOM, and update preparation status.');
+    }
+    return true;
+  }
+
+  private headerValue(value: string | string[] | undefined) {
+    return Array.isArray(value) ? value[0] ?? '' : value ?? '';
+  }
+}
 
 // Captured once when this module is loaded, so /api reveals when the running
 // process last (re)started — the quickest way to confirm a deploy/restart took
@@ -11,6 +39,7 @@ type RequestLike = {
 const SERVER_STARTED_AT = new Date().toISOString();
 
 @Controller('api')
+@UseGuards(KitchenApiAccessGuard)
 export class InventoryApiController {
   constructor(private readonly inventoryApiService: InventoryApiService) {}
 

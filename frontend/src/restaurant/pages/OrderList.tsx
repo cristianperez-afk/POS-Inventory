@@ -80,7 +80,9 @@ function formatElapsed(start?: string, end?: string, duration?: number, now = Da
 }
 
 function preparationEnd(order: Order) {
-  return order.servedAt;
+  if (order.servedAt) return order.servedAt;
+  if (!isFinalServedOrder(order)) return undefined;
+  return order.runningTimeEnd ?? order.completedAt ?? order.tableEndedAt ?? order.paymentAt;
 }
 
 function isFinalServedOrder(order: Order) {

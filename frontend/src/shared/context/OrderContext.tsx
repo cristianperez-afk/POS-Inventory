@@ -159,11 +159,11 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
     const timer = window.setInterval(() => {
       setOrders(prev => prev.map((order) => {
         const prepStartedAt = order.orderedAt ? parseDatabaseTimestamp(order.orderedAt) : null;
-        const prepEndedAt = order.servedAt ? parseDatabaseTimestamp(order.servedAt) : null;
+        const prepEndedAt = getServiceEndTimestamp(order);
         const tableStartedAt = order.type === 'Dine-In' || order.type === 'Mixed'
           ? order.tableStartedAt || order.orderedAt ? parseDatabaseTimestamp(order.tableStartedAt ?? order.orderedAt!) : null
           : null;
-        const tableEndedAt = order.tableEndedAt ? parseDatabaseTimestamp(order.tableEndedAt) : null;
+        const tableEndedAt = getStayEndTimestamp(order);
         const now = new Date();
 
         return {
@@ -464,6 +464,26 @@ function calculateElapsedSeconds(start?: string, end?: string) {
   return Math.max(0, Math.floor((endMs - startMs) / 1000));
 }
 
+function firstValidTimestamp(...values: Array<string | undefined | null>) {
+  for (const value of values) {
+    if (!value) continue;
+    const timestamp = parseDatabaseTimestamp(value);
+    if (Number.isFinite(timestamp.getTime())) return timestamp;
+  }
+  return null;
+}
+
+function getServiceEndTimestamp(order: Pick<Order, 'servedAt' | 'runningTimeEnd' | 'completedAt' | 'tableEndedAt' | 'paymentAt' | 'orderStatus'>) {
+  if (order.servedAt) return firstValidTimestamp(order.servedAt);
+  if (order.orderStatus !== 'Served' && order.orderStatus !== 'Completed') return null;
+  return firstValidTimestamp(order.runningTimeEnd, order.completedAt, order.tableEndedAt, order.paymentAt);
+}
+
+function getStayEndTimestamp(order: Pick<Order, 'type' | 'tableEndedAt' | 'runningTimeEnd' | 'completedAt' | 'paymentAt'>) {
+  if (order.type !== 'Dine-In' && order.type !== 'Mixed') return null;
+  return firstValidTimestamp(order.tableEndedAt, order.runningTimeEnd, order.completedAt, order.paymentAt);
+}
+
 function mapDatabaseRestaurantOrder(row: any): Order {
   const valueOf = (...keys: string[]) => {
     for (const key of keys) {
@@ -522,6 +542,21 @@ function mapDatabaseRestaurantOrder(row: any): Order {
     row.order_type === 'DINE_IN' ? 'Dine-In' :
     row.order_type === 'MIXED' ? 'Mixed' :
     'Takeout';
+  const serviceEnd = firstValidTimestamp(
+    normalizedTimestamp(servedAtValue),
+    orderStatus === 'Served' || orderStatus === 'Completed' ? normalizedTimestamp(valueOf('running_time_end', 'runningTimeEnd')) : undefined,
+    orderStatus === 'Completed' ? normalizedTimestamp(completedAtValue) : undefined,
+    orderStatus === 'Completed' ? normalizedTimestamp(tableEndedAtValue) : undefined,
+    orderStatus === 'Completed' ? normalizedTimestamp(valueOf('payment_at', 'paymentAt')) : undefined,
+  );
+  const stayEnd = type === 'Dine-In' || type === 'Mixed'
+    ? firstValidTimestamp(
+      normalizedTimestamp(tableEndedAtValue),
+      normalizedTimestamp(valueOf('running_time_end', 'runningTimeEnd')),
+      orderStatus === 'Completed' ? normalizedTimestamp(completedAtValue) : undefined,
+      normalizedTimestamp(valueOf('payment_at', 'paymentAt')),
+    )
+    : null;
 
   return {
     id: String(row.id).padStart(6, '0'),
@@ -557,8 +592,8 @@ function mapDatabaseRestaurantOrder(row: any): Order {
     runningDuration: valueOf('running_duration', 'runningDuration') !== undefined ? Number(valueOf('running_duration', 'runningDuration')) : undefined,
     isRunning: Boolean(valueOf('is_running', 'isRunning')),
     // Kept for older consumers; never fall back to created_at for elapsed timers.
-    runningTimeMinutes: minutesBetween(orderedAt, servedAtValue ? parseDatabaseTimestamp(servedAtValue) : null),
-    customerStayMinutes: tableStartedAt && (type === 'Dine-In' || type === 'Mixed') ? minutesBetween(tableStartedAt, tableEndedAt ?? completedAt) : undefined,
+    runningTimeMinutes: minutesBetween(orderedAt, serviceEnd),
+    customerStayMinutes: tableStartedAt && (type === 'Dine-In' || type === 'Mixed') ? minutesBetween(tableStartedAt, stayEnd ?? tableEndedAt ?? completedAt) : undefined,
     estimatedPrepMinutes,
     estimatedReadyAt: computedEstimatedReadyAt,
     items: items.map((item: any) => ({

@@ -379,6 +379,7 @@ function SettingsContent({
   userPreferences: UserPreferenceValues;
 }) {
   const isSuperadmin = currentUser?.role === 'SUPERADMIN';
+  const isKitchenAccount = currentUser?.role === 'KITCHEN' || currentUser?.staff_type === 'KITCHEN_STAFF';
 
   return (
     <>
@@ -387,15 +388,15 @@ function SettingsContent({
           <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
             <div>
               <h1 className="text-primary mb-2">Settings</h1>
-              <p className="text-muted-foreground">Account details, preferences, and theme.</p>
+              <p className="text-muted-foreground">{isKitchenAccount ? 'Account details for this session.' : 'Account details, preferences, and theme.'}</p>
             </div>
-            <button onClick={saveSettings} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-primary px-6 py-3 text-primary-foreground hover:bg-primary/90 disabled:opacity-60">
+            {!isKitchenAccount && <button onClick={saveSettings} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-primary px-6 py-3 text-primary-foreground hover:bg-primary/90 disabled:opacity-60">
               <Save className="h-5 w-5" />
               {saving ? 'Saving...' : 'Save Settings'}
-            </button>
+            </button>}
           </div>
 
-          {hasUnsavedChanges && !pendingAction && (
+          {!isKitchenAccount && hasUnsavedChanges && !pendingAction && (
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
               <span className="font-medium">You have unsaved changes.</span>
               <div className="flex gap-2">
@@ -412,7 +413,7 @@ function SettingsContent({
           {message && <div className="mb-4 rounded-lg border border-border bg-card p-4 text-sm">{message}</div>}
 
           <div className="flex flex-col gap-6">
-            <section className="rounded-lg border border-border bg-card p-6 shadow-sm">
+            {!isKitchenAccount && <section className="rounded-lg border border-border bg-card p-6 shadow-sm">
               <div className="mb-5 flex items-center gap-3">
                 <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
                   <User className="h-5 w-5" />
@@ -433,9 +434,9 @@ function SettingsContent({
                   <input value={currentUser?.role ?? ''} readOnly className="w-full max-w-sm rounded-lg border border-border bg-muted px-4 py-2 text-sm text-muted-foreground" />
                 </SettingRow>
               </div>
-            </section>
+            </section>}
 
-            <section className="rounded-lg border border-border bg-card p-6 shadow-sm">
+            {!isKitchenAccount && <section className="rounded-lg border border-border bg-card p-6 shadow-sm">
               <div className="mb-5 flex items-center gap-3">
                 <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
                   <Bell className="h-5 w-5" />
@@ -473,7 +474,7 @@ function SettingsContent({
                   </SettingRow>
                 )}
               </div>
-            </section>
+            </section>}
 
             <section className="rounded-lg border border-border bg-card p-6 shadow-sm">
               <div className="mb-5 flex items-center gap-3">

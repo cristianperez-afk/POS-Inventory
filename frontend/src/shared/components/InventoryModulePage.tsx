@@ -48,7 +48,7 @@ type InventoryUser = {
   id: string;
   name: string;
   email: string;
-  role: 'Admin' | 'Staff';
+  role: 'Admin' | 'Staff' | 'KitchenStaff';
   status: string;
   businessId: string;
   modules: string[];
@@ -156,7 +156,9 @@ function toInventoryUser(user: AuthenticatedUser | null): InventoryUser | null {
     id: String(user.id),
     name: user.full_name,
     email: user.email,
-    role: user.role === 'ADMIN' || user.role === 'INVENTORY_MANAGER' || user.role === 'INVENTORY_ADMIN' ? 'Admin' : 'Staff',
+    role: user.role === 'KITCHEN' || user.staff_type === 'KITCHEN_STAFF'
+      ? 'KitchenStaff'
+      : user.role === 'ADMIN' || user.role === 'INVENTORY_MANAGER' || user.role === 'INVENTORY_ADMIN' ? 'Admin' : 'Staff',
     status: 'Active',
     businessId: String(user.store_id ?? user.id),
     modules: user.store_type === 'RESTAURANT' ? ['RESTAURANT'] : ['RETAIL'],

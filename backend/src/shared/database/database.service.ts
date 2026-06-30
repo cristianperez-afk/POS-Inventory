@@ -66,8 +66,8 @@ type StoreInformation = {
   updated_at: Date | string | null;
 };
 
-type StaffType = 'POS_STAFF' | 'INVENTORY_STAFF';
-type StaffRole = 'STAFF' | 'POS_MANAGER' | 'INVENTORY_MANAGER';
+type StaffType = 'POS_STAFF' | 'INVENTORY_STAFF' | 'KITCHEN_STAFF';
+type StaffRole = 'STAFF' | 'POS_MANAGER' | 'INVENTORY_MANAGER' | 'KITCHEN';
 type ActivityModule = 'Authentication' | 'Staff Accounts' | 'Transactions' | 'Payments' | 'Void & Refund' | 'Restaurant Table Management' | 'Store Settings';
 
 type ActivityLogInput = {
@@ -110,9 +110,9 @@ const DEFAULT_THEME_PREFERENCES: ThemePreferences = {
 
 const LEGACY_STORE_ADMIN_ROLES = ['ADMIN'] as const;
 const STORE_MANAGER_ROLES = ['POS_MANAGER', 'INVENTORY_MANAGER'] as const;
-const STORE_STAFF_ROLES = ['STAFF'] as const;
+const STORE_STAFF_ROLES = ['STAFF', 'KITCHEN'] as const;
 const STORE_USER_ROLES = [...STORE_STAFF_ROLES, ...STORE_MANAGER_ROLES] as const;
-const STORE_USER_ROLES_WITH_LEGACY_SQL = "'STAFF', 'POS_MANAGER', 'INVENTORY_MANAGER', 'POS_ADMIN', 'INVENTORY_ADMIN'";
+const STORE_USER_ROLES_WITH_LEGACY_SQL = "'STAFF', 'KITCHEN', 'POS_MANAGER', 'INVENTORY_MANAGER', 'POS_ADMIN', 'INVENTORY_ADMIN'";
 const STORE_ADMIN_ROLES_WITH_LEGACY_SQL = "'POS_MANAGER', 'INVENTORY_MANAGER', 'ADMIN'";
 
 types.setTypeParser(1114, (value: string) => value);
@@ -257,8 +257,13 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return role === 'INVENTORY_MANAGER' || role === 'INVENTORY_ADMIN' || role === 'ADMIN';
   }
 
+  private isKitchenRole(role: unknown) {
+    return role === 'KITCHEN';
+  }
+
   async getLoginUserByEmail(email: string): Promise<AuthenticatedUser & { password_hash: string; void_pin?: string | null } | null> {
     await this.ensureVoidPinHashColumn();
+    await this.ensureKitchenRoleConstraints();
     const schema = await this.getSchemaColumns();
     const userColumns = this.resolveUserColumns(schema.users);
     const storeColumns = this.resolveStoreColumns(schema.stores);
@@ -632,6 +637,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
 
     await this.ensureVoidPinHashColumn();
+    await this.ensureKitchenRoleConstraints();
     const schema = await this.getSchemaColumns();
     const userColumns = this.resolveUserColumns(schema.users);
     const storeColumns = this.resolveStoreColumns(schema.stores);
@@ -2845,6 +2851,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     if (!user.store_id || !user.store_type) {
       throw new InternalServerErrorException('User account is not linked to a store.');
     }
+    if (this.isKitchenRole(user.role)) {
+      throw new ForbiddenException('Kitchen accounts cannot access the POS product catalog.');
+    }
 
     if (user.store_type === 'RESTAURANT') {
       await this.syncRestaurantRecipesIntoPosCatalog(user);
@@ -3730,8 +3739,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     if (!user.store_id || !user.store_type) {
       throw new InternalServerErrorException('User account is not linked to a store.');
     }
-    if (this.isInventoryManagerRole(user.role)) {
-      throw new ForbiddenException('Inventory Manager accounts can only view inventory workflows. Payment processing is restricted to POS Manager or POS Staff accounts.');
+    if (this.isInventoryManagerRole(user.role) || this.isKitchenRole(user.role)) {
+      throw new ForbiddenException('This account cannot create POS orders or process payments.');
     }
 
     try {
@@ -3923,6 +3932,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     if (!user.store_id || !user.store_type) {
       throw new InternalServerErrorException('User account is not linked to a store.');
     }
+    if (this.isKitchenRole(user.role)) {
+      throw new ForbiddenException('Kitchen accounts cannot create POS orders.');
+    }
 
     const rows = await this.query<{ next_order_number: string | number }>(
       `
@@ -3960,6 +3972,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       input.paymentStatus === 'PAID' ||
       input.paymentStatus === 'VOIDED' ||
       input.paymentStatus === 'REFUNDED';
+    if (this.isKitchenRole(user.role)) {
+      throw new ForbiddenException('Kitchen accounts cannot edit orders, process payments, void, or refund.');
+    }
     if (this.isInventoryManagerRole(user.role) && isRestrictedTransactionUpdate) {
       throw new ForbiddenException('Inventory Manager accounts can only view inventory workflows. Payment, refund, and void processing is restricted to POS Manager or POS Staff accounts.');
     }
@@ -4297,6 +4312,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     if (!user.store_id || !user.store_type) {
       throw new InternalServerErrorException('User account is not linked to a store.');
+    }
+    if (this.isKitchenRole(user.role)) {
+      throw new ForbiddenException('Kitchen accounts can only view orders through the Kitchen Orders module.');
     }
 
     await this.reconcileRestaurantRunningTimers(user);
@@ -6958,7 +6976,56 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   private staffTypeForRole(role: StaffRole, staffType: StaffType): StaffType {
     if (role === 'POS_MANAGER') return 'POS_STAFF';
     if (role === 'INVENTORY_MANAGER') return 'INVENTORY_STAFF';
+    if (role === 'KITCHEN') return 'KITCHEN_STAFF';
     return staffType;
+  }
+
+  private async ensureKitchenRoleConstraints() {
+    const schema = await this.getSchemaColumns();
+    const userColumns = this.resolveUserColumns(schema.users);
+    if (!userColumns.roleColumn) return;
+
+    await this.query(`
+      DO $$
+      DECLARE
+        role_constraint_name text;
+        staff_type_constraint_name text;
+      BEGIN
+        SELECT con.conname
+          INTO role_constraint_name
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        WHERE rel.relname = 'users'
+          AND con.contype = 'c'
+          AND pg_get_constraintdef(con.oid) ILIKE '%role%'
+        LIMIT 1;
+
+        IF role_constraint_name IS NOT NULL THEN
+          EXECUTE format('ALTER TABLE users DROP CONSTRAINT %I', role_constraint_name);
+        END IF;
+
+        ALTER TABLE users
+          ADD CONSTRAINT users_role_check
+          CHECK (role IN ('SUPERADMIN', 'ADMIN', 'STAFF', 'KITCHEN', 'POS_MANAGER', 'INVENTORY_MANAGER', 'POS_ADMIN', 'INVENTORY_ADMIN'));
+
+        SELECT con.conname
+          INTO staff_type_constraint_name
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        WHERE rel.relname = 'users'
+          AND con.contype = 'c'
+          AND pg_get_constraintdef(con.oid) ILIKE '%staff_type%'
+        LIMIT 1;
+
+        IF staff_type_constraint_name IS NOT NULL THEN
+          EXECUTE format('ALTER TABLE users DROP CONSTRAINT %I', staff_type_constraint_name);
+        END IF;
+
+        ALTER TABLE users
+          ADD CONSTRAINT users_staff_type_check
+          CHECK (staff_type IS NULL OR staff_type IN ('POS_STAFF', 'INVENTORY_STAFF', 'KITCHEN_STAFF'));
+      END $$;
+    `);
   }
 
   private resolveStoreColumns(columns: Set<string>) {

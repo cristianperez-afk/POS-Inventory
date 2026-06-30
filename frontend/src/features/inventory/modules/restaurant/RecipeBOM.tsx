@@ -497,7 +497,7 @@ const calculateRecipeGrossMarginPercent = (recipe: Recipe) => {
 export function RecipeBOM() {
   const { currentUser } = useSession();
   const normalizedRole = String(currentUser?.role ?? "").replace(/\s+/g, "").toLowerCase();
-  const canManageRecipes = normalizedRole === "admin" || normalizedRole === "kitchenstaff";
+  const canManageRecipes = normalizedRole === "admin";
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [activeFilter, setActiveFilter] = useState<"all" | "active">("all");
@@ -555,7 +555,7 @@ export function RecipeBOM() {
     unitCost: "",
   });
 
-  const { data: inventoryItems = [], isLoading: inventoryItemsLoading } = useRestaurantInventoryQuery<InventoryItem[]>();
+  const { data: inventoryItems = [], isLoading: inventoryItemsLoading } = useRestaurantInventoryQuery<InventoryItem[]>(undefined, { enabled: canManageRecipes });
 
   // Only show products that are actually in stock and not expired.
   const availableInventoryItems = inventoryItems.filter(item => item.stock > 0 && !isExpiredInventoryItem(item));

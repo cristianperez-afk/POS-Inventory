@@ -750,8 +750,8 @@ export class InventoryApiService {
 
   private assertCanManageRecipes(scope: Scope) {
     const role = String(scope.user.role ?? '').replace(/\s+/g, '').toLowerCase();
-    if (role !== 'admin' && role !== 'kitchenstaff') {
-      throw new ForbiddenException('Only Admin or Kitchen Staff users can manage recipes and modifier limits.');
+    if (role !== 'admin') {
+      throw new ForbiddenException('Only Admin users can manage recipes and modifier limits.');
     }
   }
 
@@ -1362,6 +1362,7 @@ export class InventoryApiService {
                 CASE
                   WHEN payment_status IN ('VOIDED', 'VOID', 'REFUNDED') OR order_status = 'CANCELLED' THEN 'CANCELLED'
                   WHEN order_status = 'SERVED' THEN 'SERVED'
+                  WHEN order_status = 'COMPLETED' AND served_at IS NOT NULL THEN 'SERVED'
                   ELSE order_status
                 END AS status,
                 ordered_at AS "orderedAt",
@@ -1433,7 +1434,12 @@ export class InventoryApiService {
         : [];
 
     const activeKitchenStatuses = new Set(['PENDING', 'PREPARING', 'READY']);
-    const combined = (scope.module === 'RESTAURANT' ? posRows : rows).sort((a, b) => {
+    const kitchenVisibleStatuses = new Set(['PENDING', 'PREPARING', 'READY', 'SERVED']);
+    const rawCombined = scope.module === 'RESTAURANT' ? posRows : rows;
+    const visibleRows = this.isKitchenScope(scope)
+      ? rawCombined.filter((order) => kitchenVisibleStatuses.has(String(order.status ?? '').toUpperCase()))
+      : rawCombined;
+    const combined = visibleRows.sort((a, b) => {
       const aStatus = String(a.status ?? '').toUpperCase();
       const bStatus = String(b.status ?? '').toUpperCase();
       const aActive = activeKitchenStatuses.has(aStatus);
@@ -1463,6 +1469,9 @@ export class InventoryApiService {
     const allowed = new Set(['PENDING', 'PREPARING', 'READY', 'SERVED', 'COMPLETED', 'CANCELLED']);
     if (!allowed.has(nextStatus)) {
       throw new BadRequestException('Status must be Pending, Preparing, Ready, Served, Completed, or Cancelled.');
+    }
+    if (this.isKitchenScope(scope) && !['PENDING', 'PREPARING', 'READY', 'SERVED'].includes(nextStatus)) {
+      throw new ForbiddenException('Kitchen accounts can only update preparation status.');
     }
 
     if (id.startsWith('pos-order-')) {
@@ -1652,6 +1661,7 @@ export class InventoryApiService {
         status: nextStatus.toLowerCase(),
         summary: `POS order status set to ${nextStatus}`,
       });
+      await this.recordKitchenActivity(posUserId, rows[0]?.orderNumber, nextStatus);
       return { ...rows[0], id };
     }
 
@@ -1688,6 +1698,7 @@ export class InventoryApiService {
       entityName: String((rows[0] as Record<string, unknown>).recipeName ?? '') || undefined,
       status: kitchenStatus.toLowerCase(),
     });
+    await this.recordKitchenActivity(scope.user.id, id, nextStatus);
     return rows[0];
   }
 
@@ -4915,6 +4926,29 @@ export class InventoryApiService {
     }
   }
 
+  private isKitchenScope(scope: Scope) {
+    const role = String(scope.user.role ?? '').replace(/\s+/g, '').toLowerCase();
+    return role === 'kitchen' || role === 'kitchenstaff';
+  }
+
+  private async recordKitchenActivity(userId: unknown, orderNumber: unknown, status: string) {
+    const numericUserId = Number(userId);
+    if (!Number.isFinite(numericUserId) || numericUserId <= 0) return;
+
+    const action =
+      status === 'PREPARING' ? 'Started Preparing Order' :
+      status === 'READY' ? 'Marked Order Ready' :
+      status === 'SERVED' ? 'Marked Order Served' :
+      'Updated Preparation Status';
+
+    await this.databaseService.recordActivityForUser(
+      numericUserId,
+      'Kitchen Orders',
+      action,
+      `Order #${String(orderNumber ?? '').trim() || 'Unknown'} status updated to ${status}.`,
+    );
+  }
+
   async listAuditLogs(headers: HeadersLike, query: Record<string, string | undefined>) {
     await this.ensureAuditLogTable();
     const scope = await this.resolveScope(headers);
@@ -5013,9 +5047,11 @@ export class InventoryApiService {
       if (fallbackUser && bridgedEmail) {
         const bridgedName = this.headerValue(headers['x-pos-bridge-name']) || bridgedEmail.split('@')[0];
         const bridgedRole = (this.headerValue(headers['x-pos-bridge-role']) || '').toLowerCase();
-        const inventoryRole = ['admin', 'inventory_manager', 'inventory_admin'].includes(bridgedRole)
-          ? 'Admin'
-          : 'Staff';
+        const inventoryRole = bridgedRole === 'kitchenstaff' || bridgedRole === 'kitchen'
+          ? 'KitchenStaff'
+          : ['admin', 'inventory_manager', 'inventory_admin'].includes(bridgedRole)
+            ? 'Admin'
+            : 'Staff';
         const mirroredRows = await this.safeQuery<typeof userRows[number]>(
           `
             WITH mirrored AS (

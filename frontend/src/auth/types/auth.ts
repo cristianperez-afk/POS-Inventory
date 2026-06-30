@@ -2,11 +2,12 @@ export type UserRole =
   | 'SUPERADMIN'
   | 'ADMIN'
   | 'STAFF'
+  | 'KITCHEN'
   | 'POS_MANAGER'
   | 'INVENTORY_MANAGER'
   | 'POS_ADMIN'
   | 'INVENTORY_ADMIN';
-export type StaffType = 'POS_STAFF' | 'INVENTORY_STAFF' | null;
+export type StaffType = 'POS_STAFF' | 'INVENTORY_STAFF' | 'KITCHEN_STAFF' | null;
 export type StoreType = 'RESTAURANT' | 'RETAIL_STORE' | string | null;
 
 export interface AuthenticatedUser {

@@ -3,8 +3,8 @@ import { Type } from 'class-transformer';
 import { IsArray, IsBoolean, IsEmail, IsIn, IsNumber, IsObject, IsOptional, IsString, MinLength } from 'class-validator';
 import { AdminService } from './admin.service';
 
-const STAFF_TYPES = ['POS_STAFF', 'INVENTORY_STAFF'] as const;
-const STAFF_ROLES = ['STAFF', 'POS_MANAGER', 'INVENTORY_MANAGER'] as const;
+const STAFF_TYPES = ['POS_STAFF', 'INVENTORY_STAFF', 'KITCHEN_STAFF'] as const;
+const STAFF_ROLES = ['STAFF', 'POS_MANAGER', 'INVENTORY_MANAGER', 'KITCHEN'] as const;
 type StaffType = (typeof STAFF_TYPES)[number];
 type StaffRole = (typeof STAFF_ROLES)[number];
 
