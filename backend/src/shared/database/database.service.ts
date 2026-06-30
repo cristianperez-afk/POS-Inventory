@@ -8,7 +8,6 @@ import {
   OnModuleDestroy,
   OnModuleInit,
   ServiceUnavailableException,
-  UnauthorizedException,
 } from '@nestjs/common';
 import { Pool, PoolClient, QueryResultRow, types } from 'pg';
 import * as bcrypt from 'bcryptjs';
@@ -48,25 +47,6 @@ type SchemaColumns = {
   stores: Set<string>;
 };
 
-type StoreInformation = {
-  id: number;
-  store_id: number;
-  business_name: string;
-  business_description: string | null;
-  address: string | null;
-  contact_number: string | null;
-  email: string | null;
-  logo: string | null;
-  receipt_thank_you_message: string | null;
-  receipt_footer_message: string | null;
-  operating_hours: string | null;
-  currency: string | null;
-  theme_color: string | null;
-  tax_rate: string | number | null;
-  service_charge_rate: string | number | null;
-  updated_at: Date | string | null;
-};
-
 type StaffType = 'POS_STAFF' | 'INVENTORY_STAFF';
 type StaffRole = 'STAFF' | 'POS_MANAGER' | 'INVENTORY_MANAGER';
 type ActivityModule = 'Authentication' | 'Staff Accounts' | 'Transactions' | 'Payments' | 'Void & Refund' | 'Restaurant Table Management' | 'Store Settings';
@@ -79,34 +59,6 @@ type ActivityLogInput = {
   module: ActivityModule | string;
   action: string;
   details: string;
-};
-
-type ThemeMode = 'basic' | 'advanced';
-type ThemeAppearance = 'system' | 'light' | 'dark';
-type ThemePreferences = {
-  theme_mode: ThemeMode;
-  theme_preset: string | null;
-  appearance: ThemeAppearance;
-  primary_color: string;
-  secondary_color: string;
-  sidebar_color: string;
-};
-type UserPreferences = ThemePreferences & {
-  compact_mode: boolean;
-  low_stock_alerts: boolean;
-  default_workspace: 'pos' | 'inventory' | 'reports';
-};
-type StoreThemePreferences = ThemePreferences & {
-  updated_at?: Date | string | null;
-};
-
-const DEFAULT_THEME_PREFERENCES: ThemePreferences = {
-  theme_mode: 'basic',
-  theme_preset: 'default',
-  appearance: 'light',
-  primary_color: '#008967',
-  secondary_color: '#005656',
-  sidebar_color: '#0f172a',
 };
 
 const LEGACY_STORE_ADMIN_ROLES = ['ADMIN'] as const;
@@ -258,87 +210,6 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return role === 'INVENTORY_MANAGER' || role === 'INVENTORY_ADMIN' || role === 'ADMIN';
   }
 
-  async getLoginUserByEmail(email: string): Promise<AuthenticatedUser & { password_hash: string; void_pin?: string | null } | null> {
-    await this.ensureVoidPinHashColumn();
-    const schema = await this.getSchemaColumns();
-    const userColumns = this.resolveUserColumns(schema.users);
-    const storeColumns = this.resolveStoreColumns(schema.stores);
-
-    const passwordColumn = userColumns.passwordColumn;
-    const fullNameColumn = userColumns.fullNameColumn;
-    const roleColumn = userColumns.roleColumn;
-    const storeIdColumn = userColumns.storeIdColumn;
-    const staffTypeColumn = userColumns.staffTypeColumn;
-
-    if (!passwordColumn || !fullNameColumn || !roleColumn) {
-      throw new InternalServerErrorException('Users table is missing required columns for login.');
-    }
-
-    const storeTypeSelect = storeColumns.storeTypeColumn ? `${this.normalizedStoreTypeSql(`s.${this.quoteIdentifier(storeColumns.storeTypeColumn)}`)} AS store_type` : 'NULL AS store_type';
-    const storeNameSelect = storeColumns.storeNameColumn ? `s.${this.quoteIdentifier(storeColumns.storeNameColumn)} AS store_name` : 'NULL AS store_name';
-    const storeJoin = storeIdColumn && storeColumns.joinable ? `LEFT JOIN stores s ON s.id = u.${this.quoteIdentifier(storeIdColumn)}` : '';
-    const storeIdSelect = storeIdColumn ? `u.${this.quoteIdentifier(storeIdColumn)} AS store_id` : 'NULL AS store_id';
-    const staffTypeSelect = staffTypeColumn ? `u.${this.quoteIdentifier(staffTypeColumn)} AS staff_type` : 'NULL AS staff_type';
-    const voidPinSelect = userColumns.voidPinColumn ? `u.${this.quoteIdentifier(userColumns.voidPinColumn)} AS void_pin` : 'NULL AS void_pin';
-
-    const rows = await this.query<{
-      id: number;
-      full_name: string;
-      email: string;
-      role: string;
-      store_id: number | null;
-      staff_type: StaffType | null;
-      password_hash: string;
-      store_type: string | null;
-      store_name: string | null;
-      status: string | null;
-      void_pin: string | null;
-    }>(
-      `
-        SELECT
-          u.id,
-          u.${this.quoteIdentifier(fullNameColumn)} AS full_name,
-          u.email,
-          u.${this.quoteIdentifier(roleColumn)} AS role,
-          ${storeIdSelect},
-          ${staffTypeSelect},
-          u.${this.quoteIdentifier(passwordColumn)} AS password_hash,
-          ${storeTypeSelect},
-          ${storeNameSelect},
-          ${voidPinSelect},
-          ${this.userStatusSelect(userColumns)}
-        FROM users u
-        ${storeJoin}
-        WHERE LOWER(u.email) = LOWER($1)
-        ${this.activeUsersWhereClause(userColumns)}
-        LIMIT 1
-      `,
-      [email],
-    );
-
-    if (rows.length === 0) {
-      return null;
-    }
-
-    const user = rows[0];
-    if (user.store_type === 'RETAIL_STORE' && this.isPosManagerRole(user.role) && !user.void_pin?.trim() && userColumns.voidPinHashColumn && userColumns.voidPinColumn) {
-      const uniquePin = await this.generateUniqueRetailVoidPin(user.store_id, user.id);
-      await this.query(
-        `
-          UPDATE users
-          SET
-            ${this.quoteIdentifier(userColumns.voidPinHashColumn)} = $1,
-            ${this.quoteIdentifier(userColumns.voidPinColumn)} = $2
-          WHERE id = $3
-        `,
-        [await bcrypt.hash(uniquePin, 10), uniquePin, user.id],
-      );
-      user.void_pin = uniquePin;
-    }
-
-    return rows[0];
-  }
-
   async listAdminUsers() {
     const schema = await this.getSchemaColumns();
     const userColumns = this.resolveUserColumns(schema.users);
@@ -383,150 +254,6 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         WHERE u.${this.quoteIdentifier(userColumns.roleColumn)} IN (${STORE_ADMIN_ROLES_WITH_LEGACY_SQL})
         ORDER BY u.id ASC
       `,
-    );
-  }
-
-  async comparePassword(plainPassword: string, hashedPassword: string) {
-    return bcrypt.compare(plainPassword, hashedPassword);
-  }
-
-  async getActiveAuthUserById(userId: number): Promise<AuthenticatedUser> {
-    const schema = await this.getSchemaColumns();
-    const userColumns = this.resolveUserColumns(schema.users);
-    const storeColumns = this.resolveStoreColumns(schema.stores);
-
-    if (!userColumns.fullNameColumn || !userColumns.roleColumn) {
-      throw new InternalServerErrorException('Users table is missing required columns for auth scoping.');
-    }
-
-    const storeJoin = userColumns.storeIdColumn && storeColumns.joinable ? `LEFT JOIN stores s ON s.id = u.${this.quoteIdentifier(userColumns.storeIdColumn)} LEFT JOIN store_information si ON si.store_id = s.id` : '';
-    const storeTypeSelect = storeColumns.storeTypeColumn ? `${this.normalizedStoreTypeSql(`s.${this.quoteIdentifier(storeColumns.storeTypeColumn)}`)} AS store_type` : 'NULL AS store_type';
-    const storeNameSelect = storeJoin
-      ? storeColumns.storeNameColumn
-        ? `COALESCE(si.business_name, s.${this.quoteIdentifier(storeColumns.storeNameColumn)}) AS store_name`
-        : 'si.business_name AS store_name'
-      : 'NULL AS store_name';
-
-    const rows = await this.query<AuthenticatedUser>(
-      `
-        SELECT
-          u.id,
-          u.${this.quoteIdentifier(userColumns.fullNameColumn)} AS full_name,
-          u.email,
-          u.${this.quoteIdentifier(userColumns.roleColumn)} AS role,
-          ${userColumns.storeIdColumn ? `u.${this.quoteIdentifier(userColumns.storeIdColumn)} AS store_id` : 'NULL AS store_id'},
-          ${userColumns.staffTypeColumn ? `u.${this.quoteIdentifier(userColumns.staffTypeColumn)} AS staff_type` : 'NULL AS staff_type'},
-          ${storeTypeSelect},
-          ${storeNameSelect}
-        FROM users u
-        ${storeJoin}
-        WHERE u.id = $1
-        ${this.activeUsersWhereClause(userColumns)}
-        LIMIT 1
-      `,
-      [userId],
-    );
-
-    if (!rows[0]) {
-      throw new UnauthorizedException('Session is no longer valid.');
-    }
-
-    return rows[0];
-  }
-
-  async setRefreshToken(userId: number, tokenHash: string, expiresAt: Date) {
-    await this.ensureUserAuthTokenColumns();
-    await this.query(
-      `
-        UPDATE users
-        SET refresh_token_hash = $1,
-            refresh_token_expires_at = $2
-        WHERE id = $3
-      `,
-      [tokenHash, expiresAt, userId],
-    );
-  }
-
-  async clearRefreshToken(userId: number) {
-    await this.ensureUserAuthTokenColumns();
-    await this.query(
-      `
-        UPDATE users
-        SET refresh_token_hash = NULL,
-            refresh_token_expires_at = NULL
-        WHERE id = $1
-      `,
-      [userId],
-    );
-  }
-
-  async findUserByRefreshTokenHash(tokenHash: string): Promise<AuthenticatedUser | null> {
-    await this.ensureUserAuthTokenColumns();
-    const rows = await this.query<{ id: number }>(
-      `
-        SELECT id
-        FROM users
-        WHERE refresh_token_hash = $1
-          AND refresh_token_expires_at > CURRENT_TIMESTAMP
-        LIMIT 1
-      `,
-      [tokenHash],
-    );
-
-    if (!rows[0]) return null;
-    return this.getActiveAuthUserById(rows[0].id);
-  }
-
-  async setResetToken(userId: number, tokenHash: string, expiresAt: Date) {
-    await this.ensureUserAuthTokenColumns();
-    await this.query(
-      `
-        UPDATE users
-        SET reset_token_hash = $1,
-            reset_token_expires_at = $2
-        WHERE id = $3
-      `,
-      [tokenHash, expiresAt, userId],
-    );
-  }
-
-  async findUserByResetTokenHash(tokenHash: string): Promise<AuthenticatedUser | null> {
-    await this.ensureUserAuthTokenColumns();
-    const rows = await this.query<{ id: number }>(
-      `
-        SELECT id
-        FROM users
-        WHERE reset_token_hash = $1
-          AND reset_token_expires_at > CURRENT_TIMESTAMP
-        LIMIT 1
-      `,
-      [tokenHash],
-    );
-
-    if (!rows[0]) return null;
-    return this.getActiveAuthUserById(rows[0].id);
-  }
-
-  async updatePasswordAndClearAuthTokens(userId: number, password: string) {
-    await this.ensureUserAuthTokenColumns();
-    const schema = await this.getSchemaColumns();
-    const userColumns = this.resolveUserColumns(schema.users);
-
-    if (!userColumns.passwordColumn) {
-      throw new InternalServerErrorException('Users table is missing a password column.');
-    }
-
-    await this.query(
-      `
-        UPDATE users
-        SET ${this.quoteIdentifier(userColumns.passwordColumn)} = $1,
-            refresh_token_hash = NULL,
-            refresh_token_expires_at = NULL,
-            reset_token_hash = NULL,
-            reset_token_expires_at = NULL
-        WHERE id = $2
-      `,
-      [await bcrypt.hash(password, 10), userId],
     );
   }
 
@@ -759,55 +486,6 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     const activatedIds = await this.activateAdminAndStoreStaff(adminUserId, admin.store_id, userColumns);
     return { id: adminUserId, status: 'ACTIVE', activated: true, affected_user_ids: activatedIds };
-  }
-
-  async listStaffForAdmin(adminUserId: number) {
-    const admin = await this.getUserStoreScope(adminUserId);
-
-    if (!this.isStoreAdminRole(admin.role)) {
-      throw new ForbiddenException('Only admin accounts can manage staff accounts.');
-    }
-
-    if (!admin.store_id) {
-      throw new InternalServerErrorException('Admin account is not linked to a store.');
-    }
-
-    await this.ensureVoidPinHashColumn();
-    const schema = await this.getSchemaColumns();
-    const userColumns = this.resolveUserColumns(schema.users);
-    const storeColumns = this.resolveStoreColumns(schema.stores);
-
-    if (!userColumns.fullNameColumn || !userColumns.roleColumn || !userColumns.storeIdColumn) {
-      throw new InternalServerErrorException('Users table is missing required columns for staff listing.');
-    }
-
-    const storeJoin = storeColumns.joinable ? `LEFT JOIN stores s ON s.id = u.${this.quoteIdentifier(userColumns.storeIdColumn)}` : '';
-    const storeTypeSelect = storeColumns.storeTypeColumn ? `${this.normalizedStoreTypeSql(`s.${this.quoteIdentifier(storeColumns.storeTypeColumn)}`)} AS store_type` : 'NULL AS store_type';
-    const storeNameSelect = storeColumns.storeNameColumn ? `s.${this.quoteIdentifier(storeColumns.storeNameColumn)} AS store_name` : 'NULL AS store_name';
-
-    const voidPinConfiguredSelect = userColumns.voidPinHashColumn ? `u.${this.quoteIdentifier(userColumns.voidPinHashColumn)} IS NOT NULL AS void_pin_configured` : 'FALSE AS void_pin_configured';
-
-    return this.query<AuthenticatedUser & { void_pin_configured?: boolean }>(
-      `
-        SELECT
-          u.id,
-          u.${this.quoteIdentifier(userColumns.fullNameColumn)} AS full_name,
-          u.email,
-          u.${this.quoteIdentifier(userColumns.roleColumn)} AS role,
-          u.${this.quoteIdentifier(userColumns.storeIdColumn)} AS store_id,
-          ${userColumns.staffTypeColumn ? `u.${this.quoteIdentifier(userColumns.staffTypeColumn)} AS staff_type` : 'NULL AS staff_type'},
-          ${storeTypeSelect},
-          ${storeNameSelect},
-          ${voidPinConfiguredSelect},
-          ${this.userStatusSelect(userColumns)}
-        FROM users u
-        ${storeJoin}
-        WHERE u.${this.quoteIdentifier(userColumns.roleColumn)} IN (${STORE_USER_ROLES_WITH_LEGACY_SQL})
-          AND u.${this.quoteIdentifier(userColumns.storeIdColumn)} = $1
-        ORDER BY u.id ASC
-      `,
-      [admin.store_id],
-    );
   }
 
   async createStaffAccount(input: {
@@ -1199,495 +877,6 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return { id: rows[0].id, status: 'ACTIVE', activated: true };
   }
 
-  async getStoreInformationForAdmin(adminUserId: number): Promise<StoreInformation> {
-    const user = await this.getUserStoreScope(adminUserId);
-
-    if (![...LEGACY_STORE_ADMIN_ROLES, ...STORE_USER_ROLES, 'POS_ADMIN', 'INVENTORY_ADMIN'].includes(String(user.role) as any) || !user.store_id) {
-      throw new InternalServerErrorException('Only store users can view store information.');
-    }
-
-    await this.ensureStoreInformationRow(user.store_id, user.store_name);
-
-    const rows = await this.query<StoreInformation>(
-      `
-        SELECT
-          id,
-          store_id,
-          business_name,
-          business_description,
-          address,
-          contact_number,
-          email,
-          logo,
-          receipt_thank_you_message,
-          receipt_footer_message,
-          operating_hours,
-          currency,
-          theme_color,
-          tax_rate,
-          service_charge_rate,
-          updated_at
-        FROM store_information
-        WHERE store_id = $1
-        LIMIT 1
-      `,
-      [user.store_id],
-    );
-
-    if (rows.length === 0) {
-      throw new InternalServerErrorException('Store information was not found.');
-    }
-
-    return rows[0];
-  }
-
-  async updateStoreInformationForAdmin(input: {
-    adminUserId: number;
-    businessName: string;
-    businessDescription: string | null;
-    address: string | null;
-    contactNumber: string | null;
-    email: string | null;
-    logo: string | null;
-    receiptThankYouMessage: string | null;
-    receiptFooterMessage: string | null;
-    operatingHours: string | null;
-    currency: string | null;
-    themeColor: string | null;
-    taxRate: number | null;
-    serviceChargeRate: number | null;
-  }): Promise<StoreInformation> {
-    const admin = await this.getUserStoreScope(input.adminUserId);
-
-    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
-      throw new InternalServerErrorException('Only store admin accounts can update store information.');
-    }
-
-    await this.ensureStoreInformationRow(admin.store_id, admin.store_name);
-
-    const rows = await this.query<StoreInformation>(
-      `
-        UPDATE store_information
-        SET
-          business_name = $1,
-          business_description = $2,
-          address = $3,
-          contact_number = $4,
-          email = $5,
-          logo = $6,
-          receipt_thank_you_message = $7,
-          receipt_footer_message = $8,
-          operating_hours = $9,
-          currency = $10,
-          theme_color = $11,
-          tax_rate = $12,
-          service_charge_rate = $13,
-          updated_at = CURRENT_TIMESTAMP
-        WHERE store_id = $14
-        RETURNING
-          id,
-          store_id,
-          business_name,
-          business_description,
-          address,
-          contact_number,
-          email,
-          logo,
-          receipt_thank_you_message,
-          receipt_footer_message,
-          operating_hours,
-          currency,
-          theme_color,
-          tax_rate,
-          service_charge_rate,
-          updated_at
-      `,
-      [
-        input.businessName,
-        input.businessDescription,
-        input.address,
-        input.contactNumber,
-        input.email,
-        input.logo,
-        input.receiptThankYouMessage,
-        input.receiptFooterMessage,
-        input.operatingHours,
-        input.currency,
-        input.themeColor,
-        input.taxRate,
-        input.serviceChargeRate,
-        admin.store_id,
-      ],
-    );
-
-    await this.recordActivity({
-      userId: admin.id,
-      storeId: admin.store_id,
-      userName: admin.full_name,
-      userRole: admin.role,
-      module: 'Store Settings',
-      action: 'Store Information Updated',
-      details: `Store information updated\nBusiness Name: ${rows[0].business_name}`,
-    });
-
-    return rows[0];
-  }
-
-  async getStoreSettingsForAdmin(adminUserId: number) {
-    const admin = await this.getUserStoreScope(adminUserId);
-
-    if (!admin.store_id) {
-      throw new InternalServerErrorException('Only store-linked accounts can view store settings.');
-    }
-
-    await this.ensureStoreSettingsRow(admin.store_id, admin.store_type);
-
-    const rows = await this.query(
-      `
-        SELECT *
-        FROM store_settings
-        WHERE store_id = $1
-          AND (store_type = $2 OR store_type IS NULL)
-        LIMIT 1
-      `,
-      [admin.store_id, admin.store_type],
-    );
-
-    return rows[0];
-  }
-
-  async updateStoreSettingsForAdmin(input: {
-    adminUserId: number;
-    enableCustomerRecommendation?: boolean;
-    enableTableManagement?: boolean;
-    enableRefund?: boolean;
-    enableVoid?: boolean;
-    enableDiscount?: boolean;
-    enableEstimatedPrepTime?: boolean;
-    prepTimeStrategy?: string;
-    customizationPrepTimeMinutes?: number;
-    enableServiceCharge?: boolean;
-    serviceChargeRate?: number;
-    enableTax?: boolean;
-    taxRate?: number;
-    enableDineIn?: boolean;
-    enableTakeout?: boolean;
-    enableIngredientCustomization?: boolean;
-    enableReceiptPrinting?: boolean;
-    enabledPaymentMethods?: string[];
-    paymentMethodAccounts?: Record<string, unknown>;
-    autoDeductInventoryOnSale?: boolean;
-    allowNegativeStock?: boolean;
-    defaultLowStockThreshold?: number;
-    defaultInventoryUnit?: string;
-    cycleCountIntervalDays?: number;
-    autoReorderThresholdPercent?: number;
-    enableExpiryTracking?: boolean;
-    defaultMarkupPercent?: number;
-  }) {
-    const admin = await this.getUserStoreScope(input.adminUserId);
-
-    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
-      throw new InternalServerErrorException('Only store admin accounts can update store settings.');
-    }
-
-    await this.ensureStoreSettingsRow(admin.store_id, admin.store_type);
-
-    const rows = await this.query(
-      `
-        UPDATE store_settings
-        SET
-          enable_customer_recommendation = COALESCE($1, enable_customer_recommendation),
-          enable_table_management = COALESCE($2, enable_table_management),
-          enable_refund = COALESCE($3, enable_refund),
-          enable_void = COALESCE($4, enable_void),
-          enable_discount = COALESCE($5, enable_discount),
-          enable_estimated_prep_time = COALESCE($6, enable_estimated_prep_time),
-          prep_time_strategy = COALESCE($7, prep_time_strategy),
-          customization_prep_time_minutes = COALESCE($8, customization_prep_time_minutes),
-          enable_service_charge = COALESCE($9, enable_service_charge),
-          service_charge_rate = COALESCE($10, service_charge_rate),
-          service_charge_percentage = COALESCE($10, service_charge_percentage),
-          enable_tax = COALESCE($11, enable_tax),
-          tax_rate = COALESCE($12, tax_rate),
-          enable_dine_in = COALESCE($13, enable_dine_in),
-          enable_takeout = COALESCE($14, enable_takeout),
-          enable_ingredient_customization = COALESCE($15, enable_ingredient_customization),
-          enable_receipt_printing = COALESCE($16, enable_receipt_printing),
-          enabled_payment_methods = COALESCE($17, enabled_payment_methods),
-          payment_method_accounts = COALESCE($18, payment_method_accounts),
-          auto_deduct_inventory_on_sale = COALESCE($19, auto_deduct_inventory_on_sale),
-          allow_negative_stock = COALESCE($20, allow_negative_stock),
-          default_low_stock_threshold = COALESCE($21, default_low_stock_threshold),
-          default_inventory_unit = COALESCE($22, default_inventory_unit),
-          cycle_count_interval_days = COALESCE($23, cycle_count_interval_days),
-          auto_reorder_threshold_percent = COALESCE($24, auto_reorder_threshold_percent),
-          enable_expiry_tracking = COALESCE($25, enable_expiry_tracking),
-          default_markup_percent = COALESCE($26, default_markup_percent),
-          store_type = COALESCE(store_type, $27),
-          updated_at = CURRENT_TIMESTAMP
-        WHERE store_id = $28
-          AND (store_type = $27 OR store_type IS NULL)
-        RETURNING *
-      `,
-      [
-        input.enableCustomerRecommendation,
-        input.enableTableManagement,
-        input.enableRefund,
-        input.enableVoid,
-        input.enableDiscount,
-        input.enableEstimatedPrepTime,
-        input.prepTimeStrategy === 'sequential' ? 'sequential' : input.prepTimeStrategy === 'parallel' ? 'parallel' : null,
-        input.customizationPrepTimeMinutes,
-        input.enableServiceCharge,
-        input.serviceChargeRate,
-        input.enableTax,
-        input.taxRate,
-        input.enableDineIn,
-        input.enableTakeout,
-        input.enableIngredientCustomization,
-        input.enableReceiptPrinting,
-        input.enabledPaymentMethods ?? null,
-        input.paymentMethodAccounts ? JSON.stringify(input.paymentMethodAccounts) : null,
-        input.autoDeductInventoryOnSale,
-        input.allowNegativeStock,
-        input.defaultLowStockThreshold,
-        input.defaultInventoryUnit,
-        input.cycleCountIntervalDays,
-        input.autoReorderThresholdPercent,
-        input.enableExpiryTracking,
-        input.defaultMarkupPercent,
-        admin.store_type,
-        admin.store_id,
-      ],
-    );
-
-    await this.recordActivity({
-      userId: admin.id,
-      storeId: admin.store_id,
-      userName: admin.full_name,
-      userRole: admin.role,
-      module: 'Store Settings',
-      action: 'Store Settings Updated',
-      details: `Store settings updated\nRefunds: ${rows[0].enable_refund ? 'Enabled' : 'Disabled'}\nVoids: ${rows[0].enable_void ? 'Enabled' : 'Disabled'}`,
-    });
-
-    return rows[0];
-  }
-
-  async getThemePreferencesForUser(userId: number) {
-    const user = await this.getUserStoreScope(userId);
-    await this.ensureUserPreferencesSchema();
-
-    const userRows = await this.query<UserPreferences>(
-      `
-        SELECT
-          compact_mode,
-          low_stock_alerts,
-          default_workspace,
-          theme_mode,
-          theme_preset,
-          appearance,
-          primary_color,
-          secondary_color,
-          sidebar_color
-        FROM user_preferences
-        WHERE user_id = $1
-        LIMIT 1
-      `,
-      [user.id],
-    );
-
-    const storeTheme = user.store_id ? await this.getStoreThemePreferences(user.store_id, user.store_type) : null;
-    const userTheme = userRows[0] ?? null;
-    const effectiveTheme = this.normalizeThemePreferences(userTheme ?? storeTheme ?? DEFAULT_THEME_PREFERENCES);
-
-    return {
-      user_preferences: userTheme ? this.normalizeUserPreferences(userTheme) : null,
-      store_theme: storeTheme ? this.normalizeThemePreferences(storeTheme) : null,
-      effective_theme: effectiveTheme,
-      can_manage_store_theme: this.isStoreManagerRole(user.role) && Boolean(user.store_id),
-    };
-  }
-
-  async updatePersonalThemePreferences(input: {
-    userId: number;
-    preferences: Partial<UserPreferences>;
-  }) {
-    const user = await this.getUserStoreScope(input.userId);
-    await this.ensureUserPreferencesSchema();
-    const preferences = this.normalizeUserPreferences(input.preferences);
-
-    const rows = await this.query<UserPreferences>(
-      `
-        INSERT INTO user_preferences (
-          user_id,
-          compact_mode,
-          low_stock_alerts,
-          default_workspace,
-          theme_mode,
-          theme_preset,
-          appearance,
-          primary_color,
-          secondary_color,
-          sidebar_color
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-        ON CONFLICT (user_id) DO UPDATE
-        SET
-          compact_mode = EXCLUDED.compact_mode,
-          low_stock_alerts = EXCLUDED.low_stock_alerts,
-          default_workspace = EXCLUDED.default_workspace,
-          theme_mode = EXCLUDED.theme_mode,
-          theme_preset = EXCLUDED.theme_preset,
-          appearance = EXCLUDED.appearance,
-          primary_color = EXCLUDED.primary_color,
-          secondary_color = EXCLUDED.secondary_color,
-          sidebar_color = EXCLUDED.sidebar_color,
-          updated_at = CURRENT_TIMESTAMP
-        RETURNING
-          compact_mode,
-          low_stock_alerts,
-          default_workspace,
-          theme_mode,
-          theme_preset,
-          appearance,
-          primary_color,
-          secondary_color,
-          sidebar_color
-      `,
-      [
-        user.id,
-        preferences.compact_mode,
-        preferences.low_stock_alerts,
-        preferences.default_workspace,
-        preferences.theme_mode,
-        preferences.theme_preset,
-        preferences.appearance,
-        preferences.primary_color,
-        preferences.secondary_color,
-        preferences.sidebar_color,
-      ],
-    );
-
-    return this.normalizeUserPreferences(rows[0]);
-  }
-
-  async clearPersonalThemePreferences(userId: number) {
-    const user = await this.getUserStoreScope(userId);
-    await this.ensureUserPreferencesSchema();
-    await this.query(`DELETE FROM user_preferences WHERE user_id = $1`, [user.id]);
-    return this.getThemePreferencesForUser(user.id);
-  }
-
-  async updateStoreThemePreferences(input: {
-    userId: number;
-    preferences: Partial<StoreThemePreferences>;
-  }) {
-    const user = await this.getUserStoreScope(input.userId);
-
-    if (!this.isStoreManagerRole(user.role) || !user.store_id) {
-      throw new ForbiddenException('Only store admin or manager accounts can update the store theme.');
-    }
-
-    await this.ensureStoreSettingsRow(user.store_id, user.store_type);
-    const preferences = this.normalizeThemePreferences(input.preferences);
-
-    const rows = await this.query<StoreThemePreferences>(
-      `
-        UPDATE store_settings
-        SET
-          theme_mode = $1,
-          theme_preset = $2,
-          appearance = $3,
-          primary_color = $4,
-          secondary_color = $5,
-          sidebar_color = $6,
-          updated_at = CURRENT_TIMESTAMP
-        WHERE store_id = $7
-          AND (store_type = $8 OR store_type IS NULL)
-        RETURNING
-          theme_mode,
-          theme_preset,
-          appearance,
-          primary_color,
-          secondary_color,
-          sidebar_color,
-          updated_at
-      `,
-      [
-        preferences.theme_mode,
-        preferences.theme_preset,
-        preferences.appearance,
-        preferences.primary_color,
-        preferences.secondary_color,
-        preferences.sidebar_color,
-        user.store_id,
-        user.store_type,
-      ],
-    );
-
-    await this.recordActivity({
-      userId: user.id,
-      storeId: user.store_id,
-      userName: user.full_name,
-      userRole: user.role,
-      module: 'Store Settings',
-      action: 'Theme Updated',
-      details: `Store theme updated\nPreset: ${preferences.theme_preset ?? 'custom'}\nMode: ${preferences.theme_mode}`,
-    });
-
-    return this.normalizeThemePreferences(rows[0]);
-  }
-
-  async clearStoreThemePreferences(userId: number) {
-    const user = await this.getUserStoreScope(userId);
-
-    if (!this.isStoreManagerRole(user.role) || !user.store_id) {
-      throw new ForbiddenException('Only store admin or manager accounts can reset the store theme.');
-    }
-
-    await this.ensureStoreSettingsRow(user.store_id, user.store_type);
-
-    await this.query(
-      `
-        UPDATE store_settings
-        SET
-          theme_mode = $1,
-          theme_preset = $2,
-          appearance = $3,
-          primary_color = $4,
-          secondary_color = $5,
-          sidebar_color = $6,
-          updated_at = CURRENT_TIMESTAMP
-        WHERE store_id = $7
-          AND (store_type = $8 OR store_type IS NULL)
-      `,
-      [
-        DEFAULT_THEME_PREFERENCES.theme_mode,
-        DEFAULT_THEME_PREFERENCES.theme_preset,
-        DEFAULT_THEME_PREFERENCES.appearance,
-        DEFAULT_THEME_PREFERENCES.primary_color,
-        DEFAULT_THEME_PREFERENCES.secondary_color,
-        DEFAULT_THEME_PREFERENCES.sidebar_color,
-        user.store_id,
-        user.store_type,
-      ],
-    );
-
-    await this.recordActivity({
-      userId: user.id,
-      storeId: user.store_id,
-      userName: user.full_name,
-      userRole: user.role,
-      module: 'Store Settings',
-      action: 'Theme Reset',
-      details: 'Store theme reset to default for all accounts without a personal override',
-    });
-
-    return this.getThemePreferencesForUser(user.id);
-  }
-
   private async getInventorySyncSettingsForStore(client: PoolClient, storeId: number): Promise<InventorySyncSettings> {
     await this.ensureStoreSettingsSchema();
 
@@ -1720,127 +909,6 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     );
 
     return Number(rows[0]?.default_low_stock_threshold ?? 0);
-  }
-
-  async listDiscountSettingsForAdmin(adminUserId: number) {
-    const admin = await this.getUserStoreScope(adminUserId);
-
-    if (!admin.store_id) {
-      throw new InternalServerErrorException('Only store-linked accounts can view discount settings.');
-    }
-
-    await this.ensureDefaultDiscountSettings(admin.store_id);
-
-    return this.query(
-      `
-        SELECT id, store_id, discount_name, discount_rate, is_enabled, created_at, updated_at
-        FROM discount_settings
-        WHERE store_id = $1
-        ORDER BY id ASC
-      `,
-      [admin.store_id],
-    );
-  }
-
-  async createDiscountSettingForAdmin(input: { adminUserId: number; discountName: string; discountRate: number; isEnabled: boolean }) {
-    const admin = await this.getUserStoreScope(input.adminUserId);
-
-    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
-      throw new InternalServerErrorException('Only store admin accounts can create discount settings.');
-    }
-
-    const rows = await this.query(
-      `
-        INSERT INTO discount_settings (store_id, discount_name, discount_rate, is_enabled)
-        VALUES ($1, $2, $3, $4)
-        RETURNING id, store_id, discount_name, discount_rate, is_enabled, created_at, updated_at
-      `,
-      [admin.store_id, input.discountName, input.discountRate, input.isEnabled],
-    );
-
-    await this.recordActivity({
-      userId: admin.id,
-      storeId: admin.store_id,
-      userName: admin.full_name,
-      userRole: admin.role,
-      module: 'Store Settings',
-      action: 'Discount Settings Updated',
-      details: `Created discount setting\n${input.discountName}: ${input.discountRate}%`,
-    });
-
-    return rows[0];
-  }
-
-  async updateDiscountSettingForAdmin(input: { adminUserId: number; discountId: number; discountName: string; discountRate: number; isEnabled: boolean }) {
-    const admin = await this.getUserStoreScope(input.adminUserId);
-
-    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
-      throw new InternalServerErrorException('Only store admin accounts can update discount settings.');
-    }
-
-    const rows = await this.query(
-      `
-        UPDATE discount_settings
-        SET discount_name = $1,
-            discount_rate = $2,
-            is_enabled = $3,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = $4
-          AND store_id = $5
-        RETURNING id, store_id, discount_name, discount_rate, is_enabled, created_at, updated_at
-      `,
-      [input.discountName, input.discountRate, input.isEnabled, input.discountId, admin.store_id],
-    );
-
-    if (rows.length === 0) {
-      throw new NotFoundException('Discount setting was not found for this store.');
-    }
-
-    await this.recordActivity({
-      userId: admin.id,
-      storeId: admin.store_id,
-      userName: admin.full_name,
-      userRole: admin.role,
-      module: 'Store Settings',
-      action: 'Discount Settings Updated',
-      details: `Updated discount setting\n${input.discountName}: ${input.discountRate}%`,
-    });
-
-    return rows[0];
-  }
-
-  async deleteDiscountSettingForAdmin(input: { adminUserId: number; discountId: number }) {
-    const admin = await this.getUserStoreScope(input.adminUserId);
-
-    if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
-      throw new InternalServerErrorException('Only store admin accounts can delete discount settings.');
-    }
-
-    const rows = await this.query(
-      `
-        DELETE FROM discount_settings
-        WHERE id = $1
-          AND store_id = $2
-        RETURNING id
-      `,
-      [input.discountId, admin.store_id],
-    );
-
-    if (rows.length === 0) {
-      throw new NotFoundException('Discount setting was not found for this store.');
-    }
-
-    await this.recordActivity({
-      userId: admin.id,
-      storeId: admin.store_id,
-      userName: admin.full_name,
-      userRole: admin.role,
-      module: 'Store Settings',
-      action: 'Discount Settings Updated',
-      details: `Deleted discount setting\nDiscount ID: ${input.discountId}`,
-    });
-
-    return { id: input.discountId };
   }
 
   async listCategoriesForAdmin(adminUserId: number) {
@@ -5961,7 +5029,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return `${basePaymentNumber}-${Date.now()}`;
   }
 
-  private async ensureStoreInformationRow(storeId: number, fallbackStoreName: string | null, client?: PoolClient) {
+  async ensureStoreInformationRow(storeId: number, fallbackStoreName: string | null, client?: PoolClient) {
     const sql = `
       INSERT INTO store_information (
         store_id,
@@ -6011,7 +5079,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  private async ensureStoreSettingsRow(storeId: number, storeType: string | null) {
+  async ensureStoreSettingsRow(storeId: number, storeType: string | null) {
     await this.ensureStoreSettingsSchema();
 
     await this.query(
@@ -6112,7 +5180,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  private async ensureUserAuthTokenColumns() {
+  async ensureUserAuthTokenColumns() {
     await this.query(
       `
         ALTER TABLE users
@@ -6122,77 +5190,6 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ADD COLUMN IF NOT EXISTS reset_token_expires_at TIMESTAMPTZ
       `,
     );
-  }
-
-  private async ensureUserPreferencesSchema() {
-    await this.query(
-      `
-        CREATE TABLE IF NOT EXISTS user_preferences (
-          user_id BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-          compact_mode BOOLEAN NOT NULL DEFAULT FALSE,
-          low_stock_alerts BOOLEAN NOT NULL DEFAULT TRUE,
-          default_workspace VARCHAR(20) NOT NULL DEFAULT 'pos',
-          theme_mode VARCHAR(20) NOT NULL DEFAULT 'basic',
-          theme_preset VARCHAR(50) DEFAULT 'default',
-          appearance VARCHAR(20) NOT NULL DEFAULT 'light',
-          primary_color VARCHAR(20) NOT NULL DEFAULT '#008967',
-          secondary_color VARCHAR(20) NOT NULL DEFAULT '#005656',
-          sidebar_color VARCHAR(20) NOT NULL DEFAULT '#0f172a',
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-      `,
-    );
-  }
-
-  private async getStoreThemePreferences(storeId: number, storeType: string | null): Promise<StoreThemePreferences | null> {
-    await this.ensureStoreSettingsRow(storeId, storeType);
-
-    const rows = await this.query<StoreThemePreferences>(
-      `
-        SELECT
-          theme_mode,
-          theme_preset,
-          appearance,
-          primary_color,
-          secondary_color,
-          sidebar_color,
-          updated_at
-        FROM store_settings
-        WHERE store_id = $1
-          AND (store_type = $2 OR store_type IS NULL)
-        LIMIT 1
-      `,
-      [storeId, storeType],
-    );
-
-    return rows[0] ?? null;
-  }
-
-  private normalizeUserPreferences(input: Partial<UserPreferences> | null | undefined): UserPreferences {
-    const theme = this.normalizeThemePreferences(input);
-
-    return {
-      compact_mode: Boolean(input?.compact_mode ?? false),
-      low_stock_alerts: input?.low_stock_alerts === undefined || input?.low_stock_alerts === null ? true : Boolean(input.low_stock_alerts),
-      default_workspace: input?.default_workspace === 'inventory' || input?.default_workspace === 'reports' ? input.default_workspace : 'pos',
-      ...theme,
-    };
-  }
-
-  private normalizeThemePreferences(input: Partial<ThemePreferences> | null | undefined): ThemePreferences {
-    return {
-      theme_mode: input?.theme_mode === 'advanced' ? 'advanced' : 'basic',
-      theme_preset: typeof input?.theme_preset === 'string' && input.theme_preset.trim() ? input.theme_preset : DEFAULT_THEME_PREFERENCES.theme_preset,
-      appearance: input?.appearance === 'system' || input?.appearance === 'dark' ? input.appearance : 'light',
-      primary_color: this.normalizeHexColor(input?.primary_color, DEFAULT_THEME_PREFERENCES.primary_color),
-      secondary_color: this.normalizeHexColor(input?.secondary_color, DEFAULT_THEME_PREFERENCES.secondary_color),
-      sidebar_color: this.normalizeHexColor(input?.sidebar_color, DEFAULT_THEME_PREFERENCES.sidebar_color),
-    };
-  }
-
-  private normalizeHexColor(value: unknown, fallback: string) {
-    return typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value) ? value : fallback;
   }
 
   private async ensurePosOrderSchema() {
@@ -6398,29 +5395,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async ensureDefaultDiscountSettings(storeId: number) {
-    await this.query(
-      `
-        INSERT INTO discount_settings (store_id, discount_name, discount_rate, is_enabled)
-        SELECT $1, seed.discount_name, seed.discount_rate, TRUE
-        FROM (
-          VALUES
-            ('PWD', 20),
-            ('Senior Citizen', 20),
-            ('Promo Discount', 10),
-            ('Custom Discount', 0)
-        ) AS seed(discount_name, discount_rate)
-        WHERE NOT EXISTS (
-          SELECT 1
-          FROM discount_settings ds
-          WHERE ds.store_id = $1
-        )
-      `,
-      [storeId],
-    );
-  }
-
-  private async getUserStoreScope(userId: number): Promise<AuthenticatedUser> {
+  async getUserStoreScope(userId: number): Promise<AuthenticatedUser> {
     const schema = await this.getSchemaColumns();
     const userColumns = this.resolveUserColumns(schema.users);
     const storeColumns = this.resolveStoreColumns(schema.stores);
@@ -6463,86 +5438,6 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return rows[0];
   }
 
-  async listActivityLogsForUser(input: {
-    userId: number;
-    dateFrom?: string;
-    dateTo?: string;
-    actorUserId?: number;
-    module?: string;
-    action?: string;
-    search?: string;
-  }) {
-    const requester = await this.getUserStoreScope(input.userId);
-    const role = String(requester.role ?? '');
-    const canViewAll = role === 'SUPERADMIN';
-    const canViewStore = role === 'ADMIN' || role === 'POS_MANAGER' || role === 'POS_ADMIN';
-
-    if (!canViewAll && (!canViewStore || !requester.store_id || !['RESTAURANT', 'RETAIL_STORE'].includes(String(requester.store_type)))) {
-      throw new ForbiddenException('Only Superadmin, Store Admin, and POS Manager accounts can view activity logs.');
-    }
-
-    await this.ensureActivityLogSchema();
-
-    const conditions: string[] = [];
-    const values: unknown[] = [];
-    const addValue = (value: unknown) => {
-      values.push(value);
-      return `$${values.length}`;
-    };
-
-    if (!canViewAll) {
-      conditions.push(`store_id = ${addValue(requester.store_id)}`);
-    }
-    if (input.dateFrom?.trim()) {
-      conditions.push(`created_at >= (${addValue(input.dateFrom.trim())}::date::timestamp - INTERVAL '8 hours')`);
-    }
-    if (input.dateTo?.trim()) {
-      conditions.push(`created_at < (${addValue(input.dateTo.trim())}::date::timestamp + INTERVAL '1 day' - INTERVAL '8 hours')`);
-    }
-    if (Number.isFinite(input.actorUserId) && Number(input.actorUserId) > 0) {
-      conditions.push(`user_id = ${addValue(Number(input.actorUserId))}`);
-    }
-    if (input.module?.trim()) {
-      conditions.push(`module = ${addValue(input.module.trim())}`);
-    }
-    if (input.action?.trim()) {
-      conditions.push(`action = ${addValue(input.action.trim())}`);
-    }
-    if (input.search?.trim()) {
-      const param = addValue(`%${input.search.trim()}%`);
-      conditions.push(`(user_name ILIKE ${param} OR user_role ILIKE ${param} OR module ILIKE ${param} OR action ILIKE ${param} OR details ILIKE ${param})`);
-    }
-
-    const whereSql = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-    return this.query(
-      `
-        SELECT id, store_id, user_id, user_name, user_role, module, action, details, to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at
-        FROM activity_logs
-        ${whereSql}
-        ORDER BY created_at DESC, id DESC
-        LIMIT 500
-      `,
-      values,
-    );
-  }
-
-  async recordActivityForUser(userId: number, module: ActivityModule | string, action: string, details: string) {
-    try {
-      const user = await this.getUserStoreScope(userId);
-      await this.recordActivity({
-        userId: user.id,
-        storeId: user.store_id,
-        userName: user.full_name,
-        userRole: user.role,
-        module,
-        action,
-        details,
-      });
-    } catch {
-      return;
-    }
-  }
-
   async recordActivity(input: ActivityLogInput) {
     try {
       await this.ensureActivityLogSchema();
@@ -6566,7 +5461,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async ensureActivityLogSchema() {
+  async ensureActivityLogSchema() {
     await this.query(`
       CREATE TABLE IF NOT EXISTS activity_logs (
         id BIGSERIAL PRIMARY KEY,
@@ -6586,7 +5481,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     await this.query(`CREATE INDEX IF NOT EXISTS activity_logs_module_idx ON activity_logs(module)`);
   }
 
-  private async getSchemaColumns(): Promise<SchemaColumns> {
+  async getSchemaColumns(): Promise<SchemaColumns> {
     if (this.schemaColumns) {
       return this.schemaColumns;
     }
@@ -6610,7 +5505,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return this.schemaColumns;
   }
 
-  private resolveUserColumns(columns: Set<string>) {
+  resolveUserColumns(columns: Set<string>) {
     const pick = (candidates: string[]) => candidates.find((candidate) => columns.has(candidate.toLowerCase())) ?? null;
 
     return {
@@ -6626,7 +5521,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  private async ensureVoidPinHashColumn() {
+  async ensureVoidPinHashColumn() {
     await this.query(`
       ALTER TABLE users
       ADD COLUMN IF NOT EXISTS void_pin_hash TEXT,
@@ -6671,7 +5566,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async generateUniqueRetailVoidPin(storeId: number | null, excludeUserId?: number) {
+  async generateUniqueRetailVoidPin(storeId: number | null, excludeUserId?: number) {
     for (let attempt = 0; attempt < 30; attempt += 1) {
       const pin = String(randomInt(100000, 1000000));
       try {
@@ -6689,177 +5584,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     throw new ConflictException('Unable to generate a unique retail manager PIN. Please try again.');
   }
 
-  async verifyRetailVoidPin(input: { userId: number; voidPin: string }) {
-    const requester = await this.getUserStoreScope(input.userId);
-    if (requester.store_type !== 'RETAIL_STORE' || !requester.store_id) {
-      throw new ForbiddenException('Unique PIN authorization is only available for retail stores.');
-    }
-    if (!input.voidPin?.trim()) {
-      throw new BadRequestException('Unique PIN is required.');
-    }
-
-    await this.ensureVoidPinHashColumn();
-    const schema = await this.getSchemaColumns();
-    const userColumns = this.resolveUserColumns(schema.users);
-    if (!userColumns.fullNameColumn || !userColumns.roleColumn || !userColumns.storeIdColumn || !userColumns.voidPinHashColumn) {
-      throw new InternalServerErrorException('Users table is missing required columns for Unique PIN authorization.');
-    }
-
-    const rows = await this.query<{ id: number; full_name: string; email: string; role: string; void_pin_hash: string }>(
-      `
-        SELECT
-          id,
-          ${this.quoteIdentifier(userColumns.fullNameColumn)} AS full_name,
-          email,
-          ${this.quoteIdentifier(userColumns.roleColumn)} AS role,
-          ${this.quoteIdentifier(userColumns.voidPinHashColumn)} AS void_pin_hash
-        FROM users u
-        WHERE ${this.quoteIdentifier(userColumns.storeIdColumn)} = $1
-          AND ${this.quoteIdentifier(userColumns.roleColumn)} IN ('POS_MANAGER', 'POS_ADMIN')
-          AND ${this.quoteIdentifier(userColumns.voidPinHashColumn)} IS NOT NULL
-          ${this.activeUsersWhereClause(userColumns)}
-      `,
-      [requester.store_id],
-    );
-
-    for (const row of rows) {
-      if (await bcrypt.compare(input.voidPin.trim(), row.void_pin_hash)) {
-        await this.recordActivity({
-          userId: requester.id,
-          storeId: requester.store_id,
-          userName: requester.full_name,
-          userRole: requester.role,
-          module: 'Void & Refund',
-          action: 'Void Approved',
-          details: `Retail cart void authorized\nManager: ${row.full_name}`,
-        });
-
-        return {
-          authorized: true,
-          manager: {
-            id: row.id,
-            full_name: row.full_name,
-            email: row.email,
-            role: row.role,
-          },
-        };
-      }
-    }
-
-    throw new ForbiddenException('Invalid retail POS manager Unique PIN.');
-  }
-
-  async getRetailManagerProfile(userId: number) {
-    const requester = await this.getUserStoreScope(userId);
-    if (requester.store_type !== 'RETAIL_STORE' || !requester.store_id) {
-      throw new ForbiddenException('Retail manager profile is only available for retail stores.');
-    }
-    if (!this.isPosManagerRole(requester.role)) {
-      throw new ForbiddenException('Only retail POS managers can view this profile.');
-    }
-
-    await this.ensureVoidPinHashColumn();
-    const schema = await this.getSchemaColumns();
-    const userColumns = this.resolveUserColumns(schema.users);
-    const storeColumns = this.resolveStoreColumns(schema.stores);
-
-    if (!userColumns.fullNameColumn || !userColumns.roleColumn || !userColumns.storeIdColumn || !userColumns.staffTypeColumn) {
-      throw new InternalServerErrorException('Users table is missing required columns for manager profile.');
-    }
-    if (!userColumns.voidPinHashColumn || !userColumns.voidPinColumn) {
-      throw new InternalServerErrorException('Users table is missing required columns for Unique PIN display.');
-    }
-
-    const storeJoin = storeColumns.joinable ? `LEFT JOIN stores s ON s.id = u.${this.quoteIdentifier(userColumns.storeIdColumn)}` : '';
-    const storeTypeSelect = storeColumns.storeTypeColumn ? `${this.normalizedStoreTypeSql(`s.${this.quoteIdentifier(storeColumns.storeTypeColumn)}`)} AS store_type` : '$2::text AS store_type';
-    const storeNameSelect = storeColumns.storeNameColumn ? `s.${this.quoteIdentifier(storeColumns.storeNameColumn)} AS store_name` : '$3::text AS store_name';
-    const voidPinSelect = userColumns.voidPinColumn ? `u.${this.quoteIdentifier(userColumns.voidPinColumn)} AS void_pin` : 'NULL AS void_pin';
-    const voidPinConfiguredSelect = userColumns.voidPinHashColumn ? `u.${this.quoteIdentifier(userColumns.voidPinHashColumn)} IS NOT NULL AS void_pin_configured` : 'FALSE AS void_pin_configured';
-
-    const rows = await this.query<AuthenticatedUser & { void_pin: string | null; void_pin_configured: boolean }>(
-      `
-        SELECT
-          u.id,
-          u.${this.quoteIdentifier(userColumns.fullNameColumn)} AS full_name,
-          u.email,
-          u.${this.quoteIdentifier(userColumns.roleColumn)} AS role,
-          u.${this.quoteIdentifier(userColumns.storeIdColumn)} AS store_id,
-          u.${this.quoteIdentifier(userColumns.staffTypeColumn)} AS staff_type,
-          ${storeTypeSelect},
-          ${storeNameSelect},
-          ${voidPinSelect},
-          ${voidPinConfiguredSelect},
-          ${this.userStatusSelect(userColumns)}
-        FROM users u
-        ${storeJoin}
-        WHERE u.id = $1
-          AND u.${this.quoteIdentifier(userColumns.storeIdColumn)} = $4
-        LIMIT 1
-      `,
-      [userId, requester.store_type, requester.store_name, requester.store_id],
-    );
-
-    if (rows.length === 0) {
-      throw new NotFoundException('Retail manager profile was not found.');
-    }
-
-    if (!rows[0].void_pin?.trim()) {
-      const uniquePin = await this.generateUniqueRetailVoidPin(requester.store_id, userId);
-      await this.query(
-        `
-          UPDATE users
-          SET
-            ${this.quoteIdentifier(userColumns.voidPinHashColumn)} = $1,
-            ${this.quoteIdentifier(userColumns.voidPinColumn)} = $2
-          WHERE id = $3
-            AND ${this.quoteIdentifier(userColumns.storeIdColumn)} = $4
-        `,
-        [await bcrypt.hash(uniquePin, 10), uniquePin, userId, requester.store_id],
-      );
-      rows[0].void_pin = uniquePin;
-      rows[0].void_pin_configured = true;
-    }
-
-    return rows[0];
-  }
-
-  async generateRetailManagerUniquePin(userId: number) {
-    const requester = await this.getUserStoreScope(userId);
-    if (requester.store_type !== 'RETAIL_STORE' || !requester.store_id) {
-      throw new ForbiddenException('Unique PIN generation is only available for retail stores.');
-    }
-    if (!this.isPosManagerRole(requester.role)) {
-      throw new ForbiddenException('Only retail POS managers can generate a Unique PIN.');
-    }
-
-    await this.ensureVoidPinHashColumn();
-    const schema = await this.getSchemaColumns();
-    const userColumns = this.resolveUserColumns(schema.users);
-    if (!userColumns.voidPinHashColumn || !userColumns.voidPinColumn || !userColumns.storeIdColumn) {
-      throw new InternalServerErrorException('Users table is missing required columns for Unique PIN generation.');
-    }
-
-    const uniquePin = await this.generateUniqueRetailVoidPin(requester.store_id, userId);
-    await this.query(
-      `
-        UPDATE users
-        SET
-          ${this.quoteIdentifier(userColumns.voidPinHashColumn)} = $1,
-          ${this.quoteIdentifier(userColumns.voidPinColumn)} = $2
-        WHERE id = $3
-          AND ${this.quoteIdentifier(userColumns.storeIdColumn)} = $4
-      `,
-      [await bcrypt.hash(uniquePin, 10), uniquePin, userId, requester.store_id],
-    );
-
-    return {
-      id: userId,
-      void_pin: uniquePin,
-      void_pin_configured: true,
-    };
-  }
-
-  private userStatusSelect(userColumns: { statusColumn: string | null; activeColumn?: string | null }, alias = 'u') {
+  userStatusSelect(userColumns: { statusColumn: string | null; activeColumn?: string | null }, alias = 'u') {
     const prefix = alias ? `${alias}.` : '';
     if (userColumns.statusColumn) {
       return `${prefix}${this.quoteIdentifier(userColumns.statusColumn)} AS status`;
@@ -6870,7 +5595,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return `'ACTIVE' AS status`;
   }
 
-  private activeUsersWhereClause(userColumns: { statusColumn: string | null; activeColumn?: string | null }, alias = 'u') {
+  activeUsersWhereClause(userColumns: { statusColumn: string | null; activeColumn?: string | null }, alias = 'u') {
     if (userColumns.statusColumn) {
       return ` AND COALESCE(${alias}.${this.quoteIdentifier(userColumns.statusColumn)}, 'ACTIVE') = 'ACTIVE'`;
     }
@@ -7114,7 +5839,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return staffType;
   }
 
-  private resolveStoreColumns(columns: Set<string>) {
+  resolveStoreColumns(columns: Set<string>) {
     const pick = (candidates: string[]) => candidates.find((candidate) => columns.has(candidate.toLowerCase())) ?? null;
 
     return {
@@ -7130,7 +5855,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  private quoteIdentifier(identifier: string) {
+  quoteIdentifier(identifier: string) {
     return `"${identifier.replaceAll('"', '""')}"`;
   }
 
@@ -7138,7 +5863,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return storeType === 'RETAIL_STORE' ? 'RETAIL' : storeType;
   }
 
-  private normalizedStoreTypeSql(expression: string) {
+  normalizedStoreTypeSql(expression: string) {
     return `CASE WHEN ${expression} = 'RETAIL' THEN 'RETAIL_STORE' ELSE ${expression} END`;
   }
 

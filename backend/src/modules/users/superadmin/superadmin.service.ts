@@ -1,9 +1,13 @@
 import { Injectable } from '@nestjs/common';
+import { ActivityLogRepository } from '../../../shared/activity-log.repository';
 import { DatabaseService } from '../../../shared/database/database.service';
 
 @Injectable()
 export class SuperadminService {
-  constructor(private readonly databaseService: DatabaseService) {}
+  constructor(
+    private readonly databaseService: DatabaseService,
+    private readonly activityLogRepository: ActivityLogRepository,
+  ) {}
 
   listAdminUsers() {
     return this.databaseService.listAdminUsers();
@@ -18,7 +22,7 @@ export class SuperadminService {
     action?: string;
     search?: string;
   }) {
-    return this.databaseService.listActivityLogsForUser(input);
+    return this.activityLogRepository.listForUser(input);
   }
 
   createAdminAccount(input: { fullName: string; email: string; storeType: 'RESTAURANT' | 'RETAIL_STORE'; password?: string }) {

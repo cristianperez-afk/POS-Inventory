@@ -7,7 +7,11 @@ import { AdminSettingsController } from './admin-settings.controller';
 import { AdminStaffController } from './admin-staff.controller';
 import { AdminThemeController } from './admin-theme.controller';
 import { AdminService } from './admin.service';
+import { DiscountRepository } from './discount.repository';
 import { RetailAuthorizationController } from './retail-authorization.controller';
+import { StaffRepository } from './staff.repository';
+import { StoreSettingsRepository } from './store-settings.repository';
+import { ThemeRepository } from './theme.repository';
 
 @Module({
   controllers: [
@@ -19,6 +23,6 @@ import { RetailAuthorizationController } from './retail-authorization.controller
     AdminThemeController,
     RetailAuthorizationController,
   ],
-  providers: [AdminService, ActivityLogRepository],
+  providers: [AdminService, ActivityLogRepository, StaffRepository, DiscountRepository, ThemeRepository, StoreSettingsRepository],
 })
 export class AdminModule {}

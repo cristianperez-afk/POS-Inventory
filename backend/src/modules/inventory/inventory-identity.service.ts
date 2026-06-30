@@ -1,6 +1,7 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import type { PoolClient } from 'pg';
+import { AuthRepository } from '../auth/auth.repository';
 import { AuthenticatedUser } from '../../shared/common/types';
 import { DatabaseService } from '../../shared/database/database.service';
 
@@ -43,14 +44,17 @@ type InventoryUserRow = {
 
 @Injectable()
 export class InventoryIdentityService {
-  constructor(private readonly databaseService: DatabaseService) {}
+  constructor(
+    private readonly databaseService: DatabaseService,
+    private readonly authRepository: AuthRepository,
+  ) {}
 
   async resolveScope(posUser: AuthenticatedUser): Promise<InventoryScope> {
     if (posUser.role === 'SUPERADMIN') {
       throw new ForbiddenException('Superadmin accounts do not have a store inventory scope.');
     }
 
-    const freshUser = await this.databaseService.getActiveAuthUserById(posUser.id);
+    const freshUser = await this.authRepository.getActiveAuthUserById(posUser.id);
     if (!freshUser.store_id) {
       throw new ForbiddenException('This POS user is not assigned to a store.');
     }

@@ -3,6 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { ActivityLogRepository } from '../../shared/activity-log.repository';
 import { EmailModule } from '../../shared/email/email.module';
 import { AuthController } from './auth.controller';
 import { AuthRepository } from './auth.repository';
@@ -31,6 +32,7 @@ import { RolesGuard } from './roles.guard';
   providers: [
     AuthService,
     AuthRepository,
+    ActivityLogRepository,
     JwtAuthGuard,
     CsrfGuard,
     RolesGuard,
@@ -43,6 +45,6 @@ import { RolesGuard } from './roles.guard';
       useClass: CsrfGuard,
     },
   ],
-  exports: [JwtModule, JwtAuthGuard, RolesGuard],
+  exports: [JwtModule, JwtAuthGuard, RolesGuard, AuthRepository],
 })
 export class AuthModule {}

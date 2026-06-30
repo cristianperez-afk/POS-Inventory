@@ -1,6 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { ActivityLogRepository } from '../../../shared/activity-log.repository';
 import { DatabaseService } from '../../../shared/database/database.service';
+import { DiscountRepository } from './discount.repository';
+import { StaffRepository } from './staff.repository';
+import { StoreSettingsRepository } from './store-settings.repository';
+import { ThemeRepository } from './theme.repository';
 
 type StaffType = 'POS_STAFF' | 'INVENTORY_STAFF';
 type StaffRole = 'STAFF' | 'POS_MANAGER' | 'INVENTORY_MANAGER';
@@ -10,10 +14,14 @@ export class AdminService {
   constructor(
     private readonly databaseService: DatabaseService,
     private readonly activityLogRepository: ActivityLogRepository,
+    private readonly staffRepository: StaffRepository,
+    private readonly discountRepository: DiscountRepository,
+    private readonly themeRepository: ThemeRepository,
+    private readonly storeSettingsRepository: StoreSettingsRepository,
   ) {}
 
   listStaff(adminUserId: number) {
-    return this.databaseService.listStaffForAdmin(adminUserId);
+    return this.staffRepository.listForAdmin(adminUserId);
   }
 
   createStaff(input: {
@@ -25,7 +33,7 @@ export class AdminService {
     role?: StaffRole;
     voidPin?: string | null;
   }) {
-    return this.databaseService.createStaffAccount(input);
+    return this.staffRepository.create(input);
   }
 
   updateStaff(input: {
@@ -38,35 +46,35 @@ export class AdminService {
     role?: StaffRole;
     voidPin?: string | null;
   }) {
-    return this.databaseService.updateStaffAccountForAdmin(input);
+    return this.staffRepository.update(input);
   }
 
   verifyRetailVoidPin(input: { userId: number; voidPin: string }) {
-    return this.databaseService.verifyRetailVoidPin(input);
+    return this.staffRepository.verifyRetailVoidPin(input);
   }
 
   getRetailManagerProfile(userId: number) {
-    return this.databaseService.getRetailManagerProfile(userId);
+    return this.staffRepository.getRetailManagerProfile(userId);
   }
 
   generateRetailManagerUniquePin(userId: number) {
-    return this.databaseService.generateRetailManagerUniquePin(userId);
+    return this.staffRepository.generateRetailManagerUniquePin(userId);
   }
 
   deleteStaff(input: { adminUserId: number; staffUserId: number }) {
-    return this.databaseService.deleteStaffAccountForAdmin(input);
+    return this.staffRepository.delete(input);
   }
 
   permanentlyDeleteStaff(input: { adminUserId: number; staffUserId: number }) {
-    return this.databaseService.permanentlyDeleteStaffAccountForAdmin(input);
+    return this.staffRepository.permanentlyDelete(input);
   }
 
   activateStaff(input: { adminUserId: number; staffUserId: number }) {
-    return this.databaseService.activateStaffAccountForAdmin(input);
+    return this.staffRepository.activate(input);
   }
 
   getStoreInformation(adminUserId: number) {
-    return this.databaseService.getStoreInformationForAdmin(adminUserId);
+    return this.storeSettingsRepository.getInformation(adminUserId);
   }
 
   updateStoreInformation(input: {
@@ -85,11 +93,11 @@ export class AdminService {
     taxRate: number | null;
     serviceChargeRate: number | null;
   }) {
-    return this.databaseService.updateStoreInformationForAdmin(input);
+    return this.storeSettingsRepository.updateInformation(input);
   }
 
   getStoreSettings(adminUserId: number) {
-    return this.databaseService.getStoreSettingsForAdmin(adminUserId);
+    return this.storeSettingsRepository.getSettings(adminUserId);
   }
 
   updateStoreSettings(input: {
@@ -121,43 +129,43 @@ export class AdminService {
     enableExpiryTracking?: boolean;
     defaultMarkupPercent?: number;
   }) {
-    return this.databaseService.updateStoreSettingsForAdmin(input);
+    return this.storeSettingsRepository.updateSettings(input);
   }
 
   getThemePreferences(userId: number) {
-    return this.databaseService.getThemePreferencesForUser(userId);
+    return this.themeRepository.getForUser(userId);
   }
 
   updatePersonalThemePreferences(input: { userId: number; preferences: Record<string, unknown> }) {
-    return this.databaseService.updatePersonalThemePreferences(input);
+    return this.themeRepository.updatePersonal(input);
   }
 
   clearPersonalThemePreferences(userId: number) {
-    return this.databaseService.clearPersonalThemePreferences(userId);
+    return this.themeRepository.clearPersonal(userId);
   }
 
   updateStoreThemePreferences(input: { userId: number; preferences: Record<string, unknown> }) {
-    return this.databaseService.updateStoreThemePreferences(input);
+    return this.themeRepository.updateStore(input);
   }
 
   clearStoreThemePreferences(userId: number) {
-    return this.databaseService.clearStoreThemePreferences(userId);
+    return this.themeRepository.clearStore(userId);
   }
 
   listDiscountSettings(adminUserId: number) {
-    return this.databaseService.listDiscountSettingsForAdmin(adminUserId);
+    return this.discountRepository.listForAdmin(adminUserId);
   }
 
   createDiscountSetting(input: { adminUserId: number; discountName: string; discountRate: number; isEnabled: boolean }) {
-    return this.databaseService.createDiscountSettingForAdmin(input);
+    return this.discountRepository.create(input);
   }
 
   updateDiscountSetting(input: { adminUserId: number; discountId: number; discountName: string; discountRate: number; isEnabled: boolean }) {
-    return this.databaseService.updateDiscountSettingForAdmin(input);
+    return this.discountRepository.update(input);
   }
 
   deleteDiscountSetting(input: { adminUserId: number; discountId: number }) {
-    return this.databaseService.deleteDiscountSettingForAdmin(input);
+    return this.discountRepository.delete(input);
   }
 
   listActivityLogs(input: {
