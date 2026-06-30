@@ -97,6 +97,8 @@ type Recipe = {
 // Use the actual inventory product structure from the restaurant inventory query.
 type InventoryItem = InventoryProduct & { backendId?: string };
 
+type RecipeFormTab = "details" | "variants" | "modifiers";
+
 function StockLinkAutocomplete({
   items,
   value,
@@ -503,6 +505,7 @@ export function RecipeBOM() {
   const [activeFilter, setActiveFilter] = useState<"all" | "active">("all");
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingRecipe, setEditingRecipe] = useState<Recipe | null>(null);
+  const [recipeFormTab, setRecipeFormTab] = useState<RecipeFormTab>("details");
   const [showViewModal, setShowViewModal] = useState(false);
   const [selectedRecipe, setSelectedRecipe] = useState<Recipe | null>(null);
   const [scaleMultiplier, setScaleMultiplier] = useState(1);
@@ -1043,17 +1046,25 @@ export function RecipeBOM() {
       toast.error("Only Admin or Kitchen Staff users can create or edit recipes and pricing.");
       return;
     }
+
+    if (!newRecipe.name.trim() || !newRecipe.category) {
+      setRecipeFormTab("details");
+      toast.error("Recipe name and category are required");
+      return;
+    }
     const existingModifierIds = new Set((editingRecipe?.modifiers ?? []).map((modifier) => String(modifier.id)));
     const modifierWithoutMaximum = modifiers.find((modifier) =>
       modifier.type === "add_on"
       && !existingModifierIds.has(String(modifier.id))
       && (!Number.isInteger(Number(modifier.maxQuantity)) || Number(modifier.maxQuantity) <= 0));
     if (modifierWithoutMaximum) {
+      setRecipeFormTab("modifiers");
       toast.error(`Set a maximum add-on count for ${modifierWithoutMaximum.name}`);
       return;
     }
 
     if (ingredients.length === 0) {
+      setRecipeFormTab("details");
       toast.error("Please add at least one ingredient");
       return;
     }
@@ -1065,22 +1076,27 @@ export function RecipeBOM() {
     const prepTime = parseInt(newRecipe.prepTime);
 
     if (!Number.isFinite(servings) || servings <= 0) {
+      setRecipeFormTab("details");
       toast.error("Servings must be greater than zero");
       return;
     }
     if (!Number.isFinite(yieldPercentage) || yieldPercentage <= 0 || yieldPercentage > 100) {
+      setRecipeFormTab("details");
       toast.error("Yield percentage must be between 1 and 100");
       return;
     }
     if (!Number.isFinite(targetFoodCost) || targetFoodCost <= 0 || targetFoodCost > 100) {
+      setRecipeFormTab("details");
       toast.error("Target food cost percentage must be between 1 and 100");
       return;
     }
     if (newRecipe.sellingPrice && (!Number.isFinite(sellingPriceInput) || sellingPriceInput <= 0)) {
+      setRecipeFormTab("details");
       toast.error("Menu selling price must be greater than zero when entered");
       return;
     }
     if (!Number.isFinite(prepTime) || prepTime < 0) {
+      setRecipeFormTab("details");
       toast.error("Prep time cannot be negative");
       return;
     }
@@ -1237,6 +1253,7 @@ export function RecipeBOM() {
     }
 
     setEditingRecipe(recipe);
+    setRecipeFormTab("details");
     setNewRecipe({
       name: recipe.name,
       description: recipe.description ?? recipe.menuItem?.description ?? "",
@@ -1392,6 +1409,7 @@ export function RecipeBOM() {
   const handleOpenCreateModal = () => {
     setShowCreateModal(true);
     setEditingRecipe(null);
+    setRecipeFormTab("details");
     setIngredientSearch("");
     setIsIngredientPickerOpen(false);
     setIngredients([]);
@@ -1707,8 +1725,8 @@ export function RecipeBOM() {
       {/* Create Recipe Modal */}
       {showCreateModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => { if (!isRecipeSubmitting) setShowCreateModal(false); }}>
-          <div className="bg-card rounded-2xl shadow-xl border border-border w-full max-w-3xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-            <div className="sticky top-0 bg-card p-6 border-b border-border flex items-center justify-between">
+          <div className="flex h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex shrink-0 items-center justify-between border-b border-border bg-card p-6">
               <h2 className="text-2xl font-bold text-foreground">{editingRecipe ? "Edit Recipe" : "Create New Recipe"}</h2>
               <button
                 onClick={() => { if (!isRecipeSubmitting) setShowCreateModal(false); }}
@@ -1719,7 +1737,42 @@ export function RecipeBOM() {
               </button>
             </div>
 
-            <form onSubmit={handleCreateRecipe} className="p-6 space-y-6">
+            <form onSubmit={handleCreateRecipe} className="flex min-h-0 flex-1 flex-col">
+              <div className="shrink-0 border-b border-border bg-card px-4 pt-3 sm:px-6" role="tablist" aria-label="Recipe form sections">
+                <div className="flex gap-1 overflow-x-auto">
+                  {([
+                    { id: "details", label: "Recipe Details & BOM", count: ingredients.length },
+                    { id: "variants", label: "Size Variants", count: sizeVariants.length },
+                    { id: "modifiers", label: "Menu Modifiers", count: menuModifiers.length },
+                  ] as const).map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      role="tab"
+                      id={`recipe-tab-${tab.id}`}
+                      aria-selected={recipeFormTab === tab.id}
+                      aria-controls={`recipe-panel-${tab.id}`}
+                      onClick={() => setRecipeFormTab(tab.id)}
+                      className={`flex shrink-0 items-center gap-2 border-b-2 px-3 py-3 text-sm font-medium transition-colors ${
+                        recipeFormTab === tab.id
+                          ? "border-primary text-primary"
+                          : "border-transparent text-muted-foreground hover:border-border hover:text-foreground"
+                      }`}
+                    >
+                      {tab.label}
+                      <span className={`rounded-full px-2 py-0.5 text-[11px] ${
+                        recipeFormTab === tab.id ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"
+                      }`}>
+                        {tab.count}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
+              {recipeFormTab === "details" && (
+                <div id="recipe-panel-details" role="tabpanel" aria-labelledby="recipe-tab-details" className="space-y-6">
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label htmlFor="name" className="block text-sm mb-2 text-foreground font-medium">
@@ -2078,7 +2131,11 @@ export function RecipeBOM() {
                 )}
               </div>
 
-              <div className="rounded-xl border border-violet-200 bg-violet-50/30 p-4">
+              </div>
+              )}
+
+              {recipeFormTab === "variants" && (
+              <div id="recipe-panel-variants" role="tabpanel" aria-labelledby="recipe-tab-variants" className="rounded-xl border border-violet-200 bg-violet-50/30 p-4">
                 <div className="mb-4 flex items-start justify-between gap-3">
                   <div>
                     <h3 className="text-lg font-semibold text-foreground">Size Variants</h3>
@@ -2167,8 +2224,10 @@ export function RecipeBOM() {
                   </div>
                 )}
               </div>
+              )}
 
-              <div className="rounded-xl border border-border bg-card p-4">
+              {recipeFormTab === "modifiers" && (
+              <div id="recipe-panel-modifiers" role="tabpanel" aria-labelledby="recipe-tab-modifiers" className="rounded-xl border border-border bg-card p-4">
                 <div className="mb-4 flex items-center justify-between gap-3">
                   <div>
                     <h3 className="text-lg font-semibold text-foreground">Menu Modifiers</h3>
@@ -2497,7 +2556,10 @@ export function RecipeBOM() {
                   )}
                 </div>
               </div>
+              )}
 
+              {recipeFormTab === "details" && (
+              <>
               <div className="grid grid-cols-1 gap-3 rounded-xl border border-border bg-muted/30 p-4 md:grid-cols-3">
                 <div>
                   <p className="text-xs text-muted-foreground">Raw ingredient cost</p>
@@ -2543,8 +2605,11 @@ export function RecipeBOM() {
                   placeholder="Enter cooking instructions..."
                 />
               </div>
+              </>
+              )}
+              </div>
 
-              <div className="flex gap-3 pt-4 border-t border-border">
+              <div className="flex shrink-0 gap-3 border-t border-border bg-card p-4 sm:px-6">
                 <button
                   type="submit"
                   disabled={isRecipeSubmitting}
