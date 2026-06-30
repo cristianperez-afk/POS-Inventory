@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { QueryClientProvider } from '@tanstack/react-query';
-import { Loader2 } from 'lucide-react';
 import { LoginPage } from '../auth/pages/LoginPage';
 import { AdminDashboard } from './components/AdminDashboard';
 import { SuperadminDashboard } from '../superadmin/pages/SuperadminDashboard';
@@ -293,7 +292,7 @@ export default function App() {
     <QueryClientProvider client={appQueryClient}>
       <div className="size-full bg-background">
         {authRestoring ? (
-          <AuthRestoringScreen />
+          <LoginPage onLogin={handleLogin} />
         ) : (
         <StoreSettingsProvider currentUser={currentUser}>
           <AppAlertProvider>
@@ -443,17 +442,6 @@ export default function App() {
         )}
       </div>
     </QueryClientProvider>
-  );
-}
-
-function AuthRestoringScreen() {
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-background">
-      <div className="flex items-center gap-3 rounded-md border border-border bg-card px-4 py-3 text-sm text-muted-foreground shadow-sm">
-        <Loader2 className="size-4 animate-spin text-primary" />
-        <span>Restoring session...</span>
-      </div>
-    </div>
   );
 }
 
