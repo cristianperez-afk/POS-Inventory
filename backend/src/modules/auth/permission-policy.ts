@@ -34,6 +34,7 @@ export const ROLE_PERMISSIONS: Record<string, string[]> = {
     'theme:manage_personal',
   ],
   STAFF: ['pos:read', 'pos:create_order', 'theme:manage_personal'],
+  KITCHEN: ['kitchen:read', 'kitchen:update_status', 'theme:manage_personal'],
 };
 
 export function getPermissionsForUser(user: AuthenticatedUser | undefined) {
@@ -48,7 +49,9 @@ export function getPermissionsForUser(user: AuthenticatedUser | undefined) {
 
   // Kitchen accounts are limited to viewing Kitchen Orders / Recipe-BOM and
   // updating preparation status — they get no POS or general inventory access.
-  if (user?.role === 'STAFF' && user.staff_type === 'KITCHEN_STAFF') {
+  // A kitchen account is identified by the dedicated KITCHEN role, or by a STAFF
+  // user flagged with the KITCHEN_STAFF staff type.
+  if (String(user?.role ?? '').toUpperCase() === 'KITCHEN' || user?.staff_type === 'KITCHEN_STAFF') {
     permissions.delete('pos:read');
     permissions.delete('pos:create_order');
     permissions.add('kitchen:read');
