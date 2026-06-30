@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { getItemsSoldReport } from '../../app/api/client';
-import { Plus, Edit2, Trash2, Search, ChevronRight, ChevronDown, Folder, FolderOpen, AlertTriangle, Package, PackagePlus, ShoppingCart, PackageCheck, Layers, X, Eye, TrendingUp, TrendingDown, RefreshCw, CheckCircle, Users, ClipboardList, Activity } from 'lucide-react';
+import { Plus, Edit2, Trash2, Search, ChevronRight, ChevronDown, Folder, FolderOpen, Package, PackagePlus, ShoppingCart, PackageCheck, Layers, X, Eye, TrendingUp, TrendingDown, RefreshCw, CheckCircle, Users, ClipboardList } from 'lucide-react';
 import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
 import type {
   Adjustment,
@@ -43,7 +43,6 @@ export function ReportsView() {
     loadUsers: currentUser?.role === 'Admin',
   });
   const [activeTab, setActiveTab] = useState<'overview' | 'inventory' | 'sold' | 'transfers' | 'operations' | 'audit' | 'admin'>('overview');
-  const [auditModuleFilter, setAuditModuleFilter] = useState('all');
   const [activityQuery, setActivityQuery] = useState('');
   const [activityDateFrom, setActivityDateFrom] = useState('');
   const [activityDateTo, setActivityDateTo] = useState('');
@@ -57,7 +56,6 @@ export function ReportsView() {
     queryFn: () => getItemsSoldReport({ module: 'RETAIL', from: soldFrom || undefined, to: soldTo || undefined }),
   });
   const sold = soldQuery.data;
-  const [selectedLocation, setSelectedLocation] = useState<string>('all');
 
   const isAdmin = currentUser?.role === 'Admin';
   const hasFullAuditTrailAccess = currentUser?.role === 'Admin';
@@ -261,49 +259,6 @@ export function ReportsView() {
   // status change / receive / adjust) written by the backend audit log.
   const { data: auditTrail = [], isLoading: auditTrailLoading } = useRetailAuditLogsQuery();
 
-  // Activity Log — a POS-style event feed over the real audit trail, with the same
-  // filter set as the POS Activity Log page (date range, user, module, action,
-  // free-text search).
-  const activityUsers = useMemo(() => {
-    const map = new Map<string, string>();
-    auditTrail.forEach((entry) => {
-      const value = (entry.performedBy || '').trim();
-      if (value && !map.has(value)) map.set(value, entry.performedByName || value);
-    });
-    return Array.from(map.entries())
-      .map(([value, label]) => ({ value, label }))
-      .sort((a, b) => a.label.localeCompare(b.label));
-  }, [auditTrail]);
-
-  const activityModules = useMemo(
-    () => ['All', ...Array.from(new Set(auditTrail.map((e) => e.module).filter(Boolean))).sort()],
-    [auditTrail],
-  );
-  const activityActions = useMemo(
-    () => ['All', ...Array.from(new Set(auditTrail.map((e) => e.action).filter(Boolean))).sort()],
-    [auditTrail],
-  );
-
-  const activityLog = useMemo(() => {
-    const query = activityQuery.trim().toLowerCase();
-    return auditTrail.filter((entry) => {
-      if (activityUserFilter !== 'All' && (entry.performedBy || '').toLowerCase() !== activityUserFilter.toLowerCase()) return false;
-      if (activityModuleFilter !== 'All' && entry.module !== activityModuleFilter) return false;
-      if (activityActionFilter !== 'All' && entry.action !== activityActionFilter) return false;
-      const day = (entry.date || '').slice(0, 10);
-      if (activityDateFrom && (!day || day < activityDateFrom)) return false;
-      if (activityDateTo && (!day || day > activityDateTo)) return false;
-      if (query) {
-        const haystack = [
-          entry.performedByName, entry.performedBy, entry.module, entry.action,
-          entry.item, entry.quantity, entry.details,
-        ].join(' ').toLowerCase();
-        if (!haystack.includes(query)) return false;
-      }
-      return true;
-    });
-  }, [auditTrail, activityUserFilter, activityModuleFilter, activityActionFilter, activityDateFrom, activityDateTo, activityQuery]);
-
   const visibleAuditTrail = useMemo(() => {
     if (hasFullAuditTrailAccess) return auditTrail;
     const currentEmail = (currentUser?.email || '').trim().toLowerCase();
@@ -322,18 +277,56 @@ export function ReportsView() {
     return { byModule, latest };
   }, [visibleAuditTrail]);
 
-  // Summary cards filter the activity table below by module; clicking the active
-  // card (or Total Events) clears it back to "all".
-  const toggleAuditModule = (module: string) => {
-    setAuditModuleFilter((current) => (current === module ? 'all' : module));
-  };
-  const filteredAuditTrail = useMemo(
-    () =>
-      auditModuleFilter === 'all'
-        ? visibleAuditTrail
-        : visibleAuditTrail.filter((entry) => entry.module === auditModuleFilter),
-    [visibleAuditTrail, auditModuleFilter],
+  // Filter options for the audit trail, scoped to the visible (role-limited) rows.
+  const activityUsers = useMemo(() => {
+    const map = new Map<string, string>();
+    visibleAuditTrail.forEach((entry) => {
+      const value = (entry.performedBy || '').trim();
+      if (value && !map.has(value)) map.set(value, entry.performedByName || value);
+    });
+    return Array.from(map.entries())
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [visibleAuditTrail]);
+
+  const activityModules = useMemo(
+    () => ['All', ...Array.from(new Set(visibleAuditTrail.map((e) => e.module).filter(Boolean))).sort()],
+    [visibleAuditTrail],
   );
+  const activityActions = useMemo(
+    () => ['All', ...Array.from(new Set(visibleAuditTrail.map((e) => e.action).filter(Boolean))).sort()],
+    [visibleAuditTrail],
+  );
+
+  // Summary cards toggle the same Module filter the dropdown uses; clicking the
+  // active card (or Total Events) clears it back to "All".
+  const toggleAuditModule = (module: string) => {
+    setActivityModuleFilter((current) => (current === module ? 'All' : module));
+  };
+
+  // Single audit feed shared by the summary cards and the full filter bar (date
+  // range, user, module, action, free-text search), scoped to what the current
+  // user is allowed to see.
+  const filteredAuditTrail = useMemo(() => {
+    const query = activityQuery.trim().toLowerCase();
+    return visibleAuditTrail.filter((entry) => {
+      if (activityUserFilter !== 'All' && (entry.performedBy || '').toLowerCase() !== activityUserFilter.toLowerCase()) return false;
+      if (activityModuleFilter !== 'All' && entry.module !== activityModuleFilter) return false;
+      if (activityActionFilter !== 'All' && entry.action !== activityActionFilter) return false;
+      const day = (entry.date || '').slice(0, 10);
+      if (activityDateFrom && (!day || day < activityDateFrom)) return false;
+      if (activityDateTo && (!day || day > activityDateTo)) return false;
+      if (query) {
+        const haystack = [
+          entry.performedByName, entry.performedBy, entry.module, entry.action,
+          entry.item, entry.quantity, entry.details,
+        ].join(' ').toLowerCase();
+        if (!haystack.includes(query)) return false;
+      }
+      return true;
+    });
+  }, [visibleAuditTrail, activityUserFilter, activityModuleFilter, activityActionFilter, activityDateFrom, activityDateTo, activityQuery]);
+
   const auditCardClass = (active: boolean) =>
     `text-left w-full bg-white rounded-[14px] p-6 border shadow-sm cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-lg hover:border-secondary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/40 active:translate-y-0 active:shadow-md ${
       active ? 'border-secondary bg-secondary/5 shadow-md' : 'border-border'
@@ -413,15 +406,16 @@ export function ReportsView() {
         break;
 
       case 'Audit':
-        csvContent = 'Date,Module,Action,Item,Quantity,Performed By,Reference,Details\n';
-        visibleAuditTrail.forEach(entry => {
+        csvContent = 'Date,User,Role,Module,Action,Item,Quantity,Reference,Details\n';
+        filteredAuditTrail.forEach(entry => {
           csvContent += [
             formatAuditDate(entry.date),
+            entry.performedByName || entry.performedBy,
+            entry.performedByRole,
             entry.module,
             entry.action,
             entry.item,
             entry.quantity,
-            entry.performedBy,
             entry.reference,
             entry.details,
           ].map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',') + '\n';
@@ -485,32 +479,6 @@ export function ReportsView() {
           <h2 className="text-[30px] font-bold text-foreground">Reports & Analytics</h2>
           <p className="text-[14px] text-muted-foreground mt-1">Comprehensive system reports and insights</p>
         </div>
-        <div className="flex gap-3">
-            <label className="text-[12px] text-muted-foreground">
-              From
-              <input type="date" value={soldFrom} onChange={e => setSoldFrom(e.target.value)}
-              className="block mt-1 bg-card border border-border rounded-[8px] px-3 py-2 text-[14px] text-foreground cursor-pointer hover:border-secondary/60 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-secondary/40 focus:border-secondary transition-all duration-200" />
-            </label>
-            <label className="text-[12px] text-muted-foreground">
-              To
-              <input type="date" value={soldTo} onChange={e => setSoldTo(e.target.value)}
-              className="block mt-1 bg-card border border-border rounded-[8px] px-3 py-2 text-[14px] text-foreground cursor-pointer hover:border-secondary/60 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-secondary/40 focus:border-secondary transition-all duration-200" />
-            </label>
-          {(soldFrom || soldTo) && (
-            <button onClick={() => { setSoldFrom(''); setSoldTo(''); }}
-              className="self-end px-3 py-2 text-[14px] text-muted-foreground hover:text-foreground">Clear</button>
-          )}
-            <select
-              value={selectedLocation}
-              onChange={(e) => setSelectedLocation(e.target.value)}
-            className="bg-card border border-border rounded-[8px] px-4 py-2 text-[14px] text-foreground cursor-pointer hover:border-secondary/60 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-secondary/40 focus:border-secondary transition-all duration-200"
-          >
-            <option value="all">All Locations</option>
-            {locations.map(loc => (
-              <option key={loc.id} value={loc.name}>{loc.name}</option>
-            ))}
-          </select>
-        </div>
       </div>
 
       {/* Tabs */}
@@ -565,17 +533,19 @@ export function ReportsView() {
         >
           Operations Report
         </button>
-        <button
-          onClick={() => setActiveTab('audit')}
-          className={`px-6 py-3 text-[14px] font-medium border-b-2 rounded-t-lg transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 flex items-center gap-2 ${
-            activeTab === 'audit'
-              ? 'text-secondary border-secondary'
-              : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/40 hover:border-border'
-          }`}
-        >
-          <ClipboardList className="size-4" />
-          Audit Trail
-        </button>
+        {isAdmin && (
+          <button
+            onClick={() => setActiveTab('audit')}
+            className={`px-6 py-3 text-[14px] font-medium border-b-2 rounded-t-lg transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 flex items-center gap-2 ${
+              activeTab === 'audit'
+                ? 'text-secondary border-secondary'
+                : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/40 hover:border-border'
+            }`}
+          >
+            <ClipboardList className="size-4" />
+            Audit Trail
+          </button>
+        )}
         {isAdmin && (
           <button
             onClick={() => setActiveTab('admin')}
@@ -1145,7 +1115,7 @@ export function ReportsView() {
         </div>
       )}
 
-      {activeTab === 'audit' && (
+      {activeTab === 'audit' && isAdmin && (
         <div>
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-[20px] font-semibold text-foreground">Audit Trail</h3>
@@ -1163,15 +1133,15 @@ export function ReportsView() {
             </div>
 
             <div className="grid grid-cols-4 gap-4 mb-4">
-            <button type="button" onClick={() => toggleAuditModule('all')} aria-pressed={auditModuleFilter === 'all'} aria-label="Show all audit events" className={auditCardClass(auditModuleFilter === 'all')}>
+            <button type="button" onClick={() => toggleAuditModule('All')} aria-pressed={activityModuleFilter === 'All'} aria-label="Show all audit events" className={auditCardClass(activityModuleFilter === 'All')}>
               <p className="text-muted-foreground text-[12px] mb-2">Total Events</p>
               <p className="text-foreground text-[24px] font-bold">{visibleAuditTrail.length}</p>
             </button>
-            <button type="button" onClick={() => toggleAuditModule('Purchase Order')} aria-pressed={auditModuleFilter === 'Purchase Order'} aria-label="Filter by purchase order events" className={auditCardClass(auditModuleFilter === 'Purchase Order')}>
+            <button type="button" onClick={() => toggleAuditModule('Purchase Order')} aria-pressed={activityModuleFilter === 'Purchase Order'} aria-label="Filter by purchase order events" className={auditCardClass(activityModuleFilter === 'Purchase Order')}>
               <p className="text-muted-foreground text-[12px] mb-2">Purchase Orders</p>
               <p className="text-secondary text-[24px] font-bold">{auditSummary.byModule['Purchase Order'] || 0}</p>
             </button>
-            <button type="button" onClick={() => toggleAuditModule('Goods Received')} aria-pressed={auditModuleFilter === 'Goods Received'} aria-label="Filter by goods received events" className={auditCardClass(auditModuleFilter === 'Goods Received')}>
+            <button type="button" onClick={() => toggleAuditModule('Goods Received')} aria-pressed={activityModuleFilter === 'Goods Received'} aria-label="Filter by goods received events" className={auditCardClass(activityModuleFilter === 'Goods Received')}>
               <p className="text-muted-foreground text-[12px] mb-2">Goods Received</p>
               <p className="text-success text-[24px] font-bold">{auditSummary.byModule['Goods Received'] || 0}</p>
             </button>
@@ -1185,37 +1155,60 @@ export function ReportsView() {
             <div className="flex items-center justify-between mb-4">
               <h4 className="text-[16px] font-semibold text-foreground">Recent Activity</h4>
               <p className="text-[12px] text-muted-foreground">
-                {auditModuleFilter === 'all' ? '' : `${auditModuleFilter} • `}
+                {activityModuleFilter === 'All' ? '' : `${activityModuleFilter} • `}
                 {filteredAuditTrail.length} record{filteredAuditTrail.length !== 1 ? 's' : ''}
               </p>
             </div>
+
+            <div className="mb-4 grid gap-3 md:grid-cols-5">
+              <input type="date" value={activityDateFrom} onChange={(e) => setActivityDateFrom(e.target.value)} className="rounded-[8px] border border-border px-3 py-2 text-[13px]" />
+              <input type="date" value={activityDateTo} onChange={(e) => setActivityDateTo(e.target.value)} className="rounded-[8px] border border-border px-3 py-2 text-[13px]" />
+              <select value={activityUserFilter} onChange={(e) => setActivityUserFilter(e.target.value)} className="rounded-[8px] border border-border px-3 py-2 text-[13px] bg-white">
+                <option value="All">All Users</option>
+                {activityUsers.map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}
+              </select>
+              <select value={activityModuleFilter} onChange={(e) => setActivityModuleFilter(e.target.value)} className="rounded-[8px] border border-border px-3 py-2 text-[13px] bg-white">
+                {activityModules.map((m) => <option key={m} value={m}>{m === 'All' ? 'All Modules' : m}</option>)}
+              </select>
+              <select value={activityActionFilter} onChange={(e) => setActivityActionFilter(e.target.value)} className="rounded-[8px] border border-border px-3 py-2 text-[13px] bg-white">
+                {activityActions.map((a) => <option key={a} value={a}>{a === 'All' ? 'All Actions' : a}</option>)}
+              </select>
+              <div className="relative md:col-span-5">
+                <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <input value={activityQuery} onChange={(e) => setActivityQuery(e.target.value)} placeholder="Search activity details..." className="w-full rounded-[8px] border border-border py-2 pl-9 pr-3 text-[13px]" />
+              </div>
+            </div>
+
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[900px]">
+              <table className="w-full min-w-[1040px]">
                 <thead className="bg-muted">
                   <tr>
                     <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Date</th>
+                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">User</th>
+                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Role</th>
                     <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Module</th>
                     <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Action</th>
                     <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Item</th>
                     <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Qty</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">By</th>
                     <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Reference</th>
                     <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Details</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/50">
                   {auditTrailLoading ? (
-                    <tr><td colSpan={8}><InlineDataLoading label="Loading audit trail…" /></td></tr>
+                    <tr><td colSpan={9}><InlineDataLoading label="Loading audit trail…" /></td></tr>
                   ) : filteredAuditTrail.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="px-4 py-8 text-center text-[14px] text-muted-foreground">
+                      <td colSpan={9} className="px-4 py-8 text-center text-[14px] text-muted-foreground">
                         No audit trail records found
                       </td>
                     </tr>
                   ) : (
-                    filteredAuditTrail.slice(0, 100).map(entry => (
+                    filteredAuditTrail.slice(0, 200).map(entry => (
                       <tr key={entry.id} className="hover:bg-muted transition-colors">
                         <td className="px-4 py-3 text-[12px] text-muted-foreground whitespace-nowrap">{formatAuditDate(entry.date)}</td>
+                        <td className="px-4 py-3 text-[13px] text-foreground">{entry.performedByName || entry.performedBy || 'System'}</td>
+                        <td className="px-4 py-3 text-[13px] text-muted-foreground capitalize">{entry.performedByRole || '—'}</td>
                         <td className="px-4 py-3">
                           <span className={`inline-flex px-2 py-1 rounded-[6px] text-[11px] font-medium ${
                             entry.module === 'Purchase Order' ? 'bg-secondary/10 text-secondary' :
@@ -1229,7 +1222,6 @@ export function ReportsView() {
                         <td className="px-4 py-3 text-[13px] font-medium text-foreground capitalize">{entry.action.toLowerCase()}</td>
                         <td className="px-4 py-3 text-[13px] text-foreground">{entry.item}</td>
                         <td className="px-4 py-3 text-[13px] text-muted-foreground whitespace-nowrap">{entry.quantity || '-'}</td>
-                        <td className="px-4 py-3 text-[13px] text-muted-foreground">{entry.performedBy || 'System'}</td>
                         <td className="px-4 py-3 text-[12px] text-secondary font-medium whitespace-nowrap">{entry.reference}</td>
                         <td className="px-4 py-3 text-[13px] text-muted-foreground max-w-[260px] truncate">{entry.details || '-'}</td>
                       </tr>
@@ -1244,31 +1236,6 @@ export function ReportsView() {
 
       {activeTab === 'admin' && isAdmin && confidentialReportData && (
         <div className="mt-6 pt-6 border-t border-border">
-          <div className="flex items-center gap-2 mb-4">
-            <div className="bg-destructive text-white px-3 py-1 rounded-[6px] text-[12px] font-bold flex items-center gap-2">
-              <Eye className="size-4" />
-              CONFIDENTIAL - ADMIN ONLY
-            </div>
-            <div className="flex-1" />
-            <button
-              onClick={() => handleExportReport('Confidential')}
-              className="bg-destructive text-white px-4 py-2 rounded-[8px] text-[14px] font-medium hover:bg-destructive transition-colors"
-            >
-              Export Confidential Report
-            </button>
-          </div>
-
-          <div className="rounded-[14px] border-2 border-red-300 bg-red-50 p-4 mb-6 dark:border-red-700 dark:bg-red-950/40">
-            <p className="flex items-center gap-2 text-[14px] font-semibold text-red-800 dark:text-red-200">
-              <AlertTriangle className="size-4" />
-              Warning
-            </p>
-            <p className="text-[12px] text-red-900 mt-1 dark:text-red-100">
-              This report contains sensitive financial and operational data. Access is restricted to administrators only.
-              Do not share this information with unauthorized personnel.
-            </p>
-          </div>
-
           {/* System Audit */}
           <div className="bg-card border border-border rounded-[14px] p-6 mb-4">
             <h4 className="text-[16px] font-semibold text-foreground mb-4">System Audit Summary</h4>
@@ -1295,69 +1262,6 @@ export function ReportsView() {
                   {confidentialReportData.systemAudit.staffUsers + confidentialReportData.systemAudit.managerUsers}
                 </p>
               </div>
-            </div>
-          </div>
-
-          {/* Activity Log */}
-          <div className="bg-white border border-border rounded-[14px] p-6 mb-4">
-            <div className="flex items-center gap-2 mb-1">
-              <Activity className="size-4 text-secondary" />
-              <h4 className="text-[16px] font-semibold text-foreground">Activity Log</h4>
-            </div>
-            <p className="text-[12px] text-muted-foreground mb-4">
-              Review recorded inventory actions and staff activity. {activityLog.length} of {auditTrail.length} entr{auditTrail.length === 1 ? 'y' : 'ies'}.
-            </p>
-
-            <div className="mb-4 grid gap-3 md:grid-cols-5">
-              <input type="date" value={activityDateFrom} onChange={(e) => setActivityDateFrom(e.target.value)} className="rounded-[8px] border border-border px-3 py-2 text-[13px]" />
-              <input type="date" value={activityDateTo} onChange={(e) => setActivityDateTo(e.target.value)} className="rounded-[8px] border border-border px-3 py-2 text-[13px]" />
-              <select value={activityUserFilter} onChange={(e) => setActivityUserFilter(e.target.value)} className="rounded-[8px] border border-border px-3 py-2 text-[13px] bg-white">
-                <option value="All">All Users</option>
-                {activityUsers.map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}
-              </select>
-              <select value={activityModuleFilter} onChange={(e) => setActivityModuleFilter(e.target.value)} className="rounded-[8px] border border-border px-3 py-2 text-[13px] bg-white">
-                {activityModules.map((m) => <option key={m} value={m}>{m === 'All' ? 'All Modules' : m}</option>)}
-              </select>
-              <select value={activityActionFilter} onChange={(e) => setActivityActionFilter(e.target.value)} className="rounded-[8px] border border-border px-3 py-2 text-[13px] bg-white">
-                {activityActions.map((a) => <option key={a} value={a}>{a === 'All' ? 'All Actions' : a}</option>)}
-              </select>
-              <div className="relative md:col-span-5">
-                <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                <input value={activityQuery} onChange={(e) => setActivityQuery(e.target.value)} placeholder="Search activity details..." className="w-full rounded-[8px] border border-border py-2 pl-9 pr-3 text-[13px]" />
-              </div>
-            </div>
-
-            <div className="overflow-x-auto rounded-[8px] border border-border">
-              <table className="w-full text-[13px] min-w-[760px]">
-                <thead className="bg-muted">
-                  <tr>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Date &amp; Time</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">User</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Role</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Module</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Action</th>
-                    <th className="px-4 py-3 text-left text-[12px] font-semibold text-foreground uppercase tracking-wider">Details</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {auditTrailLoading ? (
-                    <tr><td colSpan={6}><InlineDataLoading label="Loading activity…" /></td></tr>
-                  ) : activityLog.length === 0 ? (
-                    <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">No activity found.</td></tr>
-                  ) : activityLog.slice(0, 200).map((entry) => (
-                    <tr key={entry.id} className="align-top hover:bg-muted transition-colors">
-                      <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">{formatAuditDate(entry.date)}</td>
-                      <td className="px-4 py-3 text-foreground">{entry.performedByName || 'System'}</td>
-                      <td className="px-4 py-3 capitalize">{entry.performedByRole || '—'}</td>
-                      <td className="px-4 py-3"><span className="inline-flex rounded-full bg-secondary/10 px-2 py-1 text-[11px] font-medium text-secondary">{entry.module}</span></td>
-                      <td className="px-4 py-3 capitalize text-foreground">{entry.action.toLowerCase()}</td>
-                      <td className="px-4 py-3 text-muted-foreground">
-                        {[entry.item && `${entry.item}${entry.quantity ? ` (${entry.quantity})` : ''}`, entry.details].filter(Boolean).join(' — ') || '—'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
             </div>
           </div>
 

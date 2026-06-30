@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Package, Search, TrendingDown, TrendingUp, AlertCircle, RefreshCw, Download, BarChart3, Calendar, Clock } from "lucide-react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
@@ -83,6 +83,34 @@ export function StockControl() {
   const { data: inventoryMovements = [], isLoading: movementsLoading } = useRestaurantInventoryMovementsQuery();
   const stockDataLoading = productsLoading || wasteLoading || adjustmentsLoading || movementsLoading;
   const queryClient = useQueryClient();
+
+  // Focus a specific item when arriving from a notification deep-link: switch to the
+  // view matching the alert type and pre-fill the search to isolate that one item.
+  useEffect(() => {
+    const apply = () => {
+      const hint = window.__INVENTORY_DEEPLINK__;
+      if (!hint || hint.entityType !== "INVENTORY_ITEM") return;
+      // A per-item alert carries an entityId to isolate; an aggregate alert does not
+      // and just opens the relevant view.
+      let searchValue = "";
+      if (hint.entityId) {
+        const match = products.find((p) => p.backendId === hint.entityId);
+        if (!match) return; // inventory not loaded yet — retry when it arrives
+        searchValue = match.sku || match.name;
+      }
+      const t = hint.type ?? "";
+      setViewType(t.startsWith("EXPIRY") ? "expiring" : t === "LOW_STOCK" ? "low-stock" : "control");
+      setStatusFilter("all");
+      setClassificationFilter("all");
+      setExpiryDateFilter("all");
+      setExpiryPeriodFilter("all");
+      setSearchQuery(searchValue);
+      window.__INVENTORY_DEEPLINK__ = null;
+    };
+    apply();
+    window.addEventListener("inventory:deeplink", apply);
+    return () => window.removeEventListener("inventory:deeplink", apply);
+  }, [products]);
 
   const getRecordedOutflowQuantity = (productName: string) => {
     const targetName = normalizeName(productName);

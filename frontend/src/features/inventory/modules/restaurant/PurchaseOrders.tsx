@@ -21,6 +21,8 @@ import {
   EXPECTED_DELIVERY_TIME_WINDOW_LABEL,
   formatExpectedDelivery,
   getExpectedDeliveryTimeWindowError,
+  getExpectedDeliveryPastError,
+  getMinExpectedDeliveryInput,
   getDeliveryDelayLabel,
   isPurchaseOrderDelayed,
 } from "../lib/purchaseOrderDelivery";
@@ -508,6 +510,11 @@ if (
       toast.error("Please add at least one item to the order");
       return;
     }
+    const deliveryPastError = getExpectedDeliveryPastError(newOrder.expectedDelivery);
+    if (deliveryPastError) {
+      toast.error(deliveryPastError);
+      return;
+    }
     const deliveryTimeError = getExpectedDeliveryTimeWindowError(newOrder.expectedDelivery);
     if (deliveryTimeError) {
       toast.error(deliveryTimeError);
@@ -949,6 +956,7 @@ if (
                   type="datetime-local"
                   value={newOrder.expectedDelivery}
                   onChange={handleInputChange}
+                  min={getMinExpectedDeliveryInput()}
                   className="w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
                   required
                 />
@@ -1278,6 +1286,7 @@ if (
                   type="datetime-local"
                   value={newOrder.expectedDelivery}
                   onChange={handleInputChange}
+                  min={getMinExpectedDeliveryInput()}
                   className="w-full px-4 py-3 text-sm bg-input-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
                   required
                 />

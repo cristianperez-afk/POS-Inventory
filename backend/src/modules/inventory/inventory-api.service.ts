@@ -205,6 +205,11 @@ export class InventoryApiService {
     const scope = await this.resolveScope(headers);
     const itemType = String(body.itemType ?? 'RETAIL_ITEM');
     const name = String(body.name ?? 'Untitled Item').trim();
+    // Staff may register a new item (e.g. a brand-new product on a purchase order),
+    // but only an Admin can give it opening stock directly. For everyone else the
+    // initial quantity is forced to 0 — their stock must go through the adjustment
+    // approval flow, mirroring the guard in updateInventoryItem.
+    const initialQuantity = scope.user.role === 'Admin' ? Number(body.quantity ?? 0) : 0;
 
     // Reuse an existing raw item with the same name instead of creating a
     // duplicate (e.g. ordering the same new ingredient twice). Scoped to
@@ -272,7 +277,7 @@ export class InventoryApiService {
         subcategory,
         body.size ?? null,
         body.condition ?? null,
-        Number(body.quantity ?? 0),
+        initialQuantity,
         Number(body.price ?? 0),
         body.costPrice === undefined ? null : Number(body.costPrice),
         body.imageUrl ?? null,
@@ -297,7 +302,7 @@ export class InventoryApiService {
       entityType: 'InventoryItem',
       entityId: id,
       entityName: name,
-      quantity: `${Number(body.quantity ?? 0)} ${String(body.unit ?? '')}`.trim(),
+      quantity: `${initialQuantity} ${String(body.unit ?? '')}`.trim(),
       status: 'active',
       summary: `Added ${name} (${category})`,
       metadata: { itemType, category, subcategory, locationId },
@@ -510,8 +515,18 @@ export class InventoryApiService {
     };
   }
 
+  // Idempotently ensures the location "type" column (warehouse/store/kitchen)
+  // exists. Mirrors the other ensure* runtime-DDL helpers, so no manual migration
+  // is required for the new field.
+  private async ensureLocationTypeColumn() {
+    if (this.locationTypeColumnReady) return;
+    await this.safeQuery(`ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT 'warehouse'`);
+    this.locationTypeColumnReady = true;
+  }
+
   async listLocations(headers: HeadersLike) {
     const scope = await this.resolveScope(headers);
+    await this.ensureLocationTypeColumn();
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
         SELECT l.*, json_build_object('items', COUNT(i.id)::int) AS "_count"
@@ -528,11 +543,21 @@ export class InventoryApiService {
 
   async createLocation(headers: HeadersLike, body: Record<string, unknown>) {
     const scope = await this.resolveScope(headers);
+    // The "Add Location" UI is already Admin-only; enforce it on the server too so
+    // the API can't be called directly by a non-admin.
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can add locations.');
+    }
     const name = String(body.name ?? '').trim();
     if (!name) throw new BadRequestException('Location name is required.');
     const address = String(body.address ?? '').trim();
     const manager = String(body.manager ?? '').trim();
     const phone = String(body.phone ?? '').trim();
+    const allowedTypes = ['warehouse', 'store', 'kitchen'];
+    const typeInput = String(body.type ?? 'warehouse').trim().toLowerCase();
+    const type = allowedTypes.includes(typeInput) ? typeInput : 'warehouse';
+
+    await this.ensureLocationTypeColumn();
 
     const existing = await this.safeQuery<{ id: string }>(
       `SELECT id FROM "Location" WHERE "businessId" = $1 AND lower(name) = lower($2) LIMIT 1`,
@@ -544,11 +569,11 @@ export class InventoryApiService {
 
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
-        INSERT INTO "Location" (id, name, address, manager, phone, "businessId", "updatedAt")
-        VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+        INSERT INTO "Location" (id, name, address, manager, phone, type, "businessId", "updatedAt")
+        VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
         RETURNING *, json_build_object('items', 0) AS "_count"
       `,
-      [randomUUID(), name, address, manager, phone, scope.businessId],
+      [randomUUID(), name, address, manager, phone, type, scope.businessId],
     );
     await this.recordAudit(scope, {
       category: 'Location',
@@ -2775,6 +2800,9 @@ export class InventoryApiService {
       status: 'pending',
       summary: `${items.reduce((s, i) => s + i.quantity, 0)} unit(s) requested`,
     });
+
+    await this.notifyTransferRequested(scope, { id: transferId, transferNumber });
+
     return this.getTransferRow(scope, transferId);
   }
 
@@ -2786,9 +2814,12 @@ export class InventoryApiService {
       throw new ForbiddenException('Only an Admin can dispatch transfers.');
     }
 
+    let transferNumber = '';
+    let createdById: string | null = null;
+
     await this.databaseService.withTransaction(async (client) => {
-      const transferRows = await client.query<{ id: string; status: string; fromLocationId: string; transferNumber: string }>(
-        `SELECT id, status, "fromLocationId", "transferNumber" FROM "Transfer"
+      const transferRows = await client.query<{ id: string; status: string; fromLocationId: string; transferNumber: string; createdById: string | null }>(
+        `SELECT id, status, "fromLocationId", "transferNumber", "createdById" FROM "Transfer"
          WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule" FOR UPDATE`,
         [id, scope.businessId, scope.module],
       );
@@ -2797,6 +2828,8 @@ export class InventoryApiService {
       if (transfer.status !== 'PENDING') {
         throw new BadRequestException('Only pending transfers can be dispatched.');
       }
+      transferNumber = transfer.transferNumber;
+      createdById = transfer.createdById;
 
       const lineRows = await client.query<{ inventoryItemId: string; quantity: number }>(
         `SELECT "inventoryItemId", quantity FROM "TransferItem" WHERE "transferId" = $1`,
@@ -2851,6 +2884,9 @@ export class InventoryApiService {
       status: 'in_transit',
       summary: 'Stock removed from source location',
     });
+
+    await this.notifyTransferApproved(scope, { id, transferNumber, createdById });
+
     return this.getTransferRow(scope, id);
   }
 
@@ -2976,17 +3012,22 @@ export class InventoryApiService {
 
   // Cancel: allowed while PENDING or IN_TRANSIT. If it was already dispatched, the
   // in-transit stock is returned to the source location.
-  async cancelTransfer(headers: HeadersLike, id: string) {
+  async cancelTransfer(headers: HeadersLike, id: string, reason?: string) {
     const scope = await this.resolveScope(headers);
+    const trimmedReason = (reason ?? '').trim();
+    let transferNumber = '';
+    let createdById: string | null = null;
 
     await this.databaseService.withTransaction(async (client) => {
-      const transferRows = await client.query<{ id: string; status: string; fromLocationId: string; transferNumber: string }>(
-        `SELECT id, status, "fromLocationId", "transferNumber" FROM "Transfer"
+      const transferRows = await client.query<{ id: string; status: string; fromLocationId: string; transferNumber: string; createdById: string | null }>(
+        `SELECT id, status, "fromLocationId", "transferNumber", "createdById" FROM "Transfer"
          WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule" FOR UPDATE`,
         [id, scope.businessId, scope.module],
       );
       const transfer = transferRows.rows[0];
       if (!transfer) throw new NotFoundException(`Transfer #${id} not found`);
+      transferNumber = transfer.transferNumber;
+      createdById = transfer.createdById;
       if (!['PENDING', 'IN_TRANSIT'].includes(transfer.status)) {
         throw new BadRequestException('Only pending or in-transit transfers can be cancelled.');
       }
@@ -2994,6 +3035,16 @@ export class InventoryApiService {
       // transfer returns stock to the source, so that is an Admin-only action.
       if (transfer.status === 'IN_TRANSIT' && scope.user.role !== 'Admin') {
         throw new ForbiddenException('Only an Admin can cancel a transfer that is already in transit.');
+      }
+      // For a pending request, an Admin may reject anyone's, but a non-admin may
+      // only cancel (withdraw) a request they created themselves — they cannot
+      // reject another person's request.
+      if (
+        transfer.status === 'PENDING' &&
+        scope.user.role !== 'Admin' &&
+        transfer.createdById !== scope.user.id
+      ) {
+        throw new ForbiddenException('You can only cancel your own pending transfer requests.');
       }
 
       // Return in-transit stock to the source.
@@ -3034,8 +3085,16 @@ export class InventoryApiService {
       }
 
       await client.query(
-        `UPDATE "Transfer" SET status = 'CANCELLED', "updatedAt" = CURRENT_TIMESTAMP WHERE id = $1`,
-        [id],
+        `UPDATE "Transfer"
+           SET status = 'CANCELLED',
+               notes = CASE
+                 WHEN $2::text = '' THEN notes
+                 WHEN notes IS NULL OR length(trim(notes)) = 0 THEN 'Rejection reason: ' || $2::text
+                 ELSE notes || E'\n\nRejection reason: ' || $2::text
+               END,
+               "updatedAt" = CURRENT_TIMESTAMP
+         WHERE id = $1`,
+        [id, trimmedReason],
       );
     });
 
@@ -3045,7 +3104,16 @@ export class InventoryApiService {
       entityType: 'Transfer',
       entityId: id,
       status: 'cancelled',
+      summary: trimmedReason ? `Rejected: ${trimmedReason}` : undefined,
     });
+
+    await this.notifyTransferRejected(scope, {
+      id,
+      transferNumber,
+      createdById,
+      reason: trimmedReason,
+    });
+
     return this.getTransferRow(scope, id);
   }
 
@@ -3615,12 +3683,12 @@ export class InventoryApiService {
       throw new ForbiddenException('Only an Admin can approve bundles.');
     }
     const approvedById = scope.user.id === 'pos-bridge' ? null : scope.user.id;
-    const rows = await this.safeQuery<{ id: string; name: string }>(
+    const rows = await this.safeQuery<{ id: string; name: string; createdById: string | null }>(
       `UPDATE "BundlePackage"
          SET status = 'APPROVED', "approvedById" = $1, "approvedAt" = CURRENT_TIMESTAMP,
              "rejectionReason" = NULL, "updatedAt" = CURRENT_TIMESTAMP
        WHERE id = $2 AND "businessId" = $3 AND status = 'PENDING'
-       RETURNING id, name`,
+       RETURNING id, name, "createdById"`,
       [approvedById, id, scope.businessId],
     );
     if (!rows[0]) throw new BadRequestException('Only pending bundles can be approved.');
@@ -3632,6 +3700,14 @@ export class InventoryApiService {
       entityName: rows[0].name,
       status: 'approved',
     });
+
+    await this.notifyBundleReviewed(scope, {
+      id,
+      name: rows[0].name,
+      createdById: rows[0].createdById,
+      outcome: 'approved',
+    });
+
     return this.getBundleRow(scope, id);
   }
 
@@ -3642,11 +3718,11 @@ export class InventoryApiService {
     }
     const reason = String(body?.rejectionReason ?? body?.reason ?? '').trim();
     if (!reason) throw new BadRequestException('A rejection reason is required.');
-    const rows = await this.safeQuery<{ id: string; name: string }>(
+    const rows = await this.safeQuery<{ id: string; name: string; createdById: string | null }>(
       `UPDATE "BundlePackage"
          SET status = 'REJECTED', "rejectionReason" = $1, "updatedAt" = CURRENT_TIMESTAMP
        WHERE id = $2 AND "businessId" = $3 AND status = 'PENDING'
-       RETURNING id, name`,
+       RETURNING id, name, "createdById"`,
       [reason, id, scope.businessId],
     );
     if (!rows[0]) throw new BadRequestException('Only pending bundles can be rejected.');
@@ -3659,6 +3735,15 @@ export class InventoryApiService {
       status: 'rejected',
       summary: `Reason: ${reason}`,
     });
+
+    await this.notifyBundleReviewed(scope, {
+      id,
+      name: rows[0].name,
+      createdById: rows[0].createdById,
+      outcome: 'rejected',
+      reason,
+    });
+
     return this.getBundleRow(scope, id);
   }
 
@@ -3896,6 +3981,9 @@ export class InventoryApiService {
       status: 'pending',
       summary: `${type} • ${reason}`,
     });
+
+    await this.notifyAdjustmentSubmitted(scope, { id: adjustmentId, adjustmentNumber, type });
+
     return this.getAdjustment(headers, adjustmentId);
   }
 
@@ -3908,12 +3996,13 @@ export class InventoryApiService {
     const lowStockCandidates: LowStockCandidate[] = [];
     let auditAdjNumber = '';
     let auditAdjType = '';
+    let submitterId: string | null = null;
 
     await this.databaseService.withTransaction(async (client) => {
       lowStockCandidates.length = 0; // reset in case the transaction retries
       const adjRows = await client.query<Record<string, unknown>>(
         `
-          SELECT id, status, type, reason, "adjustmentNumber"
+          SELECT id, status, type, reason, "adjustmentNumber", "createdById"
           FROM "StockAdjustment"
           WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule"
           FOR UPDATE
@@ -3925,6 +4014,7 @@ export class InventoryApiService {
       if (adj.status !== 'PENDING') {
         throw new BadRequestException('Only PENDING adjustments can be approved.');
       }
+      submitterId = (adj.createdById as string | null) ?? null;
       auditAdjNumber = String(adj.adjustmentNumber ?? '');
       auditAdjType = String(adj.type ?? '');
 
@@ -4019,6 +4109,14 @@ export class InventoryApiService {
       status: 'approved',
       summary: `${auditAdjType} adjustment applied to stock`,
     });
+
+    await this.notifyAdjustmentReviewed(scope, {
+      id,
+      adjustmentNumber: auditAdjNumber,
+      createdById: submitterId,
+      outcome: 'approved',
+    });
+
     return this.getAdjustment(headers, id);
   }
 
@@ -4026,7 +4124,7 @@ export class InventoryApiService {
   // reorder threshold (downward only), de-duped against existing unread alerts,
   // to every Inventory Manager in the business.
   private async notifyLowStock(businessId: string, items: LowStockCandidate[]) {
-    const defaultThreshold = await this.databaseService.getDefaultLowStockThreshold(Number(businessId));
+    const defaultThreshold = await this.getDefaultLowStockThresholdForBusiness(businessId);
     const crossed = items.filter((item) => {
       const threshold = item.reorderPoint ?? item.minStock ?? defaultThreshold;
       return threshold > 0 && item.previousQuantity > threshold && item.newQuantity <= threshold;
@@ -4068,6 +4166,94 @@ export class InventoryApiService {
     }
   }
 
+  // Lazily sweeps for stock that is expiring soon or already expired and raises
+  // EXPIRY_WARNING / EXPIRY_REACHED notifications to the Admins/managers. There is
+  // no scheduler, so this runs when notifications are polled — throttled per
+  // business and gated by the store's expiry-tracking setting. De-duped against
+  // existing unread alerts. Best-effort; never throws to the caller.
+  private async maybeSweepExpiringStock(businessId: string) {
+    try {
+      const now = Date.now();
+      const last = this.expirySweepAt.get(businessId) ?? 0;
+      if (now - last < InventoryApiService.EXPIRY_SWEEP_INTERVAL_MS) return;
+      this.expirySweepAt.set(businessId, now);
+
+      // store_settings is keyed by the POS integer store id, which links to the
+      // inventory Business via stores.inventory_business_id. Many inventory
+      // businesses have no linked store row, so we only honor an *explicit*
+      // opt-out: if a linked store has expiry tracking turned off we skip;
+      // otherwise (enabled, or no mapping at all) we proceed — the items carry
+      // real expiry dates, so surfacing them is the safe default.
+      const settingRows = await this.safeQuery<{ enabled: boolean | null }>(
+        `SELECT bool_or(ss.enable_expiry_tracking) AS enabled
+           FROM store_settings ss
+           JOIN stores s ON s.id = ss.store_id
+          WHERE s.inventory_business_id = $1`,
+        [businessId],
+      );
+      if (settingRows[0]?.enabled === false) return;
+
+      const admins = await this.getActiveAdminIds(businessId);
+      if (admins.length === 0) return;
+
+      // Aggregate so a business with many expiring items raises at most one
+      // "expired" + one "expiring soon" alert per admin (not one per item), with a
+      // sample item name for context. Each bucket is de-duped against an existing
+      // unread alert of that type so repeated sweeps don't pile up.
+      const buckets = await this.safeQuery<{ bucket: string; count: number; sample: string }>(
+        `
+          SELECT bucket, count(*)::int AS count, min(name) AS sample
+          FROM (
+            SELECT name,
+                   CASE WHEN "expiryDate"::date < CURRENT_DATE THEN 'reached' ELSE 'warning' END AS bucket
+            FROM "InventoryItem"
+            WHERE "businessId" = $1
+              AND "expiryDate" IS NOT NULL
+              AND quantity > 0
+              AND "expiryDate"::date <= CURRENT_DATE + $2::int
+          ) t
+          GROUP BY bucket
+        `,
+        [businessId, InventoryApiService.EXPIRY_WARNING_DAYS],
+      );
+      if (buckets.length === 0) return;
+
+      for (const row of buckets) {
+        const reached = row.bucket === 'reached';
+        const type = reached ? 'EXPIRY_REACHED' : 'EXPIRY_WARNING';
+        const count = Number(row.count);
+        if (count <= 0) continue;
+
+        // Business-level de-dup: one unread aggregate of this type at a time.
+        const existing = await this.safeQuery<{ id: string }>(
+          `SELECT id FROM "Notification"
+            WHERE "businessId" = $1 AND type = $2::"NotificationType" AND "isRead" = false
+            LIMIT 1`,
+          [businessId, type],
+        );
+        if (existing[0]) continue;
+
+        const others = count > 1 ? ` and ${count - 1} other item${count - 1 === 1 ? '' : 's'}` : '';
+        const title = reached ? `${count} item${count === 1 ? '' : 's'} expired` : `${count} item${count === 1 ? '' : 's'} expiring soon`;
+        const message = reached
+          ? `"${row.sample}"${others} ${count === 1 ? 'has' : 'have'} expired and still ${count === 1 ? 'has' : 'have'} stock — review and write them off.`
+          : `"${row.sample}"${others} ${count === 1 ? 'is' : 'are'} expiring within ${InventoryApiService.EXPIRY_WARNING_DAYS} days — review them.`;
+
+        for (const userId of admins) {
+          await this.safeQuery(
+            `
+              INSERT INTO "Notification" (id, type, title, message, "entityType", "entityId", "userId", "businessId")
+              VALUES ($1, $2::"NotificationType", $3, $4, 'INVENTORY_ITEM', NULL, $5, $6)
+            `,
+            [randomUUID(), type, title, message, userId, businessId],
+          );
+        }
+      }
+    } catch {
+      // Best-effort only.
+    }
+  }
+
   async rejectAdjustment(headers: HeadersLike, id: string, body: { reason?: string }) {
     const scope = await this.resolveScope(headers);
     if (scope.user.role !== 'Admin') {
@@ -4076,13 +4262,13 @@ export class InventoryApiService {
     const reason = String(body?.reason ?? '').trim();
     if (!reason) throw new BadRequestException('A rejection reason is required.');
 
-    const rows = await this.safeQuery<Record<string, unknown>>(
+    const rows = await this.safeQuery<{ id: string; createdById: string | null; adjustmentNumber: string }>(
       `
         UPDATE "StockAdjustment"
         SET status = 'REJECTED', "rejectionReason" = $1, "reviewedById" = $2,
             "reviewedAt" = CURRENT_TIMESTAMP, "updatedAt" = CURRENT_TIMESTAMP
         WHERE id = $3 AND "businessId" = $4 AND module = $5::"BusinessModule" AND status = 'PENDING'
-        RETURNING id
+        RETURNING id, "createdById", "adjustmentNumber"
       `,
       [reason, scope.user.id, id, scope.businessId, scope.module],
     );
@@ -4097,11 +4283,21 @@ export class InventoryApiService {
       status: 'rejected',
       summary: `Reason: ${reason}`,
     });
+
+    await this.notifyAdjustmentReviewed(scope, {
+      id,
+      adjustmentNumber: rows[0].adjustmentNumber,
+      createdById: rows[0].createdById,
+      outcome: 'rejected',
+      reason,
+    });
+
     return this.getAdjustment(headers, id);
   }
 
   async listNotifications(headers: HeadersLike, query: Record<string, string | undefined>) {
     const scope = await this.resolveScope(headers);
+    await this.maybeSweepExpiringStock(scope.businessId);
     const onlyUnread = query.unread === 'true';
     const pagination = this.parsePagination(query, 50, 200);
     const rows = await this.safeQuery<Record<string, unknown>>(
@@ -4124,6 +4320,7 @@ export class InventoryApiService {
 
   async countUnreadNotifications(headers: HeadersLike) {
     const scope = await this.resolveScope(headers);
+    await this.maybeSweepExpiringStock(scope.businessId);
     const rows = await this.safeQuery<{ count: number }>(
       `SELECT COUNT(*)::int AS count FROM "Notification" WHERE "userId" = $1 AND "businessId" = $2 AND "isRead" = false`,
       [scope.user.id, scope.businessId],
@@ -4285,6 +4482,11 @@ export class InventoryApiService {
   // deleteById) so the action is attributed to the acting user in the audit trail.
   async deleteInventoryItem(headers: HeadersLike, id: string) {
     const scope = await this.resolveScope(headers);
+    // Deleting stock is destructive and irreversible — restrict to Admin, matching
+    // the rule that Staff cannot even change quantity directly (updateInventoryItem).
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can delete inventory items.');
+    }
     const rows = await this.safeQuery<Record<string, unknown>>(
       `DELETE FROM "InventoryItem" WHERE id = $1 AND "businessId" = $2 RETURNING *`,
       [id, scope.businessId],
@@ -4342,6 +4544,13 @@ export class InventoryApiService {
   // operational column helpers above) so deployments without a fresh migration
   // still get a working audit trail.
   private auditTableReady = false;
+  private notificationTypesReady = false;
+  private locationTypeColumnReady = false;
+  // Per-business throttle for the on-read expiry sweep (no scheduler exists, so we
+  // sweep lazily when notifications are polled, at most once per interval).
+  private readonly expirySweepAt = new Map<string, number>();
+  private static readonly EXPIRY_SWEEP_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+  private static readonly EXPIRY_WARNING_DAYS = 7;
 
   private async ensureAuditLogTable() {
     if (this.auditTableReady) return;
@@ -4373,6 +4582,268 @@ export class InventoryApiService {
       `CREATE INDEX IF NOT EXISTS "AuditLog_business_module_createdAt_idx" ON "AuditLog" ("businessId", "module", "createdAt")`,
     );
     this.auditTableReady = true;
+  }
+
+  // Idempotently ensures the custom NotificationType enum values used by the
+  // awareness notifications exist. ADD VALUE runs as its own autocommit statement
+  // (never inside a caller's transaction), so each value is committed before it
+  // is first inserted. The value list is a fixed internal constant — safe to
+  // interpolate.
+  private async ensureNotificationTypes() {
+    if (this.notificationTypesReady) return;
+    const values = [
+      'TRANSFER_REQUESTED',
+      'TRANSFER_APPROVED',
+      'TRANSFER_REJECTED',
+      'ADJUSTMENT_SUBMITTED',
+      'ADJUSTMENT_APPROVED',
+      'ADJUSTMENT_REJECTED',
+    ];
+    for (const value of values) {
+      await this.safeQuery(`ALTER TYPE "NotificationType" ADD VALUE IF NOT EXISTS '${value}'`);
+    }
+    this.notificationTypesReady = true;
+  }
+
+  private async getActiveAdminIds(businessId: string): Promise<string[]> {
+    const admins = await this.safeQuery<{ id: string }>(
+      `SELECT id FROM "User" WHERE "businessId" = $1 AND role = 'Admin' AND status = 'Active'`,
+      [businessId],
+    );
+    return admins.map((a) => a.id);
+  }
+
+  // Resolves the default low-stock threshold for an inventory business. store_settings
+  // is keyed by the POS integer store id, which links to the business via
+  // stores.inventory_business_id — so we must join, not cast the business UUID to a
+  // number. A business can own more than one store; take the highest configured
+  // default. Returns 0 when there is no linked store setting.
+  private async getDefaultLowStockThresholdForBusiness(businessId: string): Promise<number> {
+    const rows = await this.safeQuery<{ threshold: number | null }>(
+      `SELECT max(ss.default_low_stock_threshold) AS threshold
+         FROM store_settings ss
+         JOIN stores s ON s.id = ss.store_id
+        WHERE s.inventory_business_id = $1`,
+      [businessId],
+    );
+    return Number(rows[0]?.threshold ?? 0);
+  }
+
+  // Read-only configuration health for the current business. Surfaces the exact
+  // conditions that make notifications / expiry / thresholds silently no-op, so
+  // misconfiguration is visible instead of looking like "the feature is broken".
+  async getSystemDiagnostics(headers: HeadersLike) {
+    const scope = await this.resolveScope(headers);
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can view system diagnostics.');
+    }
+    const businessId = scope.businessId;
+
+    const adminIds = await this.getActiveAdminIds(businessId);
+    const storeRows = await this.safeQuery<{ store_id: number; enable_expiry_tracking: boolean | null }>(
+      `SELECT s.id AS store_id, ss.enable_expiry_tracking
+         FROM stores s
+         LEFT JOIN store_settings ss ON ss.store_id = s.id
+        WHERE s.inventory_business_id = $1`,
+      [businessId],
+    );
+    const expiryRows = await this.safeQuery<{ total: number; soon: number; expired: number }>(
+      `SELECT count(*)::int AS total,
+              count(*) FILTER (WHERE "expiryDate"::date BETWEEN CURRENT_DATE AND CURRENT_DATE + $2::int)::int AS soon,
+              count(*) FILTER (WHERE "expiryDate"::date < CURRENT_DATE)::int AS expired
+         FROM "InventoryItem"
+        WHERE "businessId" = $1 AND "expiryDate" IS NOT NULL AND quantity > 0`,
+      [businessId, InventoryApiService.EXPIRY_WARNING_DAYS],
+    );
+    const notifRows = await this.safeQuery<{ total: number; unread: number }>(
+      `SELECT count(*)::int AS total, count(*) FILTER (WHERE "isRead" = false)::int AS unread
+         FROM "Notification" WHERE "businessId" = $1`,
+      [businessId],
+    );
+
+    const defaultThreshold = await this.getDefaultLowStockThresholdForBusiness(businessId);
+    const linkedStoreIds = storeRows.map((r) => r.store_id);
+    const anyEnabled = storeRows.some((r) => r.enable_expiry_tracking === true);
+    const anyDisabled = storeRows.some((r) => r.enable_expiry_tracking === false);
+    const expiryTracking = anyEnabled ? 'enabled' : anyDisabled ? 'disabled' : 'default-on (no store setting)';
+
+    const warnings: string[] = [];
+    if (adminIds.length === 0) {
+      warnings.push('No active Admin users — admin-targeted notifications (transfer requests, low stock, expiry) will reach no one.');
+    }
+    if (linkedStoreIds.length === 0) {
+      warnings.push('This business is not linked to any POS store (stores.inventory_business_id is empty) — store-settings features fall back to defaults.');
+    }
+    if (expiryTracking === 'disabled') {
+      warnings.push('Expiry tracking is explicitly disabled in store settings — expiry notifications are suppressed for this business.');
+    }
+
+    return {
+      businessId,
+      module: scope.module,
+      activeAdmins: adminIds.length,
+      linkedStoreIds,
+      expiryTracking,
+      defaultLowStockThreshold: defaultThreshold,
+      itemsWithExpiry: expiryRows[0] ?? { total: 0, soon: 0, expired: 0 },
+      notifications: notifRows[0] ?? { total: 0, unread: 0 },
+      warnings,
+    };
+  }
+
+  // Generic best-effort notification fan-out. De-duplicates recipients and, by
+  // default, never notifies the actor performing the action. Never throws — a
+  // notification failure must not block the operation that triggered it.
+  private async notify(
+    scope: Scope,
+    params: {
+      type: string;
+      title: string;
+      message: string;
+      entityType?: string | null;
+      entityId?: string | null;
+      recipientIds: Array<string | null | undefined>;
+      includeActor?: boolean;
+    },
+  ) {
+    try {
+      const recipients = Array.from(new Set(params.recipientIds)).filter(
+        (rid): rid is string => Boolean(rid) && (params.includeActor === true || rid !== scope.user.id),
+      );
+      if (recipients.length === 0) return;
+      await this.ensureNotificationTypes();
+      for (const userId of recipients) {
+        await this.safeQuery(
+          `
+            INSERT INTO "Notification" (id, type, title, message, "entityType", "entityId", "userId", "businessId")
+            VALUES ($1, $2::"NotificationType", $3, $4, $5, $6, $7, $8)
+          `,
+          [
+            randomUUID(), params.type, params.title, params.message,
+            params.entityType ?? null, params.entityId ?? null, userId, scope.businessId,
+          ],
+        );
+      }
+    } catch {
+      // Best-effort only.
+    }
+  }
+
+  // A new transfer request is awaiting approval — alert the Admins/managers who
+  // can act on it (the requester already knows they submitted it).
+  private async notifyTransferRequested(scope: Scope, info: { id: string; transferNumber: string }) {
+    await this.notify(scope, {
+      type: 'TRANSFER_REQUESTED',
+      title: 'Transfer awaiting approval',
+      message: `${scope.user.name ?? 'A staff member'} requested transfer ${info.transferNumber || info.id} — awaiting your approval.`,
+      entityType: 'TRANSFER',
+      entityId: info.id,
+      recipientIds: await this.getActiveAdminIds(scope.businessId),
+    });
+  }
+
+  // A transfer request was approved & dispatched — let the requester know.
+  private async notifyTransferApproved(
+    scope: Scope,
+    info: { id: string; transferNumber: string; createdById: string | null },
+  ) {
+    await this.notify(scope, {
+      type: 'TRANSFER_APPROVED',
+      title: 'Transfer approved',
+      message: `Transfer ${info.transferNumber || info.id} was approved and dispatched.`,
+      entityType: 'TRANSFER',
+      entityId: info.id,
+      recipientIds: [info.createdById],
+    });
+  }
+
+  // A transfer request was rejected — notify the requester (and other Admins for
+  // oversight). Skipped when the actor is the creator (a self-cancel needs no alert).
+  private async notifyTransferRejected(
+    scope: Scope,
+    info: { id: string; transferNumber: string; createdById: string | null; reason: string },
+  ) {
+    if (!info.createdById || info.createdById === scope.user.id) return;
+    const label = info.transferNumber || info.id;
+    await this.notify(scope, {
+      type: 'TRANSFER_REJECTED',
+      title: 'Transfer rejected',
+      message: info.reason ? `Transfer ${label} was rejected: ${info.reason}` : `Transfer ${label} was rejected.`,
+      entityType: 'TRANSFER',
+      entityId: info.id,
+      recipientIds: [info.createdById, ...(await this.getActiveAdminIds(scope.businessId))],
+    });
+  }
+
+  // A stock adjustment was submitted for review — alert the Admins/managers.
+  private async notifyAdjustmentSubmitted(
+    scope: Scope,
+    info: { id: string; adjustmentNumber: string; type: string },
+  ) {
+    await this.notify(scope, {
+      type: 'ADJUSTMENT_SUBMITTED',
+      title: 'Adjustment awaiting approval',
+      message: `${scope.user.name ?? 'A staff member'} submitted ${info.type} adjustment ${info.adjustmentNumber || info.id} — awaiting your approval.`,
+      entityType: 'StockAdjustment',
+      entityId: info.id,
+      recipientIds: await this.getActiveAdminIds(scope.businessId),
+    });
+  }
+
+  // A stock adjustment was approved or rejected — notify whoever submitted it.
+  private async notifyAdjustmentReviewed(
+    scope: Scope,
+    info: {
+      id: string;
+      adjustmentNumber: string;
+      createdById: string | null;
+      outcome: 'approved' | 'rejected';
+      reason?: string;
+    },
+  ) {
+    if (!info.createdById || info.createdById === scope.user.id) return;
+    const label = info.adjustmentNumber || info.id;
+    const approved = info.outcome === 'approved';
+    await this.notify(scope, {
+      type: approved ? 'ADJUSTMENT_APPROVED' : 'ADJUSTMENT_REJECTED',
+      title: approved ? 'Adjustment approved' : 'Adjustment rejected',
+      message: approved
+        ? `Adjustment ${label} was approved and applied to stock.`
+        : info.reason
+          ? `Adjustment ${label} was rejected: ${info.reason}`
+          : `Adjustment ${label} was rejected.`,
+      entityType: 'StockAdjustment',
+      entityId: info.id,
+      recipientIds: [info.createdById],
+    });
+  }
+
+  // A bundle was approved or rejected — notify whoever created it.
+  private async notifyBundleReviewed(
+    scope: Scope,
+    info: {
+      id: string;
+      name: string;
+      createdById: string | null;
+      outcome: 'approved' | 'rejected';
+      reason?: string;
+    },
+  ) {
+    if (!info.createdById || info.createdById === scope.user.id) return;
+    const label = info.name || info.id;
+    const approved = info.outcome === 'approved';
+    await this.notify(scope, {
+      type: approved ? 'BUNDLE_APPROVED' : 'BUNDLE_REJECTED',
+      title: approved ? 'Bundle approved' : 'Bundle rejected',
+      message: approved
+        ? `Bundle "${label}" was approved.`
+        : info.reason
+          ? `Bundle "${label}" was rejected: ${info.reason}`
+          : `Bundle "${label}" was rejected.`,
+      entityType: 'BundlePackage',
+      entityId: info.id,
+      recipientIds: [info.createdById],
+    });
   }
 
   // Record a single audit entry. Audit logging is best-effort: a failure here must

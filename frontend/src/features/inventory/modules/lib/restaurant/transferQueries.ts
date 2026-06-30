@@ -72,13 +72,15 @@ export function useRestaurantTransferActionMutation() {
     ({
       id,
       action,
+      reason,
     }: {
       id: string;
       action: 'dispatch' | 'complete' | 'cancel';
+      reason?: string;
     }) => {
       if (action === 'dispatch') return dispatchTransfer(id, 'RESTAURANT');
       if (action === 'complete') return completeTransfer(id, 'RESTAURANT');
-      return cancelTransfer(id, 'RESTAURANT');
+      return cancelTransfer(id, 'RESTAURANT', reason);
     },
     [
       domainQueryKeys.transfers,

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bell, CheckCheck, PackageX, ShoppingCart } from 'lucide-react';
+import { Bell, CheckCheck, PackageX, ShoppingCart, ArrowLeftRight, SlidersHorizontal, CalendarClock, Boxes } from 'lucide-react';
 import {
   useNotificationsQuery,
   useUnreadNotificationCountQuery,
@@ -11,6 +11,16 @@ import type { ApiNotification } from '../api/domainTypes';
 const typeIcon = (type: string) => {
   if (type === 'LOW_STOCK') return <PackageX className="size-4 text-amber-600" />;
   if (type === 'PURCHASE_ORDER_APPROVED') return <ShoppingCart className="size-4 text-emerald-600" />;
+  if (type === 'TRANSFER_REQUESTED') return <ArrowLeftRight className="size-4 text-amber-600" />;
+  if (type === 'TRANSFER_APPROVED') return <ArrowLeftRight className="size-4 text-emerald-600" />;
+  if (type === 'TRANSFER_REJECTED') return <ArrowLeftRight className="size-4 text-red-600" />;
+  if (type === 'ADJUSTMENT_SUBMITTED') return <SlidersHorizontal className="size-4 text-amber-600" />;
+  if (type === 'ADJUSTMENT_APPROVED') return <SlidersHorizontal className="size-4 text-emerald-600" />;
+  if (type === 'ADJUSTMENT_REJECTED') return <SlidersHorizontal className="size-4 text-red-600" />;
+  if (type === 'EXPIRY_WARNING') return <CalendarClock className="size-4 text-amber-600" />;
+  if (type === 'EXPIRY_REACHED') return <CalendarClock className="size-4 text-red-600" />;
+  if (type === 'BUNDLE_APPROVED') return <Boxes className="size-4 text-emerald-600" />;
+  if (type === 'BUNDLE_REJECTED') return <Boxes className="size-4 text-red-600" />;
   return <Bell className="size-4 text-muted-foreground" />;
 };
 
@@ -28,9 +38,11 @@ const timeAgo = (iso: string) => {
 export function NotificationBell({
   enabled = true,
   buttonClassName = 'text-muted-foreground hover:text-foreground',
+  onSelectNotification,
 }: {
   enabled?: boolean;
   buttonClassName?: string;
+  onSelectNotification?: (notification: ApiNotification) => void;
 }) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -53,6 +65,14 @@ export function NotificationBell({
 
   const onItemClick = (n: ApiNotification) => {
     if (!n.isRead) markRead.mutate(n.id);
+    if (onSelectNotification && (n.entityType || n.entityId)) {
+      // Leave a breadcrumb so the destination page can focus the right tab/entity,
+      // then hand off navigation to the host layout.
+      window.__INVENTORY_DEEPLINK__ = { entityType: n.entityType ?? null, entityId: n.entityId ?? null, type: n.type ?? null };
+      window.dispatchEvent(new CustomEvent('inventory:deeplink'));
+      onSelectNotification(n);
+      setOpen(false);
+    }
   };
 
   return (

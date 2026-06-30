@@ -38,6 +38,23 @@ export function StockAlertsView() {
   const [activeTab, setActiveTab] = useState<'low-stock' | 'stock-control' | 'bad-condition'>('low-stock');
   const [filterCategory, setFilterCategory] = useState<string>('all');
   const [sortBy, setSortBy] = useState<'name' | 'quantity' | 'category'>('quantity');
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+
+  // Focus a specific item when arriving from a notification deep-link: switch to the
+  // tab matching the alert type, then scroll to + highlight that item's row.
+  useEffect(() => {
+    const apply = () => {
+      const hint = window.__INVENTORY_DEEPLINK__;
+      if (!hint || hint.entityType !== 'INVENTORY_ITEM') return;
+      setActiveTab(hint.type === 'LOW_STOCK' ? 'low-stock' : 'stock-control');
+      setFilterCategory('all');
+      if (hint.entityId) setHighlightId(hint.entityId); // per-item alert: highlight the row
+      window.__INVENTORY_DEEPLINK__ = null;
+    };
+    apply();
+    window.addEventListener('inventory:deeplink', apply);
+    return () => window.removeEventListener('inventory:deeplink', apply);
+  }, []);
 
   // Calculate statistics
   const availableStock = inventory.filter(item => item.condition !== 'Damaged').reduce((sum, item) => sum + item.quantity, 0);
@@ -114,6 +131,17 @@ export function StockAlertsView() {
       return 0;
     });
   }, [damagedItems, filterCategory, sortBy]);
+
+  // Once the target row is in the DOM (data loaded / tab switched), scroll to it and
+  // clear the highlight after a moment.
+  useEffect(() => {
+    if (!highlightId) return;
+    const el = document.getElementById(`ra-${highlightId}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const timer = setTimeout(() => setHighlightId(null), 4000);
+    return () => clearTimeout(timer);
+  }, [highlightId, filteredLowStockItems, filteredStockItems]);
 
   return (
     <div>
@@ -296,11 +324,12 @@ export function StockAlertsView() {
                   {filteredLowStockItems.map(item => (
                     <div
                       key={item.id}
+                      id={`ra-${item.id}`}
                       className={`flex items-center gap-4 px-4 py-4 rounded-[8px] border transition-colors ${
                         item.alert.severity === 'critical'
                           ? 'bg-destructive/10 border-destructive/10 hover:bg-destructive/10'
                           : 'bg-warning/10 border-warning/10 hover:bg-warning/10'
-                      }`}
+                      } ${item.id === highlightId ? 'ring-2 ring-secondary ring-offset-2' : ''}`}
                     >
                       {/* Alert Icon */}
                       <div className={`rounded-full size-[48px] flex items-center justify-center shrink-0 ${
@@ -368,7 +397,8 @@ export function StockAlertsView() {
                   {filteredStockItems.map(item => (
                     <div
                       key={item.id}
-                      className="flex items-center gap-4 px-4 py-4 rounded-[8px] border border-border bg-card hover:bg-muted transition-colors"
+                      id={`ra-${item.id}`}
+                      className={`flex items-center gap-4 px-4 py-4 rounded-[8px] border border-border bg-card hover:bg-muted transition-colors ${item.id === highlightId ? 'ring-2 ring-secondary ring-offset-2' : ''}`}
                     >
                       {/* Item Icon */}
                       <div className="rounded-full size-[48px] flex items-center justify-center shrink-0 bg-secondary/10">

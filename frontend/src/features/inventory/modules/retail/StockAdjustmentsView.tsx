@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Search, SlidersHorizontal, ShieldAlert, Check, X, Clock, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -73,6 +73,7 @@ export default function StockAdjustmentsView({
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'PENDING' | 'APPROVED' | 'REJECTED'>('PENDING');
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('');
+  const [highlightId, setHighlightId] = useState<string | null>(null);
 
   const selectedItem = items.find((i: any) => i.id === itemId);
   const currentQty = Number(selectedItem?.quantity ?? 0);
@@ -105,6 +106,31 @@ export default function StockAdjustmentsView({
     if (statusFilter === 'ALL') return adjustments;
     return adjustments.filter((a) => a.status === statusFilter);
   }, [adjustments, statusFilter]);
+
+  // Focus a specific adjustment when arriving from a notification deep-link. The
+  // parent TransfersView switches to the adjustments tab and leaves the breadcrumb
+  // for this embedded panel to consume.
+  useEffect(() => {
+    const apply = () => {
+      const hint = window.__INVENTORY_DEEPLINK__;
+      if (!hint || hint.entityType !== 'StockAdjustment' || !hint.entityId) return;
+      setStatusFilter('ALL');
+      setHighlightId(hint.entityId);
+      window.__INVENTORY_DEEPLINK__ = null;
+    };
+    apply();
+    window.addEventListener('inventory:deeplink', apply);
+    return () => window.removeEventListener('inventory:deeplink', apply);
+  }, []);
+
+  useEffect(() => {
+    if (!highlightId) return;
+    const el = document.getElementById(`adj-${highlightId}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const timer = setTimeout(() => setHighlightId(null), 4000);
+    return () => clearTimeout(timer);
+  }, [highlightId, visibleAdjustments]);
 
   const pendingCount = useMemo(
     () => adjustments.filter((a) => a.status === 'PENDING').length,
@@ -358,6 +384,7 @@ export default function StockAdjustmentsView({
                 onApprove={() => handleApprove(adj.id)}
                 onReject={() => { setRejectingId(adj.id); setRejectReason(''); }}
                 approving={approveMutation.isPending}
+                highlighted={adj.id === highlightId}
               />
             ))}
             {visibleAdjustments.length === 0 && (
@@ -404,17 +431,19 @@ function AdjustmentCard({
   onApprove,
   onReject,
   approving,
+  highlighted = false,
 }: {
   adj: RetailStockAdjustment;
   canReview: boolean;
   onApprove: () => void;
   onReject: () => void;
   approving: boolean;
+  highlighted?: boolean;
 }) {
   const line = adj.items[0];
   const change = line?.quantityChange ?? 0;
   return (
-    <div className="border border-border rounded-[10px] p-3">
+    <div id={`adj-${adj.id}`} className={`border border-border rounded-[10px] p-3 ${highlighted ? 'ring-2 ring-secondary ring-offset-2' : ''}`}>
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="flex items-center gap-2">

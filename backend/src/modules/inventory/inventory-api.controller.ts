@@ -6,6 +6,11 @@ import { Permissions } from '../auth/permissions.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { InventoryApiService } from './inventory-api.service';
 
+// Captured once when this module is loaded, so /api reveals when the running
+// process last (re)started — the quickest way to confirm a deploy/restart took
+// effect instead of guessing whether old code is still running.
+const SERVER_STARTED_AT = new Date().toISOString();
+
 @Controller('api')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Permissions('inventory:manage')
@@ -14,7 +19,19 @@ export class InventoryApiController {
 
   @Get()
   health() {
-    return { message: 'Unified POS + Inventory API' };
+    return {
+      message: 'Unified POS + Inventory API',
+      startedAt: SERVER_STARTED_AT,
+      uptimeSeconds: Math.floor(process.uptime()),
+    };
+  }
+
+  // Read-only configuration diagnostics — surfaces data-mapping gaps that cause
+  // features (expiry alerts, low-stock thresholds, store settings) to silently
+  // no-op. Intended for an Admin to spot misconfiguration at a glance.
+  @Get('diagnostics')
+  diagnostics(@CurrentUser() user: AuthenticatedUser) {
+    return this.inventoryApiService.getSystemDiagnostics(user);
   }
 
 
@@ -221,8 +238,8 @@ export class InventoryApiController {
   }
 
   @Patch('transfers/:id/cancel')
-  cancelTransfer(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
-    return this.inventoryApiService.cancelTransfer(user, id);
+  cancelTransfer(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.inventoryApiService.cancelTransfer(user, id, body?.reason as string | undefined);
   }
 
   @Get('sales')
