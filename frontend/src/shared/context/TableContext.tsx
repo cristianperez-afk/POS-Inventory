@@ -113,8 +113,13 @@ export function TableProvider({ children, currentUser }: { children: ReactNode; 
       setTables([]);
       return;
     }
-    const data = await posApi.listTables<any>();
-    setTables(Array.isArray(data) ? data.map(mapApiTable) : []);
+    try {
+      const data = await posApi.listTables<any>();
+      setTables(Array.isArray(data) ? data.map(mapApiTable) : []);
+    } catch {
+      // Non-admin roles (e.g. inventory manager) receive 403 — treat as empty
+      setTables([]);
+    }
   };
 
   useEffect(() => {

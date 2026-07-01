@@ -3,9 +3,29 @@ let refreshPromise: Promise<boolean> | null = null;
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
+function getRequestUrl(input: RequestInfo | URL) {
+  return typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+}
+
 function isAuthRefreshUrl(input: RequestInfo | URL) {
-  const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+  const url = getRequestUrl(input);
   return url.endsWith('/auth/refresh') || url.includes('/auth/refresh?');
+}
+
+// /auth/logout and /auth/me 401s must never trigger another refresh-and-retry
+// cycle: a 401 from logout just means there was no session to log out of, and
+// retrying it after a failed refresh previously re-dispatched
+// 'auth-session-expired', which re-triggered handleLogout() -> another
+// /auth/logout call -> another 401 -> forever. See incident notes.
+function isAuthNoRetryUrl(input: RequestInfo | URL) {
+  const url = getRequestUrl(input);
+  return (
+    isAuthRefreshUrl(input) ||
+    url.endsWith('/auth/logout') ||
+    url.includes('/auth/logout?') ||
+    url.endsWith('/auth/me') ||
+    url.includes('/auth/me?')
+  );
 }
 
 function getRequestMethod(input: RequestInfo | URL, init: RequestInit) {
@@ -67,7 +87,7 @@ export function installAuthFetchInterceptor() {
     let requestInit = withAuthRequestDefaults(input, init);
 
     let response = await originalFetch(input, requestInit);
-    if (response.status !== 401 || isAuthRefreshUrl(input)) {
+    if (response.status !== 401 || isAuthNoRetryUrl(input)) {
       return response;
     }
 
