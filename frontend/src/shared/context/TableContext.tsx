@@ -132,7 +132,7 @@ export function TableProvider({ children, currentUser }: { children: ReactNode; 
       const newTables = prevTables.map(table => {
         const order = orders.find(o =>
           orderUsesTable(o.table, table.number) &&
-          o.orderStatus !== 'Completed'
+          !o.tableEndedAt
         );
 
         if (order) {

@@ -1393,7 +1393,7 @@ export class InventoryApiService {
                   table_ended_at,
                   CASE
                     WHEN order_type IN ('DINE_IN', 'MIXED')
-                      AND (running_time_end IS NOT NULL OR order_status IN ('COMPLETED', 'CANCELLED'))
+                      AND (running_time_end IS NOT NULL OR order_status = 'CANCELLED')
                     THEN COALESCE(running_time_end, completed_at, payment_at, updated_at)
                   END
                 ) AS "tableEndedAt",
@@ -1402,7 +1402,7 @@ export class InventoryApiService {
                   table_ended_at,
                   CASE
                     WHEN order_type IN ('DINE_IN', 'MIXED')
-                      AND (running_time_end IS NOT NULL OR order_status IN ('COMPLETED', 'CANCELLED'))
+                      AND (running_time_end IS NOT NULL OR order_status = 'CANCELLED')
                     THEN COALESCE(running_time_end, completed_at, payment_at, updated_at)
                   END
                 ) AS "stayEndedAt",
@@ -1525,18 +1525,17 @@ export class InventoryApiService {
                   THEN COALESCE(completed_at, CURRENT_TIMESTAMP)
                 ELSE completed_at
               END,
-              table_ended_at = CASE WHEN order_type IN ('DINE_IN', 'MIXED') AND $3::varchar IN ('COMPLETED', 'CANCELLED') THEN COALESCE(table_ended_at, CURRENT_TIMESTAMP) ELSE table_ended_at END,
+              table_ended_at = CASE WHEN order_type IN ('DINE_IN', 'MIXED') AND $3::varchar = 'CANCELLED' THEN COALESCE(table_ended_at, CURRENT_TIMESTAMP) ELSE table_ended_at END,
               -- Kitchen status updates must respect the restaurant lifecycle:
               -- a takeout stops at completion; a dine-in Pay Later order only
-              -- stops after payment; a paid dine-in may stop when explicitly
-              -- marked completed (or later when its table is released).
+              -- stops after payment; a paid dine-in stops when its table is
+              -- released, not merely when the kitchen/order is completed.
               running_time_end = CASE
                 WHEN COALESCE(is_running, FALSE) = TRUE
                   AND COALESCE(running_time_start, CURRENT_TIMESTAMP) IS NOT NULL
                   AND (
                     $3::varchar = 'CANCELLED'
                     OR (order_type = 'TAKEOUT' AND $3::varchar IN ('SERVED', 'COMPLETED'))
-                    OR (order_type IN ('DINE_IN', 'MIXED') AND payment_status = 'PAID' AND $3::varchar = 'COMPLETED')
                   )
                   THEN CURRENT_TIMESTAMP
                 ELSE running_time_end
@@ -1547,7 +1546,6 @@ export class InventoryApiService {
                   AND (
                     $3::varchar = 'CANCELLED'
                     OR (order_type = 'TAKEOUT' AND $3::varchar IN ('SERVED', 'COMPLETED'))
-                    OR (order_type IN ('DINE_IN', 'MIXED') AND payment_status = 'PAID' AND $3::varchar = 'COMPLETED')
                   )
                   THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (
                     CURRENT_TIMESTAMP - COALESCE(
@@ -1566,7 +1564,6 @@ export class InventoryApiService {
                   AND (
                     $3::varchar = 'CANCELLED'
                     OR (order_type = 'TAKEOUT' AND $3::varchar IN ('SERVED', 'COMPLETED'))
-                    OR (order_type IN ('DINE_IN', 'MIXED') AND payment_status = 'PAID' AND $3::varchar = 'COMPLETED')
                   )
                   THEN FALSE
                 ELSE is_running

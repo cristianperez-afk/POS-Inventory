@@ -114,7 +114,7 @@ function isDineInOrder(order: Order) {
 
 function stayEnd(order: Order) {
   if (!isDineInOrder(order)) return undefined;
-  return order.tableEndedAt ?? order.runningTimeEnd ?? order.completedAt ?? order.paymentAt;
+  return order.tableEndedAt ?? order.runningTimeEnd;
 }
 
 function stayStart(order: Order) {
@@ -226,14 +226,15 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
     try {
       await completePayment(selectedOrder.id, { cashReceived: cash, changeGiven: change, cashier: userName ?? undefined, paymentId: pId, receiptId: rId });
       const paidAt = new Date().toISOString();
+      const shouldCloseStay = selectedOrder.paymentStatus !== 'Paid';
       const updates = {
         paymentStatus: 'Paid' as const,
         paymentAt: paidAt,
-        orderStatus: selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed' ? 'Completed' as const : selectedOrder.orderStatus,
-        completedAt: selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed' ? (selectedOrder.completedAt ?? paidAt) : selectedOrder.completedAt,
-        tableEndedAt: selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed' ? (selectedOrder.tableEndedAt ?? paidAt) : selectedOrder.tableEndedAt,
-        runningTimeEnd: selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed' ? (selectedOrder.runningTimeEnd ?? paidAt) : selectedOrder.runningTimeEnd,
-        isRunning: selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed' ? false : selectedOrder.isRunning,
+        orderStatus: shouldCloseStay && (selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed') ? 'Completed' as const : selectedOrder.orderStatus,
+        completedAt: shouldCloseStay && (selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed') ? (selectedOrder.completedAt ?? paidAt) : selectedOrder.completedAt,
+        tableEndedAt: shouldCloseStay && (selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed') ? (selectedOrder.tableEndedAt ?? paidAt) : selectedOrder.tableEndedAt,
+        runningTimeEnd: shouldCloseStay && (selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed') ? (selectedOrder.runningTimeEnd ?? paidAt) : selectedOrder.runningTimeEnd,
+        isRunning: shouldCloseStay && (selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed') ? false : selectedOrder.isRunning,
         paymentId: pId,
         receiptId: rId,
         cashReceived: cash,
