@@ -16,13 +16,14 @@ type Props = {
 };
 
 const sharedModules = ['All', 'Authentication', 'Staff Accounts', 'Transactions', 'Payments', 'Void & Refund', 'Store Settings'];
-const restaurantModules = [...sharedModules.slice(0, -1), 'Restaurant Table Management', 'Store Settings'];
+const restaurantModules = [...sharedModules.slice(0, -1), 'Kitchen Orders', 'Restaurant Table Management', 'Store Settings'];
 const superadminModules = Array.from(new Set([...sharedModules, ...restaurantModules]));
 
 function roleLabel(role: string | null | undefined, storeType?: string | null) {
   const prefix = storeType === 'RETAIL_STORE' ? 'Retail ' : storeType === 'RESTAURANT' ? 'Restaurant ' : '';
   if (role === 'ADMIN') return `${prefix}Admin`;
   if (role === 'POS_MANAGER' || role === 'POS_ADMIN') return `${prefix}POS Manager`;
+  if (role === 'KITCHEN') return `${prefix}Kitchen Account`;
   if (role === 'STAFF') return `${prefix}POS Staff`;
   if (role === 'SUPERADMIN') return 'Superadmin';
   return role ?? 'Unknown';

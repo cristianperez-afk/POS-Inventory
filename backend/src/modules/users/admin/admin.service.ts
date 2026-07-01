@@ -7,8 +7,8 @@ import { StaffRepository } from './staff.repository';
 import { StoreSettingsRepository } from './store-settings.repository';
 import { ThemeRepository } from './theme.repository';
 
-type StaffType = 'POS_STAFF' | 'INVENTORY_STAFF';
-type StaffRole = 'STAFF' | 'POS_MANAGER' | 'INVENTORY_MANAGER';
+type StaffType = 'POS_STAFF' | 'INVENTORY_STAFF' | 'KITCHEN_STAFF';
+type StaffRole = 'STAFF' | 'POS_MANAGER' | 'INVENTORY_MANAGER' | 'KITCHEN';
 
 @Injectable()
 export class AdminService {

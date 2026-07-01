@@ -23,6 +23,7 @@ export class AuthRepository {
 
   async getLoginUserByEmail(email: string): Promise<AuthenticatedUser & { password_hash: string; void_pin?: string | null } | null> {
     await this.databaseService.ensureVoidPinHashColumn();
+    await this.databaseService.ensureKitchenRoleConstraints();
     const schema = await this.databaseService.getSchemaColumns();
     const userColumns = this.databaseService.resolveUserColumns(schema.users);
     const storeColumns = this.databaseService.resolveStoreColumns(schema.stores);

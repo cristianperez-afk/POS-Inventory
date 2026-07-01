@@ -19,6 +19,9 @@ type RestaurantInventoryProduct = InventoryProduct & {
   backendId?: string;
   locationId?: string;
   condition?: string;
+  purchaseUnit?: string;
+  baseUnit?: string;
+  conversionFactor?: number;
 };
 
 type GlobalProduct = {
@@ -63,6 +66,9 @@ type CatalogProduct = {
   category: string;
   subCategory: string;
   unit: string;
+  purchaseUnit: string;
+  baseUnit: string;
+  conversionFactor: number;
   inventoryIds: number[];
   inventoryItems: RestaurantInventoryProduct[];
   globalIds: string[];
@@ -80,6 +86,9 @@ const units = [
   "kg",
   "g",
   "pcs",
+  "slices",
+  "L",
+  "ml",
   "liter",
   "milliliter",
   "bottle",
@@ -92,6 +101,10 @@ const units = [
   "tray",
   "dozen",
   "gallon",
+  "block",
+  "loaf",
+  "pouch",
+  "tub",
 ];
 const normalizeName = (value: string | undefined) => (value || '').trim().toLowerCase();
 
@@ -136,6 +149,8 @@ export function ProductManagement() {
     category: "",
     subCategory: "",
     unit: "",
+    baseUnit: "",
+    conversionFactor: "1",
     maxStock: "0",
     minStock: "0",
     reorderPoint: "0",
@@ -168,7 +183,10 @@ export function ProductManagement() {
         name: override?.name ?? product.name,
         category,
         subCategory,
-        unit: override?.unit ?? (product.unit || "pcs"),
+        unit: override?.unit ?? (product.baseUnit || product.unit || "pcs"),
+        purchaseUnit: product.purchaseUnit || product.unit || product.baseUnit || "pcs",
+        baseUnit: override?.unit ?? (product.baseUnit || product.unit || "pcs"),
+        conversionFactor: Number(product.conversionFactor ?? 1),
         inventoryIds: [],
         inventoryItems: [],
         globalIds: linkedGlobalIds,
@@ -217,7 +235,9 @@ export function ProductManagement() {
       name: product.name,
       category: product.category,
       subCategory: product.subCategory,
-      unit: product.unit || "pcs",
+      unit: product.purchaseUnit || product.unit || "pcs",
+      baseUnit: product.baseUnit || product.unit || "pcs",
+      conversionFactor: String(product.conversionFactor || 1),
       maxStock: String(product.maxStock || 0),
       minStock: String(product.minStock || 0),
       reorderPoint: String(product.reorderPoint || 0),
@@ -237,13 +257,23 @@ export function ProductManagement() {
   };
 
   const saveProduct = async () => {
-    if (!selectedProduct || !form.name.trim() || !form.category.trim() || !form.unit.trim()) return;
+    const conversionFactor = Number(form.conversionFactor);
+    if (!selectedProduct || !form.name.trim() || !form.category.trim() || !form.unit.trim() || !form.baseUnit.trim()) {
+      toast.error("Product name, category, purchase unit, and base unit are required");
+      return;
+    }
+    if (!Number.isFinite(conversionFactor) || conversionFactor <= 0) {
+      toast.error("Conversion factor must be greater than zero");
+      return;
+    }
 
     const next = {
       name: form.name.trim(),
       category: form.category,
       subCategory: form.subCategory,
       unit: form.unit,
+      baseUnit: form.baseUnit,
+      conversionFactor,
       fullCategory: joinCategory(form.category, form.subCategory),
       maxStock: Number(form.maxStock) || 0,
       minStock: Number(form.minStock) || 0,
@@ -282,7 +312,7 @@ export function ProductManagement() {
       name: next.name,
       category: next.category,
       subCategory: next.subCategory,
-      unit: next.unit,
+      unit: next.baseUnit,
     };
     nextMetadata.supplierPrices![nextKey] = supplierPriceValues;
 
@@ -296,7 +326,10 @@ export function ProductManagement() {
               data: {
                 name: next.name,
                 category: next.fullCategory,
-                unit: next.unit,
+                unit: next.baseUnit,
+                purchaseUnit: next.unit,
+                baseUnit: next.baseUnit,
+                conversionFactor: next.conversionFactor,
                 maxStock: next.maxStock,
                 minStock: next.minStock,
                 reorderPoint: next.reorderPoint,
@@ -406,6 +439,7 @@ export function ProductManagement() {
                   <span className="rounded bg-muted px-2 py-1 text-xs text-muted-foreground">{product.stock} {product.unit}</span>
                 </div>
                 <p className="mt-1 text-xs text-muted-foreground">{joinCategory(product.category, product.subCategory) || "Uncategorized"}</p>
+                <p className="mt-1 text-xs text-muted-foreground">1 {product.purchaseUnit} = {product.conversionFactor} {product.baseUnit}</p>
                 <p className="mt-1 text-xs text-muted-foreground">{product.supplierNames.length} supplier link{product.supplierNames.length === 1 ? "" : "s"}</p>
               </button>
             ))}
@@ -431,10 +465,34 @@ export function ProductManagement() {
                   <input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} className="w-full rounded-lg border border-input bg-input-background px-3 py-2 text-sm outline-none focus:border-primary" />
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs text-foreground">Unit</label>
+                  <label className="mb-1 block text-xs text-foreground">Purchase Unit</label>
                   <select value={form.unit} onChange={(event) => setForm({ ...form, unit: event.target.value })} className="w-full rounded-lg border border-input bg-input-background px-3 py-2 text-sm outline-none focus:border-primary">
+                    {form.unit && !units.includes(form.unit) && <option value={form.unit}>{form.unit}</option>}
                     {units.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
                   </select>
+                  <p className="mt-1 text-[10px] text-muted-foreground">Unit used when ordering from suppliers, such as pack, sack, or bottle.</p>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs text-foreground">Base Unit</label>
+                  <select value={form.baseUnit} onChange={(event) => setForm({ ...form, baseUnit: event.target.value })} className="w-full rounded-lg border border-input bg-input-background px-3 py-2 text-sm outline-none focus:border-primary">
+                    {form.baseUnit && !units.includes(form.baseUnit) && <option value={form.baseUnit}>{form.baseUnit}</option>}
+                    {units.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+                  </select>
+                  <p className="mt-1 text-[10px] text-muted-foreground">Unit used for inventory stock, recipe deductions, and unit cost.</p>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs text-foreground">Conversion Factor</label>
+                  <input
+                    type="number"
+                    min="0.000001"
+                    step="any"
+                    value={form.conversionFactor}
+                    onChange={(event) => setForm({ ...form, conversionFactor: event.target.value })}
+                    className="w-full rounded-lg border border-input bg-input-background px-3 py-2 text-sm outline-none focus:border-primary"
+                  />
+                  <p className="mt-1 text-[10px] text-muted-foreground">
+                    1 {form.unit || "purchase unit"} = {form.conversionFactor || "?"} {form.baseUnit || "base unit"}.
+                  </p>
                 </div>
                 <div>
                   <label className="mb-1 block text-xs text-foreground">Category</label>

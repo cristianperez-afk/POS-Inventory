@@ -30,4 +30,4 @@ WHERE staff_type = 'MANAGER';
 
 ALTER TABLE users
   ADD CONSTRAINT users_staff_type_check
-  CHECK (staff_type IS NULL OR staff_type IN ('POS_STAFF', 'INVENTORY_STAFF'));
+  CHECK (staff_type IS NULL OR staff_type IN ('POS_STAFF', 'INVENTORY_STAFF', 'KITCHEN_STAFF'));

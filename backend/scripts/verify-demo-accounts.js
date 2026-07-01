@@ -9,6 +9,7 @@ const demoAccounts = [
   ['resstaff@pos.com', 'resstaffpos123'],
   ['resstaff@inventory.com', 'resstaffinventory123'],
   ['resstaff@manager.com', 'resstaffmanager123'],
+  ['kitchen@restaurant.com', 'kitchen123'],
   ['retailadmin@gmail.com', 'retailadmin123'],
   ['retailstaff@pos.com', 'retailstaffpos123'],
   ['retailstaff@inventory.com', 'retailstaffinventory123'],

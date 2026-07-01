@@ -1,5 +1,5 @@
 export type StoreType = 'RESTAURANT' | 'RETAIL_STORE' | string | null;
-export type StaffType = 'POS_STAFF' | 'INVENTORY_STAFF' | null;
+export type StaffType = 'POS_STAFF' | 'INVENTORY_STAFF' | 'KITCHEN_STAFF' | null;
 
 export interface AuthenticatedUser {
   id: number;

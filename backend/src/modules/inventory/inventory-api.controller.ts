@@ -85,7 +85,11 @@ export class InventoryApiController {
     return this.inventoryApiService.listUsers(user);
   }
 
+  // Kitchen accounts may view Recipe/BOM; the class-level inventory:manage is
+  // relaxed here so kitchen:read (held by kitchen staff, admins, inventory
+  // managers) is sufficient to read recipes. Recipe writes below stay manage-only.
   @Get('recipes')
+  @Permissions('kitchen:read')
   listRecipes(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string | undefined>) {
     return this.inventoryApiService.listRecipes(user, query);
   }
@@ -119,11 +123,13 @@ export class InventoryApiController {
   }
 
   @Get('kitchen-orders')
+  @Permissions('kitchen:read')
   listKitchenOrders(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string | undefined>) {
     return this.inventoryApiService.listKitchenOrders(user, query);
   }
 
   @Patch('kitchen-orders/:id/status')
+  @Permissions('kitchen:update_status')
   updateKitchenOrderStatus(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
@@ -360,12 +366,17 @@ export class InventoryApiController {
     return this.inventoryApiService.rejectAdjustment(user, id, body);
   }
 
+  // Module-shell reads (notification bell + badge): relaxed to kitchen:read so a
+  // kitchen account can render the shared layout without 403s. Marking read below
+  // stays inventory:manage.
   @Get('notifications')
+  @Permissions('kitchen:read')
   listNotifications(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string | undefined>) {
     return this.inventoryApiService.listNotifications(user, query);
   }
 
   @Get('notifications/unread-count')
+  @Permissions('kitchen:read')
   countUnreadNotifications(@CurrentUser() user: AuthenticatedUser) {
     return this.inventoryApiService.countUnreadNotifications(user);
   }
@@ -380,7 +391,10 @@ export class InventoryApiController {
     return this.inventoryApiService.markNotificationRead(user, id);
   }
 
+  // Read-only store settings (currency/display) the shared layout needs to render;
+  // kitchen accounts may read them. Writing a setting below stays inventory:manage.
   @Get('restaurant-settings')
+  @Permissions('kitchen:read')
   listRestaurantSettings(@CurrentUser() user: AuthenticatedUser) {
     return this.inventoryApiService.listRestaurantSettings(user);
   }

@@ -15,8 +15,8 @@ export class PosOrderRepository {
     if (!user.store_id || !user.store_type) {
       throw new InternalServerErrorException('User account is not linked to a store.');
     }
-    if (this.databaseService.isInventoryManagerRole(user.role)) {
-      throw new ForbiddenException('Inventory Manager accounts can only view inventory workflows. Payment processing is restricted to POS Manager or POS Staff accounts.');
+    if (this.databaseService.isInventoryManagerRole(user.role) || this.databaseService.isKitchenRole(user.role)) {
+      throw new ForbiddenException('This account cannot create POS orders or process payments.');
     }
 
     try {
@@ -215,6 +215,9 @@ export class PosOrderRepository {
       input.paymentStatus === 'REFUNDED';
     if (this.databaseService.isInventoryManagerRole(user.role) && isRestrictedTransactionUpdate) {
       throw new ForbiddenException('Inventory Manager accounts can only view inventory workflows. Payment, refund, and void processing is restricted to POS Manager or POS Staff accounts.');
+    }
+    if (this.databaseService.isKitchenRole(user.role)) {
+      throw new ForbiddenException('Kitchen accounts can only update orders through the Kitchen Orders module.');
     }
 
     const updates: string[] = [];
@@ -561,6 +564,9 @@ export class PosOrderRepository {
 
     if (!user.store_id || !user.store_type) {
       throw new InternalServerErrorException('User account is not linked to a store.');
+    }
+    if (this.databaseService.isKitchenRole(user.role)) {
+      throw new ForbiddenException('Kitchen accounts can only view orders through the Kitchen Orders module.');
     }
 
     await this.databaseService.reconcileRestaurantRunningTimers(user);

@@ -12,6 +12,7 @@ function getStaffTypeOptions(storeType?: string | null): Array<{ value: Exclude<
   return [
     { value: 'POS_STAFF', label: `${storeLabel} POS Staff` },
     { value: 'INVENTORY_STAFF', label: `${storeLabel} Inventory Staff` },
+    ...(storeType === 'RESTAURANT' ? [{ value: 'KITCHEN_STAFF' as const, label: 'Kitchen Account' }] : []),
   ];
 }
 
@@ -19,7 +20,7 @@ function getStaffTypeLabel(staffType: StaffType, storeType?: string | null) {
   return getStaffTypeOptions(storeType).find((option) => option.value === staffType)?.label ?? 'POS Staff';
 }
 
-type AccessRole = 'POS_MANAGER' | 'INVENTORY_MANAGER' | 'POS_STAFF' | 'INVENTORY_STAFF';
+type AccessRole = 'POS_MANAGER' | 'INVENTORY_MANAGER' | 'POS_STAFF' | 'INVENTORY_STAFF' | 'KITCHEN';
 
 function getAccessRoleOptions(storeType?: string | null): Array<{ value: AccessRole; label: string }> {
   const storeLabel = storeType === 'RESTAURANT' ? 'Restaurant' : 'Retail';
@@ -29,16 +30,19 @@ function getAccessRoleOptions(storeType?: string | null): Array<{ value: AccessR
     { value: 'INVENTORY_MANAGER', label: `${storeLabel} Inventory Manager` },
     { value: 'POS_STAFF', label: `${storeLabel} POS Staff` },
     { value: 'INVENTORY_STAFF', label: `${storeLabel} Inventory Staff` },
+    ...(storeType === 'RESTAURANT' ? [{ value: 'KITCHEN' as const, label: 'Kitchen Account' }] : []),
   ];
 }
 
 function getAccessRolePayload(accessRole: AccessRole) {
   if (accessRole === 'POS_MANAGER') return { role: 'POS_MANAGER', staff_type: 'POS_STAFF' };
   if (accessRole === 'INVENTORY_MANAGER') return { role: 'INVENTORY_MANAGER', staff_type: 'INVENTORY_STAFF' };
+  if (accessRole === 'KITCHEN') return { role: 'KITCHEN', staff_type: 'KITCHEN_STAFF' };
   return { role: 'STAFF', staff_type: accessRole };
 }
 
 function getAccessRoleFromUser(user: StaffUser): AccessRole {
+  if (user.role === 'KITCHEN' || user.staff_type === 'KITCHEN_STAFF') return 'KITCHEN';
   if (user.role === 'POS_MANAGER' || user.role === 'INVENTORY_MANAGER') return user.role;
   if (user.role === 'POS_ADMIN') return 'POS_MANAGER';
   if (user.role === 'INVENTORY_ADMIN') return 'INVENTORY_MANAGER';

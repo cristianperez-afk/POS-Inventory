@@ -34,6 +34,14 @@ const demoAccounts = [
     staffType: 'INVENTORY_STAFF',
   },
   {
+    fullName: 'Kitchen Account',
+    email: 'kitchen@restaurant.com',
+    password: 'kitchen123',
+    role: 'KITCHEN',
+    store: 'restaurant',
+    staffType: 'KITCHEN_STAFF',
+  },
+  {
     fullName: 'Retail POS Manager',
     email: 'retailposadmin@example.com',
     password: 'password123',
@@ -90,7 +98,7 @@ async function main() {
 
   try {
     await client.query('BEGIN');
-    await ensureRoleConstraint(client);
+    await ensureUserConstraints(client);
 
     const storeIds = {};
 
@@ -114,9 +122,15 @@ async function main() {
   console.log(`Ensured ${demoAccounts.length} missing role demo accounts.`);
 }
 
-async function ensureRoleConstraint(client) {
-  const sqlPath = path.join(__dirname, '..', 'sql', 'pos-inventory-admin-roles.sql');
-  await client.query(fs.readFileSync(sqlPath, 'utf8'));
+async function ensureUserConstraints(client) {
+  const sqlPaths = [
+    path.join(__dirname, '..', 'sql', 'pos-inventory-admin-roles.sql'),
+    path.join(__dirname, '..', 'sql', 'merge-pos-inventory-staff-types.sql'),
+  ];
+
+  for (const sqlPath of sqlPaths) {
+    await client.query(fs.readFileSync(sqlPath, 'utf8'));
+  }
 }
 
 async function getSchema() {

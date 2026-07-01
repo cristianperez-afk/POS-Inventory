@@ -4,8 +4,8 @@ import { ActivityLogRepository } from '../../../shared/activity-log.repository';
 import { AuthenticatedUser } from '../../../shared/common/types';
 import { DatabaseService } from '../../../shared/database/database.service';
 
-type StaffType = 'POS_STAFF' | 'INVENTORY_STAFF';
-type StaffRole = 'STAFF' | 'POS_MANAGER' | 'INVENTORY_MANAGER';
+type StaffType = 'POS_STAFF' | 'INVENTORY_STAFF' | 'KITCHEN_STAFF';
+type StaffRole = 'STAFF' | 'POS_MANAGER' | 'INVENTORY_MANAGER' | 'KITCHEN';
 
 @Injectable()
 export class StaffRepository {
@@ -26,6 +26,7 @@ export class StaffRepository {
     }
 
     await this.databaseService.ensureVoidPinHashColumn();
+    await this.databaseService.ensureKitchenRoleConstraints();
     const schema = await this.databaseService.getSchemaColumns();
     const userColumns = this.databaseService.resolveUserColumns(schema.users);
     const storeColumns = this.databaseService.resolveStoreColumns(schema.stores);
@@ -54,7 +55,7 @@ export class StaffRepository {
           ${this.databaseService.userStatusSelect(userColumns)}
         FROM users u
         ${storeJoin}
-        WHERE u.${this.databaseService.quoteIdentifier(userColumns.roleColumn)} IN ('STAFF', 'POS_MANAGER', 'INVENTORY_MANAGER', 'POS_ADMIN', 'INVENTORY_ADMIN')
+        WHERE u.${this.databaseService.quoteIdentifier(userColumns.roleColumn)} IN ('STAFF', 'KITCHEN', 'POS_MANAGER', 'INVENTORY_MANAGER', 'POS_ADMIN', 'INVENTORY_ADMIN')
           AND u.${this.databaseService.quoteIdentifier(userColumns.storeIdColumn)} = $1
         ORDER BY u.id ASC
       `,
