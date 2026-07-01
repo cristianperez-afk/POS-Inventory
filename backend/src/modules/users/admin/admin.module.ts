@@ -8,7 +8,7 @@ import { AdminStaffController } from './admin-staff.controller';
 import { AdminThemeController } from './admin-theme.controller';
 import { AdminService } from './admin.service';
 import { DiscountRepository } from './discount.repository';
-import { PosOrderRepository } from './pos-order.repository';
+import { PosOrderRepository } from '../../pos/pos-order.repository';
 import { PosRepository } from './pos.repository';
 import { RetailAuthorizationController } from './retail-authorization.controller';
 import { StaffRepository } from './staff.repository';

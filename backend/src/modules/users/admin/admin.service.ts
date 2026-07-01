@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ActivityLogRepository } from '../../../shared/activity-log.repository';
-import { PosOrderRepository } from './pos-order.repository';
+import { PosOrderRepository } from '../../pos/pos-order.repository';
 import { DiscountRepository } from './discount.repository';
 import { PosRepository } from './pos.repository';
 import { StaffRepository } from './staff.repository';

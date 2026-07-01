@@ -1,9 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { DatabaseService } from '../../shared/database/database.service';
+import { PosOrderRepository } from './pos-order.repository';
 
 @Injectable()
 export class PosService {
-  constructor(private readonly databaseService: DatabaseService) {}
+  constructor(
+    private readonly databaseService: DatabaseService,
+    private readonly posOrderRepository: PosOrderRepository,
+  ) {}
 
   getMenu(userId: number) {
     return this.databaseService.listPosProducts(userId);
@@ -18,6 +22,6 @@ export class PosService {
   }
 
   createOrder(input: any) {
-    return this.databaseService.createPaidPosOrder(input);
+    return this.posOrderRepository.createPaidOrder(input);
   }
 }
