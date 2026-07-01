@@ -145,10 +145,14 @@ function getCartItemDisplayDetails(item: CartItem) {
 
 function getCartItemVariantTags(item: CartItem): string[] {
   const details = getCartItemDisplayDetails(item);
+  const sizeTags = (item.modifiers ?? [])
+    .filter((modifier) => modifier.type === 'size_variant' && (item.selectedModifierIds ?? []).includes(modifier.id))
+    .map((modifier) => `Size: ${modifier.name}`);
   const noteTags = (item.modifiers ?? [])
     .filter((modifier) => modifier.type === 'note' && (item.selectedModifierIds ?? []).includes(modifier.id))
     .map((modifier) => modifier.name);
   return [
+    ...sizeTags,
     ...noteTags,
     ...details.addedIngredients.map((entry) => `+${entry}`),
     ...details.removedIngredients.map((entry) => `-${entry}`),
@@ -878,11 +882,14 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
     );
     const sizeMultiplier = Math.max(Number(selectedSizeVariant?.sizeMultiplier ?? 1), 0.01);
 
-    const adjustedIngredients = item.ingredients.map((ingredient): Ingredient => {
-      if (ingredient.customization_type === 'ADD') return ingredient;
+    // Recompute from the untouched regular recipe every time. A previous size
+    // or level choice must never become the base for the next selection.
+    const baseIngredients = item.originalIngredients.length > 0
+      ? item.originalIngredients
+      : item.ingredients.filter((ingredient) => ingredient.customization_type !== 'ADD');
+    const adjustedIngredients = baseIngredients.map((ingredient): Ingredient => {
       const adjustment = selectedIngredientAdjustments.find((modifier) =>
-        (modifier.itemId && modifier.itemId === (ingredient.itemId ?? ingredient.inventory_item_id)) ||
-        (modifier.itemName && modifier.itemName === ingredient.name)
+        modifierTargetsIngredient(modifier, ingredient)
       );
       const originalQuantity = Number(ingredient.original_quantity ?? ingredient.quantity ?? 0);
       if (adjustment?.type === 'remove') {
@@ -913,6 +920,9 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       .map((modifier): Ingredient => {
         const count = Number(item.modifierQuantities?.[modifier.id] ?? 1);
         return {
+          itemId: modifier.itemId,
+          inventory_item_id: modifier.itemId,
+          quantity_available: modifier.quantityAvailable ?? undefined,
           name: modifier.itemName ?? modifier.name,
           quantity: Math.max(Number(modifier.quantity ?? 1), 0.001) * Math.max(count, 1),
           original_quantity: 0,
@@ -1079,6 +1089,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
 
     return completePaymentMutation.mutateAsync({
       orderNumber: orderDetails.orderNumber,
+      clientRequestId: orderDetails.clientRequestId,
       customerName: orderDetails.customerName || null,
       orderType: getOrderTypeForPayload(orderDetails.items),
       tableName: orderDetails.tableNumber
@@ -1153,18 +1164,34 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
   const handleConfirmOrder = () => {
     console.log('Confirm Order clicked'); // Debug log
 
-    const insufficientAdjustedStock = cart.flatMap((item) => applySelectedModifiers(item)
-      .filter((ingredient) => ingredient.customization_type !== 'ADD' && !ingredient.removed)
-      .map((ingredient) => {
-        const required = Number(ingredient.quantity ?? 0) * Number(item.quantity ?? 1);
-        const available = ingredient.quantity_available;
-        return available != null && required > Number(available) + 0.000001
-          ? `${item.name}: ${ingredient.name} requires ${required} ${ingredient.unit}, only ${available} available`
-          : null;
-      }))
-      .find(Boolean);
+    const stockRequirements = new Map<string, { name: string; unit: string; required: number; available?: number }>();
+    for (const item of cart) {
+      for (const ingredient of applySelectedModifiers(item)) {
+        if (ingredient.removed || Number(ingredient.quantity ?? 0) <= 0) continue;
+        const stockKey = String(
+          ingredient.itemId
+          ?? ingredient.inventory_item_id
+          ?? ingredient.replacement_ingredient_id
+          ?? ingredient.ingredient_id
+          ?? ingredient.name,
+        );
+        const existing = stockRequirements.get(stockKey);
+        const available = ingredient.quantity_available == null ? undefined : Number(ingredient.quantity_available);
+        stockRequirements.set(stockKey, {
+          name: ingredient.name,
+          unit: ingredient.unit,
+          required: Number(existing?.required ?? 0) + Number(ingredient.quantity ?? 0) * Number(item.quantity ?? 1),
+          available: existing?.available ?? available,
+        });
+      }
+    }
+    const insufficientAdjustedStock = [...stockRequirements.values()].find((requirement) =>
+      requirement.available != null && requirement.required > requirement.available + 0.000001,
+    );
     if (insufficientAdjustedStock) {
-      setValidationError(`Not enough stock for ${insufficientAdjustedStock}.`);
+      setValidationError(
+        `Not enough stock for ${insufficientAdjustedStock.name}: requires ${insufficientAdjustedStock.required} ${insufficientAdjustedStock.unit}, only ${insufficientAdjustedStock.available} available.`,
+      );
       setShowPreview(false);
       return;
     }
@@ -1173,11 +1200,9 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       .filter((modifier) => modifier.type === 'add_on' && (item.selectedModifierIds ?? []).includes(modifier.id))
       .map((modifier) => {
         const count = Number(item.modifierQuantities?.[modifier.id] ?? 1);
-        const required = Number(modifier.quantity ?? 1) * count * item.quantity;
         return modifier.stockStatus === 'unavailable'
           || !Number.isInteger(Number(modifier.maxQuantity))
           || count > Number(modifier.maxQuantity)
-          || (modifier.quantityAvailable != null && required > Number(modifier.quantityAvailable))
           ? `${item.name}: ${modifier.name}`
           : null;
       }))
@@ -1192,6 +1217,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
     const hasTakeout = cart.some(item => item.orderType === 'takeout');
 
     const order = {
+      clientRequestId: crypto.randomUUID(),
       orderNumber: currentOrderNumber,
       customerName: customerName.trim(),
       items: cart,
@@ -2512,6 +2538,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
               const levelOptions = selectedIngredientAdjustments.filter((modifier) => modifier.type === 'ingredient_level');
               const removedOptions = selectedIngredientAdjustments.filter((modifier) => modifier.type === 'remove');
               const additionalCharge = modifierPrice(item) * item.quantity;
+              const effectiveIngredients = applySelectedModifiers(item).filter((ingredient) => ingredient.customization_type !== 'ADD');
 
               return <>
                 <div className="overflow-y-auto flex-1 space-y-5 p-5">
@@ -2524,12 +2551,19 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                       {item.originalIngredients.map((ingredient, ingredientIndex) => {
                         const options = (item.modifiers ?? []).filter((modifier) => (modifier.type === 'remove' || modifier.type === 'ingredient_level') && modifierTargetsIngredient(modifier, ingredient));
                         const selectedOption = options.find((modifier) => selectedIds.includes(modifier.id));
+                        const effectiveIngredient = effectiveIngredients.find((candidate) =>
+                          String(candidate.itemId ?? candidate.inventory_item_id ?? candidate.ingredient_id ?? '')
+                            === String(ingredient.itemId ?? ingredient.inventory_item_id ?? ingredient.ingredient_id ?? ''),
+                        );
                         return (
                           <div key={`basic-${ingredientIndex}-${ingredient.name}`} className="rounded-lg border border-border p-3">
                             <div className="flex items-center justify-between gap-3">
                               <div>
                                 <p className="text-sm font-medium text-foreground">{ingredient.name}</p>
-                                <p className="text-[11px] text-muted-foreground">Included in the standard recipe</p>
+                                <p className="text-[11px] text-muted-foreground">
+                                  Regular: {Number(ingredient.original_quantity ?? ingredient.quantity).toFixed(3)} {ingredient.unit}
+                                  {' -> '}Effective: {Number(effectiveIngredient?.quantity ?? ingredient.quantity).toFixed(3)} {effectiveIngredient?.unit ?? ingredient.unit}
+                                </p>
                               </div>
                               <span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${selectedOption ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-700'}`}>
                                 {selectedOption?.name ?? 'Regular'}
