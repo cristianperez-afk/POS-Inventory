@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Sidebar } from '../../shared/components/Sidebar';
 import { Page, type StoreBrand } from '../../shared/App';
 import type { StaffType, StoreType } from '../../auth/types/auth';
@@ -10,6 +10,7 @@ import { DeleteConfirmDialog } from '../../shared/components/DeleteConfirmDialog
 import { DateFilterControl, type DateFilterMode } from '../../shared/components/DateFilterControl';
 import { formatManilaDateTime, formatManilaTime, getLocalDateKey, parseDatabaseTimestamp, parseLocalDateKey } from '../../shared/utils/date';
 import { adminApi } from '../../shared/api/adminApi';
+import type { ActivityLog } from '../../shared/api/activityApi';
 
 interface OrderListProps {
   onNavigate: (page: Page) => void;
@@ -23,6 +24,7 @@ interface OrderListProps {
 }
 
 type ActiveModal = 'details' | 'payment' | 'receipt' | 'refund' | 'cancel' | 'item-cancel' | null;
+type TransactionTab = 'history' | 'changes';
 
 const ORDER_TYPES = ['Dine-In', 'Takeout', 'Mixed'];
 const PAYMENT_STATUSES = ['Paid', 'Not Paid', 'Refunded', 'Partially Refunded'];
@@ -42,6 +44,63 @@ function formatDuration(minutes?: number) {
   const hours = Math.floor(minutes / 60);
   const rest = minutes % 60;
   return `${hours} hr${hours === 1 ? '' : 's'}${rest ? ` ${rest} mins` : ''}`;
+}
+
+type OrderChangeRecord = {
+  id: string;
+  createdAt: string;
+  orderNumber: string;
+  type: string;
+  affectedItems: string;
+  quantity: string;
+  amount: string;
+  reason: string;
+  initiatedBy: string;
+  approvedBy: string;
+};
+
+function detailLine(details: string, label: string) {
+  const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return details.match(new RegExp(`(?:^|\\n)${escapedLabel}:\\s*(.*)`, 'i'))?.[1]?.trim() ?? '';
+}
+
+function orderChangeType(log: ActivityLog) {
+  const action = log.action.toLowerCase();
+  if (action === 'partial item cancellation') return 'Partial Cancellation';
+  if (action === 'order cancelled') return 'Full Cancellation';
+  if (action.includes('refund')) return detailLine(log.details, 'Items') ? 'Item Refund' : 'Full Refund';
+  return '';
+}
+
+function parseQuantity(items: string) {
+  if (!items || items === 'Full order') return '-';
+  const quantities = Array.from(items.matchAll(/\bx\s*([0-9.]+)/gi)).map((match) => Number(match[1]));
+  if (quantities.length === 0 || quantities.some((quantity) => !Number.isFinite(quantity))) return '-';
+  return String(quantities.reduce((sum, quantity) => sum + quantity, 0));
+}
+
+function buildOrderChangeRecords(logs: ActivityLog[]): OrderChangeRecord[] {
+  return logs
+    .map((log) => {
+      const type = orderChangeType(log);
+      if (!type) return null;
+
+      const affectedItems = detailLine(log.details, 'Items') || 'Full order';
+      const amount = detailLine(log.details, 'Amount');
+      return {
+        id: String(log.id),
+        createdAt: log.created_at,
+        orderNumber: log.details.match(/Order #([^\s\n]+)/i)?.[1] ?? '-',
+        type,
+        affectedItems,
+        quantity: parseQuantity(affectedItems),
+        amount: amount ? `PHP ${Number(amount).toFixed(2)}` : '-',
+        reason: detailLine(log.details, 'Reason') || '-',
+        initiatedBy: log.user_name || '-',
+        approvedBy: detailLine(log.details, 'Authorized by') || '-',
+      };
+    })
+    .filter((record): record is OrderChangeRecord => Boolean(record));
 }
 
 function OrderItemDetail({ item }: { item: OrderItem }) {
@@ -152,6 +211,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
   const [paymentFilter, setPaymentFilter] = useState('All');
   const [dateFilter, setDateFilter] = useState('');
   const [datePreset, setDatePreset] = useState<DateFilterMode>('all');
+  const [activeTab, setActiveTab] = useState<TransactionTab>('history');
 
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [activeModal, setActiveModal] = useState<ActiveModal>(null);
@@ -172,11 +232,17 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
   const [isAuthorizingManagerPin, setIsAuthorizingManagerPin] = useState(false);
   const [authorizedManager, setAuthorizedManager] = useState<{ id?: number; full_name?: string; email?: string } | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
+  const [orderChangeLogs, setOrderChangeLogs] = useState<ActivityLog[]>([]);
+  const [orderChangeLoading, setOrderChangeLoading] = useState(false);
+  const [orderChangeError, setOrderChangeError] = useState('');
   const [clock, setClock] = useState(() => Date.now());
   const [isCompletingPayment, setIsCompletingPayment] = useState(false);
   const showTableManagementColumns = settings.enable_table_management;
   const showEstimatedPrepTime = settings.enable_estimated_prep_time;
   const canProcessTransactions = !isAdmin && userRole === 'STAFF' && staffType === 'POS_STAFF';
+  const canViewOrderChangeAudit =
+    storeType === 'RESTAURANT' &&
+    ((userRole === 'STAFF' && staffType === 'POS_STAFF') || ['ADMIN', 'POS_MANAGER', 'POS_ADMIN'].includes(userRole ?? ''));
   const canPayOrder = (order: Order) => order.paymentStatus === 'Not Paid' && order.orderStatus === 'Served';
   const hasCompletedPayment = (order: Order) => order.paymentStatus === 'Paid';
   const isRestaurantRefundWindowOpen = (order: Order) => order.date === getLocalDateKey();
@@ -369,6 +435,62 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
     return date >= startString && date <= todayString;
   };
 
+  const orderChangeDateRange = useMemo<{ from?: string; to?: string }>(() => {
+    const todayString = getLocalDateKey();
+    const today = parseLocalDateKey(todayString);
+    const start = new Date(today);
+
+    if (datePreset === 'date') {
+      return dateFilter ? { from: dateFilter, to: dateFilter } : {};
+    }
+    if (datePreset === 'today') {
+      return { from: todayString, to: todayString };
+    }
+    if (datePreset === 'week') {
+      start.setDate(today.getDate() - 6);
+      return { from: getLocalDateKey(start), to: todayString };
+    }
+    if (datePreset === 'month') {
+      start.setDate(1);
+      return { from: getLocalDateKey(start), to: todayString };
+    }
+    if (datePreset === 'year') {
+      start.setMonth(0, 1);
+      return { from: getLocalDateKey(start), to: todayString };
+    }
+    return {};
+  }, [dateFilter, datePreset]);
+
+  const loadOrderChangeLogs = useCallback(async () => {
+    if (!canViewOrderChangeAudit) {
+      setOrderChangeLogs([]);
+      return;
+    }
+
+    setOrderChangeLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (orderChangeDateRange.from) params.set('date_from', orderChangeDateRange.from);
+      if (orderChangeDateRange.to) params.set('date_to', orderChangeDateRange.to);
+      if (searchTerm.trim()) params.set('search', searchTerm.trim());
+      setOrderChangeLogs(await adminApi.listPosOrderChangeLogs(params));
+      setOrderChangeError('');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to load cancelled/refunded items.';
+      setOrderChangeError(
+        message.includes('Cannot GET /admin/pos/order-change-logs')
+          ? 'Cancelled/refunded item history is not available yet. Please restart the backend server to load the new POS audit endpoint.'
+          : message,
+      );
+    } finally {
+      setOrderChangeLoading(false);
+    }
+  }, [canViewOrderChangeAudit, orderChangeDateRange.from, orderChangeDateRange.to, searchTerm]);
+
+  useEffect(() => {
+    void loadOrderChangeLogs();
+  }, [loadOrderChangeLogs]);
+
   const filteredOrders = orders.filter(order => {
     const term = searchTerm.toLowerCase();
     const normalizedTerm = normalizeSearchValue(searchTerm);
@@ -393,6 +515,11 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
   const visibleStart = filteredOrders.length === 0 ? 0 : pageStartIndex + 1;
   const visibleEnd = Math.min(pageStartIndex + ORDERS_PER_PAGE, filteredOrders.length);
   const tableColumnCount = (showTableManagementColumns ? 13 : 10) + (showEstimatedPrepTime ? 1 : 0);
+  const orderChangeRecords = useMemo(() => buildOrderChangeRecords(orderChangeLogs), [orderChangeLogs]);
+  const tabButtonClass = (tab: TransactionTab) =>
+    `relative px-1 pb-3 text-sm font-medium transition-colors ${
+      activeTab === tab ? 'text-primary' : 'text-muted-foreground hover:text-foreground'
+    }`;
 
   useEffect(() => {
     setCurrentPage(1);
@@ -493,6 +620,21 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
           <p className="text-sm text-muted-foreground mt-0.5">Manage and track all restaurant orders</p>
         </div>
 
+        <div className="mb-5 border-b border-border">
+          <div className="flex flex-wrap gap-10">
+            <button type="button" onClick={() => setActiveTab('history')} className={tabButtonClass('history')}>
+              Order List
+              {activeTab === 'history' && <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-primary" />}
+            </button>
+            {canViewOrderChangeAudit && (
+              <button type="button" onClick={() => setActiveTab('changes')} className={tabButtonClass('changes')}>
+                Cancelled / Refund
+                {activeTab === 'changes' && <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-primary" />}
+              </button>
+            )}
+          </div>
+        </div>
+
         {/* Filter Bar */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-5">
           <div className="flex flex-wrap gap-3 items-center">
@@ -508,31 +650,35 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
               />
             </div>
 
-            {/* Type Filter */}
-            <div className="relative">
-              <select
-                value={typeFilter}
-                onChange={e => setTypeFilter(e.target.value)}
-                className="appearance-none pl-3 pr-8 py-2.5 bg-muted border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary cursor-pointer"
-              >
-                <option value="All">All Types</option>
-                {ORDER_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-              </select>
-              <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
-            </div>
+            {activeTab === 'history' && (
+              <>
+                {/* Type Filter */}
+                <div className="relative">
+                  <select
+                    value={typeFilter}
+                    onChange={e => setTypeFilter(e.target.value)}
+                    className="appearance-none pl-3 pr-8 py-2.5 bg-muted border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary cursor-pointer"
+                  >
+                    <option value="All">All Types</option>
+                    {ORDER_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                  <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+                </div>
 
-            {/* Payment Filter */}
-            <div className="relative">
-              <select
-                value={paymentFilter}
-                onChange={e => setPaymentFilter(e.target.value)}
-                className="appearance-none pl-3 pr-8 py-2.5 bg-muted border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary cursor-pointer"
-              >
-                <option value="All">All Payments</option>
-                {PAYMENT_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-              <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
-            </div>
+                {/* Payment Filter */}
+                <div className="relative">
+                  <select
+                    value={paymentFilter}
+                    onChange={e => setPaymentFilter(e.target.value)}
+                    className="appearance-none pl-3 pr-8 py-2.5 bg-muted border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary cursor-pointer"
+                  >
+                    <option value="All">All Payments</option>
+                    {PAYMENT_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                  <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+                </div>
+              </>
+            )}
 
             {/* Date Filter */}
             <DateFilterControl
@@ -543,14 +689,20 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
               className="appearance-none pl-3 pr-8 py-2.5 bg-muted border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary cursor-pointer"
             />
 
-            <span className="text-xs text-gray-400 ml-auto">{filteredOrders.length} order{filteredOrders.length !== 1 ? 's' : ''}</span>
+            <span className="text-xs text-gray-400 ml-auto">
+              {activeTab === 'history'
+                ? `${filteredOrders.length} order${filteredOrders.length !== 1 ? 's' : ''}`
+                : `${orderChangeRecords.length} record${orderChangeRecords.length !== 1 ? 's' : ''}`}
+            </span>
           </div>
         </div>
 
-        {/* Table Card */}
-        <div className="bg-white rounded-xl shadow-sm border border-border overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className={`w-full ${showTableManagementColumns ? 'min-w-[1300px]' : 'min-w-[1000px]'}`}>
+        {activeTab === 'history' && (
+          <>
+            {/* Table Card */}
+            <div className="bg-white rounded-xl shadow-sm border border-border overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className={`w-full ${showTableManagementColumns ? 'min-w-[1300px]' : 'min-w-[1000px]'}`}>
               <thead className="bg-muted/30">
                 <tr>
                   <th className="w-[13%] text-left px-5 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Order Number</th>
@@ -737,35 +889,84 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                   </tr>);
                 })}
               </tbody>
-            </table>
+                </table>
+              </div>
+            </div>
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+              <span>
+                Showing {visibleStart} to {visibleEnd} of {filteredOrders.length} order{filteredOrders.length !== 1 ? 's' : ''}
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                  disabled={currentPage === 1}
+                  className="rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Previous
+                </button>
+                <span className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-1.5 text-sm font-semibold text-primary">
+                  Page {currentPage} of {totalPages}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                  disabled={currentPage === totalPages}
+                  className="rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+        {activeTab === 'changes' && canViewOrderChangeAudit && (
+          <div className="rounded-xl border border-border bg-white shadow-sm overflow-hidden">
+            <div className="border-b border-border px-5 py-4">
+              <h2 className="text-base font-semibold text-primary">Cancelled & Refunded Items</h2>
+              <p className="text-xs text-muted-foreground">Order change history for cancellations, item removals, and refund approvals.</p>
+            </div>
+            {orderChangeError && (
+              <div className="border-b border-red-100 bg-red-50 px-5 py-3 text-sm text-red-700">{orderChangeError}</div>
+            )}
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[1100px] text-sm">
+                <thead className="bg-muted/30">
+                  <tr>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Date & Time</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Order #</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Type</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Affected Dish(es)</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Qty</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Amount</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Reason</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Staff</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Manager</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {orderChangeLoading ? (
+                    <tr><td colSpan={9} className="px-4 py-8 text-sm text-gray-400">Loading cancelled/refunded items...</td></tr>
+                  ) : orderChangeRecords.length === 0 ? (
+                    <tr><td colSpan={9} className="px-4 py-8 text-sm text-gray-400">No cancelled or refunded items found.</td></tr>
+                  ) : orderChangeRecords.map((record) => (
+                    <tr key={record.id} className="align-top hover:bg-muted/20">
+                      <td className="whitespace-nowrap px-4 py-3 text-xs text-gray-600">{formatManilaDateTime(record.createdAt)}</td>
+                      <td className="px-4 py-3 font-mono text-primary">{record.orderNumber}</td>
+                      <td className="px-4 py-3 text-gray-700">{record.type}</td>
+                      <td className="max-w-xs px-4 py-3 text-gray-700">{record.affectedItems}</td>
+                      <td className="px-4 py-3 text-gray-700">{record.quantity}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-gray-700">{record.amount}</td>
+                      <td className="max-w-xs px-4 py-3 text-gray-700">{record.reason}</td>
+                      <td className="px-4 py-3 text-gray-700">{record.initiatedBy}</td>
+                      <td className="px-4 py-3 text-gray-700">{record.approvedBy}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
-          <span>
-            Showing {visibleStart} to {visibleEnd} of {filteredOrders.length} order{filteredOrders.length !== 1 ? 's' : ''}
-          </span>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
-              disabled={currentPage === 1}
-              className="rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              Previous
-            </button>
-            <span className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-1.5 text-sm font-semibold text-primary">
-              Page {currentPage} of {totalPages}
-            </span>
-            <button
-              type="button"
-              onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
-              disabled={currentPage === totalPages}
-              className="rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              Next
-            </button>
-          </div>
-        </div>
+        )}
       </div>
 
       {/* ── MODAL: View Details ── */}
@@ -1153,7 +1354,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                           <span className="block text-sm font-medium text-gray-800">{item.name}</span>
                           <span className="mt-1 block text-xs text-gray-500">Qty: {item.quantity} - {item.itemType === 'dine-in' ? 'Dine-in' : 'Takeout'}</span>
                         </span>
-                        <span className="text-sm font-semibold text-red-600">â‚±{amount.toFixed(2)}</span>
+                        <span className="text-sm font-semibold text-red-600">&#8369;{amount.toFixed(2)}</span>
                       </label>
                     );
                   })}
@@ -1362,6 +1563,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
         onConfirm={async () => {
           if (!refundingOrder) return;
           await refundOrderItems(refundingOrder.id, selectedRefundIndices, buildAuthorization(refundReason.trim()));
+          await loadOrderChangeLogs();
           setRefundingOrder(null);
           closeModal();
         }}
@@ -1374,7 +1576,8 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
         onConfirm={() => {
           if (!cancellingOrder) return;
           void cancelOrder(cancellingOrder.id, false, buildAuthorization(cancelReason.trim()))
-            .then(() => {
+            .then(async () => {
+              await loadOrderChangeLogs();
               setCancellingOrder(null);
               closeModal();
             })
@@ -1392,7 +1595,8 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
         onConfirm={() => {
           if (!itemCancellingOrder) return;
           void cancelOrderItems(itemCancellingOrder.id, selectedCancelIndices, buildAuthorization(itemCancelReason.trim()))
-            .then(() => {
+            .then(async () => {
+              await loadOrderChangeLogs();
               setItemCancellingOrder(null);
               closeModal();
             })

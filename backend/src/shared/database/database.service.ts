@@ -4187,6 +4187,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const newPaymentStatus = String(input.paymentStatus ?? '');
     const isVoidOrRefund = ['VOIDED', 'VOID', 'REFUNDED'].includes(newPaymentStatus);
     let itemCancellationDetails: { names: string[]; amount: number } | null = null;
+    let itemRefundDetails: { names: string[]; amount: number } | null = null;
 
     const rows = await this.withTransaction(async (client) => {
       type UpdatedOrderRow = {
@@ -4483,6 +4484,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       if (restockItemIds && restockItemIds.length > 0) {
         // Per-item path (retail partial/whole refund or void with an item list).
         // Idempotent per item, so it doesn't need the PAID-transition guard.
+        const refundedRows = await this.queryWithClient<{ product_name: string; quantity: string | number; line_total: string | number }>(
+          client,
+          `SELECT product_name, quantity, line_total FROM order_items WHERE order_id = $1 AND id = ANY($2::bigint[]) ORDER BY id ASC`,
+          [updatedRows[0].id, restockItemIds],
+        );
+        itemRefundDetails = {
+          names: refundedRows.map((item) => `${item.product_name} x${Number(item.quantity ?? 0)}`),
+          amount: refundedRows.reduce((sum, item) => sum + Number(item.line_total ?? 0), 0),
+        };
         const reason =
           input.reason ?? input.refundReason ?? input.voidReason ??
           (isPartialRefund ? 'Partially refunded in POS' : newPaymentStatus === 'VOIDED' ? 'Voided in POS' : 'Refunded in POS');
@@ -4523,6 +4533,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       ? `\nAuthorized by: ${input.authorizedByManagerName}`
       : '';
     const itemCancellationLog = itemCancellationDetails as { names: string[]; amount: number } | null;
+    const itemRefundLog = itemRefundDetails as { names: string[]; amount: number } | null;
 
     if (cancelOrderItemIds?.length && itemCancellationLog) {
       await this.recordActivity({
@@ -4555,6 +4566,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         details: `Cancelled Order #${rows[0].order_number}\nReason: ${input.reason ?? 'No reason provided'}${authorizedBy}`,
       });
     } else if (String(input.paymentStatus ?? '').toUpperCase() === 'REFUNDED' || String(input.paymentStatus ?? '').toUpperCase() === 'PARTIALLY_REFUNDED') {
+      const refundedItems = itemRefundLog?.names.length
+        ? `\nItems: ${itemRefundLog.names.join(', ')}\nAmount: ${itemRefundLog.amount.toFixed(2)}`
+        : '';
       await this.recordActivity({
         userId: user.id,
         storeId: user.store_id,
@@ -4562,7 +4576,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         userRole: user.role,
         module: 'Void & Refund',
         action: 'Refund Processed',
-        details: `Refund processed\nOrder #${rows[0].order_number}\nReason: ${input.refundReason ?? input.reason ?? 'Customer request'}${authorizedBy}`,
+        details: `Refund processed\nOrder #${rows[0].order_number}${refundedItems}\nReason: ${input.refundReason ?? input.reason ?? 'Customer request'}${authorizedBy}`,
       });
     } else if (String(input.paymentStatus ?? '').toUpperCase() === 'VOIDED') {
       await this.recordActivity({
@@ -6908,6 +6922,57 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         ${whereSql}
         ORDER BY created_at DESC, id DESC
         LIMIT 500
+      `,
+      values,
+    );
+  }
+
+  async listPosOrderChangeLogsForUser(input: {
+    userId: number;
+    dateFrom?: string;
+    dateTo?: string;
+    search?: string;
+  }) {
+    const requester = await this.getUserStoreScope(input.userId);
+    const role = String(requester.role ?? '');
+    const staffType = String((requester as any).staff_type ?? '');
+    const canView =
+      role === 'ADMIN' ||
+      role === 'POS_MANAGER' ||
+      role === 'POS_ADMIN' ||
+      (role === 'STAFF' && staffType === 'POS_STAFF');
+
+    if (!canView || !requester.store_id || requester.store_type !== 'RESTAURANT') {
+      throw new ForbiddenException('Only restaurant POS staff, POS Manager, and Admin accounts can view order change logs.');
+    }
+
+    await this.ensureActivityLogSchema();
+
+    const conditions: string[] = [`store_id = $1`, `action IN ('Order Cancelled', 'Partial Item Cancellation', 'Refund Processed')`];
+    const values: unknown[] = [requester.store_id];
+    const addValue = (value: unknown) => {
+      values.push(value);
+      return `$${values.length}`;
+    };
+
+    if (input.dateFrom?.trim()) {
+      conditions.push(`created_at >= (${addValue(input.dateFrom.trim())}::date::timestamp - INTERVAL '8 hours')`);
+    }
+    if (input.dateTo?.trim()) {
+      conditions.push(`created_at < (${addValue(input.dateTo.trim())}::date::timestamp + INTERVAL '1 day' - INTERVAL '8 hours')`);
+    }
+    if (input.search?.trim()) {
+      const param = addValue(`%${input.search.trim()}%`);
+      conditions.push(`(user_name ILIKE ${param} OR action ILIKE ${param} OR details ILIKE ${param})`);
+    }
+
+    return this.query(
+      `
+        SELECT id, store_id, user_id, user_name, user_role, module, action, details, to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at
+        FROM activity_logs
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY created_at DESC, id DESC
+        LIMIT 200
       `,
       values,
     );

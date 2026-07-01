@@ -209,6 +209,15 @@ export class AdminService {
     return this.databaseService.listPosOrders(userId);
   }
 
+  listPosOrderChangeLogs(input: {
+    userId: number;
+    dateFrom?: string;
+    dateTo?: string;
+    search?: string;
+  }) {
+    return this.databaseService.listPosOrderChangeLogsForUser(input);
+  }
+
   listDiningTables(userId: number) {
     return this.databaseService.listDiningTables(userId);
   }

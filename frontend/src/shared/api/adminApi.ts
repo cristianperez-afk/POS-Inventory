@@ -1,6 +1,7 @@
 import { apiClient } from '../../api/apiClient';
 import type { AuthenticatedUser, StaffType } from '../../auth/types/auth';
 import type { DiscountSetting, StoreSettingValues } from '../context/StoreSettingsContext';
+import type { ActivityLog } from './activityApi';
 
 export interface AdminStaffUser {
   id: number;
@@ -128,4 +129,8 @@ export const adminApi = {
     method: 'POST',
     body: JSON.stringify({ void_pin: voidPin }),
   }),
+  listPosOrderChangeLogs: (params = new URLSearchParams()) => {
+    const query = params.toString();
+    return apiClient<ActivityLog[]>(`/admin/pos/order-change-logs${query ? `?${query}` : ''}`);
+  },
 };
