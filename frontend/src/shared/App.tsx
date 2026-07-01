@@ -153,11 +153,12 @@ export default function App() {
 
   useEffect(() => {
     const handleExpired = () => {
+      if (!currentUser) return;
       handleLogout();
     };
     window.addEventListener('auth-session-expired', handleExpired);
     return () => window.removeEventListener('auth-session-expired', handleExpired);
-  }, []);
+  }, [currentUser]);
 
   useEffect(() => {
     const loadStoreBrand = async () => {
@@ -230,7 +231,10 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    void logoutSession();
+    // Clear frontend state immediately for fast UX, then fire backend invalidation.
+    // We intentionally do NOT await logoutSession() here so the login form appears
+    // instantly, but we do catch errors silently.
+    logoutSession().catch(() => {});
     window.sessionStorage.removeItem(SESSION_USER_KEY);
     window.sessionStorage.removeItem(SESSION_PAGE_KEY);
     setCurrentUser(null);

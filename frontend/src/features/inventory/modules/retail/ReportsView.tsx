@@ -123,7 +123,7 @@ export function ReportsView() {
 
     const routeStats: { [key: string]: number } = {};
     transfers.forEach(t => {
-      const route = `${t.fromLocation} â†’ ${t.toLocation}`;
+      const route = `${t.fromLocation} → ${t.toLocation}`;
       routeStats[route] = (routeStats[route] || 0) + 1;
     });
 
