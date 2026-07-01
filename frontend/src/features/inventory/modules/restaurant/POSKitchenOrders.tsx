@@ -240,6 +240,7 @@ function getServeTimeEnd(order: KitchenOrder) {
 }
 
 function getRunningTime(order: KitchenOrder, nowMs = Date.now()) {
+  if (order.status === "cancelled") return formatServeTime(0);
   const end = getServeTimeEnd(order);
   const savedSeconds = getSavedServiceSeconds(order);
   if ((order.status === "served" || order.status === "completed") && savedSeconds !== null && savedSeconds > 0) {
@@ -251,6 +252,7 @@ function getRunningTime(order: KitchenOrder, nowMs = Date.now()) {
 }
 
 function getCustomerStayDuration(order: KitchenOrder, nowMs = Date.now()) {
+  if (order.status === "cancelled") return formatServeTime(0);
   const normalizedType = order.orderType.replace(/_/g, "-").toLowerCase();
   if (normalizedType === "takeout") return "-";
   const stayEnd = order.tableEndedAt ?? (order.status === "cancelled" ? getLifecycleEnd(order) : undefined);
@@ -380,7 +382,7 @@ export function POSKitchenOrders() {
   }, []);
 
   useEffect(() => {
-    if (isKitchenAccount && (statusFilter === "completed" || statusFilter === "cancelled")) {
+    if (isKitchenAccount && statusFilter === "completed") {
       setStatusFilter("all");
     }
   }, [isKitchenAccount, statusFilter]);
@@ -394,7 +396,7 @@ export function POSKitchenOrders() {
 
   const orderStats = useMemo(() => {
     const statOrders = isKitchenAccount
-      ? orders.filter((order) => KITCHEN_ACTIVE_STATUSES.has(order.status) || order.status === "served")
+      ? orders.filter((order) => KITCHEN_ACTIVE_STATUSES.has(order.status) || order.status === "served" || order.status === "cancelled")
       : orders;
     const counts = statOrders.reduce<Record<KitchenStatus, number>>(
       (acc, order) => {
@@ -413,7 +415,7 @@ export function POSKitchenOrders() {
       { label: "Completed", value: counts.completed, filter: "completed" as StatusFilter, icon: ClipboardCheck, color: "from-blue-500 to-sky-500" },
       { label: "Cancelled", value: counts.cancelled, filter: "cancelled" as StatusFilter, icon: X, color: "from-red-500 to-rose-500" },
     ];
-    return isKitchenAccount ? stats.filter((stat) => !["completed", "cancelled"].includes(stat.filter)) : stats;
+    return isKitchenAccount ? stats.filter((stat) => stat.filter !== "completed") : stats;
   }, [isKitchenAccount, orders]);
 
   const filteredOrders = useMemo(() => {
@@ -421,8 +423,8 @@ export function POSKitchenOrders() {
 
     return orders.filter((order) => {
       if (isKitchenAccount) {
-        if (statusFilter === "served") {
-          if (order.status !== "served") return false;
+        if (statusFilter === "served" || statusFilter === "cancelled") {
+          if (order.status !== statusFilter) return false;
         } else if (!KITCHEN_ACTIVE_STATUSES.has(order.status)) {
           return false;
         }
@@ -487,8 +489,12 @@ export function POSKitchenOrders() {
     { status: "ready", title: "Ready to Serve Orders", helper: "Needs pickup/service" },
   ];
   const statusLanes: Array<{ status: KitchenStatus; title: string; helper: string }> = isKitchenAccount
-    ? statusFilter === "served"
-      ? [{ status: "served", title: "Served Orders", helper: "Orders already marked served" }]
+    ? statusFilter === "served" || statusFilter === "cancelled"
+      ? [{
+        status: statusFilter,
+        title: statusFilter === "served" ? "Served Orders" : "Cancelled Orders",
+        helper: statusFilter === "served" ? "Orders already marked served" : "Orders stopped or voided",
+      }]
       : activeKitchenLanes
     : [
       ...activeKitchenLanes,
@@ -497,13 +503,18 @@ export function POSKitchenOrders() {
       { status: "cancelled" as KitchenStatus, title: "Cancelled Orders", helper: "Stopped or voided" },
     ];
   const statsGridClass = isKitchenAccount
-    ? "mb-8 grid grid-cols-1 gap-4 md:grid-cols-3 xl:grid-cols-5"
-    : "mb-8 grid grid-cols-1 gap-4 md:grid-cols-3 xl:grid-cols-6";
+    ? "mb-8 grid grid-cols-1 gap-4 md:grid-cols-3 xl:grid-cols-6"
+    : "mb-8 grid grid-cols-1 gap-4 md:grid-cols-3 xl:grid-cols-7";
   const lanesGridClass = isKitchenAccount
-    ? statusFilter === "served"
+    ? statusFilter === "served" || statusFilter === "cancelled"
       ? "grid gap-4"
       : "grid gap-4 lg:grid-cols-3"
     : "grid gap-4 xl:grid-cols-5";
+  const kitchenHistoryMode = isKitchenAccount && (statusFilter === "served" || statusFilter === "cancelled");
+  const kitchenHistoryTitle = statusFilter === "cancelled" ? "Cancelled Orders" : "Served Orders";
+  const kitchenHistoryDescription = statusFilter === "cancelled"
+    ? "List of orders that were cancelled or voided."
+    : "List of orders already marked as served.";
 
   return (
     <div className="p-8">
@@ -547,27 +558,14 @@ export function POSKitchenOrders() {
             <ClipboardList className="h-5 w-5 text-primary" />
             <div>
               <h2 className="text-xl font-semibold text-foreground">
-                {isKitchenAccount && statusFilter === "served" ? "Served Orders" : "Kitchen Receipt History"}
+                {kitchenHistoryMode ? kitchenHistoryTitle : "Kitchen Receipt History"}
               </h2>
-              {isKitchenAccount && statusFilter === "served" && (
-                <p className="text-xs text-muted-foreground">List of orders already marked as served.</p>
+              {kitchenHistoryMode && (
+                <p className="text-xs text-muted-foreground">{kitchenHistoryDescription}</p>
               )}
             </div>
           </div>
           <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-start lg:w-auto">
-            {isKitchenAccount && (
-              <button
-                type="button"
-                onClick={() => setStatusFilter((current) => (current === "served" ? "all" : "served"))}
-                className={`inline-flex h-10 items-center justify-center px-1 text-sm font-medium transition ${
-                  statusFilter === "served"
-                    ? "text-primary underline underline-offset-4"
-                    : "text-primary hover:underline hover:underline-offset-4"
-                }`}
-              >
-                {statusFilter === "served" ? "Back" : "Served Orders"}
-              </button>
-            )}
             <div className="relative w-full lg:w-72">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <input
@@ -584,7 +582,7 @@ export function POSKitchenOrders() {
                 onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
                 className="w-full appearance-none rounded-lg border border-input bg-input-background py-2 pl-9 pr-8 text-sm outline-none focus:border-primary"
               >
-                {STATUS_FILTERS.filter((filter) => !isKitchenAccount || !["completed", "cancelled"].includes(filter.value)).map((filter) => (
+                {STATUS_FILTERS.filter((filter) => !isKitchenAccount || filter.value !== "completed").map((filter) => (
                   <option key={filter.value} value={filter.value}>
                     {filter.label}
                   </option>
@@ -602,7 +600,7 @@ export function POSKitchenOrders() {
           <div className="rounded-lg border border-dashed border-border px-4 py-12 text-center text-sm text-muted-foreground">
             No kitchen orders found.
           </div>
-        ) : isKitchenAccount && statusFilter === "served" ? (
+        ) : kitchenHistoryMode ? (
           <div className="overflow-hidden rounded-xl border border-border">
             <div className="overflow-x-auto">
               <table className="w-full min-w-[900px] text-left text-sm">
@@ -613,8 +611,8 @@ export function POSKitchenOrders() {
                     <th className="px-4 py-3 font-semibold">Order Type</th>
                     <th className="px-4 py-3 font-semibold">Table</th>
                     <th className="px-4 py-3 font-semibold">Order Time</th>
-                    <th className="px-4 py-3 font-semibold">Served At</th>
-                    <th className="px-4 py-3 font-semibold">Serve Time</th>
+                    <th className="px-4 py-3 font-semibold">{statusFilter === "cancelled" ? "Cancelled At" : "Served At"}</th>
+                    <th className="px-4 py-3 font-semibold">{statusFilter === "cancelled" ? "Elapsed Time" : "Serve Time"}</th>
                     <th className="px-4 py-3 text-right font-semibold">Action</th>
                   </tr>
                 </thead>
@@ -628,7 +626,11 @@ export function POSKitchenOrders() {
                       <td className="px-4 py-3 text-muted-foreground">{formatOrderType(order.orderType)}</td>
                       <td className="px-4 py-3 text-muted-foreground">{order.tableNumber || "-"}</td>
                       <td className="px-4 py-3 text-muted-foreground">{formatDateTime(order.orderedAt)}</td>
-                      <td className="px-4 py-3 text-muted-foreground">{order.servedAt ? formatDateTime(order.servedAt) : "-"}</td>
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {statusFilter === "cancelled"
+                          ? formatDateTime(getLifecycleEnd(order) ?? order.updatedAt)
+                          : order.servedAt ? formatDateTime(order.servedAt) : "-"}
+                      </td>
                       <td className="px-4 py-3 text-muted-foreground">{getRunningTime(order, nowMs)}</td>
                       <td className="px-4 py-3">
                         <div className="flex justify-end">

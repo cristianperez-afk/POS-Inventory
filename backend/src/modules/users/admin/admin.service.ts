@@ -45,12 +45,24 @@ export class AdminService {
     return this.databaseService.verifyRetailVoidPin(input);
   }
 
+  verifyPosManagerPin(input: { userId: number; voidPin: string; action?: string }) {
+    return this.databaseService.verifyPosManagerPin(input);
+  }
+
   getRetailManagerProfile(userId: number) {
     return this.databaseService.getRetailManagerProfile(userId);
   }
 
   generateRetailManagerUniquePin(userId: number) {
     return this.databaseService.generateRetailManagerUniquePin(userId);
+  }
+
+  getPosManagerProfile(userId: number) {
+    return this.databaseService.getPosManagerProfile(userId);
+  }
+
+  generatePosManagerUniquePin(userId: number) {
+    return this.databaseService.generatePosManagerUniquePin(userId);
   }
 
   deleteStaff(input: { adminUserId: number; staffUserId: number }) {

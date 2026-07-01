@@ -24,7 +24,6 @@ const restaurantSettings: Array<[keyof StoreSettingValues, string, string]> = [
   ['enable_customer_recommendation', 'Customer Recommendations', 'Previous-customer suggestions while staff types names.'],
   ['enable_table_management', 'Table Management', 'Table selection, status, assignment, and history for dine-in orders.'],
   ['enable_refund', 'Refund Processing', 'Refund actions in paid order workflows.'],
-  ['enable_void', 'Void Transactions', 'Void actions for transactions that need cancellation.'],
   ['enable_service_charge', 'Service Charge', 'Service charge line and calculation in order totals.'],
   ['enable_tax', 'VAT', 'VAT line and calculation in order totals.'],
   ['enable_discount', 'Discounts', 'Discount management and staff discount selection.'],
@@ -33,7 +32,6 @@ const restaurantSettings: Array<[keyof StoreSettingValues, string, string]> = [
 
 const retailSettings: Array<[keyof StoreSettingValues, string, string]> = [
   ['enable_refund', 'Refund Processing', 'Refund actions in paid order workflows.'],
-  ['enable_void', 'Void Transactions', 'Void actions for transactions that need cancellation.'],
   ['enable_service_charge', 'Service Fee / Service Charge', 'Service fee line and calculation in order totals.'],
   ['enable_tax', 'VAT', 'VAT line and calculation in order totals.'],
   ['enable_discount', 'Discounts', 'Discount management and staff discount selection.'],
@@ -134,7 +132,6 @@ export function StoreSettings({ currentUser, storeBrand, onLogout, onNavigate }:
           enable_customer_recommendation: settings.enable_customer_recommendation,
           enable_table_management: settings.enable_table_management,
           enable_refund: settings.enable_refund,
-          enable_void: settings.enable_void,
           enable_service_charge: settings.enable_service_charge,
           service_charge_rate: settings.service_charge_rate,
           enable_tax: settings.enable_tax,

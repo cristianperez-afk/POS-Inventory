@@ -53,6 +53,7 @@ export type ManagerProfileData = AuthenticatedUser & {
 };
 
 export interface RetailVoidPinVerification {
+  authorized?: boolean;
   manager?: {
     id?: number;
     full_name?: string;
@@ -114,7 +115,16 @@ export const adminApi = {
     method: 'POST',
     body: JSON.stringify({}),
   }),
+  getPosManagerProfile: () => apiClient<ManagerProfileData>('/admin/pos/manager-profile'),
+  generatePosManagerUniquePin: () => apiClient<{ void_pin?: string }>('/admin/pos/manager-profile/unique-pin', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  }),
   verifyRetailVoidPin: (voidPin: string) => apiClient<RetailVoidPinVerification>('/admin/retail/void-pin/verify', {
+    method: 'POST',
+    body: JSON.stringify({ void_pin: voidPin }),
+  }),
+  verifyPosManagerPin: (voidPin: string) => apiClient<RetailVoidPinVerification>('/admin/pos/manager-pin/verify', {
     method: 'POST',
     body: JSON.stringify({ void_pin: voidPin }),
   }),
