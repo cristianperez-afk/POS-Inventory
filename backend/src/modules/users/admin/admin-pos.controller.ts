@@ -69,7 +69,7 @@ export class AdminPosController {
   }
 
   @Patch('pos/tables/:id/occupancy')
-  @Permissions('pos:manage')
+  @Permissions('pos:update_table_occupancy')
   @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: 120, ttl: 60000 } })
   setDiningTableOccupancy(@Param('id') id: string, @Body() body: any, @CurrentUser() user: AuthenticatedUser) {
