@@ -282,7 +282,7 @@ export function TableProvider({ children, currentUser }: { children: ReactNode; 
   const setTableStatus = async (tableNumber: string, status: 'available') => {
     const table = tables.find(t => t.number === tableNumber);
     if (!table || !currentUser?.id || status !== 'available') return;
-    await updateTable(table.id, table.number, table.seats, table.isShared);
+    await setTableOccupancy(table.id, 0);
   };
 
   const getAvailableTablesCount = () => {
