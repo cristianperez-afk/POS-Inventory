@@ -327,8 +327,13 @@ export function useDomainMutation<TData, TVariables>(
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn,
-    onSuccess: async () => {
-      await Promise.all(
+    onSuccess: () => {
+      // Fire-and-forget: invalidating triggers a background refetch, but we must
+      // NOT await it here. `invalidateQueries` only resolves once the refetch
+      // settles, so awaiting it would keep `mutateAsync` (and any caller's
+      // "Saving..." state) pending if that refetch is slow or stalls — even
+      // though the write already succeeded. The lists still update reactively.
+      void Promise.all(
         expandInvalidationKeys(invalidateKeys).map((queryKey) =>
           queryClient.invalidateQueries({ queryKey }),
         ),

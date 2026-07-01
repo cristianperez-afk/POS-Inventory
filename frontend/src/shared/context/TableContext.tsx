@@ -113,8 +113,13 @@ export function TableProvider({ children, currentUser }: { children: ReactNode; 
       setTables([]);
       return;
     }
-    const data = await posApi.listTables<any>();
-    setTables(Array.isArray(data) ? data.map(mapApiTable) : []);
+    try {
+      const data = await posApi.listTables<any>();
+      setTables(Array.isArray(data) ? data.map(mapApiTable) : []);
+    } catch {
+      // Non-admin roles (e.g. inventory manager) receive 403 — treat as empty
+      setTables([]);
+    }
   };
 
   useEffect(() => {
@@ -132,7 +137,7 @@ export function TableProvider({ children, currentUser }: { children: ReactNode; 
       const newTables = prevTables.map(table => {
         const order = orders.find(o =>
           orderUsesTable(o.table, table.number) &&
-          o.orderStatus !== 'Completed'
+          !o.tableEndedAt
         );
 
         if (order) {
@@ -282,7 +287,7 @@ export function TableProvider({ children, currentUser }: { children: ReactNode; 
   const setTableStatus = async (tableNumber: string, status: 'available') => {
     const table = tables.find(t => t.number === tableNumber);
     if (!table || !currentUser?.id || status !== 'available') return;
-    await updateTable(table.id, table.number, table.seats, table.isShared);
+    await setTableOccupancy(table.id, 0);
   };
 
   const getAvailableTablesCount = () => {

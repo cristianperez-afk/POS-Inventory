@@ -2804,8 +2804,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           AND (
             -- Takeout has no table stay: serving or completion ends it.
             (o.order_type = 'TAKEOUT' AND o.order_status IN ('SERVED', 'COMPLETED', 'CANCELLED'))
-            -- An explicitly completed dine-in lifecycle is final as well.
-            OR (o.order_type IN ('DINE_IN', 'MIXED') AND o.order_status IN ('COMPLETED', 'CANCELLED'))
+            -- Cancellation is final. A completed dine-in order can still be
+            -- an active customer stay until payment/table release closes it.
+            OR (o.order_type IN ('DINE_IN', 'MIXED') AND o.order_status = 'CANCELLED')
             -- Pay Now remains active only while its assigned table is occupied.
             OR (
               o.order_type IN ('DINE_IN', 'MIXED')

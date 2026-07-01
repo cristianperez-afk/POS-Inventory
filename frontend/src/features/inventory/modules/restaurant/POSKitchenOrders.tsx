@@ -253,7 +253,7 @@ function getRunningTime(order: KitchenOrder, nowMs = Date.now()) {
 function getCustomerStayDuration(order: KitchenOrder, nowMs = Date.now()) {
   const normalizedType = order.orderType.replace(/_/g, "-").toLowerCase();
   if (normalizedType === "takeout") return "-";
-  const stayEnd = order.tableEndedAt ?? getLifecycleEnd(order);
+  const stayEnd = order.tableEndedAt ?? (order.status === "cancelled" ? getLifecycleEnd(order) : undefined);
   const savedSeconds = Number(order.runningDuration ?? NaN);
   if (stayEnd && Number.isFinite(savedSeconds) && savedSeconds > 0) {
     return formatServeTime(savedSeconds);

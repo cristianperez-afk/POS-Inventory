@@ -44,6 +44,15 @@ type InventoryUserRow = {
 
 @Injectable()
 export class InventoryIdentityService {
+  // resolveScope() runs on every inventory API request. ensureBridgeColumns
+  // and ensureBusinessDefaults are idempotent setup (schema columns/indexes,
+  // "create if missing" seed rows) that only ever need to run once per
+  // business per process lifetime.
+  // ensureBusinessModule and ensureInventoryUser are intentionally kept live:
+  // they keep role/status/business-module assignment in sync with POS changes.
+  private bridgeColumnsReady = false;
+  private readonly businessDefaultsReady = new Set<string>();
+
   constructor(
     private readonly databaseService: DatabaseService,
     private readonly authRepository: AuthRepository,
@@ -63,11 +72,17 @@ export class InventoryIdentityService {
     const role = this.mapRole(freshUser);
 
     return this.databaseService.withTransaction(async (client) => {
-      await this.ensureBridgeColumns(client);
+      if (!this.bridgeColumnsReady) {
+        await this.ensureBridgeColumns(client);
+        this.bridgeColumnsReady = true;
+      }
 
       const business = await this.ensureBusiness(client, freshUser, module);
       await this.ensureBusinessModule(client, business.id, module);
-      await this.ensureBusinessDefaults(client, business.id, module);
+      if (!this.businessDefaultsReady.has(business.id)) {
+        await this.ensureBusinessDefaults(client, business.id, module);
+        this.businessDefaultsReady.add(business.id);
+      }
       const inventoryUser = await this.ensureInventoryUser(client, freshUser, business.id, role);
 
       return {
