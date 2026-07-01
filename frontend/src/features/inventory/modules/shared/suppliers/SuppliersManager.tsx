@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Archive, Edit, Plus, RotateCcw, X, Users, Building2 } from 'lucide-react';
+import { toast } from 'sonner';
 
 // A supplier in the shape the shared UI understands. Each module normalizes its
 // own supplier records to this before passing them in.
@@ -27,8 +28,12 @@ export type SupplierFieldDef = {
   key: keyof SupplierCreatePayload;
   label: string;
   required?: boolean;
-  type?: 'text' | 'textarea';
+  type?: 'text' | 'textarea' | 'select';
   placeholder?: string;
+  // For `select` fields: the choices offered in the dropdown.
+  options?: { value: string; label: string }[];
+  // Optional helper text shown beneath the field.
+  hint?: string;
 };
 
 type Props = {
@@ -104,11 +109,14 @@ export function SuppliersManager({
       } else {
         await onCreate(payload);
       }
+      toast.success(mode === 'edit' ? `Supplier "${payload.name}" updated` : `Supplier "${payload.name}" added`);
       setForm({});
       setEditingSupplier(null);
       setMode('list');
     } catch (e: any) {
-      setError(e?.message ?? `Failed to ${mode === 'edit' ? 'update' : 'create'} supplier`);
+      const message = e?.message ?? `Failed to ${mode === 'edit' ? 'update' : 'create'} supplier`;
+      setError(message);
+      toast.error(message);
     } finally {
       setSaving(false);
     }
@@ -136,13 +144,16 @@ export function SuppliersManager({
       setSaving(true);
       setError(null);
       await onArchive(supplier.id);
+      toast.success(`Supplier "${supplier.name}" archived`);
       if (editingSupplier?.id === supplier.id) {
         setEditingSupplier(null);
         setForm({});
         setMode('list');
       }
     } catch (e: any) {
-      setError(e?.message ?? 'Failed to archive supplier');
+      const message = e?.message ?? 'Failed to archive supplier';
+      setError(message);
+      toast.error(message);
     } finally {
       setSaving(false);
     }
@@ -154,8 +165,11 @@ export function SuppliersManager({
       setSaving(true);
       setError(null);
       await onRestore(supplier.id);
+      toast.success(`Supplier "${supplier.name}" restored`);
     } catch (e: any) {
-      setError(e?.message ?? 'Failed to restore supplier');
+      const message = e?.message ?? 'Failed to restore supplier';
+      setError(message);
+      toast.error(message);
     } finally {
       setSaving(false);
     }
@@ -364,6 +378,19 @@ export function SuppliersManager({
                       rows={2}
                       className="w-full px-3 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary resize-none"
                     />
+                  ) : f.type === 'select' ? (
+                    <select
+                      value={form[f.key] ?? ''}
+                      onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
+                      className="w-full px-3 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] bg-white focus:outline-none focus:border-primary"
+                    >
+                      <option value="">{f.placeholder ?? 'Select…'}</option>
+                      {(f.options ?? []).map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
                   ) : (
                     <input
                       type="text"
@@ -373,6 +400,7 @@ export function SuppliersManager({
                       className="w-full px-3 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary"
                     />
                   )}
+                  {f.hint && <p className="text-[11px] text-muted-foreground mt-1">{f.hint}</p>}
                 </div>
               ))}
             </div>

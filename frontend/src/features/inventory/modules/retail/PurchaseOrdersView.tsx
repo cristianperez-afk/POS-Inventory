@@ -53,6 +53,33 @@ const STATUS_CLASS: Record<string, string> = {
 //    condition-graded, and later sorted into individual pieces for sale.
 type POProductType = 'GENERAL' | 'THRIFT';
 
+// Supplier classification for the retail business: whether a supplier provides
+// brand-new general merchandise, sealed thrift/ukay-ukay bales, or both. Stored
+// on the supplier's `category` field and surfaced as a badge in the directory.
+const SUPPLIER_TYPE_GENERAL = 'General Merchandise';
+const SUPPLIER_TYPE_THRIFT = 'Thrift / Bale';
+const SUPPLIER_TYPE_BOTH = 'Both / Mixed';
+
+const SUPPLIER_TYPE_OPTIONS: { value: string; label: string }[] = [
+  { value: SUPPLIER_TYPE_GENERAL, label: 'General Merchandise' },
+  { value: SUPPLIER_TYPE_THRIFT, label: 'Thrift / Bale (Ukay-ukay)' },
+  { value: SUPPLIER_TYPE_BOTH, label: 'Both / Mixed' },
+];
+
+// Which PO item product-types a supplier of the given classification may provide.
+// Unclassified/legacy suppliers (blank or old free-text category) are allowed
+// both, so existing data keeps working.
+function allowedProductTypes(category?: string | null): POProductType[] {
+  if (category === SUPPLIER_TYPE_GENERAL) return ['GENERAL'];
+  if (category === SUPPLIER_TYPE_THRIFT) return ['THRIFT'];
+  return ['GENERAL', 'THRIFT'];
+}
+
+const PRODUCT_TYPE_LABEL: Record<POProductType, string> = {
+  GENERAL: 'general merchandise',
+  THRIFT: 'thrift bales',
+};
+
 type POItemDraft = {
   inventoryItemId?: string;
   productType: POProductType;
@@ -164,6 +191,9 @@ export default function PurchaseOrdersView({
   }, []);
 
   const [poForm, setPOForm] = useState({
+    // The PO is scoped to a single product type, chosen first. It drives which
+    // suppliers can be selected and which items can be added.
+    poType: 'GENERAL' as POProductType,
     supplierId: '' as string | undefined,
     supplierName: '',
     paymentMethod: 'Bank Transfer',
@@ -191,9 +221,19 @@ export default function PurchaseOrdersView({
     t.toLowerCase().includes(newItemForm.baleType.toLowerCase())
   );
 
-  const filteredSuppliers = suppliers.filter(s =>
+  // Only suppliers that provide the PO's chosen product type are selectable
+  // (unclassified/legacy suppliers can supply either), then narrowed by the
+  // typed name.
+  const suppliersForType = suppliers.filter((s: any) =>
+    allowedProductTypes(s.category).includes(poForm.poType)
+  );
+  const filteredSuppliers = suppliersForType.filter(s =>
     s.name.toLowerCase().includes(poForm.supplierName.toLowerCase())
   );
+
+  const selectedSupplier = suppliers.find((s: any) => s.id === poForm.supplierId);
+  // Every item on the PO must match the PO's chosen product type.
+  const allowedTypes: POProductType[] = [poForm.poType];
 
   const isThrift = newItemForm.productType === 'THRIFT';
   const itemUnitOptions = isThrift ? THRIFT_UNITS : GENERAL_UNITS;
@@ -225,6 +265,12 @@ export default function PurchaseOrdersView({
 
   const handleAddItemToPO = () => {
     const isThrift = newItemForm.productType === 'THRIFT';
+    if (!allowedTypes.includes(newItemForm.productType)) {
+      toast.error(
+        `${selectedSupplier?.name ?? 'This supplier'} is a ${selectedSupplier?.category ?? 'supplier'} — it does not provide ${PRODUCT_TYPE_LABEL[newItemForm.productType]}.`
+      );
+      return;
+    }
     const itemName = isThrift ? newItemForm.baleType.trim() : newItemForm.name.trim();
     if (!itemName) {
       toast.error(isThrift ? 'Please enter a Bale Type' : 'Please enter a Product Name');
@@ -284,6 +330,13 @@ export default function PurchaseOrdersView({
     }
     if (poForm.items.length === 0) {
       toast.error('Add at least one item');
+      return;
+    }
+    const mismatchedItem = poForm.items.find(i => !allowedTypes.includes(i.productType));
+    if (mismatchedItem) {
+      toast.error(
+        `${selectedSupplier?.name ?? 'This supplier'} (${selectedSupplier?.category ?? 'unclassified'}) cannot supply "${mismatchedItem.name}" (${PRODUCT_TYPE_LABEL[mismatchedItem.productType]}). Remove it or choose a different supplier.`
+      );
       return;
     }
     const hasNewItems = poForm.items.some(i => !i.inventoryItemId);
@@ -359,8 +412,9 @@ export default function PurchaseOrdersView({
           : undefined,
         items,
       });
-      setPOForm({ supplierId: undefined, supplierName: '', paymentMethod: 'Bank Transfer', paymentTerms: '', expectedDelivery: '', notes: '', items: [] });
+      setPOForm({ poType: 'GENERAL', supplierId: undefined, supplierName: '', paymentMethod: 'Bank Transfer', paymentTerms: '', expectedDelivery: '', notes: '', items: [] });
       setShowNewPOModal(false);
+      toast.success('Purchase order created');
     } catch (err: any) {
       toast.error(err.message ?? 'Failed to create purchase order');
     } finally {
@@ -371,6 +425,7 @@ export default function PurchaseOrdersView({
   const handleSubmitPO = async (id: string) => {
     try {
       await submitPurchaseOrderMutation.mutateAsync(id);
+      toast.success('Purchase order submitted for approval');
     } catch (err: any) {
       toast.error(err.message ?? 'Failed to submit purchase order');
     }
@@ -381,6 +436,7 @@ export default function PurchaseOrdersView({
       await approvePurchaseOrderMutation.mutateAsync(id);
       setSelectedPOForAction(null);
       setShowPendingApprovalsModal(false);
+      toast.success('Purchase order approved');
     } catch (err: any) {
       toast.error(err.message ?? 'Failed to approve purchase order');
     }
@@ -395,6 +451,7 @@ export default function PurchaseOrdersView({
       await rejectPurchaseOrderMutation.mutateAsync({ id, reason: rejectionRemarks });
       setRejectionRemarks('');
       setSelectedPOForAction(null);
+      toast.success('Purchase order rejected');
     } catch (err: any) {
       toast.error(err.message ?? 'Failed to reject purchase order');
     }
@@ -403,6 +460,7 @@ export default function PurchaseOrdersView({
   const handleCancelPO = async (id: string) => {
     try {
       await cancelPurchaseOrderMutation.mutateAsync(id);
+      toast.success('Purchase order cancelled');
     } catch (err: any) {
       toast.error(err.message ?? 'Failed to cancel purchase order');
     }
@@ -477,7 +535,12 @@ export default function PurchaseOrdersView({
             </button>
             )}
             <button
-              onClick={() => setShowNewPOModal(true)}
+              onClick={() => {
+                // Start each new PO from a clean form so a stale supplier name
+                // doesn't filter suppliers out of the picker.
+                setPOForm({ poType: 'GENERAL', supplierId: undefined, supplierName: '', paymentMethod: 'Bank Transfer', paymentTerms: '', expectedDelivery: '', notes: '', items: [] });
+                setShowNewPOModal(true);
+              }}
             className="bg-primary text-white px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-primary/90 hover:-translate-y-0.5 hover:shadow-md hover:shadow-primary/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:shadow-sm transition-all duration-200"
           >
             <Plus className="size-4" />
@@ -501,6 +564,37 @@ export default function PurchaseOrdersView({
             </div>
 
             <div className="space-y-4 mt-6">
+              {/* Step 1 — pick what kind of goods this PO is for. This scopes the
+                  supplier list and every item added below. */}
+              <div>
+                <label className="block text-[12px] font-medium text-foreground mb-2">Purchase Order Type <span className="text-[#E7000B]">*</span></label>
+                <div className="grid grid-cols-2 gap-3">
+                  {([
+                    { type: 'GENERAL' as POProductType, title: 'General Merchandise', desc: 'Brand-new goods sold per unit' },
+                    { type: 'THRIFT' as POProductType, title: 'Thrift Bale (Ukay-ukay)', desc: 'Sealed bales sorted into pieces' },
+                  ]).map(({ type, title, desc }) => (
+                    <button
+                      key={type}
+                      type="button"
+                      onClick={() => {
+                        // Switching type invalidates the supplier and any items, so reset them.
+                        setPOForm({ ...poForm, poType: type, supplierId: undefined, supplierName: '', items: [] });
+                        setShowSupplierDropdown(false);
+                      }}
+                      className={`text-left px-4 py-3 rounded-[10px] border transition-colors ${
+                        poForm.poType === type
+                          ? 'border-primary bg-primary/10'
+                          : 'border-[rgba(0,0,0,0.1)] bg-card hover:bg-background'
+                      }`}
+                    >
+                      <p className="text-[14px] font-semibold text-foreground">{title}</p>
+                      <p className="text-[12px] text-muted-foreground mt-0.5">{desc}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Step 2 — choose a supplier that provides the selected type. */}
               <div className="relative">
                 <label className="block text-[12px] font-medium text-foreground mb-2">Supplier <span className="text-[#E7000B]">*</span></label>
                 <input
@@ -510,8 +604,15 @@ export default function PurchaseOrdersView({
                   onFocus={() => setShowSupplierDropdown(true)}
                   onBlur={() => setTimeout(() => setShowSupplierDropdown(false), 300)}
                   className="w-full px-[12.8px] py-[8.8px] bg-card border-[0.8px] border-transparent rounded-[10px] text-[14px] focus:outline-none focus:border-primary"
-                  placeholder="Select supplier"
+                  placeholder={`Select a ${poForm.poType === 'THRIFT' ? 'thrift/bale' : 'general merchandise'} supplier`}
                 />
+                {showSupplierDropdown && suppliersForType.length === 0 && (
+                  <div className="absolute z-10 w-full mt-1 bg-card border border-[rgba(50,59,66,0.15)] rounded-[10px] shadow-lg p-3">
+                    <p className="text-[13px] text-muted-foreground">
+                      No suppliers classified for {poForm.poType === 'THRIFT' ? 'Thrift / Bale' : 'General Merchandise'}. Add one in the Suppliers Directory first.
+                    </p>
+                  </div>
+                )}
                 {showSupplierDropdown && filteredSuppliers.length > 0 && (
                   <div className="absolute z-10 w-full mt-1 bg-card border border-[rgba(50,59,66,0.15)] rounded-[10px] shadow-lg max-h-[240px] overflow-y-auto">
                     {filteredSuppliers.map((s: any) => (
@@ -585,7 +686,20 @@ export default function PurchaseOrdersView({
             <div className="mt-6">
               <div className="flex items-center justify-between mb-3">
                 <label className="text-[16px] font-semibold text-foreground">Order Items</label>
-                <button onClick={() => setShowNewItemModal(true)} className="px-[10.8px] py-[0.8px] h-[32px] bg-background border-[0.8px] border-[rgba(50,59,66,0.15)] text-foreground rounded-[10px] text-[14px] font-medium flex items-center gap-[6px] hover:bg-muted transition-colors">
+                <button
+                  onClick={() => {
+                    // Items inherit the PO's product type — no per-item choice.
+                    setNewItemForm({
+                      ...blankNewItemForm(),
+                      productType: poForm.poType,
+                      unit: poForm.poType === 'THRIFT' ? 'bale' : 'pcs',
+                    });
+                    setShowNewItemModal(true);
+                  }}
+                  disabled={!poForm.supplierId}
+                  title={!poForm.supplierId ? 'Select a supplier first' : undefined}
+                  className="px-[10.8px] py-[0.8px] h-[32px] bg-background border-[0.8px] border-[rgba(50,59,66,0.15)] text-foreground rounded-[10px] text-[14px] font-medium flex items-center gap-[6px] hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
                   <Plus className="size-4" />
                   Add Item
                 </button>
@@ -666,30 +780,20 @@ export default function PurchaseOrdersView({
         <div className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-50">
           <div className="bg-card rounded-[14px] p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
             <h3 className="text-[24px] font-bold text-foreground mb-1">Add Item to Purchase Order</h3>
-            <p className="text-[14px] text-muted-foreground mb-6">Order brand-new general merchandise or sealed ukay-ukay/thrift bales.</p>
+            <p className="text-[14px] text-muted-foreground mb-6">
+              Adding {isThrift ? 'a sealed ukay-ukay/thrift bale' : 'brand-new general merchandise'} for {poForm.supplierName || 'this supplier'}.
+            </p>
             <div className="space-y-4">
-              {/* Product type — general merchandise vs. thrift bale drive different fields */}
+              {/* Product type is fixed by the PO — shown read-only for context. */}
               <div>
-                <label className="block text-[14px] font-medium text-foreground mb-2">Product Type *</label>
-                <div className="grid grid-cols-2 gap-3">
-                  {([
-                    { type: 'GENERAL' as POProductType, title: 'General Merchandise', desc: 'Brand-new goods sold per unit', defUnit: 'pcs' },
-                    { type: 'THRIFT' as POProductType, title: 'Thrift Bale (Ukay-ukay)', desc: 'Sealed bales sorted into pieces', defUnit: 'bale' },
-                  ]).map(({ type, title, desc, defUnit }) => (
-                    <button
-                      key={type}
-                      type="button"
-                      onClick={() => setNewItemForm({ ...newItemForm, productType: type, unit: defUnit, category: '', subcategory: '', newCategory: '', newSubcategory: '' })}
-                      className={`text-left px-4 py-3 rounded-[10px] border transition-colors ${
-                        newItemForm.productType === type
-                          ? 'border-primary bg-primary/10'
-                          : 'border-[rgba(0,0,0,0.1)] bg-card hover:bg-background'
-                      }`}
-                    >
-                      <p className="text-[14px] font-semibold text-foreground">{title}</p>
-                      <p className="text-[12px] text-muted-foreground mt-0.5">{desc}</p>
-                    </button>
-                  ))}
+                <label className="block text-[14px] font-medium text-foreground mb-2">Product Type</label>
+                <div className="flex items-center gap-2 px-4 py-3 rounded-[10px] border border-primary bg-primary/10">
+                  <span className={`text-[11px] px-1.5 py-0.5 rounded font-medium ${isThrift ? 'bg-[#fdf0e6] text-[#b45309]' : 'bg-primary/10 text-primary'}`}>
+                    {isThrift ? 'Thrift Bale' : 'General'}
+                  </span>
+                  <p className="text-[13px] text-muted-foreground">
+                    {isThrift ? 'Sealed bales sorted into pieces' : 'Brand-new goods sold per unit'} — set on the purchase order.
+                  </p>
                 </div>
               </div>
 
@@ -987,11 +1091,19 @@ export default function PurchaseOrdersView({
         archivedSuppliers={archivedSuppliers as NormalizedSupplier[]}
         fields={[
           { key: 'name', label: 'Name', required: true, placeholder: 'Supplier name' },
+          {
+            key: 'category',
+            label: 'Supplier Type',
+            required: true,
+            type: 'select',
+            placeholder: 'Select supplier type',
+            options: SUPPLIER_TYPE_OPTIONS,
+            hint: 'Classifies what this supplier provides so it can be matched to the right purchase orders.',
+          },
           { key: 'contactPerson', label: 'Contact Person', placeholder: 'Contact name' },
           { key: 'email', label: 'Email', placeholder: 'email@example.com' },
           { key: 'phone', label: 'Phone', placeholder: '+63 9XX XXX XXXX' },
           { key: 'address', label: 'Address', type: 'textarea', placeholder: 'City, Province' },
-          { key: 'category', label: 'Category', placeholder: 'e.g. Clothing, Footwear' },
         ]}
         onCreate={async (payload) => {
           await createSupplierMutation.mutateAsync(payload);
@@ -1013,7 +1125,9 @@ export default function PurchaseOrdersView({
         }}
         canManage={isAdmin}
         onSelectSupplier={(s) => {
-          setPOForm({ ...poForm, supplierId: s.id, supplierName: s.name });
+          // Seed the PO type from the supplier's classification so the flow stays consistent.
+          const poType = allowedProductTypes(s.category)[0];
+          setPOForm({ poType, supplierId: s.id, supplierName: s.name, paymentMethod: 'Bank Transfer', paymentTerms: '', expectedDelivery: '', notes: '', items: [] });
           setShowSuppliersModal(false);
           setShowNewPOModal(true);
         }}
