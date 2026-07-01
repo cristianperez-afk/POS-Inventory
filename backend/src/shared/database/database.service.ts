@@ -3908,24 +3908,39 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           (['DINE_IN', 'MIXED'].includes(orderType) && orderStatus === 'COMPLETED');
         const runningTimeEnd = isRestaurantOrder && stopsOnConfirmation ? runningTimeStart : null;
         const orderNumber = await this.createUniqueOrderNumber(client, input.orderNumber);
+        const clientRequestId = String(input.clientRequestId ?? input.client_request_id ?? '').trim() || null;
+        if (clientRequestId) {
+          const existingRequest = await this.queryWithClient<{ id: number; order_number: string }>(
+            client,
+            `SELECT id, order_number
+             FROM orders
+             WHERE store_id = $1 AND client_request_id = $2
+             LIMIT 1`,
+            [user.store_id, clientRequestId],
+          );
+          if (existingRequest[0]) {
+            return { ...existingRequest[0], already_existed: true };
+          }
+        }
         const partySize = Number(input.partySize ?? input.party_size ?? input.requiredSeats ?? 0);
         const orderRows = await this.queryWithClient<{ id: number }>(
           client,
           `
             INSERT INTO orders (
-              store_id, cashier_id, order_number, customer_name, order_type, table_name,
+              store_id, cashier_id, order_number, client_request_id, customer_name, order_type, table_name,
               party_size, subtotal, discount_amount, discount_type, tax_amount, service_charge,
               total_amount, order_status, payment_status, ordered_at, payment_at, completed_at,
               table_started_at, preparing_started_at, ready_at, service_started_at, served_at, service_duration,
               running_time_start, running_time_end, running_duration, is_running, estimated_prep_minutes, estimated_ready_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31)
             RETURNING id
           `,
           [
             user.store_id,
             user.id,
             orderNumber,
+            clientRequestId,
             input.customerName ?? null,
             orderType,
             input.tableName ?? null,
@@ -3965,6 +3980,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       for (const item of input.items ?? []) {
         if (isRestaurantOrder) {
           await this.validateRestaurantModifiers(client, user.store_id!, item);
+          item.ingredients = await this.buildAuthoritativeRestaurantIngredients(client, user.store_id!, item);
         }
         const itemRows = await this.queryWithClient<{ id: number }>(
           client,
@@ -4006,6 +4022,23 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
+      const expectedSubtotal = (input.items ?? []).reduce(
+        (sum: number, item: any) => sum + Number(item.lineTotal ?? 0),
+        0,
+      );
+      const submittedSubtotal = Number(input.subtotal ?? 0);
+      const expectedTotal = submittedSubtotal
+        + Number(input.tax ?? 0)
+        + Number(input.serviceFee ?? 0)
+        - Number(input.discount ?? 0);
+      const sameMoney = (left: number, right: number) => Math.abs(left - right) < 0.01;
+      if (!Number.isFinite(expectedSubtotal) || !sameMoney(submittedSubtotal, expectedSubtotal)) {
+        throw new BadRequestException('The order subtotal is invalid. Please refresh the order and try again.');
+      }
+      if (!Number.isFinite(expectedTotal) || !sameMoney(Number(input.total ?? 0), expectedTotal)) {
+        throw new BadRequestException('The order total is invalid. Please refresh the order and try again.');
+      }
+
       if (inventorySyncSettings.autoDeductInventoryOnSale) {
         await this.writeInventorySaleRecords(client, { user, orderNumber, input, movements: inventorySaleMovements });
       }
@@ -4041,6 +4074,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
         return { id: orderId, order_number: orderNumber };
       });
+      if ('already_existed' in savedOrder && savedOrder.already_existed) return savedOrder;
       await this.recordActivity({
         userId: user.id,
         storeId: user.store_id,
@@ -4160,12 +4194,13 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
       // Capture the payment status before the update so a void/refund only restocks
       // when the order was actually paid (and so a repeated void is a no-op).
-      const priorRows = await this.queryWithClient<{ payment_status: string | null; table_name: string | null; party_size: string | number | null; order_type: string | null }>(
+      const priorRows = await this.queryWithClient<{ payment_status: string | null; order_status: string | null; table_name: string | null; party_size: string | number | null; order_type: string | null }>(
         client,
-        `SELECT payment_status, table_name, party_size, order_type FROM orders WHERE store_id = $1 AND order_number = $2 LIMIT 1`,
+        `SELECT payment_status, order_status, table_name, party_size, order_type FROM orders WHERE store_id = $1 AND order_number = $2 LIMIT 1`,
         [user.store_id, input.orderNumber],
       );
       const priorPaymentStatus = priorRows[0]?.payment_status ?? null;
+      const priorOrderStatus = priorRows[0]?.order_status ?? null;
 
       const updatedRows = updates.length > 0
         ? await this.queryWithClient<UpdatedOrderRow>(
@@ -4370,6 +4405,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         ? input.restockOrderItemIds.map((x: any) => Number(x)).filter((n: number) => Number.isFinite(n))
         : null;
       const isPartialRefund = newPaymentStatus === 'PARTIALLY_REFUNDED';
+      const isNewCancellation = String(input.orderStatus ?? '').toUpperCase() === 'CANCELLED'
+        && String(priorOrderStatus ?? '').toUpperCase() !== 'CANCELLED';
 
       if (restockItemIds && restockItemIds.length > 0) {
         // Per-item path (retail partial/whole refund or void with an item list).
@@ -4393,6 +4430,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             ? input.restock
             : user.store_type === 'RETAIL_STORE';
         await this.restockVoidedPosOrder(client, user, updatedRows[0], newPaymentStatus, reason, restock);
+      } else if (isNewCancellation) {
+        const reason = input.reason ?? input.voidReason ?? 'Cancelled in POS';
+        // Inventory was deducted when the order was confirmed, including Pay
+        // Later orders, so a valid first cancellation reverses that snapshot.
+        // An explicit false supports the operational case where ingredients
+        // were already consumed and must remain recorded as a loss.
+        const restock = typeof input.restock === 'boolean' ? input.restock : true;
+        await this.restockVoidedPosOrder(client, user, updatedRows[0], 'CANCELLED', reason, restock);
       }
 
       return updatedRows;
@@ -4635,6 +4680,163 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  private async buildAuthoritativeRestaurantIngredients(client: PoolClient, storeId: number, item: any) {
+    const productId = Number(item.productId ?? item.id ?? 0);
+    if (!Number.isFinite(productId) || productId <= 0) return [];
+
+    const baseIngredients = await this.queryWithClient<any>(
+      client,
+      `
+        SELECT pi.id AS product_ingredient_id,
+               pi.ingredient_id,
+               ii.inventory_item_id,
+               COALESCE(ii.ingredient_name, pi.ingredient_name) AS name,
+               pi.quantity_required,
+               COALESCE(NULLIF(pi.unit, ''), ii.unit) AS unit
+        FROM product_ingredients pi
+        JOIN ingredients_inventory ii
+          ON ii.id = pi.ingredient_id AND ii.store_id = pi.store_id
+        WHERE pi.store_id = $1 AND pi.product_id = $2
+        ORDER BY pi.id ASC
+      `,
+      [storeId, productId],
+    );
+    if (baseIngredients.length === 0) {
+      throw new BadRequestException('This menu item does not have a linked recipe BOM.');
+    }
+
+    const recipeRows = await this.queryWithClient<{ modifiers: any[] }>(
+      client,
+      `
+        SELECT COALESCE(recipe.modifiers, '[]'::jsonb) AS modifiers
+        FROM products product
+        LEFT JOIN "InventoryItem" menu_item ON menu_item.id = product.inventory_item_id
+        LEFT JOIN LATERAL (
+          SELECT configured.modifiers
+          FROM "Recipe" configured
+          WHERE COALESCE(configured."isActive", TRUE) = TRUE
+            AND (menu_item."businessId" IS NULL OR configured."businessId" = menu_item."businessId")
+            AND (
+              configured."menuItemId" = product.inventory_item_id
+              OR lower(trim(COALESCE(configured.name, ''))) = lower(trim(COALESCE(product.name, '')))
+            )
+          ORDER BY CASE WHEN configured."menuItemId" = product.inventory_item_id THEN 0 ELSE 1 END,
+                   configured."updatedAt" DESC NULLS LAST
+          LIMIT 1
+        ) recipe ON TRUE
+        WHERE product.id = $1 AND product.store_id = $2
+        LIMIT 1
+      `,
+      [productId, storeId],
+    );
+    const configuredModifiers = Array.isArray(recipeRows[0]?.modifiers) ? recipeRows[0].modifiers : [];
+    const configuredById = new Map(configuredModifiers.map((modifier: any) => [String(modifier.id), modifier]));
+    const selectedSubmissions = Array.isArray(item.modifiers) ? item.modifiers : [];
+    const selected = selectedSubmissions
+      .map((submission: any) => ({ submission, configured: configuredById.get(String(submission?.id ?? '')) as any }))
+      .filter((entry: any) => Boolean(entry.configured));
+    const sizeVariant = selected.find((entry: any) => entry.configured.type === 'size_variant')?.configured;
+    const sizeMultiplier = Math.max(Number(sizeVariant?.sizeMultiplier ?? 1), 0.01);
+    const adjustmentsByItemId = new Map<string, { submission: any; configured: any }>();
+    for (const entry of selected) {
+      if (['remove', 'ingredient_level', 'less'].includes(String(entry.configured.type ?? ''))) {
+        adjustmentsByItemId.set(String(entry.configured.itemId ?? ''), entry);
+      }
+    }
+
+    const effectiveIngredients: any[] = baseIngredients.map((ingredient: any) => {
+      const itemId = String(ingredient.inventory_item_id ?? '');
+      const baseQuantity = Number(ingredient.quantity_required ?? 0);
+      const exactVariantQuantity = sizeVariant?.ingredientQuantities?.[itemId];
+      const variantQuantity = exactVariantQuantity != null && Number.isFinite(Number(exactVariantQuantity))
+        ? Number(exactVariantQuantity)
+        : baseQuantity * sizeMultiplier;
+      const adjustment = adjustmentsByItemId.get(itemId);
+      const adjustmentType = String(adjustment?.configured?.type ?? '');
+      const removed = adjustmentType === 'remove';
+      const levelPercent = adjustmentType === 'less'
+        ? 50
+        : adjustmentType === 'ingredient_level'
+          ? Number(adjustment?.configured?.levelPercent ?? 100)
+          : 100;
+      const quantity = removed ? 0 : variantQuantity * (levelPercent / 100);
+      const changed = Math.abs(quantity - baseQuantity) > 0.000001;
+      const labels = [sizeVariant?.name, adjustment?.configured?.name].filter(Boolean);
+      const modifierSnapshot = adjustment ? {
+        id: adjustment.configured.id,
+        name: adjustment.configured.name,
+        type: adjustment.configured.type,
+        itemId: adjustment.configured.itemId,
+        levelPercent: adjustmentType === 'ingredient_level' || adjustmentType === 'less' ? levelPercent : undefined,
+      } : undefined;
+      return {
+        id: ingredient.product_ingredient_id,
+        product_ingredient_id: ingredient.product_ingredient_id,
+        ingredient_id: ingredient.ingredient_id,
+        itemId: ingredient.inventory_item_id,
+        inventory_item_id: ingredient.inventory_item_id,
+        name: ingredient.name,
+        original_name: ingredient.name,
+        original_quantity: baseQuantity,
+        quantity,
+        unit: ingredient.unit,
+        removed: quantity <= 0,
+        customization_type: changed ? (quantity <= 0 ? 'REMOVE' : 'CHANGE_QUANTITY') : undefined,
+        notes: labels.length > 0 ? labels.join('; ') : undefined,
+        modifier_id: adjustment?.configured?.id,
+        modifier_type: adjustment?.configured?.type,
+        modifier_snapshot: modifierSnapshot,
+      };
+    });
+
+    const selectedAddOns = selected.filter((entry: any) => entry.configured.type === 'add_on');
+    const addOnItemIds = Array.from(new Set(selectedAddOns.map((entry: any) => String(entry.configured.itemId ?? '')).filter(Boolean)));
+    const addOnRows = addOnItemIds.length > 0
+      ? await this.queryWithClient<any>(
+          client,
+          `SELECT id, inventory_item_id, ingredient_name, unit
+           FROM ingredients_inventory
+           WHERE store_id = $1 AND inventory_item_id = ANY($2::text[])`,
+          [storeId, addOnItemIds],
+        )
+      : [];
+    const addOnByItemId = new Map(addOnRows.map((row: any) => [String(row.inventory_item_id), row]));
+    for (const { submission, configured } of selectedAddOns) {
+      const inventory = addOnByItemId.get(String(configured.itemId ?? '')) as any;
+      if (!inventory) continue;
+      const selectedQuantity = Number(submission.selectedQuantity ?? 1);
+      const quantity = Number(configured.quantity ?? 0) * selectedQuantity;
+      effectiveIngredients.push({
+        itemId: inventory.inventory_item_id,
+        inventory_item_id: inventory.inventory_item_id,
+        replacement_ingredient_id: Number(inventory.id),
+        replacement_name: inventory.ingredient_name,
+        name: inventory.ingredient_name ?? configured.itemName ?? configured.name,
+        original_quantity: 0,
+        quantity,
+        unit: configured.unit ?? inventory.unit,
+        additional_price: Number(configured.priceDelta ?? 0) * selectedQuantity,
+        customization_type: 'ADD',
+        notes: `${configured.name}${selectedQuantity > 1 ? ` x${selectedQuantity}` : ''}`,
+        modifier_id: configured.id,
+        modifier_type: configured.type,
+        modifier_snapshot: {
+          id: configured.id,
+          name: configured.name,
+          type: configured.type,
+          itemId: configured.itemId,
+          portion: Number(configured.quantity ?? 0),
+          selectedQuantity,
+          totalQuantity: quantity,
+          unit: configured.unit ?? inventory.unit,
+          priceDelta: Number(configured.priceDelta ?? 0),
+        },
+      });
+    }
+
+    return effectiveIngredients;
+  }
+
   private async recordRestaurantInstructionModifiers(client: PoolClient, storeId: number, orderItemId: number, item: any) {
     const modifiers = Array.isArray(item.modifiers) ? item.modifiers : [];
     for (const modifier of modifiers) {
@@ -4643,15 +4845,32 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       if (!label) continue;
       await this.queryWithClient(
         client,
-        `
-          INSERT INTO order_item_customizations (
-            store_id, order_item_id, customization_type, notes,
-            original_quantity, new_quantity, additional_cost
-          )
-          VALUES ($1, $2, 'NOTE', $3, 0, 0, $4)
-        `,
-        [storeId, orderItemId, label, Number(modifier.priceDelta ?? 0)],
-      );
+          `
+            INSERT INTO order_item_customizations (
+              store_id, order_item_id, customization_type, notes,
+              original_quantity, new_quantity, additional_cost,
+              modifier_id, modifier_type, modifier_snapshot
+            )
+            VALUES ($1, $2, 'NOTE', $3, 0, 0, $4, $5, $6, $7::jsonb)
+          `,
+          [
+            storeId,
+            orderItemId,
+            label,
+            Number(modifier.priceDelta ?? 0),
+            String(modifier.id ?? '') || null,
+            String(modifier.type ?? 'note'),
+            JSON.stringify({
+              id: modifier.id,
+              name: label,
+              type: modifier.type,
+              sizeMultiplier: modifier.type === 'size_variant' ? Number(modifier.sizeMultiplier ?? 1) : undefined,
+              sellingPrice: modifier.type === 'size_variant' ? Number(modifier.sellingPrice ?? 0) : undefined,
+              ingredientQuantities: modifier.type === 'size_variant' ? modifier.ingredientQuantities ?? {} : undefined,
+              priceDelta: Number(modifier.priceDelta ?? 0),
+            }),
+          ],
+        );
     }
   }
 
@@ -4668,7 +4887,6 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     if (selectedModifiers.length === 0) {
       if (hasSubmittedAddOn) throw new BadRequestException('An add-on selection is required for added ingredients.');
       if (hasSubmittedBasicAdjustment) throw new BadRequestException('A configured modifier is required for ingredient adjustments.');
-      return;
     }
     const productId = Number(item.productId ?? item.id ?? 0);
     if (!Number.isFinite(productId) || productId <= 0) {
@@ -4827,6 +5045,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           [storeId, configured.itemId, productId],
         );
         const ingredientId = Number(inventoryRows[0]?.id ?? 0);
+        if (explicitlyAdjustedIngredientIds.has(ingredientId)) {
+          throw new BadRequestException('Only one ingredient-level or remove option may be selected per recipe ingredient.');
+        }
         approvedAdjustmentIngredientIds.add(ingredientId);
         explicitlyAdjustedIngredientIds.add(ingredientId);
         const submittedIngredient = submittedIngredients.find((ingredient: any) =>
@@ -4910,6 +5131,18 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     if (!Number.isFinite(itemQuantity) || itemQuantity <= 0 || !sameNumber(item.lineTotal, expectedLineTotal)) {
       throw new BadRequestException('The modified item total is invalid. Please review the order again.');
     }
+    // Discard client-provided modifier details after validation. Downstream BOM
+    // computation and snapshots use the server-owned recipe configuration while
+    // preserving only the validated add-on count selected by the cashier.
+    item.modifiers = selectedModifiers.map((selected: any) => {
+      const configured: any = configuredById.get(String(selected?.id ?? ''));
+      return {
+        ...configured,
+        selectedQuantity: configured?.type === 'add_on' ? Number(selected.selectedQuantity ?? 1) : 1,
+      };
+    });
+    const authoritativeSize = item.modifiers.find((modifier: any) => modifier?.type === 'size_variant');
+    item.size = authoritativeSize?.name ?? null;
   }
 
   private async replaceProductVariants(client: PoolClient, productId: number, variants: any[]) {
@@ -5143,6 +5376,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       const persistedProductIngredientId = isAddedIngredient ? null : productIngredientId;
       const hasCustomization = Boolean(
         customizationType ||
+          ingredient.modifier_id || ingredient.modifierId ||
           removed ||
           replacementId ||
           additionalCost !== 0 ||
@@ -5160,9 +5394,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             store_id, order_item_id, product_ingredient_id, original_ingredient_id,
             replacement_ingredient_id, customization_type, original_ingredient_name,
             replacement_ingredient_name, original_quantity, new_quantity, unit,
-            additional_cost, notes
+            additional_cost, notes, modifier_id, modifier_type, modifier_snapshot
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb)
         `,
         [
           storeId,
@@ -5178,6 +5412,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ingredient.unit ?? null,
           additionalCost,
           ingredient.notes ?? null,
+          ingredient.modifier_id ?? ingredient.modifierId ?? null,
+          ingredient.modifier_type ?? ingredient.modifierType ?? null,
+          ingredient.modifier_snapshot || ingredient.modifierSnapshot
+            ? JSON.stringify(ingredient.modifier_snapshot ?? ingredient.modifierSnapshot)
+            : null,
         ],
       );
     }
@@ -5289,6 +5528,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       const persistedProductIngredientId = isAddedIngredient ? null : productIngredientId;
       const hasCustomization = Boolean(
         customizationType ||
+          ingredient.modifier_id || ingredient.modifierId ||
           removed ||
           replacementId ||
           additionalCost !== 0 ||
@@ -5307,9 +5547,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
               store_id, order_item_id, product_ingredient_id, original_ingredient_id,
               replacement_ingredient_id, customization_type, original_ingredient_name,
               replacement_ingredient_name, original_quantity, new_quantity, unit,
-              additional_cost, notes
+              additional_cost, notes, modifier_id, modifier_type, modifier_snapshot
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb)
           `,
           [
             storeId,
@@ -5325,6 +5565,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             ingredient.unit ?? null,
             additionalCost,
             ingredient.notes ?? null,
+            ingredient.modifier_id ?? ingredient.modifierId ?? null,
+            ingredient.modifier_type ?? ingredient.modifierType ?? null,
+            ingredient.modifier_snapshot || ingredient.modifierSnapshot
+              ? JSON.stringify(ingredient.modifier_snapshot ?? ingredient.modifierSnapshot)
+              : null,
           ],
         );
       }
@@ -5367,7 +5612,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       }
 
       if (!inventorySyncSettings.allowNegativeStock && Number(inventory.quantity_available ?? 0) < quantity) {
-        throw new BadRequestException('Not enough ingredient inventory for this order.');
+        throw new BadRequestException(
+          `Not enough stock for ${ingredient.original_name ?? ingredient.name ?? 'recipe ingredient'}. `
+          + `Required ${quantity} ${ingredient.unit ?? inventory.unit}, available ${Number(inventory.quantity_available ?? 0)} ${inventory.unit}.`,
+        );
       }
 
       await this.queryWithClient(
@@ -5701,7 +5949,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  // Reverses the stock deducted by a paid POS order when it is voided/fully refunded:
+  // Reverses the stock deducted by a POS order when it is cancelled, voided, or fully refunded:
   // restores everything in inventory_deductions and marks the mirrored "Sale" REFUNDED.
   // Caller guards on a PAID transition, so re-running is a no-op.
   private async restockVoidedPosOrder(
@@ -5717,7 +5965,20 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     // Whether stock goes back depends on the caller's decision (per-refund choice or
     // store-type default). When false, the deductions stand as a loss and only the
     // money is reversed (Sale -> REFUNDED below).
-    const deductions = restock
+    const priorRestock = restock
+      ? await this.queryWithClient<{ exists: boolean }>(
+          client,
+          `SELECT EXISTS (
+             SELECT 1 FROM "StockMovement"
+             WHERE "referenceType" = 'POS_VOID'
+               AND "referenceId" = $1
+               AND type = 'VOID_RESTOCK'
+           ) AS exists`,
+          [order.order_number],
+        )
+      : [];
+    const alreadyRestocked = Boolean(priorRestock[0]?.exists);
+    const deductions = restock && !alreadyRestocked
       ? await this.queryWithClient<{ variant_id: number | null; ingredient_id: number | null; quantity_deducted: string | number; unit: string | null }>(
           client,
           `SELECT variant_id, ingredient_id, quantity_deducted, unit FROM inventory_deductions WHERE order_id = $1`,
@@ -6284,6 +6545,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       `
         ALTER TABLE orders
           ADD COLUMN IF NOT EXISTS party_size INT,
+          ADD COLUMN IF NOT EXISTS client_request_id VARCHAR(100),
           ADD COLUMN IF NOT EXISTS table_name VARCHAR(50),
           ADD COLUMN IF NOT EXISTS subtotal DECIMAL(10,2) DEFAULT 0,
           ADD COLUMN IF NOT EXISTS discount_amount DECIMAL(10,2) DEFAULT 0,
@@ -6309,6 +6571,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ADD COLUMN IF NOT EXISTS is_running BOOLEAN NOT NULL DEFAULT FALSE,
           ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       `,
+    );
+    await this.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS orders_store_client_request_unique
+       ON orders (store_id, client_request_id)
+       WHERE client_request_id IS NOT NULL`,
     );
     await this.query(
       `
@@ -6350,6 +6617,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           new_quantity DECIMAL(10,2),
           unit VARCHAR(50),
           additional_cost DECIMAL(10,2) DEFAULT 0,
+          modifier_id VARCHAR(100),
+          modifier_type VARCHAR(50),
+          modifier_snapshot JSONB,
           notes TEXT,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -6369,6 +6639,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           ADD COLUMN IF NOT EXISTS new_quantity DECIMAL(10,2),
           ADD COLUMN IF NOT EXISTS unit VARCHAR(50),
           ADD COLUMN IF NOT EXISTS additional_cost DECIMAL(10,2) DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS modifier_id VARCHAR(100),
+          ADD COLUMN IF NOT EXISTS modifier_type VARCHAR(50),
+          ADD COLUMN IF NOT EXISTS modifier_snapshot JSONB,
           ADD COLUMN IF NOT EXISTS notes TEXT,
           ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       `,
