@@ -6,7 +6,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsive
 import { Printer, TrendingUp, TrendingDown, ShoppingCart, Calendar } from 'lucide-react';
 import { useOrders } from '../../shared/context/OrderContext';
 import { DateFilterControl, type DateFilterMode } from '../../shared/components/DateFilterControl';
-import { getLocalDateKey, parseLocalDateKey } from '../../shared/utils/date';
+import { getLocalDateKey, parseDatabaseTimestamp, parseLocalDateKey } from '../../shared/utils/date';
 import { calculateVatBreakdown } from '../../shared/utils/vat';
 
 // Custom Peso Icon Component using ₱ symbol
@@ -113,9 +113,19 @@ export function Reports({ onNavigate, onLogout, isAdmin = false, storeBrand, use
       return true;
     });
   };
+  const getFilteredOperationalOrders = () => {
+    const { start, end } = getFilterRange();
+
+    return orders.filter(o => {
+      if (start && o.date < start) return false;
+      if (end && o.date > end) return false;
+      return true;
+    });
+  };
 
   // Calculate metrics from filtered orders
   const filteredOrders = getFilteredOrders();
+  const filteredOperationalOrders = getFilteredOperationalOrders();
   const filteredRevenue = filteredOrders.reduce((sum, order) => sum + order.amountNumber, 0);
 
   const getItemAmount = (item: (typeof filteredOrders)[number]['items'][number]) =>
@@ -228,8 +238,36 @@ export function Reports({ onNavigate, onLogout, isAdmin = false, storeBrand, use
 
   const secondsBetween = (start?: string, end?: string) => {
     if (!start || !end) return null;
-    const duration = Math.floor((new Date(end).getTime() - new Date(start).getTime()) / 1000);
+    const duration = Math.floor((parseDatabaseTimestamp(end).getTime() - parseDatabaseTimestamp(start).getTime()) / 1000);
     return Number.isFinite(duration) && duration >= 0 ? duration : null;
+  };
+  const firstTimestamp = (...values: Array<string | undefined | null>) =>
+    values.find((value) => {
+      if (!value) return false;
+      return Number.isFinite(parseDatabaseTimestamp(value).getTime());
+    });
+  const isDineInOrder = (type: string) => type === 'Dine-In' || type === 'Mixed';
+  const isFinalServedOrder = (order: (typeof orders)[number]) =>
+    order.orderStatus === 'Served' || order.orderStatus === 'Completed';
+  const transactionServeEnd = (order: (typeof orders)[number]) => {
+    if (order.servedAt) return order.servedAt;
+    if (!isFinalServedOrder(order)) return undefined;
+    return firstTimestamp(order.runningTimeEnd, order.completedAt, order.tableEndedAt, order.paymentAt);
+  };
+  const transactionServeSeconds = (order: (typeof orders)[number]) => {
+    const savedSeconds = Number(order.serviceDuration ?? NaN);
+    if (isFinalServedOrder(order) && Number.isFinite(savedSeconds) && savedSeconds > 0) {
+      return Math.max(0, Math.floor(savedSeconds));
+    }
+
+    const end = transactionServeEnd(order);
+    const endMs = end ? parseDatabaseTimestamp(end).getTime() : Date.now();
+    const start = firstTimestamp(order.orderedAt, order.runningTimeStart, order.preparingStartedAt, order.createdAt);
+    if (!start) return null;
+
+    const startMs = parseDatabaseTimestamp(start).getTime();
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs > endMs) return null;
+    return Math.max(0, Math.floor((endMs - startMs) / 1000));
   };
   const averageSeconds = (values: Array<number | null>) => {
     const valid = values.filter((value): value is number => value !== null);
@@ -244,12 +282,15 @@ export function Reports({ onNavigate, onLogout, isAdmin = false, storeBrand, use
   };
   // Preparation is kitchen work (Preparing → Ready); completion is the
   // persisted restaurant running time from confirmation to the true lifecycle end.
-  const averagePreparationSeconds = averageSeconds(filteredOrders.map((order) =>
-    secondsBetween(order.preparingStartedAt, order.readyAt),
-  ));
-  const averageCompletionSeconds = averageSeconds(filteredOrders.map((order) => {
-    if (order.isRunning || order.runningDuration === undefined) return null;
-    return Math.max(0, order.runningDuration);
+  const averageServingSeconds = averageSeconds(filteredOperationalOrders.map(transactionServeSeconds));
+  const averageCustomerStaySeconds = averageSeconds(filteredOperationalOrders.map((order) => {
+    if (!isDineInOrder(order.type)) return null;
+    if (!order.isRunning && order.runningDuration !== undefined) {
+      return Math.max(0, order.runningDuration);
+    }
+    const start = firstTimestamp(order.tableStartedAt, order.orderedAt, order.runningTimeStart, order.createdAt);
+    const end = firstTimestamp(order.tableEndedAt, order.runningTimeEnd);
+    return secondsBetween(start, end);
   }));
 
   const handlePrint = () => {
@@ -350,24 +391,24 @@ export function Reports({ onNavigate, onLogout, isAdmin = false, storeBrand, use
 
             <div className="bg-card rounded-lg shadow-sm border border-border p-6">
               <div className="flex items-center justify-between mb-2">
-                <p className="text-sm text-muted-foreground">Avg. Preparation Time</p>
+                <p className="text-sm text-muted-foreground">Avg. Serving Time</p>
                 <div className="w-10 h-10 rounded-full bg-cyan-100 flex items-center justify-center">
                   <Calendar className="w-5 h-5 text-cyan-600" />
                 </div>
               </div>
-              <h2 className="text-2xl font-bold text-primary mb-1">{formatElapsed(averagePreparationSeconds)}</h2>
-              <div className="text-xs text-cyan-700">Preparing to Ready</div>
+              <h2 className="text-2xl font-bold text-primary mb-1">{formatElapsed(averageServingSeconds)}</h2>
+              <div className="text-xs text-cyan-700">Order start to served</div>
             </div>
 
             <div className="bg-card rounded-lg shadow-sm border border-border p-6">
               <div className="flex items-center justify-between mb-2">
-                <p className="text-sm text-muted-foreground">Avg. Completion Time</p>
+                <p className="text-sm text-muted-foreground">Avg. Customer Stay Time</p>
                 <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center">
                   <Calendar className="w-5 h-5 text-emerald-600" />
                 </div>
               </div>
-              <h2 className="text-2xl font-bold text-primary mb-1">{formatElapsed(averageCompletionSeconds)}</h2>
-              <div className="text-xs text-emerald-700">Confirmed to lifecycle end</div>
+              <h2 className="text-2xl font-bold text-primary mb-1">{formatElapsed(averageCustomerStaySeconds)}</h2>
+              <div className="text-xs text-emerald-700">Dine-in table start to release</div>
             </div>
           </div>
 

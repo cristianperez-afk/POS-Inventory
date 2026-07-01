@@ -325,10 +325,10 @@ export default function MultilocationView() {
                     <p className="text-[12px] text-muted-foreground mb-1">Active Transfers:</p>
                     <div className="flex items-center justify-between text-[13px]">
                       {stats.incomingTransfers > 0 && (
-                        <span className="text-secondary">â†“ {stats.incomingTransfers} incoming</span>
+                        <span className="text-secondary">↓ {stats.incomingTransfers} incoming</span>
                       )}
                       {stats.outgoingTransfers > 0 && (
-                        <span className="text-warning">â†‘ {stats.outgoingTransfers} outgoing</span>
+                        <span className="text-warning">↑ {stats.outgoingTransfers} outgoing</span>
                       )}
                     </div>
                   </div>

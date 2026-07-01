@@ -304,6 +304,7 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
     const paymentId = paymentData.paymentId ?? `PAY-${Date.now()}`;
     const receiptId = paymentData.receiptId ?? `REC-${Date.now()}`;
     const paidAtIso = new Date().toISOString();
+    const shouldCloseStay = order.paymentStatus !== 'Paid';
     const staySeconds = calculateElapsedSeconds(order.tableStartedAt ?? order.orderedAt, paidAtIso);
 
     setOrders(prev => prev.map(o =>
@@ -312,12 +313,12 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
             ...o,
             paymentStatus: 'Paid' as const,
             paymentAt: paidAtIso,
-            orderStatus: o.type === 'Dine-In' || o.type === 'Mixed' ? 'Completed' as const : o.orderStatus,
-            completedAt: o.type === 'Dine-In' || o.type === 'Mixed' ? (o.completedAt ?? paidAtIso) : o.completedAt,
-            tableEndedAt: o.type === 'Dine-In' || o.type === 'Mixed' ? (o.tableEndedAt ?? paidAtIso) : o.tableEndedAt,
-            runningTimeEnd: o.type === 'Dine-In' || o.type === 'Mixed' ? (o.runningTimeEnd ?? paidAtIso) : o.runningTimeEnd,
-            runningDuration: o.type === 'Dine-In' || o.type === 'Mixed' ? (o.runningDuration ?? staySeconds) : o.runningDuration,
-            isRunning: o.type === 'Dine-In' || o.type === 'Mixed' ? false : o.isRunning,
+            orderStatus: shouldCloseStay && (o.type === 'Dine-In' || o.type === 'Mixed') ? 'Completed' as const : o.orderStatus,
+            completedAt: shouldCloseStay && (o.type === 'Dine-In' || o.type === 'Mixed') ? (o.completedAt ?? paidAtIso) : o.completedAt,
+            tableEndedAt: shouldCloseStay && (o.type === 'Dine-In' || o.type === 'Mixed') ? (o.tableEndedAt ?? paidAtIso) : o.tableEndedAt,
+            runningTimeEnd: shouldCloseStay && (o.type === 'Dine-In' || o.type === 'Mixed') ? (o.runningTimeEnd ?? paidAtIso) : o.runningTimeEnd,
+            runningDuration: shouldCloseStay && (o.type === 'Dine-In' || o.type === 'Mixed') ? (o.runningDuration ?? staySeconds) : o.runningDuration,
+            isRunning: shouldCloseStay && (o.type === 'Dine-In' || o.type === 'Mixed') ? false : o.isRunning,
             cashReceived: paymentData.cashReceived,
             changeGiven: paymentData.changeGiven,
             cashier: paymentData.cashier,
@@ -435,7 +436,7 @@ function getServiceEndTimestamp(order: Pick<Order, 'servedAt' | 'runningTimeEnd'
 
 function getStayEndTimestamp(order: Pick<Order, 'type' | 'tableEndedAt' | 'runningTimeEnd' | 'completedAt' | 'paymentAt'>) {
   if (order.type !== 'Dine-In' && order.type !== 'Mixed') return null;
-  return firstValidTimestamp(order.tableEndedAt, order.runningTimeEnd, order.completedAt, order.paymentAt);
+  return firstValidTimestamp(order.tableEndedAt, order.runningTimeEnd);
 }
 
 function mapDatabaseRestaurantOrder(row: any): Order {
@@ -507,8 +508,6 @@ function mapDatabaseRestaurantOrder(row: any): Order {
     ? firstValidTimestamp(
       normalizedTimestamp(tableEndedAtValue),
       normalizedTimestamp(valueOf('running_time_end', 'runningTimeEnd')),
-      orderStatus === 'Completed' ? normalizedTimestamp(completedAtValue) : undefined,
-      normalizedTimestamp(valueOf('payment_at', 'paymentAt')),
     )
     : null;
 
@@ -547,7 +546,7 @@ function mapDatabaseRestaurantOrder(row: any): Order {
     isRunning: Boolean(valueOf('is_running', 'isRunning')),
     // Kept for older consumers; never fall back to created_at for elapsed timers.
     runningTimeMinutes: minutesBetween(orderedAt, serviceEnd),
-    customerStayMinutes: tableStartedAt && (type === 'Dine-In' || type === 'Mixed') ? minutesBetween(tableStartedAt, stayEnd ?? tableEndedAt ?? completedAt) : undefined,
+    customerStayMinutes: tableStartedAt && (type === 'Dine-In' || type === 'Mixed') ? minutesBetween(tableStartedAt, stayEnd ?? tableEndedAt) : undefined,
     estimatedPrepMinutes,
     estimatedReadyAt: computedEstimatedReadyAt,
     items: items.map((item: any) => ({

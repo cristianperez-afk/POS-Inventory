@@ -220,6 +220,21 @@ export function SuperadminDashboard({ currentUser, onLogout, onNavigate }: Super
     setAdminModalOpen(false);
   };
 
+  useEffect(() => {
+    const anyOpen = adminModalOpen || addStoreModalOpen || !!adminActionPreview || !!activeSummaryModal || !!viewSummaryRecord;
+    if (!anyOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (adminModalOpen) { handleCancelEdit(); return; }
+      if (addStoreModalOpen) { setAddStoreModalOpen(false); return; }
+      if (adminActionPreview) { setAdminActionPreview(null); return; }
+      if (activeSummaryModal) { setActiveSummaryModal(null); return; }
+      if (viewSummaryRecord) { setViewSummaryRecord(null); return; }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [adminModalOpen, addStoreModalOpen, adminActionPreview, activeSummaryModal, viewSummaryRecord]);
+
   const handleDeactivateAdmin = async (admin: AdminSummary) => {
     setDeletingAdminId(admin.id);
     setError('');

@@ -11,6 +11,8 @@ export const ROLE_PERMISSIONS: Record<string, string[]> = {
     'kitchen:update_status',
     'pos:manage',
     'pos:read',
+    'pos:update_order',
+    'pos:update_table_occupancy',
     'retail:void_authorize',
     'settings:manage',
     'staff:manage',
@@ -22,6 +24,8 @@ export const ROLE_PERMISSIONS: Record<string, string[]> = {
     'pos:create_order',
     'pos:manage',
     'pos:read',
+    'pos:update_order',
+    'pos:update_table_occupancy',
     'retail:void_authorize',
     'theme:manage_personal',
   ],
@@ -33,7 +37,7 @@ export const ROLE_PERMISSIONS: Record<string, string[]> = {
     'kitchen:update_status',
     'theme:manage_personal',
   ],
-  STAFF: ['pos:read', 'pos:create_order', 'theme:manage_personal'],
+  STAFF: ['pos:read', 'pos:create_order', 'pos:update_order', 'pos:update_table_occupancy', 'theme:manage_personal'],
   KITCHEN: ['kitchen:read', 'kitchen:update_status', 'theme:manage_personal'],
 };
 
@@ -43,6 +47,8 @@ export function getPermissionsForUser(user: AuthenticatedUser | undefined) {
   if (user?.role === 'STAFF' && user.staff_type === 'INVENTORY_STAFF') {
     permissions.delete('pos:read');
     permissions.delete('pos:create_order');
+    permissions.delete('pos:update_order');
+    permissions.delete('pos:update_table_occupancy');
     permissions.add('inventory:read');
     permissions.add('inventory:manage');
     // kitchen:read is the shared "view recipes / kitchen orders / module-shell
@@ -57,6 +63,8 @@ export function getPermissionsForUser(user: AuthenticatedUser | undefined) {
   if (String(user?.role ?? '').toUpperCase() === 'KITCHEN' || user?.staff_type === 'KITCHEN_STAFF') {
     permissions.delete('pos:read');
     permissions.delete('pos:create_order');
+    permissions.delete('pos:update_order');
+    permissions.delete('pos:update_table_occupancy');
     permissions.add('kitchen:read');
     permissions.add('kitchen:update_status');
   }

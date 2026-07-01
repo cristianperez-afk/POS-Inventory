@@ -103,6 +103,23 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
     void loadStaff();
   }, [canManageStaff, currentUser?.id]);
 
+  const closeModal = () => {
+    setShowModal(false);
+    setShowPassword(false);
+    setFormVoidPin('');
+    setEditingUser(null);
+  };
+
+  useEffect(() => {
+    if (!showModal) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeModal();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showModal]);
+
   const handleAddUser = () => {
     if (!canManageStaff) return;
 
@@ -129,6 +146,14 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
     setShowPassword(false);
     setError('');
     setShowModal(true);
+  };
+
+  // Same edit modal as handleEditUser, but reveals the password field by
+  // default so the "reset password" action visibly differs from "edit" and
+  // doesn't look like an inert duplicate icon.
+  const handleResetPassword = (user: StaffUser) => {
+    handleEditUser(user);
+    setShowPassword(true);
   };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -313,7 +338,7 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
                           </button>
                           <button
                             type="button"
-                            onClick={() => handleEditUser(user)}
+                            onClick={() => handleResetPassword(user)}
                             className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[#64748b] transition-colors hover:bg-slate-100 hover:text-[#007a5e]"
                             title="Reset password"
                             aria-label={`Reset password for ${user.full_name}`}
@@ -371,12 +396,7 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
               <h3 className="text-primary">{editingUser ? 'Edit Staff Account' : 'Add Staff Account'}</h3>
               <button
                 type="button"
-                onClick={() => {
-                  setShowModal(false);
-                  setShowPassword(false);
-                  setFormVoidPin('');
-                  setEditingUser(null);
-                }}
+                onClick={closeModal}
                 className="text-muted-foreground hover:text-foreground"
               >
                 <X className="w-5 h-5" />
@@ -446,12 +466,7 @@ export function AdminDashboard({ currentUser, storeBrand, onLogout, onNavigate }
               <div className="flex gap-3 justify-end pt-4">
                 <button
                   type="button"
-                  onClick={() => {
-                    setShowModal(false);
-                    setShowPassword(false);
-                    setFormVoidPin('');
-                    setEditingUser(null);
-                  }}
+                  onClick={closeModal}
                   className="px-4 py-2 border border-border rounded-lg hover:bg-muted transition-colors"
                 >
                   Cancel

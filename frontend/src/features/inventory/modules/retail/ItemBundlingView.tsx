@@ -267,7 +267,7 @@ export function ItemBundlingView({
     PENDING:  { bg: 'bg-warning/10', text: 'text-warning' },
     APPROVED: { bg: 'bg-accent/10', text: 'text-accent' },
     REJECTED: { bg: 'bg-destructive/10', text: 'text-destructive' },
-    ACTIVE:   { bg: 'bg-secondary/10', text: 'text-success' },
+    ACTIVE:   { bg: 'bg-secondary/10', text: 'text-green-600' },
     INACTIVE: { bg: 'bg-muted', text: 'text-muted-foreground' },
   };
 
@@ -460,7 +460,7 @@ export function ItemBundlingView({
               <button onClick={() => handleRejectBundle(selectedBundle.id)} disabled={saving} className="flex-1 px-4 py-2 bg-destructive text-white rounded-[8px] text-[14px] font-medium hover:bg-destructive transition-colors disabled:opacity-50">
                 Reject
               </button>
-              <button onClick={() => handleApproveBundle(selectedBundle.id)} disabled={saving} className="flex-1 px-4 py-2 bg-success text-white rounded-[8px] text-[14px] font-medium hover:bg-success transition-colors disabled:opacity-50">
+              <button onClick={() => handleApproveBundle(selectedBundle.id)} disabled={saving} className="flex-1 px-4 py-2 bg-green-600 text-white rounded-[8px] text-[14px] font-medium hover:bg-green-700 transition-colors disabled:opacity-50">
                 Approve
               </button>
             </div>
@@ -540,7 +540,7 @@ export function ItemBundlingView({
         </button>
         <button type="button" onClick={() => toggleFilterStatus('ACTIVE')} aria-pressed={filterStatus === 'ACTIVE'} aria-label="Filter by active bundles" className={statCardClass(filterStatus === 'ACTIVE')}>
           <p className="text-muted-foreground text-sm mb-2">Active Bundles</p>
-          <p className="text-2xl font-bold text-success">{loading ? '—' : stats.active}</p>
+          <p className="text-2xl font-bold text-green-600">{loading ? '—' : stats.active}</p>
         </button>
         <div className="bg-card rounded-2xl p-6 shadow-sm border border-border">
           <p className="text-muted-foreground text-sm mb-2">Active Value</p>
@@ -639,7 +639,7 @@ export function ItemBundlingView({
                     </div>
                     <div className="col-span-2 flex items-center justify-between border-t border-border/60 pt-2">
                       <span className="text-xs text-muted-foreground">You save</span>
-                      <span className="text-sm font-semibold text-success">₱{savings.toLocaleString()}</span>
+                      <span className="text-sm font-semibold text-green-600">₱{savings.toLocaleString()}</span>
                     </div>
                   </div>
                 </div>
@@ -649,7 +649,7 @@ export function ItemBundlingView({
                     Created: {getManilaDateKey(bundle.createdAt)} by {bundle.createdBy?.name ?? 'N/A'}
                   </p>
                   {bundle.approvedBy && bundle.approvedAt && (
-                    <p className="text-[10px] text-success truncate">
+                    <p className="text-[10px] text-green-600 truncate">
                       Approved by {bundle.approvedBy.name} on {getManilaDateKey(bundle.approvedAt)}
                     </p>
                   )}
@@ -704,7 +704,7 @@ export function ItemBundlingView({
                         </button>
                       )}
                       {isAdmin && canActivate && (
-                        <button onClick={() => handleActivateBundle(bundle.id)} disabled={saving} className="w-full px-4 py-2 bg-success/10 text-success rounded-xl text-sm font-medium hover:bg-success/20 transition-colors disabled:opacity-50">
+                        <button onClick={() => handleActivateBundle(bundle.id)} disabled={saving} className="w-full px-4 py-2 bg-green-50 text-green-700 rounded-xl text-sm font-medium hover:bg-green-100 transition-colors disabled:opacity-50">
                           Activate Bundle
                         </button>
                       )}
