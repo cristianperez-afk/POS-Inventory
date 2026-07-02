@@ -106,6 +106,20 @@ export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBr
     return 'bg-red-50 text-red-700 border-red-200';
   };
 
+  const isRetailRefundWindowOpen = (order: Order) => {
+    const today = parseLocalDateKey(getLocalDateKey());
+    const orderDate = parseLocalDateKey(order.date);
+    if (Number.isNaN(orderDate.getTime())) return false;
+    const diffDays = Math.floor((today.getTime() - orderDate.getTime()) / 86400000);
+    return diffDays >= 0 && diffDays <= 6;
+  };
+
+  const canRefundOrder = (order: Order) =>
+    settings.enable_refund &&
+    isRetailRefundWindowOpen(order) &&
+    (order.paymentStatus === 'Paid' || order.paymentStatus === 'Partially Refunded') &&
+    !order.items.every(item => item.refunded);
+
   const handleViewDetails = (order: Order) => {
     setSelectedOrder(order);
     setShowDetails(true);
@@ -118,7 +132,7 @@ export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBr
 
   const handleRefundClick = (order: Order) => {
     if (!canProcessTransactions) return;
-    if (!settings.enable_refund) return;
+    if (!canRefundOrder(order)) return;
     setOrderToRefund(order);
     setSelectedRefundItems({});
     setRefundReason('');
@@ -134,8 +148,7 @@ export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBr
 
   const handleRefundConfirm = async () => {
     if (!canProcessTransactions) return;
-    if (!settings.enable_refund) return;
-    if (!orderToRefund) return;
+    if (!orderToRefund || !canRefundOrder(orderToRefund)) return;
 
     const selectedIndices = Object.keys(selectedRefundItems)
       .filter(key => selectedRefundItems[Number(key)])
@@ -281,7 +294,7 @@ export function RetailOrderList({ onNavigate, onLogout, isAdmin = false, storeBr
                             <Receipt className="w-3.5 h-3.5" />
                             Receipt
                           </button>
-                          {canProcessTransactions && settings.enable_refund && (order.paymentStatus === 'Paid' || order.paymentStatus === 'Partially Refunded') && !order.items.every(item => item.refunded) && (
+                          {canProcessTransactions && canRefundOrder(order) && (
                             <button
                               onClick={() => handleRefundClick(order)}
                               className="inline-flex items-center gap-1 px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded-lg transition-colors"

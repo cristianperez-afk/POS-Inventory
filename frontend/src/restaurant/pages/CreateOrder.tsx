@@ -284,6 +284,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
   const [discountModalError, setDiscountModalError] = useState('');
   const [validationError, setValidationError] = useState<string>('');
   const [showReceiptPreview, setShowReceiptPreview] = useState(false);
+  const [showPaymentTicket, setShowPaymentTicket] = useState(false);
   const receiptRef = useRef<HTMLDivElement>(null);
   const [isInQueue, setIsInQueue] = useState(false);
   const [queuePosition, setQueuePosition] = useState<number | null>(null);
@@ -1280,11 +1281,14 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
       } else {
         addOrder(orderForList);
       }
-      await reloadOrders();
       onOrderCreated(savedOrderDetails);
       setSuccessOrderDetails(savedOrderDetails);
       setShowPaymentChoice(false);
-      setShowSuccess(true);
+      setShowSuccess(false);
+      setShowPaymentTicket(true);
+      void reloadOrders().catch((error) => {
+        console.error('Unable to refresh orders after pay later:', error);
+      });
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Unable to save order.');
     } finally {
@@ -1353,6 +1357,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
     setShowPaymentChoice(false);
     setPaymentMethod(enabledPaymentMethods[0] ?? 'Cash');
     setShowReceiptPreview(false);
+    setShowPaymentTicket(false);
     onNavigate('create-order');
   };
 
@@ -3049,18 +3054,142 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                         : 'Order sent to kitchen. Customer will pay after dining.'
                       : 'Order created and ready for payment.'}
                   </p>
-                  <button
-                    onClick={handleSuccessClose}
-                    className="w-full bg-primary text-primary-foreground py-3 rounded-lg hover:bg-primary/90 transition-colors text-sm"
-                  >
-                    Back to Dashboard
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleSuccessClose}
+                      className="flex-1 bg-muted text-foreground py-3 rounded-lg hover:bg-muted/80 transition-colors text-sm"
+                    >
+                      Back
+                    </button>
+                    <button
+                      onClick={() => setShowPaymentTicket(true)}
+                      className="flex-1 bg-primary text-primary-foreground py-3 rounded-lg hover:bg-primary/90 transition-colors text-sm flex items-center justify-center gap-2"
+                    >
+                      <Printer className="w-4 h-4" />
+                      Print Ticket
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
           </div>
         </div>
       )}
+
+      {/* Pay Later Payment Ticket Modal */}
+      {showPaymentTicket && successOrderDetails && (() => {
+        const ticketOrderType = successOrderDetails.items.some((i: any) => i.orderType === 'dine-in') &&
+          successOrderDetails.items.some((i: any) => i.orderType === 'takeout')
+          ? 'Mixed'
+          : successOrderDetails.items.some((i: any) => i.orderType === 'dine-in')
+          ? 'Dine-In'
+          : 'Takeout';
+        const tableLabel = successOrderDetails.tableNumber
+          ? `Table ${successOrderDetails.tableNumber}`
+          : Array.isArray(successOrderDetails.tableNumbers) && successOrderDetails.tableNumbers.length > 0
+          ? successOrderDetails.tableNumbers.map((tableNumber: string | number) => `Table ${tableNumber}`).join(' + ')
+          : successOrderDetails.isQueued
+          ? `Queue #${successOrderDetails.queuePosition || queuePosition || 1}`
+          : '-';
+
+        return (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4 overflow-y-auto">
+            <div className="bg-white rounded-2xl w-full max-w-sm max-h-[90vh] overflow-hidden shadow-2xl flex flex-col my-8">
+              <div className="flex justify-between items-center px-5 py-4 border-b border-gray-100">
+                <h2 className="text-sm text-gray-700" style={{ fontWeight: 600 }}>Payment Ticket</h2>
+                <button
+                  onClick={handleSuccessClose}
+                  className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
+                  aria-label="Close payment ticket"
+                >
+                  <X className="w-4 h-4 text-gray-500" />
+                </button>
+              </div>
+
+              <div className="overflow-y-auto px-5 py-4">
+                <div className="mx-auto w-full max-w-[320px] border border-gray-200 bg-white p-4 text-gray-900 shadow-sm">
+                  <div className="text-center border-b border-dashed border-gray-300 pb-3">
+                    <p className="text-[11px] uppercase tracking-[0.2em] text-gray-500">Pay Later Ticket</p>
+                    <p className="mt-1 text-sm font-bold">{storeBrand?.name || 'Restaurant'}</p>
+                    <p className="mt-2 text-3xl font-bold tracking-wide text-primary">#{successOrderDetails.orderNumber}</p>
+                    <p className="mt-1 text-xs text-gray-500">Show this ticket to the cashier before paying.</p>
+                  </div>
+
+                  <div className="space-y-1.5 border-b border-dashed border-gray-300 py-3 text-xs">
+                    <div className="flex justify-between gap-3">
+                      <span className="text-gray-500">Customer</span>
+                      <span className="text-right font-medium">{successOrderDetails.customerName?.trim() || 'Walk-in Customer'}</span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-gray-500">Order Type</span>
+                      <span className="font-medium">{ticketOrderType}</span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-gray-500">Table/Queue</span>
+                      <span className="text-right font-medium">{tableLabel}</span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-gray-500">Status</span>
+                      <span className="font-medium text-orange-600">Pay Later</span>
+                    </div>
+                  </div>
+
+                  <div className="border-b border-dashed border-gray-300 py-3">
+                    <p className="mb-2 text-[11px] font-bold uppercase text-gray-500">Items</p>
+                    <div className="space-y-2">
+                      {successOrderDetails.items.map((item: CartItem, index: number) => (
+                        <div key={`${item.id}-${index}`} className="flex justify-between gap-3 text-xs">
+                          <span className="min-w-0">{item.quantity}x {item.name}</span>
+                          <span className="shrink-0">PHP {itemLineTotal(item).toFixed(2)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5 py-3 text-xs">
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Subtotal</span>
+                      <span>PHP {Number(successOrderDetails.subtotal ?? 0).toFixed(2)}</span>
+                    </div>
+                    {Number(successOrderDetails.discount ?? 0) > 0 && (
+                      <div className="flex justify-between text-red-600">
+                        <span>Discount</span>
+                        <span>-PHP {Number(successOrderDetails.discount ?? 0).toFixed(2)}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between border-t border-gray-200 pt-2 text-sm font-bold">
+                      <span>Amount Due</span>
+                      <span>PHP {Number(successOrderDetails.total ?? 0).toFixed(2)}</span>
+                    </div>
+                  </div>
+
+                  <div className="border-t border-dashed border-gray-300 pt-3 text-center text-[11px] text-gray-500">
+                    <p>Cashier: search this order by Order Number.</p>
+                    <p className="mt-1">Payment will be processed at the counter.</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="px-5 py-4 border-t border-gray-100 space-y-2">
+                <button
+                  onClick={() => window.print()}
+                  className="w-full py-2.5 bg-primary hover:bg-primary/90 text-white rounded-xl text-sm transition-colors flex items-center justify-center gap-2"
+                  style={{ fontWeight: 600 }}
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  Print Ticket
+                </button>
+                <button
+                  onClick={handleSuccessClose}
+                  className="w-full py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Discount Modal */}
       {showDiscountModal && (
@@ -3616,10 +3745,7 @@ export function CreateOrder({ currentUser, onNavigate, onOrderCreated, onLogout,
                   Print
                 </button>
                 <button
-                  onClick={() => {
-                    setShowReceiptPreview(false);
-                    setShowSuccess(true);
-                  }}
+                  onClick={handleSuccessClose}
                   className="w-full py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors"
                 >
                   Continue

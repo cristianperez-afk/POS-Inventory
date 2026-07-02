@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { AuthenticatedUser } from '../../../shared/common/types';
 import { CurrentUser } from '../../auth/current-user.decorator';
@@ -22,6 +22,22 @@ export class AdminPosController {
   @Permissions('pos:read')
   listPosOrders(@CurrentUser() user: AuthenticatedUser) {
     return this.adminService.listPosOrders(user.id);
+  }
+
+  @Get('pos/order-change-logs')
+  @Permissions('pos:read')
+  listPosOrderChangeLogs(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('date_from') dateFrom?: string,
+    @Query('date_to') dateTo?: string,
+    @Query('search') search?: string,
+  ) {
+    return this.adminService.listPosOrderChangeLogs({
+      userId: user.id,
+      dateFrom,
+      dateTo,
+      search,
+    });
   }
 
   @Get('pos/tables')

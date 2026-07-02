@@ -40,7 +40,7 @@ export function ManagerProfile({ currentUser, storeBrand, onLogout, onNavigate, 
     setError('');
 
     try {
-      const data = await adminApi.generateRetailManagerUniquePin();
+      const data = await adminApi.generatePosManagerUniquePin();
       const uniquePin = String(data?.void_pin ?? '');
       if (!uniquePin) {
         throw new Error('Unable to generate Unique PIN.');
@@ -54,7 +54,7 @@ export function ManagerProfile({ currentUser, storeBrand, onLogout, onNavigate, 
       saveUniquePinToSession(uniquePin);
       return uniquePin;
     } catch {
-      setError('Cannot generate Unique PIN yet. Please restart the backend server, then try again.');
+      setError('Cannot generate Unique PIN yet. Please try again.');
       return null;
     } finally {
       setGeneratingPin(false);
@@ -69,7 +69,7 @@ export function ManagerProfile({ currentUser, storeBrand, onLogout, onNavigate, 
       }
 
       try {
-        const data = await adminApi.getRetailManagerProfile();
+        const data = await adminApi.getPosManagerProfile();
         setProfile(data);
         setError('');
         if (!data?.void_pin?.trim() && !currentUser?.void_pin?.trim()) {
@@ -110,7 +110,7 @@ export function ManagerProfile({ currentUser, storeBrand, onLogout, onNavigate, 
         <div className="mx-auto max-w-4xl">
           <div className="mb-8">
             <h1 className="text-2xl font-semibold text-slate-950">Manager Profile</h1>
-            <p className="mt-1 text-sm text-slate-500">Account details and retail Unique PIN.</p>
+            <p className="mt-1 text-sm text-slate-500">Account details and Manager PIN.</p>
           </div>
 
           {error && (
@@ -146,7 +146,7 @@ export function ManagerProfile({ currentUser, storeBrand, onLogout, onNavigate, 
                 </div>
                 <div>
                   <h2 className="font-semibold text-slate-950">Unique PIN</h2>
-                  <p className="text-xs text-slate-500">Used by managers to authorize retail item voids.</p>
+                  <p className="text-xs text-slate-500">Used by managers to authorize order cancellations, refunds, and voids.</p>
                 </div>
               </div>
 
@@ -203,8 +203,8 @@ function InfoRow({ icon: Icon, label, value }: { icon: LucideIcon; label: string
 }
 
 function getRoleLabel(role: string | null | undefined) {
-  if (role === 'POS_ADMIN') return 'Retail POS Manager';
-  if (role === 'POS_MANAGER') return 'Retail POS Manager';
+  if (role === 'POS_ADMIN') return 'POS Manager';
+  if (role === 'POS_MANAGER') return 'POS Manager';
   if (role === 'ADMIN') return 'Admin';
   return role ?? 'Manager';
 }

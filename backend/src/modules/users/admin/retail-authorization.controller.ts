@@ -24,10 +24,28 @@ export class RetailAuthorizationController {
     });
   }
 
+  @Post('pos/manager-pin/verify')
+  @Permissions('pos:update_order')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 8, ttl: 60000 } })
+  verifyPosManagerPin(@Body() body: VerifyRetailVoidPinDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.adminService.verifyPosManagerPin({
+      userId: user.id,
+      voidPin: body.void_pin,
+      action: 'POS Manager Authorization',
+    });
+  }
+
   @Get('retail/manager-profile')
   @Permissions('retail:void_authorize')
   getRetailManagerProfile(@CurrentUser() user: AuthenticatedUser) {
     return this.adminService.getRetailManagerProfile(user.id);
+  }
+
+  @Get('pos/manager-profile')
+  @Permissions('pos:manage')
+  getPosManagerProfile(@CurrentUser() user: AuthenticatedUser) {
+    return this.adminService.getPosManagerProfile(user.id);
   }
 
   @Post('retail/manager-profile/unique-pin')
@@ -36,5 +54,13 @@ export class RetailAuthorizationController {
   @Throttle({ default: { limit: 5, ttl: 60000 } })
   generateRetailManagerUniquePin(@CurrentUser() user: AuthenticatedUser) {
     return this.adminService.generateRetailManagerUniquePin(user.id);
+  }
+
+  @Post('pos/manager-profile/unique-pin')
+  @Permissions('pos:manage')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  generatePosManagerUniquePin(@CurrentUser() user: AuthenticatedUser) {
+    return this.adminService.generatePosManagerUniquePin(user.id);
   }
 }

@@ -326,7 +326,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
 
     const user = rows[0];
-    if (user.store_type === 'RETAIL_STORE' && this.isPosManagerRole(user.role) && !user.void_pin?.trim() && userColumns.voidPinHashColumn && userColumns.voidPinColumn) {
+    if (this.isPosManagerRole(user.role) && !user.void_pin?.trim() && userColumns.voidPinHashColumn && userColumns.voidPinColumn) {
       const uniquePin = await this.generateUniqueRetailVoidPin(user.store_id, user.id);
       await this.query(
         `
@@ -842,7 +842,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const passwordHash = await bcrypt.hash(input.password, 10);
     const role = input.role ?? 'STAFF';
     const staffType = this.staffTypeForRole(role, input.staffType);
-    const normalizedVoidPin = admin.store_type === 'RETAIL_STORE' && role === 'POS_MANAGER'
+    const normalizedVoidPin = role === 'POS_MANAGER'
       ? input.voidPin?.trim() || await this.generateUniqueRetailVoidPin(admin.store_id)
       : null;
     if (normalizedVoidPin) {
@@ -933,13 +933,13 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const role = input.role ?? 'STAFF';
     const values: unknown[] = [input.fullName, input.email, this.staffTypeForRole(role, input.staffType), role];
 
-    let normalizedVoidPin = admin.store_type === 'RETAIL_STORE' && role === 'POS_MANAGER' && input.voidPin?.trim()
+    let normalizedVoidPin = role === 'POS_MANAGER' && input.voidPin?.trim()
       ? input.voidPin.trim()
       : null;
     if (normalizedVoidPin) {
       await this.assertUniqueRetailVoidPin(admin.store_id, normalizedVoidPin, input.staffUserId);
     }
-    if (admin.store_type === 'RETAIL_STORE' && role === 'POS_MANAGER' && !normalizedVoidPin) {
+    if (role === 'POS_MANAGER' && !normalizedVoidPin) {
       if (!userColumns.voidPinHashColumn) {
         throw new InternalServerErrorException('Users table is missing required columns for unique PIN setup.');
       }
@@ -4143,11 +4143,16 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     if (!user.store_id || !user.store_type) {
       throw new InternalServerErrorException('User account is not linked to a store.');
     }
+    const cancelOrderItemIds = Array.isArray(input.cancelOrderItemIds)
+      ? input.cancelOrderItemIds.map((x: any) => Number(x)).filter((n: number) => Number.isFinite(n))
+      : null;
     const isRestrictedTransactionUpdate =
       Boolean(input.payment) ||
       input.paymentStatus === 'PAID' ||
       input.paymentStatus === 'VOIDED' ||
-      input.paymentStatus === 'REFUNDED';
+      input.paymentStatus === 'REFUNDED' ||
+      input.paymentStatus === 'PARTIALLY_REFUNDED' ||
+      Boolean(cancelOrderItemIds?.length);
     if (this.isKitchenRole(user.role)) {
       throw new ForbiddenException('Kitchen accounts cannot edit orders, process payments, void, or refund.');
     }
@@ -4175,12 +4180,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     if (input.orderStatus === 'COMPLETED') addUpdate('completed_at', new Date());
     if (input.orderStatus === 'COMPLETED') addUpdate('table_ended_at', new Date());
 
-    if (updates.length === 0 && !isPaymentUpdate) {
+    if (updates.length === 0 && !isPaymentUpdate && !cancelOrderItemIds?.length) {
       throw new BadRequestException('No order updates were provided.');
     }
 
     const newPaymentStatus = String(input.paymentStatus ?? '');
     const isVoidOrRefund = ['VOIDED', 'VOID', 'REFUNDED'].includes(newPaymentStatus);
+    let itemCancellationDetails: { names: string[]; amount: number } | null = null;
+    let itemRefundDetails: { names: string[]; amount: number } | null = null;
 
     const rows = await this.withTransaction(async (client) => {
       type UpdatedOrderRow = {
@@ -4188,6 +4195,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         order_number: string;
         total_amount: string | number;
         subtotal: string | number;
+        service_charge: string | number;
         discount_amount: string | number;
         tax_amount: string | number;
         customer_name: string | null;
@@ -4215,14 +4223,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
                   ($${values.length + 1} = 'RETAIL_STORE' AND order_type = 'RETAIL')
                   OR ($${values.length + 1} = 'RESTAURANT' AND order_type <> 'RETAIL')
                 )
-              RETURNING id, order_number, total_amount, subtotal, discount_amount, tax_amount, customer_name
+              RETURNING id, order_number, total_amount, subtotal, service_charge, discount_amount, tax_amount, customer_name
             `,
             [...values, user.store_type],
           )
         : await this.queryWithClient<UpdatedOrderRow>(
             client,
             `
-              SELECT id, order_number, total_amount, subtotal, discount_amount, tax_amount, customer_name
+              SELECT id, order_number, total_amount, subtotal, service_charge, discount_amount, tax_amount, customer_name
               FROM orders
               WHERE store_id = $1
                 AND order_number = $2
@@ -4241,6 +4249,66 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
       const orderType = String(priorRows[0]?.order_type ?? '').toUpperCase();
       const nextStatus = String(input.orderStatus ?? '').toUpperCase();
+
+      if (cancelOrderItemIds?.length) {
+        if (String(priorRows[0]?.order_status ?? '').toUpperCase() !== 'PENDING') {
+          throw new BadRequestException('Items can only be cancelled while the order is pending.');
+        }
+
+        const itemRows = await this.queryWithClient<{ id: number; product_name: string; quantity: string | number; line_total: string | number }>(
+          client,
+          `SELECT id, product_name, quantity, line_total FROM order_items WHERE order_id = $1 ORDER BY id ASC`,
+          [updatedRows[0].id],
+        );
+        const selectedRows = itemRows.filter((item) => cancelOrderItemIds.includes(Number(item.id)));
+        if (selectedRows.length === 0) {
+          throw new BadRequestException('Select at least one order item to cancel.');
+        }
+        if (selectedRows.length >= itemRows.length) {
+          throw new BadRequestException('Use full order cancellation when cancelling every item.');
+        }
+
+        await this.queryWithClient(
+          client,
+          `DELETE FROM order_items WHERE order_id = $1 AND id = ANY($2::bigint[])`,
+          [updatedRows[0].id, selectedRows.map((item) => item.id)],
+        );
+
+        const totals = await this.queryWithClient<{ subtotal: string | number }>(
+          client,
+          `SELECT COALESCE(SUM(line_total), 0) AS subtotal FROM order_items WHERE order_id = $1`,
+          [updatedRows[0].id],
+        );
+        const newSubtotal = Number(totals[0]?.subtotal ?? 0);
+        const oldSubtotal = Number(updatedRows[0].subtotal ?? 0);
+        const serviceRate = oldSubtotal > 0 ? Number(updatedRows[0].service_charge ?? 0) / oldSubtotal : 0;
+        const discountRate = oldSubtotal > 0 ? Number(updatedRows[0].discount_amount ?? 0) / oldSubtotal : 0;
+        const newServiceCharge = Number((newSubtotal * serviceRate).toFixed(2));
+        const newDiscount = Number((newSubtotal * discountRate).toFixed(2));
+        const taxAmount = Number(updatedRows[0].tax_amount ?? 0);
+        const newTotal = Number((newSubtotal + newServiceCharge - newDiscount + taxAmount).toFixed(2));
+
+        await this.queryWithClient(
+          client,
+          `
+            UPDATE orders
+            SET subtotal = $2,
+                service_charge = $3,
+                discount_amount = $4,
+                total_amount = $5
+            WHERE id = $1
+          `,
+          [updatedRows[0].id, newSubtotal, newServiceCharge, newDiscount, newTotal],
+        );
+
+        updatedRows[0].subtotal = newSubtotal;
+        updatedRows[0].discount_amount = newDiscount;
+        updatedRows[0].total_amount = newTotal;
+        itemCancellationDetails = {
+          names: selectedRows.map((item) => `${item.product_name} x${Number(item.quantity ?? 0)}`),
+          amount: selectedRows.reduce((sum, item) => sum + Number(item.line_total ?? 0), 0),
+        };
+      }
 
       if (nextStatus === 'PREPARING') {
         await this.queryWithClient(
@@ -4396,7 +4464,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       if (hasDiningTable && input.orderStatus === 'COMPLETED' && !isPaymentUpdate && priorPaymentStatus !== 'PAID') {
         throw new BadRequestException('Cannot release a Pay Later table before payment is completed.');
       }
-      if (input.orderStatus === 'COMPLETED') {
+      const shouldReleaseDiningTable =
+        input.orderStatus === 'COMPLETED' ||
+        input.orderStatus === 'CANCELLED' ||
+        (hasDiningTable && ['DINE_IN', 'MIXED'].includes(orderType) && paymentCompletedNow);
+      if (shouldReleaseDiningTable) {
         await this.releaseDiningTable(client, user, nextTableName, Number.isFinite(nextPartySize) ? nextPartySize : 0);
       }
 
@@ -4412,12 +4484,21 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       if (restockItemIds && restockItemIds.length > 0) {
         // Per-item path (retail partial/whole refund or void with an item list).
         // Idempotent per item, so it doesn't need the PAID-transition guard.
+        const refundedRows = await this.queryWithClient<{ product_name: string; quantity: string | number; line_total: string | number }>(
+          client,
+          `SELECT product_name, quantity, line_total FROM order_items WHERE order_id = $1 AND id = ANY($2::bigint[]) ORDER BY id ASC`,
+          [updatedRows[0].id, restockItemIds],
+        );
+        itemRefundDetails = {
+          names: refundedRows.map((item) => `${item.product_name} x${Number(item.quantity ?? 0)}`),
+          amount: refundedRows.reduce((sum, item) => sum + Number(item.line_total ?? 0), 0),
+        };
         const reason =
           input.reason ?? input.refundReason ?? input.voidReason ??
           (isPartialRefund ? 'Partially refunded in POS' : newPaymentStatus === 'VOIDED' ? 'Voided in POS' : 'Refunded in POS');
         const saleStatus = isPartialRefund ? 'PARTIAL_REFUND' : 'REFUNDED';
         await this.restockPosOrderItems(client, user, updatedRows[0], restockItemIds, saleStatus, reason);
-      } else if (isVoidOrRefund && priorPaymentStatus === 'PAID') {
+      } else if (!restockItemIds && isVoidOrRefund && priorPaymentStatus === 'PAID') {
         // Whole-order path (restaurant void/refund, or any void/refund without an item
         // list). Only fires on a PAID -> void/refund transition, so repeating is a no-op.
         const reason =
@@ -4448,7 +4529,23 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       throw new NotFoundException('Order not found.');
     }
 
-    if (input.payment) {
+    const authorizedBy = input.authorizedByManagerName
+      ? `\nAuthorized by: ${input.authorizedByManagerName}`
+      : '';
+    const itemCancellationLog = itemCancellationDetails as { names: string[]; amount: number } | null;
+    const itemRefundLog = itemRefundDetails as { names: string[]; amount: number } | null;
+
+    if (cancelOrderItemIds?.length && itemCancellationLog) {
+      await this.recordActivity({
+        userId: user.id,
+        storeId: user.store_id,
+        userName: user.full_name,
+        userRole: user.role,
+        module: 'Transactions',
+        action: 'Partial Item Cancellation',
+        details: `Partially cancelled Order #${rows[0].order_number}\nItems: ${itemCancellationLog.names.join(', ')}\nAmount: ${itemCancellationLog.amount.toFixed(2)}\nReason: ${input.reason ?? 'No reason provided'}${authorizedBy}`,
+      });
+    } else if (input.payment) {
       await this.recordActivity({
         userId: user.id,
         storeId: user.store_id,
@@ -4458,7 +4555,20 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         action: 'Payment Processed',
         details: `${input.payment.method ?? 'Cash'} Payment\nAmount: ${Number(input.payment.amountPaid ?? rows[0].total_amount ?? 0).toFixed(2)}\nOrder #${rows[0].order_number}`,
       });
+    } else if (String(input.orderStatus ?? '').toUpperCase() === 'CANCELLED') {
+      await this.recordActivity({
+        userId: user.id,
+        storeId: user.store_id,
+        userName: user.full_name,
+        userRole: user.role,
+        module: 'Transactions',
+        action: 'Order Cancelled',
+        details: `Cancelled Order #${rows[0].order_number}\nReason: ${input.reason ?? 'No reason provided'}${authorizedBy}`,
+      });
     } else if (String(input.paymentStatus ?? '').toUpperCase() === 'REFUNDED' || String(input.paymentStatus ?? '').toUpperCase() === 'PARTIALLY_REFUNDED') {
+      const refundedItems = itemRefundLog?.names.length
+        ? `\nItems: ${itemRefundLog.names.join(', ')}\nAmount: ${itemRefundLog.amount.toFixed(2)}`
+        : '';
       await this.recordActivity({
         userId: user.id,
         storeId: user.store_id,
@@ -4466,7 +4576,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         userRole: user.role,
         module: 'Void & Refund',
         action: 'Refund Processed',
-        details: `Refund processed\nOrder #${rows[0].order_number}\nReason: ${input.refundReason ?? input.reason ?? 'Customer request'}`,
+        details: `Refund processed\nOrder #${rows[0].order_number}${refundedItems}\nReason: ${input.refundReason ?? input.reason ?? 'Customer request'}${authorizedBy}`,
       });
     } else if (String(input.paymentStatus ?? '').toUpperCase() === 'VOIDED') {
       await this.recordActivity({
@@ -4476,7 +4586,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         userRole: user.role,
         module: 'Void & Refund',
         action: 'Void Approved',
-        details: `Voided Order #${rows[0].order_number}\nReason: ${input.voidReason ?? input.reason ?? 'No reason provided'}`,
+        details: `Voided Order #${rows[0].order_number}\nReason: ${input.voidReason ?? input.reason ?? 'No reason provided'}${authorizedBy}`,
       });
     } else if (input.orderStatus) {
       await this.recordActivity({
@@ -6001,9 +6111,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  // Restocks specific line items of a paid order (retail partial/whole refund or void).
-  // Idempotent per item via a per-item referenceId, so refunding more items later or
-  // retrying never double-restocks. Always restocks (retail goods are returned).
+  // Restocks specific line items of a paid order for retail. Restaurant refunds keep
+  // ingredients consumed, so selected dishes are reported as refunded without stock return.
   private async restockPosOrderItems(
     client: PoolClient,
     user: AuthenticatedUser,
@@ -6012,24 +6121,24 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     saleStatus: 'REFUNDED' | 'PARTIAL_REFUND',
     reason: string,
   ) {
-    const module = user.store_type === 'RETAIL_STORE' ? 'RETAIL' : 'RESTAURANT';
+    if (user.store_type === 'RETAIL_STORE') {
+      for (const orderItemId of orderItemIds) {
+        const referenceId = `POS-${order.order_number}-item-${orderItemId}`;
+        const already = await this.queryWithClient<{ exists: boolean }>(
+          client,
+          `SELECT EXISTS (SELECT 1 FROM "StockMovement" WHERE "referenceType" = 'POS_VOID' AND "referenceId" = $1) AS exists`,
+          [referenceId],
+        );
+        if (already[0]?.exists) continue;
 
-    for (const orderItemId of orderItemIds) {
-      const referenceId = `POS-${order.order_number}-item-${orderItemId}`;
-      const already = await this.queryWithClient<{ exists: boolean }>(
-        client,
-        `SELECT EXISTS (SELECT 1 FROM "StockMovement" WHERE "referenceType" = 'POS_VOID' AND "referenceId" = $1) AS exists`,
-        [referenceId],
-      );
-      if (already[0]?.exists) continue;
-
-      const deductions = await this.queryWithClient<{ variant_id: number | null; ingredient_id: number | null; quantity_deducted: string | number; unit: string | null }>(
-        client,
-        `SELECT variant_id, ingredient_id, quantity_deducted, unit FROM inventory_deductions WHERE order_id = $1 AND order_item_id = $2`,
-        [order.id, orderItemId],
-      );
-      for (const d of deductions) {
-        await this.reverseDeduction(client, d, referenceId, reason, `POS order ${order.order_number} item ${orderItemId} refunded`, module);
+        const deductions = await this.queryWithClient<{ variant_id: number | null; ingredient_id: number | null; quantity_deducted: string | number; unit: string | null }>(
+          client,
+          `SELECT variant_id, ingredient_id, quantity_deducted, unit FROM inventory_deductions WHERE order_id = $1 AND order_item_id = $2`,
+          [order.id, orderItemId],
+        );
+        for (const d of deductions) {
+          await this.reverseDeduction(client, d, referenceId, reason, `POS order ${order.order_number} item ${orderItemId} refunded`, 'RETAIL');
+        }
       }
     }
 
@@ -6818,6 +6927,57 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  async listPosOrderChangeLogsForUser(input: {
+    userId: number;
+    dateFrom?: string;
+    dateTo?: string;
+    search?: string;
+  }) {
+    const requester = await this.getUserStoreScope(input.userId);
+    const role = String(requester.role ?? '');
+    const staffType = String((requester as any).staff_type ?? '');
+    const canView =
+      role === 'ADMIN' ||
+      role === 'POS_MANAGER' ||
+      role === 'POS_ADMIN' ||
+      (role === 'STAFF' && staffType === 'POS_STAFF');
+
+    if (!canView || !requester.store_id || requester.store_type !== 'RESTAURANT') {
+      throw new ForbiddenException('Only restaurant POS staff, POS Manager, and Admin accounts can view order change logs.');
+    }
+
+    await this.ensureActivityLogSchema();
+
+    const conditions: string[] = [`store_id = $1`, `action IN ('Order Cancelled', 'Partial Item Cancellation', 'Refund Processed')`];
+    const values: unknown[] = [requester.store_id];
+    const addValue = (value: unknown) => {
+      values.push(value);
+      return `$${values.length}`;
+    };
+
+    if (input.dateFrom?.trim()) {
+      conditions.push(`created_at >= (${addValue(input.dateFrom.trim())}::date::timestamp - INTERVAL '8 hours')`);
+    }
+    if (input.dateTo?.trim()) {
+      conditions.push(`created_at < (${addValue(input.dateTo.trim())}::date::timestamp + INTERVAL '1 day' - INTERVAL '8 hours')`);
+    }
+    if (input.search?.trim()) {
+      const param = addValue(`%${input.search.trim()}%`);
+      conditions.push(`(user_name ILIKE ${param} OR action ILIKE ${param} OR details ILIKE ${param})`);
+    }
+
+    return this.query(
+      `
+        SELECT id, store_id, user_id, user_name, user_role, module, action, details, to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at
+        FROM activity_logs
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY created_at DESC, id DESC
+        LIMIT 200
+      `,
+      values,
+    );
+  }
+
   async recordActivityForUser(userId: number, module: ActivityModule | string, action: string, details: string) {
     try {
       const user = await this.getUserStoreScope(userId);
@@ -7041,13 +7201,81 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     throw new ForbiddenException('Invalid retail POS manager Unique PIN.');
   }
 
+  async verifyPosManagerPin(input: { userId: number; voidPin: string; action?: string }) {
+    const requester = await this.getUserStoreScope(input.userId);
+    if (!requester.store_id) {
+      throw new ForbiddenException('Store scope is required for manager PIN authorization.');
+    }
+    if (!input.voidPin?.trim()) {
+      throw new BadRequestException('Manager PIN is required.');
+    }
+
+    await this.ensureVoidPinHashColumn();
+    const schema = await this.getSchemaColumns();
+    const userColumns = this.resolveUserColumns(schema.users);
+    if (!userColumns.fullNameColumn || !userColumns.roleColumn || !userColumns.storeIdColumn || !userColumns.voidPinHashColumn) {
+      throw new InternalServerErrorException('Users table is missing required columns for manager PIN authorization.');
+    }
+
+    const rows = await this.query<{ id: number; full_name: string; email: string; role: string; void_pin_hash: string }>(
+      `
+        SELECT
+          id,
+          ${this.quoteIdentifier(userColumns.fullNameColumn)} AS full_name,
+          email,
+          ${this.quoteIdentifier(userColumns.roleColumn)} AS role,
+          ${this.quoteIdentifier(userColumns.voidPinHashColumn)} AS void_pin_hash
+        FROM users u
+        WHERE ${this.quoteIdentifier(userColumns.storeIdColumn)} = $1
+          AND UPPER(${this.quoteIdentifier(userColumns.roleColumn)}) IN ('POS_MANAGER', 'POS_ADMIN', 'ADMIN')
+          AND ${this.quoteIdentifier(userColumns.voidPinHashColumn)} IS NOT NULL
+          ${this.activeUsersWhereClause(userColumns)}
+      `,
+      [requester.store_id],
+    );
+
+    for (const row of rows) {
+      if (await bcrypt.compare(input.voidPin.trim(), row.void_pin_hash)) {
+        await this.recordActivity({
+          userId: requester.id,
+          storeId: requester.store_id,
+          userName: requester.full_name,
+          userRole: requester.role,
+          module: 'POS Authorization',
+          action: input.action ?? 'Manager PIN Approved',
+          details: `POS manager action authorized\nManager: ${row.full_name}`,
+        });
+
+        return {
+          authorized: true,
+          manager: {
+            id: row.id,
+            full_name: row.full_name,
+            email: row.email,
+            role: row.role,
+          },
+        };
+      }
+    }
+
+    throw new ForbiddenException('Invalid manager PIN.');
+  }
+
   async getRetailManagerProfile(userId: number) {
     const requester = await this.getUserStoreScope(userId);
-    if (requester.store_type !== 'RETAIL_STORE' || !requester.store_id) {
+    if (requester.store_type !== 'RETAIL_STORE') {
       throw new ForbiddenException('Retail manager profile is only available for retail stores.');
     }
+    return this.getPosManagerProfile(userId);
+  }
+
+  async getPosManagerProfile(userId: number) {
+    const requester = await this.getUserStoreScope(userId);
+    if (!requester.store_id) {
+      throw new ForbiddenException('Store scope is required for manager profile.');
+    }
     if (!this.isPosManagerRole(requester.role)) {
-      throw new ForbiddenException('Only retail POS managers can view this profile.');
+      throw new ForbiddenException('Only POS managers can view this profile.');
     }
 
     await this.ensureVoidPinHashColumn();
@@ -7092,7 +7320,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     );
 
     if (rows.length === 0) {
-      throw new NotFoundException('Retail manager profile was not found.');
+      throw new NotFoundException('Manager profile was not found.');
     }
 
     if (!rows[0].void_pin?.trim()) {
@@ -7117,11 +7345,19 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
   async generateRetailManagerUniquePin(userId: number) {
     const requester = await this.getUserStoreScope(userId);
-    if (requester.store_type !== 'RETAIL_STORE' || !requester.store_id) {
+    if (requester.store_type !== 'RETAIL_STORE') {
       throw new ForbiddenException('Unique PIN generation is only available for retail stores.');
     }
+    return this.generatePosManagerUniquePin(userId);
+  }
+
+  async generatePosManagerUniquePin(userId: number) {
+    const requester = await this.getUserStoreScope(userId);
+    if (!requester.store_id) {
+      throw new ForbiddenException('Store scope is required for Unique PIN generation.');
+    }
     if (!this.isPosManagerRole(requester.role)) {
-      throw new ForbiddenException('Only retail POS managers can generate a Unique PIN.');
+      throw new ForbiddenException('Only POS managers can generate a Unique PIN.');
     }
 
     await this.ensureVoidPinHashColumn();

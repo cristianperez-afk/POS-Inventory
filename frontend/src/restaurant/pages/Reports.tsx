@@ -126,7 +126,11 @@ export function Reports({ onNavigate, onLogout, isAdmin = false, storeBrand, use
   // Calculate metrics from filtered orders
   const filteredOrders = getFilteredOrders();
   const filteredOperationalOrders = getFilteredOperationalOrders();
+  const visibleTransactions = showAllTransactions ? filteredOperationalOrders : filteredOperationalOrders.slice(0, 5);
   const filteredRevenue = filteredOrders.reduce((sum, order) => sum + order.amountNumber, 0);
+  const cancelledTransactions = filteredOperationalOrders.filter((order) => order.orderStatus === 'Cancelled').length;
+  const refundedTransactions = filteredOperationalOrders.filter((order) => order.paymentStatus === 'Refunded' || order.paymentStatus === 'Partially Refunded').length;
+  const voidTransactions = filteredOperationalOrders.filter((order) => order.paymentStatus === 'Void').length;
 
   const getItemAmount = (item: (typeof filteredOrders)[number]['items'][number]) =>
     Number(item.lineTotal ?? (item.price * item.quantity));
@@ -255,6 +259,7 @@ export function Reports({ onNavigate, onLogout, isAdmin = false, storeBrand, use
     return firstTimestamp(order.runningTimeEnd, order.completedAt, order.tableEndedAt, order.paymentAt);
   };
   const transactionServeSeconds = (order: (typeof orders)[number]) => {
+    if (order.orderStatus === 'Cancelled') return 0;
     const savedSeconds = Number(order.serviceDuration ?? NaN);
     if (isFinalServedOrder(order) && Number.isFinite(savedSeconds) && savedSeconds > 0) {
       return Math.max(0, Math.floor(savedSeconds));
@@ -284,6 +289,7 @@ export function Reports({ onNavigate, onLogout, isAdmin = false, storeBrand, use
   // persisted restaurant running time from confirmation to the true lifecycle end.
   const averageServingSeconds = averageSeconds(filteredOperationalOrders.map(transactionServeSeconds));
   const averageCustomerStaySeconds = averageSeconds(filteredOperationalOrders.map((order) => {
+    if (order.orderStatus === 'Cancelled') return 0;
     if (!isDineInOrder(order.type)) return null;
     if (!order.isRunning && order.runningDuration !== undefined) {
       return Math.max(0, order.runningDuration);
@@ -449,6 +455,14 @@ export function Reports({ onNavigate, onLogout, isAdmin = false, storeBrand, use
                 <div className="flex justify-between items-center pb-3 border-b border-border">
                   <span className="text-sm text-muted-foreground">VAT Collected (12%)</span>
                   <span className="font-medium">₱{totalVatCollected.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between items-center pb-3 border-b border-border">
+                  <span className="text-sm text-muted-foreground">Cancelled Orders</span>
+                  <span className="font-medium text-red-600">{cancelledTransactions}</span>
+                </div>
+                <div className="flex justify-between items-center pb-3 border-b border-border">
+                  <span className="text-sm text-muted-foreground">Refunded / Voided</span>
+                  <span className="font-medium text-amber-700">{refundedTransactions + voidTransactions}</span>
                 </div>
                 <div className="flex justify-between items-center pt-2">
                   <span className="font-medium">Net Revenue</span>
@@ -654,12 +668,18 @@ export function Reports({ onNavigate, onLogout, isAdmin = false, storeBrand, use
                       Date
                     </th>
                     <th className="px-6 py-3.5 text-left text-xs font-semibold text-emerald-400 uppercase tracking-widest">
+                      Payment
+                    </th>
+                    <th className="px-6 py-3.5 text-left text-xs font-semibold text-emerald-400 uppercase tracking-widest">
+                      Status
+                    </th>
+                    <th className="px-6 py-3.5 text-left text-xs font-semibold text-emerald-400 uppercase tracking-widest">
                       Amount
                     </th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-border">
-                  {(showAllTransactions ? filteredOrders : filteredOrders.slice(0, 5)).map((order) => (
+                  {visibleTransactions.map((order) => (
                     <tr key={order.id} className="hover:bg-muted/50 transition-colors">
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                         {order.orderNumber || order.id}
@@ -678,6 +698,18 @@ export function Reports({ onNavigate, onLogout, isAdmin = false, storeBrand, use
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-muted-foreground">
                         {order.date}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm">
+                        {order.paymentStatus}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm">
+                        <span className={`inline-flex px-2 py-1 text-xs rounded-full ${
+                          order.orderStatus === 'Cancelled' ? 'bg-red-100 text-red-800' :
+                          order.orderStatus === 'Completed' ? 'bg-green-100 text-green-800' :
+                          'bg-slate-100 text-slate-700'
+                        }`}>
+                          {order.orderStatus}
+                        </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                         ₱{order.amountNumber.toFixed(2)}

@@ -1,5 +1,5 @@
 import { useEffect, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
-import { Bell, History, LogOut, Palette, PanelLeftClose, PanelLeftOpen, Save, Settings, StoreIcon, User, UserPlus } from 'lucide-react';
+import { Bell, Eye, EyeOff, History, KeyRound, LogOut, Palette, PanelLeftClose, PanelLeftOpen, Save, Settings, StoreIcon, User, UserPlus } from 'lucide-react';
 import { Sidebar } from './Sidebar';
 import { Page, type StoreBrand } from '../App';
 import type { AuthenticatedUser } from '../../auth/types/auth';
@@ -368,6 +368,57 @@ function SettingsContent({
 }) {
   const isSuperadmin = currentUser?.role === 'SUPERADMIN';
   const isKitchenAccount = currentUser?.role === 'KITCHEN' || currentUser?.staff_type === 'KITCHEN_STAFF';
+  const isPosManagerAccount = currentUser?.role === 'POS_MANAGER' || currentUser?.role === 'POS_ADMIN' || currentUser?.role === 'ADMIN';
+  const [managerProfile, setManagerProfile] = useState<Awaited<ReturnType<typeof adminApi.getPosManagerProfile>> | null>(null);
+  const [managerPinLoading, setManagerPinLoading] = useState(false);
+  const [managerPinMessage, setManagerPinMessage] = useState('');
+  const [showManagerPin, setShowManagerPin] = useState(true);
+  const [generatingManagerPin, setGeneratingManagerPin] = useState(false);
+  const managerPin = managerProfile?.void_pin?.trim() || currentUser?.void_pin?.trim() || '';
+
+  useEffect(() => {
+    if (!currentUser?.id || !isPosManagerAccount || isKitchenAccount) return;
+
+    let cancelled = false;
+    const loadManagerPin = async () => {
+      setManagerPinLoading(true);
+      setManagerPinMessage('');
+      try {
+        const data = await adminApi.getPosManagerProfile();
+        if (cancelled) return;
+        setManagerProfile(data);
+      } catch (error) {
+        if (!cancelled) setManagerPinMessage(error instanceof Error ? error.message : 'Unable to load manager PIN.');
+      } finally {
+        if (!cancelled) setManagerPinLoading(false);
+      }
+    };
+
+    void loadManagerPin();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser?.id, isKitchenAccount, isPosManagerAccount]);
+
+  const generateManagerPin = async () => {
+    setGeneratingManagerPin(true);
+    setManagerPinMessage('');
+    try {
+      const data = await adminApi.generatePosManagerUniquePin();
+      const nextPin = String(data.void_pin ?? '');
+      if (!nextPin) throw new Error('Unable to generate Manager PIN.');
+      setManagerProfile((current) => ({
+        ...(current ?? currentUser ?? {}),
+        void_pin: nextPin,
+        void_pin_configured: true,
+      } as Awaited<ReturnType<typeof adminApi.getPosManagerProfile>>));
+      setManagerPinMessage('Manager PIN generated.');
+    } catch (error) {
+      setManagerPinMessage(error instanceof Error ? error.message : 'Unable to generate Manager PIN.');
+    } finally {
+      setGeneratingManagerPin(false);
+    }
+  };
 
   return (
     <>
@@ -422,6 +473,51 @@ function SettingsContent({
                   <input value={currentUser?.role ?? ''} readOnly className="w-full max-w-sm rounded-lg border border-border bg-muted px-4 py-2 text-sm text-muted-foreground" />
                 </SettingRow>
               </div>
+            </section>}
+
+            {!isKitchenAccount && isPosManagerAccount && <section className="rounded-lg border border-border bg-card p-6 shadow-sm">
+              <div className="mb-5 flex items-center gap-3">
+                <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <KeyRound className="h-5 w-5" />
+                </span>
+                <div>
+                  <h2 className="text-lg font-semibold">Manager PIN</h2>
+                  <p className="text-sm text-muted-foreground">Used to authorize order cancellations, refunds, and voids.</p>
+                </div>
+              </div>
+              <div className="divide-y divide-border">
+                <SettingRow label="Unique PIN" description="This identifies which POS manager approved sensitive order actions.">
+                  <div className="flex w-full max-w-sm flex-wrap items-center justify-end gap-2">
+                    <div className="flex min-h-10 flex-1 items-center justify-between rounded-lg border border-border bg-muted px-4 py-2">
+                      <span className="font-mono text-lg font-semibold tracking-[0.2em] text-foreground">
+                        {managerPinLoading ? 'Loading...' : managerPin ? (showManagerPin ? managerPin : '*'.repeat(managerPin.length)) : 'Not set'}
+                      </span>
+                      {managerPin && (
+                        <button
+                          type="button"
+                          onClick={() => setShowManagerPin((current) => !current)}
+                          className="rounded-md p-1.5 text-muted-foreground transition hover:bg-background hover:text-foreground"
+                          title={showManagerPin ? 'Hide PIN' : 'Show PIN'}
+                          aria-label={showManagerPin ? 'Hide PIN' : 'Show PIN'}
+                        >
+                          {showManagerPin ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                      )}
+                    </div>
+                    {!managerPin && (
+                      <button
+                        type="button"
+                        onClick={generateManagerPin}
+                        disabled={generatingManagerPin || managerPinLoading}
+                        className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
+                      >
+                        {generatingManagerPin ? 'Generating...' : 'Generate'}
+                      </button>
+                    )}
+                  </div>
+                </SettingRow>
+              </div>
+              {managerPinMessage && <p className="mt-3 text-sm text-muted-foreground">{managerPinMessage}</p>}
             </section>}
 
             {!isKitchenAccount && <section className="rounded-lg border border-border bg-card p-6 shadow-sm">

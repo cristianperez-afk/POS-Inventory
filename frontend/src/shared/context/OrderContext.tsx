@@ -4,6 +4,7 @@ import { formatManilaTime, getManilaDateKey, parseDatabaseTimestamp } from '../u
 import { posApi } from '../api/posApi';
 
 export interface OrderItem {
+  id?: number;
   name: string;
   quantity: number;
   price: number;
@@ -33,8 +34,8 @@ export interface Order {
   tax: number;
   discount: number;
   discountType?: string;
-  paymentStatus: 'Paid' | 'Not Paid' | 'Void' | 'Refunded';
-  orderStatus: 'Pending' | 'Preparing' | 'Ready' | 'Served' | 'Completed';
+  paymentStatus: 'Paid' | 'Not Paid' | 'Void' | 'Refunded' | 'Partially Refunded';
+  orderStatus: 'Pending' | 'Preparing' | 'Ready' | 'Served' | 'Completed' | 'Cancelled';
   date: string;
   time: string;
   orderedAt?: string;
@@ -100,11 +101,20 @@ interface OrderContextType {
   assignQueuedOrderToTable: (id: string, table: string, orderStatus: Order['orderStatus']) => Promise<void>;
   completePayment: (orderId: string, paymentData: { cashReceived: number; changeGiven: number; cashier?: string; paymentId?: string; receiptId?: string }) => Promise<void>;
   completeTableOrder: (orderId: string) => Promise<void>;
-  voidOrder: (orderId: string, restock?: boolean) => Promise<void>;
-  refundOrder: (orderId: string, restock?: boolean) => Promise<void>;
+  cancelOrder: (orderId: string, restock?: boolean, authorization?: OrderAuthorization) => Promise<void>;
+  cancelOrderItems: (orderId: string, itemIndices: number[], authorization?: OrderAuthorization) => Promise<void>;
+  voidOrder: (orderId: string, restock?: boolean, authorization?: OrderAuthorization) => Promise<void>;
+  refundOrder: (orderId: string, restock?: boolean, authorization?: OrderAuthorization) => Promise<void>;
+  refundOrderItems: (orderId: string, itemIndices: number[], authorization?: OrderAuthorization) => Promise<void>;
   reloadOrders: () => Promise<void>;
   paymentCompletedSignal: number; // Signal for when payment is completed
 }
+
+type OrderAuthorization = {
+  reason?: string;
+  managerId?: number;
+  managerName?: string;
+};
 
 const OrderContext = createContext<OrderContextType | null>(null);
 
@@ -182,7 +192,7 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
 
   // Derive queued orders from orders with isQueued = true
   const queuedOrders: QueuedOrder[] = orders
-    .filter(o => o.isQueued && o.table === 'Queue' && o.orderStatus !== 'Completed')
+    .filter(o => o.isQueued && o.table === 'Queue' && o.orderStatus !== 'Completed' && o.orderStatus !== 'Cancelled')
     .sort((a, b) => (a.queuePosition || 0) - (b.queuePosition || 0))
     .map(o => ({
       id: o.id,
@@ -210,7 +220,7 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
     setOrders(prev => prev.filter(o => o.id !== id));
   };
 
-  const voidOrder = async (orderId: string, restock: boolean = false) => {
+  const voidOrder = async (orderId: string, restock: boolean = false, authorization?: OrderAuthorization) => {
     const order = orders.find(o => o.id === orderId);
     if (!order) return;
 
@@ -227,6 +237,9 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
           paymentStatus: 'VOIDED',
           orderStatus: 'COMPLETED',
           restock,
+          voidReason: authorization?.reason,
+          authorizedByManagerId: authorization?.managerId,
+          authorizedByManagerName: authorization?.managerName,
       });
     } catch (error) {
       setOrders(prev => prev.map(o => o.id === orderId ? order : o));
@@ -236,7 +249,117 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
     setPaymentCompletedSignal(prev => prev + 1);
   };
 
-  const refundOrder = async (orderId: string, restock: boolean = false) => {
+  const cancelOrder = async (orderId: string, restock: boolean = false, authorization?: OrderAuthorization) => {
+    const order = orders.find(o => o.id === orderId);
+    if (!order) return;
+    if (order.orderStatus !== 'Pending' || (order.paymentStatus !== 'Not Paid' && order.paymentStatus !== 'Paid' && order.paymentStatus !== 'Partially Refunded')) {
+      throw new Error('Only pending paid or unpaid orders can be cancelled.');
+    }
+    const nextPaymentStatus = order.paymentStatus === 'Not Paid' ? 'Not Paid' as const : 'Refunded' as const;
+    const databasePaymentStatus = order.paymentStatus === 'Not Paid' ? 'NOT_PAID' : 'REFUNDED';
+
+    const cancelledAtIso = new Date().toISOString();
+    setOrders(prev => prev.map(o =>
+      o.id === orderId
+        ? {
+            ...o,
+            orderStatus: 'Cancelled' as const,
+            paymentStatus: nextPaymentStatus,
+            completedAt: o.completedAt ?? cancelledAtIso,
+            tableEndedAt: o.tableEndedAt ?? cancelledAtIso,
+            runningTimeEnd: o.runningTimeEnd ?? cancelledAtIso,
+            serviceDuration: 0,
+            runningDuration: 0,
+            runningTimeMinutes: 0,
+            customerStayMinutes: 0,
+            isRunning: false,
+          }
+        : o
+    ));
+
+    if (!currentUser?.id || !order.orderNumber) return;
+
+    try {
+      await posApi.updateOrder(order.orderNumber, {
+          orderStatus: 'CANCELLED',
+          paymentStatus: databasePaymentStatus,
+          restock,
+          reason: authorization?.reason,
+          authorizedByManagerId: authorization?.managerId,
+          authorizedByManagerName: authorization?.managerName,
+      });
+    } catch (error) {
+      setOrders(prev => prev.map(o => o.id === orderId ? order : o));
+      throw error;
+    }
+
+    setPaymentCompletedSignal(prev => prev + 1);
+  };
+
+  const cancelOrderItems = async (orderId: string, itemIndices: number[], authorization?: OrderAuthorization) => {
+    const order = orders.find(o => o.id === orderId);
+    if (!order || itemIndices.length === 0) return;
+    if (order.orderStatus !== 'Pending') {
+      throw new Error('Items can only be cancelled while the order is pending.');
+    }
+    if (itemIndices.length >= order.items.length) {
+      throw new Error('Use full order cancellation when cancelling every item.');
+    }
+
+    const selectedItemIds = itemIndices
+      .map(index => order.items[index]?.id)
+      .filter((id): id is number => typeof id === 'number');
+    if (selectedItemIds.length !== itemIndices.length) {
+      throw new Error('Please refresh orders before cancelling selected dishes.');
+    }
+
+    const cancelledAmount = itemIndices.reduce((sum, index) => {
+      const item = order.items[index];
+      return sum + (item ? Number(item.lineTotal ?? item.price * item.quantity) : 0);
+    }, 0);
+    const remainingItems = order.items.filter((_, index) => !itemIndices.includes(index));
+    const nextSubtotal = Math.max(0, order.subtotal - cancelledAmount);
+    const serviceRate = order.subtotal > 0 ? order.serviceFee / order.subtotal : 0;
+    const discountRate = order.subtotal > 0 ? order.discount / order.subtotal : 0;
+    const nextServiceFee = Number((nextSubtotal * serviceRate).toFixed(2));
+    const nextDiscount = Number((nextSubtotal * discountRate).toFixed(2));
+    const nextTotal = Number((nextSubtotal + nextServiceFee + order.tax - nextDiscount).toFixed(2));
+    const nextPaymentStatus = order.paymentStatus === 'Paid' || order.paymentStatus === 'Partially Refunded' ? 'Partially Refunded' as const : order.paymentStatus;
+    const databasePaymentStatus = order.paymentStatus === 'Paid' || order.paymentStatus === 'Partially Refunded' ? 'PARTIALLY_REFUNDED' : order.paymentStatus === 'Not Paid' ? 'NOT_PAID' : undefined;
+
+    setOrders(prev => prev.map(o =>
+      o.id === orderId
+        ? {
+            ...o,
+            items: remainingItems,
+            subtotal: nextSubtotal,
+            serviceFee: nextServiceFee,
+            discount: nextDiscount,
+            amountNumber: nextTotal,
+            paymentStatus: nextPaymentStatus,
+          }
+        : o
+    ));
+
+    if (!currentUser?.id || !order.orderNumber) return;
+
+    try {
+      await posApi.updateOrder(order.orderNumber, {
+          cancelOrderItemIds: selectedItemIds,
+          paymentStatus: databasePaymentStatus,
+          reason: authorization?.reason,
+          authorizedByManagerId: authorization?.managerId,
+          authorizedByManagerName: authorization?.managerName,
+      });
+    } catch (error) {
+      setOrders(prev => prev.map(o => o.id === orderId ? order : o));
+      throw error;
+    }
+
+    setPaymentCompletedSignal(prev => prev + 1);
+  };
+
+  const refundOrder = async (orderId: string, restock: boolean = false, authorization?: OrderAuthorization) => {
     const order = orders.find(o => o.id === orderId);
     if (!order) return;
 
@@ -253,6 +376,48 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
           paymentStatus: 'REFUNDED',
           orderStatus: 'COMPLETED',
           restock,
+          refundReason: authorization?.reason,
+          authorizedByManagerId: authorization?.managerId,
+          authorizedByManagerName: authorization?.managerName,
+      });
+    } catch (error) {
+      setOrders(prev => prev.map(o => o.id === orderId ? order : o));
+      throw error;
+    }
+
+    setPaymentCompletedSignal(prev => prev + 1);
+  };
+
+  const refundOrderItems = async (orderId: string, itemIndices: number[], authorization?: OrderAuthorization) => {
+    const order = orders.find(o => o.id === orderId);
+    if (!order || itemIndices.length === 0) return;
+
+    const selectedItemIds = itemIndices
+      .map(index => order.items[index]?.id)
+      .filter((id): id is number => typeof id === 'number');
+    if (selectedItemIds.length !== itemIndices.length) {
+      throw new Error('Please refresh orders before refunding selected dishes.');
+    }
+    const allItemsSelected = itemIndices.length >= order.items.length;
+    const nextPaymentStatus = allItemsSelected ? 'Refunded' as const : 'Partially Refunded' as const;
+    const databasePaymentStatus = allItemsSelected ? 'REFUNDED' : 'PARTIALLY_REFUNDED';
+
+    setOrders(prev => prev.map(o =>
+      o.id === orderId
+        ? { ...o, paymentStatus: nextPaymentStatus, orderStatus: 'Completed' as const }
+        : o
+    ));
+
+    if (!currentUser?.id || !order.orderNumber) return;
+
+    try {
+      await posApi.updateOrder(order.orderNumber, {
+          paymentStatus: databasePaymentStatus,
+          orderStatus: 'COMPLETED',
+          refundReason: authorization?.reason,
+          restockOrderItemIds: selectedItemIds,
+          authorizedByManagerId: authorization?.managerId,
+          authorizedByManagerName: authorization?.managerName,
       });
     } catch (error) {
       setOrders(prev => prev.map(o => o.id === orderId ? order : o));
@@ -273,6 +438,7 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
     status === 'Ready' ? 'READY' :
     status === 'Served' ? 'SERVED' :
     status === 'Completed' ? 'COMPLETED' :
+    status === 'Cancelled' ? 'CANCELLED' :
     'PENDING';
 
   const assignQueuedOrderToTable = async (id: string, table: string, orderStatus: Order['orderStatus']) => {
@@ -301,6 +467,9 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
   const completePayment = async (orderId: string, paymentData: { cashReceived: number; changeGiven: number; cashier?: string; paymentId?: string; receiptId?: string }) => {
     const order = orders.find(o => o.id === orderId);
     if (!order) return;
+    if (order.paymentStatus !== 'Not Paid' || order.orderStatus !== 'Served') {
+      throw new Error('Payment can only be processed after the order has been served.');
+    }
     const paymentId = paymentData.paymentId ?? `PAY-${Date.now()}`;
     const receiptId = paymentData.receiptId ?? `REC-${Date.now()}`;
     const paidAtIso = new Date().toISOString();
@@ -395,8 +564,11 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
       assignQueuedOrderToTable,
       completePayment,
       completeTableOrder,
+      cancelOrder,
+      cancelOrderItems,
       voidOrder,
       refundOrder,
+      refundOrderItems,
       reloadOrders,
       paymentCompletedSignal,
     }}>
@@ -429,6 +601,7 @@ function firstValidTimestamp(...values: Array<string | undefined | null>) {
 }
 
 function getServiceEndTimestamp(order: Pick<Order, 'servedAt' | 'runningTimeEnd' | 'completedAt' | 'tableEndedAt' | 'paymentAt' | 'orderStatus'>) {
+  if (order.orderStatus === 'Cancelled') return null;
   if (order.servedAt) return firstValidTimestamp(order.servedAt);
   if (order.orderStatus !== 'Served' && order.orderStatus !== 'Completed') return null;
   return firstValidTimestamp(order.runningTimeEnd, order.completedAt, order.tableEndedAt, order.paymentAt);
@@ -478,6 +651,7 @@ function mapDatabaseRestaurantOrder(row: any): Order {
   const partySize = Number(row.party_size ?? row.partySize ?? row.required_seats ?? 0);
   const paymentStatus: Order['paymentStatus'] =
     row.payment_status === 'REFUNDED' ? 'Refunded' :
+    row.payment_status === 'PARTIALLY_REFUNDED' ? 'Partially Refunded' :
     row.payment_status === 'VOIDED' || row.payment_status === 'VOID' ? 'Void' :
     row.payment_status === 'PAID' ? 'Paid' :
     'Not Paid';
@@ -486,13 +660,14 @@ function mapDatabaseRestaurantOrder(row: any): Order {
     row.order_status === 'READY' ? 'Ready' :
     row.order_status === 'SERVED' ? 'Served' :
     row.order_status === 'COMPLETED' ? 'Completed' :
+    row.order_status === 'CANCELLED' ? 'Cancelled' :
     'Pending';
   const estimatedPrepMinutes = valueOf('estimated_prep_minutes', 'estimatedPrepMinutes') !== undefined ? Number(valueOf('estimated_prep_minutes', 'estimatedPrepMinutes')) : undefined;
   const computedEstimatedReadyAt = orderedAt && Number.isFinite(Number(estimatedPrepMinutes)) && Number(estimatedPrepMinutes) > 0
     ? new Date(orderedAt.getTime() + Math.ceil(Number(estimatedPrepMinutes)) * 60000).toISOString()
     : normalizedTimestamp(valueOf('estimated_ready_at', 'estimatedReadyAt'));
-  const completedAt = orderStatus === 'Completed' ? rawCompletedAt : null;
-  const isQueued = Boolean(queueMatch) && orderStatus !== 'Completed';
+  const completedAt = orderStatus === 'Completed' || orderStatus === 'Cancelled' ? rawCompletedAt : null;
+  const isQueued = Boolean(queueMatch) && orderStatus !== 'Completed' && orderStatus !== 'Cancelled';
   const type: Order['type'] =
     row.order_type === 'DINE_IN' ? 'Dine-In' :
     row.order_type === 'MIXED' ? 'Mixed' :
@@ -500,8 +675,8 @@ function mapDatabaseRestaurantOrder(row: any): Order {
   const serviceEnd = firstValidTimestamp(
     normalizedTimestamp(servedAtValue),
     orderStatus === 'Served' || orderStatus === 'Completed' ? normalizedTimestamp(valueOf('running_time_end', 'runningTimeEnd')) : undefined,
-    orderStatus === 'Completed' ? normalizedTimestamp(completedAtValue) : undefined,
-    orderStatus === 'Completed' ? normalizedTimestamp(tableEndedAtValue) : undefined,
+    orderStatus === 'Completed' || orderStatus === 'Cancelled' ? normalizedTimestamp(completedAtValue) : undefined,
+    orderStatus === 'Completed' || orderStatus === 'Cancelled' ? normalizedTimestamp(tableEndedAtValue) : undefined,
     orderStatus === 'Completed' ? normalizedTimestamp(valueOf('payment_at', 'paymentAt')) : undefined,
   );
   const stayEnd = type === 'Dine-In' || type === 'Mixed'
@@ -534,7 +709,7 @@ function mapDatabaseRestaurantOrder(row: any): Order {
     readyAt: normalizedTimestamp(valueOf('ready_at', 'readyAt')),
     serviceStartedAt: normalizedTimestamp(valueOf('service_started_at', 'serviceStartedAt')),
     servedAt: normalizedTimestamp(servedAtValue),
-    serviceDuration: valueOf('service_duration', 'serviceDuration') !== undefined ? Number(valueOf('service_duration', 'serviceDuration')) : undefined,
+    serviceDuration: orderStatus === 'Cancelled' ? 0 : valueOf('service_duration', 'serviceDuration') !== undefined ? Number(valueOf('service_duration', 'serviceDuration')) : undefined,
     completedAt: completedAt ? normalizedTimestamp(completedAtValue) : undefined,
     tableStartedAt: normalizedTimestamp(tableStartedAtValue),
     tableEndedAt: normalizedTimestamp(tableEndedAtValue),
@@ -542,14 +717,15 @@ function mapDatabaseRestaurantOrder(row: any): Order {
     stayEndedAt: normalizedTimestamp(tableEndedAtValue),
     runningTimeStart: normalizedTimestamp(valueOf('running_time_start', 'runningTimeStart')),
     runningTimeEnd: normalizedTimestamp(valueOf('running_time_end', 'runningTimeEnd')),
-    runningDuration: valueOf('running_duration', 'runningDuration') !== undefined ? Number(valueOf('running_duration', 'runningDuration')) : undefined,
+    runningDuration: orderStatus === 'Cancelled' ? 0 : valueOf('running_duration', 'runningDuration') !== undefined ? Number(valueOf('running_duration', 'runningDuration')) : undefined,
     isRunning: Boolean(valueOf('is_running', 'isRunning')),
     // Kept for older consumers; never fall back to created_at for elapsed timers.
-    runningTimeMinutes: minutesBetween(orderedAt, serviceEnd),
-    customerStayMinutes: tableStartedAt && (type === 'Dine-In' || type === 'Mixed') ? minutesBetween(tableStartedAt, stayEnd ?? tableEndedAt) : undefined,
+    runningTimeMinutes: orderStatus === 'Cancelled' ? 0 : minutesBetween(orderedAt, serviceEnd),
+    customerStayMinutes: orderStatus === 'Cancelled' ? 0 : tableStartedAt && (type === 'Dine-In' || type === 'Mixed') ? minutesBetween(tableStartedAt, stayEnd ?? tableEndedAt) : undefined,
     estimatedPrepMinutes,
     estimatedReadyAt: computedEstimatedReadyAt,
     items: items.map((item: any) => ({
+      id: typeof item.id === 'number' ? item.id : Number.isFinite(Number(item.id)) ? Number(item.id) : undefined,
       name: item.product_name,
       quantity: Number(item.quantity ?? 0),
       price: Number(item.unit_price ?? 0),

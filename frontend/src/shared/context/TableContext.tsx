@@ -334,11 +334,30 @@ export function TableProvider({ children, currentUser }: { children: ReactNode; 
 
   const setTableOccupancy = async (tableId: string, occupiedSeats: number): Promise<boolean> => {
     if (!currentUser?.id) return false;
+    const previousTables = tables;
+    const nextOccupiedSeats = Math.max(0, Math.floor(Number(occupiedSeats) || 0));
+    setTables(prevTables => prevTables.map(table => {
+      if (table.id !== tableId) return table;
+      const cappedOccupiedSeats = Math.min(table.seats, nextOccupiedSeats);
+      const status: Table['status'] = cappedOccupiedSeats <= 0
+        ? 'available'
+        : table.isShared && cappedOccupiedSeats < table.seats
+        ? 'partially_occupied'
+        : 'occupied';
+      return {
+        ...table,
+        status,
+        occupiedSeats: cappedOccupiedSeats,
+        availableSeats: Math.max(0, table.seats - cappedOccupiedSeats),
+        orderId: cappedOccupiedSeats <= 0 ? undefined : table.orderId,
+      };
+    }));
     try {
-      await posApi.updateTableOccupancy(tableId, occupiedSeats);
+      await posApi.updateTableOccupancy(tableId, nextOccupiedSeats);
       await loadTables();
       return true;
     } catch {
+      setTables(previousTables);
       return false;
     }
   };

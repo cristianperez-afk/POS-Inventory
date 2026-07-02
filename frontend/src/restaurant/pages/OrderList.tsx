@@ -1,14 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Sidebar } from '../../shared/components/Sidebar';
 import { Page, type StoreBrand } from '../../shared/App';
 import type { StaffType, StoreType } from '../../auth/types/auth';
-import { X, Search, Eye, CreditCard, Printer, RotateCcw, CheckCircle, ChevronDown, Download, Users } from 'lucide-react';
+import { X, Search, Eye, CreditCard, Printer, RotateCcw, ChevronDown, Download, Users } from 'lucide-react';
 import { useOrders, Order, type OrderItem } from '../../shared/context/OrderContext';
 import { ThermalReceipt } from '../../shared/components/ThermalReceipt';
 import { useStoreSettings } from '../../shared/context/StoreSettingsContext';
 import { DeleteConfirmDialog } from '../../shared/components/DeleteConfirmDialog';
 import { DateFilterControl, type DateFilterMode } from '../../shared/components/DateFilterControl';
 import { formatManilaDateTime, formatManilaTime, getLocalDateKey, parseDatabaseTimestamp, parseLocalDateKey } from '../../shared/utils/date';
+import { adminApi } from '../../shared/api/adminApi';
+import type { ActivityLog } from '../../shared/api/activityApi';
 
 interface OrderListProps {
   onNavigate: (page: Page) => void;
@@ -21,10 +23,11 @@ interface OrderListProps {
   staffType?: StaffType;
 }
 
-type ActiveModal = 'details' | 'payment' | 'payment-success' | 'receipt' | 'refund' | 'void' | null;
+type ActiveModal = 'details' | 'payment' | 'receipt' | 'refund' | 'cancel' | 'item-cancel' | null;
+type TransactionTab = 'history' | 'changes';
 
 const ORDER_TYPES = ['Dine-In', 'Takeout', 'Mixed'];
-const PAYMENT_STATUSES = ['Paid', 'Not Paid', 'Void', 'Refunded'];
+const PAYMENT_STATUSES = ['Paid', 'Not Paid', 'Refunded', 'Partially Refunded'];
 const ORDERS_PER_PAGE = 10;
 
 function generateId(prefix: string) {
@@ -41,6 +44,63 @@ function formatDuration(minutes?: number) {
   const hours = Math.floor(minutes / 60);
   const rest = minutes % 60;
   return `${hours} hr${hours === 1 ? '' : 's'}${rest ? ` ${rest} mins` : ''}`;
+}
+
+type OrderChangeRecord = {
+  id: string;
+  createdAt: string;
+  orderNumber: string;
+  type: string;
+  affectedItems: string;
+  quantity: string;
+  amount: string;
+  reason: string;
+  initiatedBy: string;
+  approvedBy: string;
+};
+
+function detailLine(details: string, label: string) {
+  const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return details.match(new RegExp(`(?:^|\\n)${escapedLabel}:\\s*(.*)`, 'i'))?.[1]?.trim() ?? '';
+}
+
+function orderChangeType(log: ActivityLog) {
+  const action = log.action.toLowerCase();
+  if (action === 'partial item cancellation') return 'Partial Cancellation';
+  if (action === 'order cancelled') return 'Full Cancellation';
+  if (action.includes('refund')) return detailLine(log.details, 'Items') ? 'Item Refund' : 'Full Refund';
+  return '';
+}
+
+function parseQuantity(items: string) {
+  if (!items || items === 'Full order') return '-';
+  const quantities = Array.from(items.matchAll(/\bx\s*([0-9.]+)/gi)).map((match) => Number(match[1]));
+  if (quantities.length === 0 || quantities.some((quantity) => !Number.isFinite(quantity))) return '-';
+  return String(quantities.reduce((sum, quantity) => sum + quantity, 0));
+}
+
+function buildOrderChangeRecords(logs: ActivityLog[]): OrderChangeRecord[] {
+  return logs
+    .map((log) => {
+      const type = orderChangeType(log);
+      if (!type) return null;
+
+      const affectedItems = detailLine(log.details, 'Items') || 'Full order';
+      const amount = detailLine(log.details, 'Amount');
+      return {
+        id: String(log.id),
+        createdAt: log.created_at,
+        orderNumber: log.details.match(/Order #([^\s\n]+)/i)?.[1] ?? '-',
+        type,
+        affectedItems,
+        quantity: parseQuantity(affectedItems),
+        amount: amount ? `PHP ${Number(amount).toFixed(2)}` : '-',
+        reason: detailLine(log.details, 'Reason') || '-',
+        initiatedBy: log.user_name || '-',
+        approvedBy: detailLine(log.details, 'Authorized by') || '-',
+      };
+    })
+    .filter((record): record is OrderChangeRecord => Boolean(record));
 }
 
 function OrderItemDetail({ item }: { item: OrderItem }) {
@@ -101,6 +161,7 @@ function serveTimeStart(order: Order) {
 }
 
 function serveTimeDisplay(order: Order, now = Date.now()) {
+  if (order.orderStatus === 'Cancelled') return '00:00:00';
   const savedSeconds = Number(order.serviceDuration ?? NaN);
   if (isFinalServedOrder(order) && Number.isFinite(savedSeconds) && savedSeconds > 0) {
     return formatElapsed(undefined, undefined, savedSeconds, now);
@@ -143,13 +204,14 @@ function estimatedWaitDisplay(order: Order, _strategy: 'parallel' | 'sequential'
 }
 
 export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, userName, userRole, storeType, staffType }: OrderListProps) {
-  const { orders, completePayment, voidOrder, refundOrder, reloadOrders } = useOrders();
+  const { orders, completePayment, cancelOrder, cancelOrderItems, refundOrderItems, reloadOrders } = useOrders();
   const { settings } = useStoreSettings();
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState('All');
   const [paymentFilter, setPaymentFilter] = useState('All');
   const [dateFilter, setDateFilter] = useState('');
   const [datePreset, setDatePreset] = useState<DateFilterMode>('all');
+  const [activeTab, setActiveTab] = useState<TransactionTab>('history');
 
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [activeModal, setActiveModal] = useState<ActiveModal>(null);
@@ -159,18 +221,38 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
   const [currentReceiptId, setCurrentReceiptId] = useState('');
   const [refundReason, setRefundReason] = useState('');
   const [refundingOrder, setRefundingOrder] = useState<Order | null>(null);
-  const [voidReason, setVoidReason] = useState('');
-  const [voidingOrder, setVoidingOrder] = useState<Order | null>(null);
-  // Restaurant default: ingredients are consumed in cooking, so don't restock unless
-  // the staff confirms the order wasn't prepared yet.
-  const [restockOnRefund, setRestockOnRefund] = useState(false);
-  const [restockOnVoid, setRestockOnVoid] = useState(false);
+  const [selectedRefundItems, setSelectedRefundItems] = useState<Record<number, boolean>>({});
+  const [cancelReason, setCancelReason] = useState('');
+  const [cancellingOrder, setCancellingOrder] = useState<Order | null>(null);
+  const [itemCancelReason, setItemCancelReason] = useState('');
+  const [itemCancellingOrder, setItemCancellingOrder] = useState<Order | null>(null);
+  const [selectedCancelItems, setSelectedCancelItems] = useState<Record<number, boolean>>({});
+  const [managerPin, setManagerPin] = useState('');
+  const [managerPinError, setManagerPinError] = useState('');
+  const [isAuthorizingManagerPin, setIsAuthorizingManagerPin] = useState(false);
+  const [authorizedManager, setAuthorizedManager] = useState<{ id?: number; full_name?: string; email?: string } | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
+  const [orderChangeLogs, setOrderChangeLogs] = useState<ActivityLog[]>([]);
+  const [orderChangeLoading, setOrderChangeLoading] = useState(false);
+  const [orderChangeError, setOrderChangeError] = useState('');
   const [clock, setClock] = useState(() => Date.now());
   const [isCompletingPayment, setIsCompletingPayment] = useState(false);
   const showTableManagementColumns = settings.enable_table_management;
   const showEstimatedPrepTime = settings.enable_estimated_prep_time;
-  const canProcessTransactions = !isAdmin && staffType === 'POS_STAFF';
+  const canProcessTransactions = !isAdmin && userRole === 'STAFF' && staffType === 'POS_STAFF';
+  const canViewOrderChangeAudit =
+    storeType === 'RESTAURANT' &&
+    ((userRole === 'STAFF' && staffType === 'POS_STAFF') || ['ADMIN', 'POS_MANAGER', 'POS_ADMIN'].includes(userRole ?? ''));
+  const canPayOrder = (order: Order) => order.paymentStatus === 'Not Paid' && order.orderStatus === 'Served';
+  const hasCompletedPayment = (order: Order) => order.paymentStatus === 'Paid';
+  const isRestaurantRefundWindowOpen = (order: Order) => order.date === getLocalDateKey();
+  const canCancelOrder = (order: Order) => order.orderStatus === 'Pending' && (order.paymentStatus === 'Not Paid' || order.paymentStatus === 'Paid' || order.paymentStatus === 'Partially Refunded');
+  const canCancelItemsOrder = (order: Order) => canCancelOrder(order) && order.items.length > 1;
+  const canRefundOrder = (order: Order) =>
+    settings.enable_refund &&
+    hasCompletedPayment(order) &&
+    isRestaurantRefundWindowOpen(order) &&
+    ['Preparing', 'Served', 'Completed'].includes(order.orderStatus);
 
   useEffect(() => {
     void reloadOrders();
@@ -189,9 +271,16 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
   }, [orders]);
 
   const openModal = (order: Order, modal: ActiveModal) => {
-    if (!canProcessTransactions && ['payment', 'refund', 'void'].includes(String(modal))) return;
-    if (modal === 'refund' && !settings.enable_refund) return;
-    if (modal === 'void' && !settings.enable_void) return;
+    if (!canProcessTransactions && ['payment', 'refund', 'cancel', 'item-cancel'].includes(String(modal))) return;
+    if (modal === 'payment' && !canPayOrder(order)) {
+      alert('Payment can only be processed after the order has been served.');
+      return;
+    }
+    if (modal === 'refund' && !canRefundOrder(order)) return;
+    if (modal === 'cancel' && !canCancelOrder(order)) return;
+    if (modal === 'item-cancel' && !canCancelItemsOrder(order)) return;
+    if (modal === 'refund') setSelectedRefundItems({});
+    if (modal === 'item-cancel') setSelectedCancelItems({});
     setSelectedOrder(order);
     setActiveModal(modal);
   };
@@ -202,14 +291,22 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
     setCashReceived('');
     setChangeAmount(0);
     setRefundReason('');
-    setVoidReason('');
-    setRestockOnRefund(false);
-    setRestockOnVoid(false);
+    setSelectedRefundItems({});
+    setCancelReason('');
+    setItemCancelReason('');
+    setSelectedCancelItems({});
+    setManagerPin('');
+    setManagerPinError('');
+    setAuthorizedManager(null);
   };
 
   const handleConfirmPayment = async () => {
     if (!canProcessTransactions) return;
     if (!selectedOrder) return;
+    if (!canPayOrder(selectedOrder)) {
+      alert('Payment can only be processed after the order has been served.');
+      return;
+    }
     const cash = parseFloat(cashReceived);
     if (cash < selectedOrder.amountNumber) return;
     if (isCompletingPayment) return;
@@ -242,7 +339,8 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
         cashier: userName ?? undefined,
       };
       setSelectedOrder(prev => prev ? { ...prev, ...updates } : null);
-      setActiveModal('payment-success');
+      await reloadOrders();
+      setActiveModal('receipt');
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Unable to complete payment.');
     } finally {
@@ -254,18 +352,51 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
     closeModal();
   };
 
-  const handleRefundSubmit = () => {
+  const verifyManagerPin = async () => {
+    if (managerPin.trim().length < 4) {
+      setManagerPinError('Enter the manager PIN.');
+      return false;
+    }
+
+    setIsAuthorizingManagerPin(true);
+    setManagerPinError('');
+    try {
+      const response = await adminApi.verifyPosManagerPin(managerPin.trim());
+      setAuthorizedManager(response.manager ?? null);
+      return true;
+    } catch (error) {
+      setManagerPinError(error instanceof Error ? error.message : 'Unable to authorize manager PIN.');
+      return false;
+    } finally {
+      setIsAuthorizingManagerPin(false);
+    }
+  };
+
+  const handleRefundSubmit = async () => {
     if (!canProcessTransactions) return;
     if (!settings.enable_refund) return;
+    if (!selectedOrder || !canRefundOrder(selectedOrder)) return;
+    if (Object.values(selectedRefundItems).filter(Boolean).length === 0) return;
     if (!selectedOrder || !refundReason.trim()) return;
+    if (!(await verifyManagerPin())) return;
     setRefundingOrder(selectedOrder);
   };
 
-  const handleVoidSubmit = () => {
+  const handleCancelSubmit = async () => {
     if (!canProcessTransactions) return;
-    if (!settings.enable_void) return;
-    if (!selectedOrder || !voidReason.trim()) return;
-    setVoidingOrder(selectedOrder);
+    if (!selectedOrder || !cancelReason.trim()) return;
+    if (!(await verifyManagerPin())) return;
+    setCancellingOrder(selectedOrder);
+  };
+
+  const handleItemCancelSubmit = async () => {
+    if (!canProcessTransactions) return;
+    if (!selectedOrder || !canCancelItemsOrder(selectedOrder)) return;
+    const selectedCount = Object.values(selectedCancelItems).filter(Boolean).length;
+    if (selectedCount === 0 || selectedCount >= selectedOrder.items.length) return;
+    if (!itemCancelReason.trim()) return;
+    if (!(await verifyManagerPin())) return;
+    setItemCancellingOrder(selectedOrder);
   };
 
   const handlePrintReceipt = () => {
@@ -304,6 +435,62 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
     return date >= startString && date <= todayString;
   };
 
+  const orderChangeDateRange = useMemo<{ from?: string; to?: string }>(() => {
+    const todayString = getLocalDateKey();
+    const today = parseLocalDateKey(todayString);
+    const start = new Date(today);
+
+    if (datePreset === 'date') {
+      return dateFilter ? { from: dateFilter, to: dateFilter } : {};
+    }
+    if (datePreset === 'today') {
+      return { from: todayString, to: todayString };
+    }
+    if (datePreset === 'week') {
+      start.setDate(today.getDate() - 6);
+      return { from: getLocalDateKey(start), to: todayString };
+    }
+    if (datePreset === 'month') {
+      start.setDate(1);
+      return { from: getLocalDateKey(start), to: todayString };
+    }
+    if (datePreset === 'year') {
+      start.setMonth(0, 1);
+      return { from: getLocalDateKey(start), to: todayString };
+    }
+    return {};
+  }, [dateFilter, datePreset]);
+
+  const loadOrderChangeLogs = useCallback(async () => {
+    if (!canViewOrderChangeAudit) {
+      setOrderChangeLogs([]);
+      return;
+    }
+
+    setOrderChangeLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (orderChangeDateRange.from) params.set('date_from', orderChangeDateRange.from);
+      if (orderChangeDateRange.to) params.set('date_to', orderChangeDateRange.to);
+      if (searchTerm.trim()) params.set('search', searchTerm.trim());
+      setOrderChangeLogs(await adminApi.listPosOrderChangeLogs(params));
+      setOrderChangeError('');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to load cancelled/refunded items.';
+      setOrderChangeError(
+        message.includes('Cannot GET /admin/pos/order-change-logs')
+          ? 'Cancelled/refunded item history is not available yet. Please restart the backend server to load the new POS audit endpoint.'
+          : message,
+      );
+    } finally {
+      setOrderChangeLoading(false);
+    }
+  }, [canViewOrderChangeAudit, orderChangeDateRange.from, orderChangeDateRange.to, searchTerm]);
+
+  useEffect(() => {
+    void loadOrderChangeLogs();
+  }, [loadOrderChangeLogs]);
+
   const filteredOrders = orders.filter(order => {
     const term = searchTerm.toLowerCase();
     const normalizedTerm = normalizeSearchValue(searchTerm);
@@ -328,6 +515,11 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
   const visibleStart = filteredOrders.length === 0 ? 0 : pageStartIndex + 1;
   const visibleEnd = Math.min(pageStartIndex + ORDERS_PER_PAGE, filteredOrders.length);
   const tableColumnCount = (showTableManagementColumns ? 13 : 10) + (showEstimatedPrepTime ? 1 : 0);
+  const orderChangeRecords = useMemo(() => buildOrderChangeRecords(orderChangeLogs), [orderChangeLogs]);
+  const tabButtonClass = (tab: TransactionTab) =>
+    `relative px-1 pb-3 text-sm font-medium transition-colors ${
+      activeTab === tab ? 'text-primary' : 'text-muted-foreground hover:text-foreground'
+    }`;
 
   useEffect(() => {
     setCurrentPage(1);
@@ -341,6 +533,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
     if (status === 'Paid') return 'bg-[#dcfce7] text-[#15803d]';
     if (status === 'Void') return 'bg-purple-50 text-purple-700 border-purple-200';
     if (status === 'Refunded') return 'bg-amber-100 text-amber-800 border-amber-200';
+    if (status === 'Partially Refunded') return 'bg-orange-50 text-orange-700 border-orange-200';
     return 'bg-[#fef2f2] text-[#ef4444]';
   };
 
@@ -358,12 +551,61 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
     if (status === 'Served') return 'bg-sky-50 text-sky-700 border-sky-200';
     if (status === 'Ready') return 'bg-emerald-50 text-emerald-700 border-emerald-200';
     if (status === 'Preparing') return 'bg-amber-50 text-amber-700 border-amber-200';
+    if (status === 'Cancelled') return 'bg-red-50 text-red-700 border-red-200';
     return 'bg-slate-50 text-slate-700 border-slate-200';
   };
 
   const dineInItems = selectedOrder?.items.filter(i => i.itemType === 'dine-in') ?? [];
   const takeoutItems = selectedOrder?.items.filter(i => i.itemType === 'takeout') ?? [];
   const isMixed = selectedOrder?.type === 'Mixed';
+  const selectedRefundIndices = Object.keys(selectedRefundItems)
+    .filter(key => selectedRefundItems[Number(key)])
+    .map(key => Number(key));
+  const selectedRefundAmount = selectedRefundIndices.reduce((total, index) => {
+    const item = selectedOrder?.items[index];
+    return total + (item ? Number(item.lineTotal ?? item.price * item.quantity) : 0);
+  }, 0);
+  const selectedCancelIndices = Object.keys(selectedCancelItems)
+    .filter(key => selectedCancelItems[Number(key)])
+    .map(key => Number(key));
+  const selectedCancelAmount = selectedCancelIndices.reduce((total, index) => {
+    const item = selectedOrder?.items[index];
+    return total + (item ? Number(item.lineTotal ?? item.price * item.quantity) : 0);
+  }, 0);
+  const toggleRefundItem = (index: number) => {
+    setSelectedRefundItems(current => ({
+      ...current,
+      [index]: !current[index],
+    }));
+  };
+  const toggleCancelItem = (index: number) => {
+    setSelectedCancelItems(current => ({
+      ...current,
+      [index]: !current[index],
+    }));
+  };
+  const buildAuthorization = (reason: string) => ({
+    reason,
+    managerId: authorizedManager?.id,
+    managerName: authorizedManager?.full_name || authorizedManager?.email || undefined,
+  });
+  const managerPinField = (
+    <div>
+      <label className="block text-sm text-gray-700 mb-2" style={{ fontWeight: 500 }}>Manager PIN *</label>
+      <input
+        type="password"
+        inputMode="numeric"
+        value={managerPin}
+        onChange={(event) => {
+          setManagerPin(event.target.value);
+          setManagerPinError('');
+        }}
+        placeholder="Enter manager PIN"
+        className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary bg-muted"
+      />
+      {managerPinError && <p className="mt-2 text-xs text-red-600">{managerPinError}</p>}
+    </div>
+  );
 
   return (
     <div className="flex h-screen bg-background">
@@ -376,6 +618,21 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
             Transaction History
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">Manage and track all restaurant orders</p>
+        </div>
+
+        <div className="mb-5 border-b border-border">
+          <div className="flex flex-wrap gap-10">
+            <button type="button" onClick={() => setActiveTab('history')} className={tabButtonClass('history')}>
+              Order List
+              {activeTab === 'history' && <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-primary" />}
+            </button>
+            {canViewOrderChangeAudit && (
+              <button type="button" onClick={() => setActiveTab('changes')} className={tabButtonClass('changes')}>
+                Cancelled / Refund
+                {activeTab === 'changes' && <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-primary" />}
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Filter Bar */}
@@ -393,31 +650,35 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
               />
             </div>
 
-            {/* Type Filter */}
-            <div className="relative">
-              <select
-                value={typeFilter}
-                onChange={e => setTypeFilter(e.target.value)}
-                className="appearance-none pl-3 pr-8 py-2.5 bg-muted border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary cursor-pointer"
-              >
-                <option value="All">All Types</option>
-                {ORDER_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-              </select>
-              <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
-            </div>
+            {activeTab === 'history' && (
+              <>
+                {/* Type Filter */}
+                <div className="relative">
+                  <select
+                    value={typeFilter}
+                    onChange={e => setTypeFilter(e.target.value)}
+                    className="appearance-none pl-3 pr-8 py-2.5 bg-muted border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary cursor-pointer"
+                  >
+                    <option value="All">All Types</option>
+                    {ORDER_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                  <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+                </div>
 
-            {/* Payment Filter */}
-            <div className="relative">
-              <select
-                value={paymentFilter}
-                onChange={e => setPaymentFilter(e.target.value)}
-                className="appearance-none pl-3 pr-8 py-2.5 bg-muted border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary cursor-pointer"
-              >
-                <option value="All">All Payments</option>
-                {PAYMENT_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-              <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
-            </div>
+                {/* Payment Filter */}
+                <div className="relative">
+                  <select
+                    value={paymentFilter}
+                    onChange={e => setPaymentFilter(e.target.value)}
+                    className="appearance-none pl-3 pr-8 py-2.5 bg-muted border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary cursor-pointer"
+                  >
+                    <option value="All">All Payments</option>
+                    {PAYMENT_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                  <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+                </div>
+              </>
+            )}
 
             {/* Date Filter */}
             <DateFilterControl
@@ -428,14 +689,20 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
               className="appearance-none pl-3 pr-8 py-2.5 bg-muted border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary cursor-pointer"
             />
 
-            <span className="text-xs text-gray-400 ml-auto">{filteredOrders.length} order{filteredOrders.length !== 1 ? 's' : ''}</span>
+            <span className="text-xs text-gray-400 ml-auto">
+              {activeTab === 'history'
+                ? `${filteredOrders.length} order${filteredOrders.length !== 1 ? 's' : ''}`
+                : `${orderChangeRecords.length} record${orderChangeRecords.length !== 1 ? 's' : ''}`}
+            </span>
           </div>
         </div>
 
-        {/* Table Card */}
-        <div className="bg-white rounded-xl shadow-sm border border-border overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className={`w-full ${showTableManagementColumns ? 'min-w-[1300px]' : 'min-w-[1000px]'}`}>
+        {activeTab === 'history' && (
+          <>
+            {/* Table Card */}
+            <div className="bg-white rounded-xl shadow-sm border border-border overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className={`w-full ${showTableManagementColumns ? 'min-w-[1300px]' : 'min-w-[1000px]'}`}>
               <thead className="bg-muted/30">
                 <tr>
                   <th className="w-[13%] text-left px-5 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">Order Number</th>
@@ -538,7 +805,9 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                       </td>
                     )}
                     <td className="px-4 py-5 text-xs text-gray-600 whitespace-nowrap">
-                      {isDineInOrder(order)
+                      {order.orderStatus === 'Cancelled'
+                        ? '00:00:00'
+                        : isDineInOrder(order)
                         ? formatElapsed(stayStart(order), stayEnd(order), order.runningDuration, clock)
                         : '-'}
                     </td>
@@ -558,7 +827,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                         </button>
 
                         {/* Process Payment - only if Not Paid */}
-                        {canProcessTransactions && order.paymentStatus === 'Not Paid' && (
+                        {canProcessTransactions && canPayOrder(order) && (
                           <button
                             onClick={() => openModal(order, 'payment')}
                             title="Process Payment"
@@ -570,7 +839,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                         )}
 
                         {/* Receipt - only if Paid */}
-                        {order.paymentStatus === 'Paid' && (
+                        {hasCompletedPayment(order) && (
                           <button
                             onClick={() => openModal(order, 'receipt')}
                             title="View Receipt"
@@ -581,11 +850,11 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                           </button>
                         )}
 
-                        {/* Refund - only if Paid */}
-                        {canProcessTransactions && settings.enable_refund && order.paymentStatus === 'Paid' && (
+                        {/* Refund request - only after kitchen progress */}
+                        {canProcessTransactions && canRefundOrder(order) && (
                           <button
                             onClick={() => openModal(order, 'refund')}
-                            title="Process Refund"
+                            title="Request Refund"
                             className="inline-flex items-center gap-1 px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded-lg transition-colors whitespace-nowrap"
                           >
                             <RotateCcw className="w-3.5 h-3.5" />
@@ -593,50 +862,111 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                           </button>
                         )}
 
-                        {canProcessTransactions && settings.enable_void && order.paymentStatus === 'Paid' && (
+                        {canProcessTransactions && canCancelOrder(order) && (
                           <button
-                            onClick={() => openModal(order, 'void')}
-                            title="Void Transaction"
-                            className="inline-flex items-center gap-1 px-2 py-1 text-xs text-purple-600 hover:bg-purple-50 rounded-lg transition-colors whitespace-nowrap"
+                            onClick={() => openModal(order, 'cancel')}
+                            title="Cancel Order"
+                            className="inline-flex items-center gap-1 px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded-lg transition-colors whitespace-nowrap"
                           >
                             <X className="w-3.5 h-3.5" />
-                            Void
+                            Cancel
                           </button>
                         )}
+
+                        {canProcessTransactions && canCancelItemsOrder(order) && (
+                          <button
+                            onClick={() => openModal(order, 'item-cancel')}
+                            title="Cancel Item"
+                            className="inline-flex items-center gap-1 px-2 py-1 text-xs text-amber-700 hover:bg-amber-50 rounded-lg transition-colors whitespace-nowrap"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            Cancel Item
+                          </button>
+                        )}
+
                       </div>
                     </td>
                   </tr>);
                 })}
               </tbody>
-            </table>
+                </table>
+              </div>
+            </div>
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+              <span>
+                Showing {visibleStart} to {visibleEnd} of {filteredOrders.length} order{filteredOrders.length !== 1 ? 's' : ''}
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                  disabled={currentPage === 1}
+                  className="rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Previous
+                </button>
+                <span className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-1.5 text-sm font-semibold text-primary">
+                  Page {currentPage} of {totalPages}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                  disabled={currentPage === totalPages}
+                  className="rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+        {activeTab === 'changes' && canViewOrderChangeAudit && (
+          <div className="rounded-xl border border-border bg-white shadow-sm overflow-hidden">
+            <div className="border-b border-border px-5 py-4">
+              <h2 className="text-base font-semibold text-primary">Cancelled & Refunded Items</h2>
+              <p className="text-xs text-muted-foreground">Order change history for cancellations, item removals, and refund approvals.</p>
+            </div>
+            {orderChangeError && (
+              <div className="border-b border-red-100 bg-red-50 px-5 py-3 text-sm text-red-700">{orderChangeError}</div>
+            )}
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[1100px] text-sm">
+                <thead className="bg-muted/30">
+                  <tr>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Date & Time</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Order #</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Type</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Affected Dish(es)</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Qty</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Amount</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Reason</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Staff</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Manager</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {orderChangeLoading ? (
+                    <tr><td colSpan={9} className="px-4 py-8 text-sm text-gray-400">Loading cancelled/refunded items...</td></tr>
+                  ) : orderChangeRecords.length === 0 ? (
+                    <tr><td colSpan={9} className="px-4 py-8 text-sm text-gray-400">No cancelled or refunded items found.</td></tr>
+                  ) : orderChangeRecords.map((record) => (
+                    <tr key={record.id} className="align-top hover:bg-muted/20">
+                      <td className="whitespace-nowrap px-4 py-3 text-xs text-gray-600">{formatManilaDateTime(record.createdAt)}</td>
+                      <td className="px-4 py-3 font-mono text-primary">{record.orderNumber}</td>
+                      <td className="px-4 py-3 text-gray-700">{record.type}</td>
+                      <td className="max-w-xs px-4 py-3 text-gray-700">{record.affectedItems}</td>
+                      <td className="px-4 py-3 text-gray-700">{record.quantity}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-gray-700">{record.amount}</td>
+                      <td className="max-w-xs px-4 py-3 text-gray-700">{record.reason}</td>
+                      <td className="px-4 py-3 text-gray-700">{record.initiatedBy}</td>
+                      <td className="px-4 py-3 text-gray-700">{record.approvedBy}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
-          <span>
-            Showing {visibleStart} to {visibleEnd} of {filteredOrders.length} order{filteredOrders.length !== 1 ? 's' : ''}
-          </span>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
-              disabled={currentPage === 1}
-              className="rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              Previous
-            </button>
-            <span className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-1.5 text-sm font-semibold text-primary">
-              Page {currentPage} of {totalPages}
-            </span>
-            <button
-              type="button"
-              onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
-              disabled={currentPage === totalPages}
-              className="rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              Next
-            </button>
-          </div>
-        </div>
+        )}
       </div>
 
       {/* ── MODAL: View Details ── */}
@@ -682,7 +1012,9 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                 <div className="bg-muted rounded-xl p-3">
                   <p className="text-xs text-gray-400 mb-1">Stay Time</p>
                   <p className="text-sm text-gray-800">
-                    {selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed'
+                    {selectedOrder.orderStatus === 'Cancelled'
+                      ? '00:00:00'
+                      : selectedOrder.type === 'Dine-In' || selectedOrder.type === 'Mixed'
                       ? formatElapsed(stayStart(selectedOrder), stayEnd(selectedOrder), selectedOrder.runningDuration, clock)
                       : '-'}
                   </p>
@@ -791,7 +1123,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                 </div>
               </div>
 
-              {selectedOrder.paymentStatus === 'Not Paid' && (
+              {canProcessTransactions && canPayOrder(selectedOrder) && (
                 <button
                   onClick={() => setActiveModal('payment')}
                   className="w-full py-3 bg-primary hover:bg-primary/90 text-white rounded-xl text-sm transition-colors flex items-center justify-center gap-2"
@@ -898,73 +1230,6 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
         </div>
       )}
 
-      {/* ── MODAL: Payment Successful ── */}
-      {activeModal === 'payment-success' && selectedOrder && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl flex flex-col">
-            <div className="flex justify-end px-6 pt-4">
-              <button onClick={closeModal} className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
-                <X className="w-4 h-4 text-gray-500" />
-              </button>
-            </div>
-
-            <div className="px-6 pb-6 text-center">
-              <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                <CheckCircle className="w-8 h-8 text-emerald-600" />
-              </div>
-              <h2 className="text-lg text-gray-900 mb-1" style={{ fontWeight: 700 }}>Payment Successful!</h2>
-              <p className="text-sm text-gray-400 mb-6">Order {selectedOrder.id} has been paid and marked as completed.</p>
-
-              <div className="bg-muted rounded-xl p-4 text-left space-y-2 mb-6">
-                <div className="flex justify-between text-xs">
-                  <span className="text-gray-500">Payment ID</span>
-                  <span className="text-gray-800 font-medium">{currentPaymentId}</span>
-                </div>
-                <div className="flex justify-between text-xs">
-                  <span className="text-gray-500">Receipt ID</span>
-                  <span className="text-gray-800 font-medium">{currentReceiptId}</span>
-                </div>
-                <div className="flex justify-between text-xs">
-                  <span className="text-gray-500">Order ID</span>
-                  <span className="text-gray-800 font-medium">{selectedOrder.id}</span>
-                </div>
-                <div className="border-t border-gray-200 pt-2 space-y-1">
-                  <div className="flex justify-between text-sm text-gray-700">
-                    <span>Total Amount Due</span>
-                    <span style={{ fontWeight: 600 }}>₱{selectedOrder.amountNumber.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between text-sm text-gray-700">
-                    <span>Amount Received</span>
-                    <span>₱{(selectedOrder.cashReceived ?? cashFloat).toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between text-sm text-emerald-600">
-                    <span style={{ fontWeight: 600 }}>Change</span>
-                    <span style={{ fontWeight: 700 }}>₱{changeAmount.toFixed(2)}</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex gap-3">
-                <button
-                  onClick={closeModal}
-                  className="flex-1 py-3 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors"
-                >
-                  Close
-                </button>
-                <button
-                  onClick={() => setActiveModal('receipt')}
-                  className="flex-1 py-3 bg-primary hover:bg-primary/90 text-white rounded-xl text-sm transition-colors flex items-center justify-center gap-2"
-                  style={{ fontWeight: 600 }}
-                >
-                  <Printer className="w-4 h-4" />
-                  Print Receipt
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* ── MODAL: Receipt (Thermal Style) ── */}
       {activeModal === 'receipt' && selectedOrder && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4 overflow-y-auto">
@@ -1045,7 +1310,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl flex flex-col">
             <div className="flex justify-between items-center px-6 py-4 border-b border-gray-100">
-              <h2 className="text-base text-red-600" style={{ fontWeight: 600 }}>Process Refund</h2>
+              <h2 className="text-base text-red-600" style={{ fontWeight: 600 }}>Request Refund</h2>
               <button onClick={closeModal} className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
                 <X className="w-4 h-4 text-gray-500" />
               </button>
@@ -1054,7 +1319,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
             <div className="p-6 space-y-4">
               <div className="bg-red-50 border border-red-100 rounded-xl p-4">
                 <p className="text-sm text-red-700 mb-1" style={{ fontWeight: 600 }}>⚠ Refund Warning</p>
-                <p className="text-xs text-red-500">This will process a full refund for this order. This action cannot be undone.</p>
+                <p className="text-xs text-red-500">Select the dishes to refund. Manager PIN authorization is required.</p>
               </div>
 
               <div className="bg-muted rounded-xl p-4 space-y-2">
@@ -1067,9 +1332,36 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                   <span className="text-gray-800">{selectedOrder.customer}</span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-gray-500">Refund Amount</span>
+                  <span className="text-gray-500">Selected Refund</span>
                   <span className="text-red-600" style={{ fontWeight: 700 }}>₱{selectedOrder.amountNumber.toFixed(2)}</span>
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-sm text-gray-700 mb-2" style={{ fontWeight: 500 }}>Dishes to Refund *</label>
+                <div className="max-h-56 space-y-2 overflow-y-auto rounded-xl border border-gray-100 bg-muted p-2">
+                  {selectedOrder.items.map((item, index) => {
+                    const amount = Number(item.lineTotal ?? item.price * item.quantity);
+                    return (
+                      <label key={`${item.id ?? index}-${item.name}`} className="flex cursor-pointer items-start gap-3 rounded-lg border border-gray-100 bg-white p-3 hover:bg-red-50/40">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(selectedRefundItems[index])}
+                          onChange={() => toggleRefundItem(index)}
+                          className="mt-1 h-4 w-4 accent-red-500"
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-sm font-medium text-gray-800">{item.name}</span>
+                          <span className="mt-1 block text-xs text-gray-500">Qty: {item.quantity} - {item.itemType === 'dine-in' ? 'Dine-in' : 'Takeout'}</span>
+                        </span>
+                        <span className="text-sm font-semibold text-red-600">&#8369;{amount.toFixed(2)}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                {selectedRefundIndices.length === 0 && (
+                  <p className="mt-2 text-xs text-amber-600">Select at least one dish to refund.</p>
+                )}
               </div>
 
               <div>
@@ -1084,18 +1376,7 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                 />
               </div>
 
-              <label className="flex items-start gap-3 cursor-pointer bg-muted rounded-xl p-3">
-                <input
-                  type="checkbox"
-                  checked={restockOnRefund}
-                  onChange={e => setRestockOnRefund(e.target.checked)}
-                  className="mt-0.5 w-4 h-4 accent-red-500"
-                />
-                <span className="text-xs text-gray-600">
-                  <span className="text-gray-800" style={{ fontWeight: 600 }}>Return ingredients to stock</span>
-                  <br />Only if this order was not cooked yet. Leave unchecked if the food was already prepared.
-                </span>
-              </label>
+              {managerPinField}
 
               <div className="flex gap-3">
                 <button
@@ -1106,31 +1387,123 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                 </button>
                 <button
                   onClick={handleRefundSubmit}
-                  disabled={!refundReason.trim()}
+                  disabled={selectedRefundIndices.length === 0 || !refundReason.trim() || managerPin.trim().length < 4 || isAuthorizingManagerPin}
                   className="flex-1 py-3 bg-red-500 hover:bg-red-600 text-white rounded-xl text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                   style={{ fontWeight: 600 }}
                 >
-                  Process Refund
+                  {isAuthorizingManagerPin ? 'Authorizing...' : 'Request Refund'}
                 </button>
               </div>
             </div>
           </div>
         </div>
       )}
-      {activeModal === 'void' && selectedOrder && (
+      {activeModal === 'item-cancel' && selectedOrder && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl flex flex-col">
             <div className="flex justify-between items-center px-6 py-4 border-b border-gray-100">
-              <h2 className="text-base text-purple-700" style={{ fontWeight: 600 }}>Void Transaction</h2>
+              <h2 className="text-base text-amber-700" style={{ fontWeight: 600 }}>Cancel Item</h2>
               <button onClick={closeModal} className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
                 <X className="w-4 h-4 text-gray-500" />
               </button>
             </div>
 
             <div className="p-6 space-y-4">
-              <div className="bg-purple-50 border border-purple-100 rounded-xl p-4">
-                <p className="text-sm text-purple-800 mb-1" style={{ fontWeight: 600 }}>Void Warning</p>
-                <p className="text-xs text-purple-600">This will mark the paid order as void in the transaction history.</p>
+              <div className="bg-amber-50 border border-amber-100 rounded-xl p-4">
+                <p className="text-sm text-amber-800 mb-1" style={{ fontWeight: 600 }}>Pending Order Item Cancellation</p>
+                <p className="text-xs text-amber-700">Only selected dishes will be removed. If this was paid already, the selected amount is treated as a partial refund.</p>
+              </div>
+
+              <div className="bg-muted rounded-xl p-4 space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-500">Order #</span>
+                  <span className="text-gray-800 font-medium">{selectedOrder.orderNumber || selectedOrder.id}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-500">Selected Amount</span>
+                  <span className="text-amber-700" style={{ fontWeight: 700 }}>₱{selectedCancelAmount.toFixed(2)}</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm text-gray-700 mb-2" style={{ fontWeight: 500 }}>Dishes to Cancel *</label>
+                <div className="max-h-56 space-y-2 overflow-y-auto rounded-xl border border-gray-100 bg-muted p-2">
+                  {selectedOrder.items.map((item, index) => {
+                    const amount = Number(item.lineTotal ?? item.price * item.quantity);
+                    const wouldSelectAll = !selectedCancelItems[index] && selectedCancelIndices.length + 1 >= selectedOrder.items.length;
+                    return (
+                      <label key={`${item.id ?? index}-${item.name}`} className={`flex items-start gap-3 rounded-lg border border-gray-100 bg-white p-3 ${wouldSelectAll ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-amber-50/40'}`}>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(selectedCancelItems[index])}
+                          disabled={wouldSelectAll}
+                          onChange={() => toggleCancelItem(index)}
+                          className="mt-1 h-4 w-4 accent-amber-600"
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-sm font-medium text-gray-800">{item.name}</span>
+                          <span className="mt-1 block text-xs text-gray-500">Qty: {item.quantity} - {item.itemType === 'dine-in' ? 'Dine-in' : 'Takeout'}</span>
+                        </span>
+                        <span className="text-sm font-semibold text-amber-700">₱{amount.toFixed(2)}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                {selectedCancelIndices.length === 0 && (
+                  <p className="mt-2 text-xs text-amber-600">Select at least one dish to cancel.</p>
+                )}
+                {selectedCancelIndices.length >= selectedOrder.items.length - 1 && (
+                  <p className="mt-2 text-xs text-gray-500">Use full Cancel Order if every dish must be removed.</p>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-sm text-gray-700 mb-2" style={{ fontWeight: 500 }}>Reason for Item Cancellation *</label>
+                <textarea
+                  value={itemCancelReason}
+                  onChange={e => setItemCancelReason(e.target.value)}
+                  placeholder="Enter the reason for cancelling selected dishes..."
+                  rows={3}
+                  className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-400 bg-muted resize-none"
+                />
+              </div>
+
+              {managerPinField}
+
+              <div className="flex gap-3">
+                <button
+                  onClick={closeModal}
+                  className="flex-1 py-3 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors"
+                >
+                  Back
+                </button>
+                <button
+                  onClick={handleItemCancelSubmit}
+                  disabled={selectedCancelIndices.length === 0 || selectedCancelIndices.length >= selectedOrder.items.length || !itemCancelReason.trim() || managerPin.trim().length < 4 || isAuthorizingManagerPin}
+                  className="flex-1 py-3 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  style={{ fontWeight: 600 }}
+                >
+                  {isAuthorizingManagerPin ? 'Authorizing...' : 'Cancel Items'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {activeModal === 'cancel' && selectedOrder && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl flex flex-col">
+            <div className="flex justify-between items-center px-6 py-4 border-b border-gray-100">
+              <h2 className="text-base text-red-700" style={{ fontWeight: 600 }}>Cancel Order</h2>
+              <button onClick={closeModal} className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
+                <X className="w-4 h-4 text-gray-500" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="bg-red-50 border border-red-100 rounded-xl p-4">
+                <p className="text-sm text-red-700 mb-1" style={{ fontWeight: 600 }}>Cancel Warning</p>
+                <p className="text-xs text-red-500">This will cancel the pending order. If it was already paid, payment will be marked as refunded.</p>
               </div>
 
               <div className="bg-muted rounded-xl p-4 space-y-2">
@@ -1144,49 +1517,38 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-500">Amount</span>
-                  <span className="text-purple-700" style={{ fontWeight: 700 }}>₱{selectedOrder.amountNumber.toFixed(2)}</span>
+                  <span className="text-red-600" style={{ fontWeight: 700 }}>₱{selectedRefundAmount.toFixed(2)}</span>
                 </div>
               </div>
 
               <div>
-                <label className="block text-sm text-gray-700 mb-2" style={{ fontWeight: 500 }}>Reason for Void *</label>
+                <label className="block text-sm text-gray-700 mb-2" style={{ fontWeight: 500 }}>Reason for Cancel *</label>
                 <textarea
-                  value={voidReason}
-                  onChange={e => setVoidReason(e.target.value)}
-                  placeholder="Enter the reason for voiding this transaction..."
+                  value={cancelReason}
+                  onChange={e => setCancelReason(e.target.value)}
+                  placeholder="Enter the reason for cancelling this order..."
                   autoFocus
                   rows={3}
-                  className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-400 bg-muted resize-none"
+                  className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-red-500/20 focus:border-red-400 bg-muted resize-none"
                 />
               </div>
 
-              <label className="flex items-start gap-3 cursor-pointer bg-muted rounded-xl p-3">
-                <input
-                  type="checkbox"
-                  checked={restockOnVoid}
-                  onChange={e => setRestockOnVoid(e.target.checked)}
-                  className="mt-0.5 w-4 h-4 accent-purple-600"
-                />
-                <span className="text-xs text-gray-600">
-                  <span className="text-gray-800" style={{ fontWeight: 600 }}>Return ingredients to stock</span>
-                  <br />Only if this order was not cooked yet. Leave unchecked if the food was already prepared.
-                </span>
-              </label>
+              {managerPinField}
 
               <div className="flex gap-3">
                 <button
                   onClick={closeModal}
                   className="flex-1 py-3 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors"
                 >
-                  Cancel
+                  Back
                 </button>
                 <button
-                  onClick={handleVoidSubmit}
-                  disabled={!voidReason.trim()}
-                  className="flex-1 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  onClick={handleCancelSubmit}
+                  disabled={!cancelReason.trim() || managerPin.trim().length < 4 || isAuthorizingManagerPin}
+                  className="flex-1 py-3 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                   style={{ fontWeight: 600 }}
                 >
-                  Void Transaction
+                  {isAuthorizingManagerPin ? 'Authorizing...' : 'Cancel Order'}
                 </button>
               </div>
             </div>
@@ -1196,30 +1558,51 @@ export function OrderList({ onNavigate, onLogout, isAdmin = false, storeBrand, u
       <DeleteConfirmDialog
         isOpen={Boolean(refundingOrder)}
         title="Confirm Refund"
-        description={`Are you sure you want to mark order ${refundingOrder?.id ?? ''} as refunded? The receipt will stay in history.`}
+        description={`Refund ${selectedRefundIndices.length} selected item(s) from order ${refundingOrder?.id ?? ''}? The receipt will stay in history.`}
         onCancel={() => setRefundingOrder(null)}
         onConfirm={async () => {
           if (!refundingOrder) return;
-          await refundOrder(refundingOrder.id, restockOnRefund);
+          await refundOrderItems(refundingOrder.id, selectedRefundIndices, buildAuthorization(refundReason.trim()));
+          await loadOrderChangeLogs();
           setRefundingOrder(null);
           closeModal();
         }}
       />
       <DeleteConfirmDialog
-        isOpen={Boolean(voidingOrder)}
-        title="Confirm Void"
-        description={`Are you sure you want to void order ${voidingOrder?.orderNumber || voidingOrder?.id || ''}?`}
-        onCancel={() => setVoidingOrder(null)}
+        isOpen={Boolean(cancellingOrder)}
+        title="Confirm Cancel"
+        description={`Are you sure you want to cancel order ${cancellingOrder?.orderNumber || cancellingOrder?.id || ''}?`}
+        onCancel={() => setCancellingOrder(null)}
         onConfirm={() => {
-          if (!voidingOrder) return;
-          void voidOrder(voidingOrder.id, restockOnVoid)
-            .then(() => {
-              setVoidingOrder(null);
+          if (!cancellingOrder) return;
+          void cancelOrder(cancellingOrder.id, false, buildAuthorization(cancelReason.trim()))
+            .then(async () => {
+              await loadOrderChangeLogs();
+              setCancellingOrder(null);
               closeModal();
             })
             .catch((error) => {
-              alert(error instanceof Error ? error.message : 'Unable to void order.');
-              setVoidingOrder(null);
+              alert(error instanceof Error ? error.message : 'Unable to cancel order.');
+              setCancellingOrder(null);
+            });
+        }}
+      />
+      <DeleteConfirmDialog
+        isOpen={Boolean(itemCancellingOrder)}
+        title="Confirm Item Cancellation"
+        description={`Cancel ${selectedCancelIndices.length} selected item(s) from order ${itemCancellingOrder?.orderNumber || itemCancellingOrder?.id || ''}?`}
+        onCancel={() => setItemCancellingOrder(null)}
+        onConfirm={() => {
+          if (!itemCancellingOrder) return;
+          void cancelOrderItems(itemCancellingOrder.id, selectedCancelIndices, buildAuthorization(itemCancelReason.trim()))
+            .then(async () => {
+              await loadOrderChangeLogs();
+              setItemCancellingOrder(null);
+              closeModal();
+            })
+            .catch((error) => {
+              alert(error instanceof Error ? error.message : 'Unable to cancel selected items.');
+              setItemCancellingOrder(null);
             });
         }}
       />

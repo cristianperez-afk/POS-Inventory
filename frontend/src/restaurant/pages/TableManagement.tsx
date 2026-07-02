@@ -122,6 +122,7 @@ export function TableManagement({ onNavigate, currentOrder, onLogout, storeBrand
     }
 
     try {
+      await setTableOccupancy(table.id, 0);
       await completeTableOrder(order.id);
       setSelectedTableId(null);
       setOpenMenuId(null);
