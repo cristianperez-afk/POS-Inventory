@@ -67,10 +67,13 @@ export function useRestaurantRecipesQuery(params?: { archived?: boolean }) {
           backendItemId: ingredient.itemId,
           productSku: ingredient.item?.sku ?? undefined,
           name: ingredient.item?.name ?? 'Ingredient',
-          quantity: ingredient.quantity,
-          unit: ingredient.unit ?? ingredient.item?.unit ?? 'pcs',
+          quantity: ingredient.recipeQuantity ?? ingredient.quantity,
+          unit: ingredient.recipeUnit ?? ingredient.unit ?? ingredient.item?.baseUnit ?? ingredient.item?.unit ?? 'pcs',
           inventoryQuantity: ingredient.quantity,
-          inventoryUnit: ingredient.item?.unit ?? ingredient.unit ?? 'pcs',
+          inventoryUnit: ingredient.baseUnitSnapshot ?? ingredient.item?.baseUnit ?? ingredient.item?.unit ?? ingredient.unit ?? 'pcs',
+          purchaseUnit: ingredient.purchaseUnitSnapshot ?? ingredient.item?.purchaseUnit ?? ingredient.item?.unit ?? 'pcs',
+          baseUnit: ingredient.baseUnitSnapshot ?? ingredient.item?.baseUnit ?? ingredient.item?.unit ?? ingredient.unit ?? 'pcs',
+          conversionFactor: Number(ingredient.conversionFactorSnapshot ?? ingredient.item?.conversionFactor ?? 1),
           inventoryStock: Number(ingredient.physicalStock ?? ingredient.item?.quantity ?? 0),
           inventoryUsableStock: Number(
             ingredient.usableStock ??
@@ -81,7 +84,7 @@ export function useRestaurantRecipesQuery(params?: { archived?: boolean }) {
           unitCost: ingredient.unitCost ?? ingredient.item?.price ?? 0,
           totalCost:
             (ingredient.unitCost ?? ingredient.item?.price ?? 0) *
-            ingredient.quantity,
+            Number(ingredient.quantity),
         }));
         const totalCost = ingredients.reduce(
           (sum, ingredient) => sum + ingredient.totalCost,

@@ -90,6 +90,17 @@ export class InventoryApiService {
     );
   }
 
+  private async ensureRecipeIngredientUnitColumns() {
+    await this.safeQuery(
+      `ALTER TABLE "RecipeIngredient"
+         ADD COLUMN IF NOT EXISTS "recipeQuantity" DOUBLE PRECISION,
+         ADD COLUMN IF NOT EXISTS "recipeUnit" TEXT,
+         ADD COLUMN IF NOT EXISTS "purchaseUnitSnapshot" TEXT,
+         ADD COLUMN IF NOT EXISTS "baseUnitSnapshot" TEXT,
+         ADD COLUMN IF NOT EXISTS "conversionFactorSnapshot" DOUBLE PRECISION`,
+    );
+  }
+
   private normalizeUnit(value: unknown) {
     const raw = String(value ?? '').trim().toLowerCase();
     if (!raw) return '';
@@ -144,6 +155,35 @@ export class InventoryApiService {
   private normalizeConversionFactor(value: unknown) {
     const factor = Number(value ?? 1);
     return Number.isFinite(factor) && factor > 0 ? factor : 1;
+  }
+
+  private toBaseRecipeQuantity(
+    quantity: number,
+    recipeUnitValue: unknown,
+    baseUnitValue: unknown,
+    purchaseUnitValue: unknown,
+    conversionFactorValue: unknown,
+  ) {
+    const recipeUnit = this.normalizeUnit(recipeUnitValue);
+    const baseUnit = this.normalizeUnit(baseUnitValue);
+    const purchaseUnit = this.normalizeUnit(purchaseUnitValue);
+    const conversionFactor = this.normalizeConversionFactor(conversionFactorValue);
+    if (!Number.isFinite(quantity) || quantity <= 0 || !recipeUnit || !baseUnit) return null;
+    if (recipeUnit === baseUnit) return quantity;
+    if (purchaseUnit && recipeUnit === purchaseUnit) return quantity * conversionFactor;
+
+    const dimensions: Record<string, { family: string; factor: number }> = {
+      g: { family: 'weight', factor: 1 },
+      kg: { family: 'weight', factor: 1000 },
+      ml: { family: 'volume', factor: 1 },
+      l: { family: 'volume', factor: 1000 },
+      pcs: { family: 'count', factor: 1 },
+      dozen: { family: 'count', factor: 12 },
+    };
+    const from = dimensions[recipeUnit];
+    const to = dimensions[baseUnit];
+    if (!from || !to || from.family !== to.family) return null;
+    return quantity * from.factor / to.factor;
   }
 
   async getCurrentUser(headers: HeadersLike) {
@@ -644,6 +684,8 @@ export class InventoryApiService {
   }
 
   async listRecipes(headers: HeadersLike, query: Record<string, string | undefined>) {
+    await this.ensureInventoryItemOperationalColumns();
+    await this.ensureRecipeIngredientUnitColumns();
     const scope = await this.resolveScope(headers);
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
@@ -661,6 +703,11 @@ export class InventoryApiService {
               'itemId', ri."itemId",
               'quantity', ri.quantity,
               'unit', ri.unit,
+              'recipeQuantity', ri."recipeQuantity",
+              'recipeUnit', ri."recipeUnit",
+              'purchaseUnitSnapshot', ri."purchaseUnitSnapshot",
+              'baseUnitSnapshot', ri."baseUnitSnapshot",
+              'conversionFactorSnapshot', ri."conversionFactorSnapshot",
               'unitCost', ri."unitCost",
               'totalCost', ri."totalCost",
               'physicalStock', COALESCE(item.quantity, 0),
@@ -854,6 +901,8 @@ export class InventoryApiService {
   }
 
   private async saveRecipe(scope: Scope, recipeId: string | undefined, body: Record<string, unknown>) {
+    await this.ensureInventoryItemOperationalColumns();
+    await this.ensureRecipeIngredientUnitColumns();
     const ingredients = Array.isArray(body.ingredients) ? body.ingredients as Record<string, unknown>[] : [];
     const submittedMenuModifiers = Array.isArray(body.modifiers) ? body.modifiers as Record<string, unknown>[] : [];
     const submittedSizeVariants = Array.isArray(body.sizeVariants) ? body.sizeVariants as Record<string, unknown>[] : [];
@@ -1040,12 +1089,50 @@ export class InventoryApiService {
       for (const ingredient of ingredients) {
         const itemId = String(ingredient.itemId ?? '');
         if (!itemId) throw new BadRequestException('Every recipe ingredient must link to an inventory item.');
-        const quantity = Number(ingredient.quantity ?? 0);
-        const unitCost = ingredient.unitCost == null ? null : Number(ingredient.unitCost);
+        const itemRows = await client.query<{
+          unit: string | null;
+          purchaseUnit: string | null;
+          baseUnit: string | null;
+          conversionFactor: number | string | null;
+          price: number | string | null;
+        }>(
+          `SELECT unit, "purchaseUnit", "baseUnit", "conversionFactor", price
+           FROM "InventoryItem"
+           WHERE id = $1 AND "businessId" = $2
+           LIMIT 1`,
+          [itemId, scope.businessId],
+        );
+        const item = itemRows.rows[0];
+        if (!item) throw new BadRequestException('A recipe ingredient is not available in this inventory.');
+        const baseUnit = this.normalizeUnit(item.baseUnit ?? item.unit);
+        const purchaseUnit = this.normalizeUnit(item.purchaseUnit ?? item.unit ?? baseUnit) || baseUnit;
+        const conversionFactor = this.normalizeConversionFactor(item.conversionFactor);
+        const recipeQuantity = Number(ingredient.recipeQuantity ?? ingredient.quantity ?? 0);
+        const recipeUnit = this.normalizeUnit(ingredient.recipeUnit ?? ingredient.unit ?? baseUnit);
+        const quantity = this.toBaseRecipeQuantity(
+          recipeQuantity,
+          recipeUnit,
+          baseUnit,
+          purchaseUnit,
+          conversionFactor,
+        );
+        if (quantity == null) {
+          throw new BadRequestException(
+            `Recipe unit ${recipeUnit || '(blank)'} is not compatible with ${baseUnit || 'the inventory base unit'}.`,
+          );
+        }
+        const unitCost = Number(item.price ?? ingredient.unitCost ?? 0);
         await client.query(
-          `INSERT INTO "RecipeIngredient" (id, "recipeId", "itemId", quantity, unit, "unitCost", "totalCost", "updatedAt")
-           VALUES ($1,$2,$3,$4,$5,$6,$7,CURRENT_TIMESTAMP)`,
-          [randomUUID(), savedId, itemId, quantity, ingredient.unit ?? null, unitCost, unitCost == null ? null : quantity * unitCost],
+          `INSERT INTO "RecipeIngredient" (
+             id, "recipeId", "itemId", quantity, unit,
+             "recipeQuantity", "recipeUnit", "purchaseUnitSnapshot", "baseUnitSnapshot", "conversionFactorSnapshot",
+             "unitCost", "totalCost", "updatedAt"
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,CURRENT_TIMESTAMP)`,
+          [
+            randomUUID(), savedId, itemId, quantity, baseUnit,
+            recipeQuantity, recipeUnit, purchaseUnit, baseUnit, conversionFactor,
+            unitCost, quantity * unitCost,
+          ],
         );
       }
       return { recipe: recipeRows.rows[0], menuItemId, recipeId: savedId };

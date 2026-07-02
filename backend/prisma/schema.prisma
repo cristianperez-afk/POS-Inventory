@@ -292,6 +292,11 @@ model RecipeIngredient {
   item      InventoryItem @relation(fields: [itemId], references: [id])
   quantity  Float
   unit      String?
+  recipeQuantity           Float?
+  recipeUnit               String?
+  purchaseUnitSnapshot     String?
+  baseUnitSnapshot         String?
+  conversionFactorSnapshot Float?
   unitCost  Float?
   totalCost Float?
   createdAt DateTime      @default(now())

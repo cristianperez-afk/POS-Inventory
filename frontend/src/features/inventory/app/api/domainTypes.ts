@@ -281,6 +281,11 @@ export interface ApiRecipeIngredient {
   item: ApiInventoryItem;
   quantity: number;
   unit?: string | null;
+  recipeQuantity?: number | null;
+  recipeUnit?: string | null;
+  purchaseUnitSnapshot?: string | null;
+  baseUnitSnapshot?: string | null;
+  conversionFactorSnapshot?: number | null;
   unitCost?: number | null;
   totalCost?: number | null;
   physicalStock?: number;

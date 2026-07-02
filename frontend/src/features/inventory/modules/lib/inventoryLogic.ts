@@ -10,6 +10,9 @@ export type InventoryProduct = {
   expiry: string;
   location?: string;
   unit: string;
+  purchaseUnit?: string;
+  baseUnit?: string;
+  conversionFactor?: number;
   storageTemperature?: string;
   minStock?: number;
   reorderPoint?: number;
