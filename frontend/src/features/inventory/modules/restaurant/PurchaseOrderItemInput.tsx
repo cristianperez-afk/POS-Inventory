@@ -22,6 +22,10 @@ export type PurchaseOrderProductOption = {
   purchaseUnit?: string;
   baseUnit?: string;
   conversionFactor?: number;
+  measurementType?: "WEIGHT" | "VOLUME" | "COUNT";
+  packageContentQuantity?: number;
+  packageContentUnit?: string;
+  unitConfigurationStatus?: "CONFIGURED" | "REVIEW_REQUIRED";
 };
 
 export type PurchaseOrderItemInputValue = {
@@ -35,6 +39,9 @@ export type PurchaseOrderItemInputValue = {
   purchaseUnit: string;
   baseUnit: string;
   conversionFactor: string;
+  measurementType: "" | "WEIGHT" | "VOLUME" | "COUNT";
+  packageContentQuantity: string;
+  packageContentUnit: string;
   quantity: string;
   unitPrice: string;
   isNewProduct?: boolean;
@@ -92,57 +99,34 @@ const normalizeUnitLabel = (value: string | undefined) => {
   return aliases[raw] || raw;
 };
 
-const standardConversionFactor = (purchaseUnitValue: string, baseUnitValue: string) => {
-  const purchaseUnit = normalizeUnitLabel(purchaseUnitValue);
-  const baseUnit = normalizeUnitLabel(baseUnitValue);
-  if (!purchaseUnit || !baseUnit) return null;
-  if (purchaseUnit === baseUnit) return 1;
-  const standard: Record<string, number> = {
-    "kg:g": 1000,
-    "g:kg": 0.001,
-    "liter:milliliter": 1000,
-    "milliliter:liter": 0.001,
-    "dozen:pcs": 12,
-    "pcs:dozen": 1 / 12,
-  };
-  return standard[`${purchaseUnit}:${baseUnit}`] ?? null;
-};
-
 const PACKAGE_UNITS = new Set(["bottle", "can", "pack", "box", "bag", "sack", "carton", "tray", "gallon"]);
+const STANDARD_UNITS = {
+  WEIGHT: ["g", "kg"],
+  VOLUME: ["milliliter", "liter"],
+  COUNT: ["pcs", "dozen"],
+} as const;
+const CANONICAL_BASE = { WEIGHT: "g", VOLUME: "milliliter", COUNT: "pcs" } as const;
+const UNIT_SIZE: Record<string, number> = { g: 1, kg: 1000, milliliter: 1, liter: 1000, pcs: 1, dozen: 12 };
 
-const unitFamily = (value: string) => {
-  const unit = normalizeUnitLabel(value);
-  if (["kg", "g"].includes(unit)) return "mass";
-  if (["liter", "milliliter"].includes(unit)) return "volume";
-  if (["pcs", "dozen"].includes(unit)) return "count";
-  return PACKAGE_UNITS.has(unit) ? "package" : null;
-};
-
-const isCompatibleUnitPair = (purchaseUnitValue: string, baseUnitValue: string) => {
-  const purchaseUnit = normalizeUnitLabel(purchaseUnitValue);
-  const baseUnit = normalizeUnitLabel(baseUnitValue);
-  if (!purchaseUnit || !baseUnit) return false;
-  if (purchaseUnit === baseUnit) return true;
-  const purchaseFamily = unitFamily(purchaseUnit);
-  return purchaseFamily === "package" || purchaseFamily === unitFamily(baseUnit);
-};
-
-const compatibleBaseUnits = (purchaseUnit: string) => {
-  const family = unitFamily(purchaseUnit);
-  if (family === "mass") return UNIT_OPTIONS.filter((unit) => unitFamily(unit) === "mass");
-  if (family === "volume") return UNIT_OPTIONS.filter((unit) => unitFamily(unit) === "volume");
-  if (family === "count") return UNIT_OPTIONS.filter((unit) => unitFamily(unit) === "count");
-  if (family === "package") return UNIT_OPTIONS;
-  return purchaseUnit ? [purchaseUnit] : [];
-};
-
-const preferredBaseUnit = (purchaseUnitValue: string) => {
-  const purchaseUnit = normalizeUnitLabel(purchaseUnitValue);
-  if (purchaseUnit === "kg") return "g";
-  if (purchaseUnit === "liter") return "milliliter";
-  if (purchaseUnit === "dozen") return "pcs";
-  if (["g", "milliliter", "pcs"].includes(purchaseUnit)) return purchaseUnit;
+const inferMeasurementType = (unitValue: string | undefined): "WEIGHT" | "VOLUME" | "COUNT" | "" => {
+  const unit = normalizeUnitLabel(unitValue);
+  if (["g", "kg"].includes(unit)) return "WEIGHT";
+  if (["milliliter", "liter"].includes(unit)) return "VOLUME";
+  if (["pcs", "dozen"].includes(unit)) return "COUNT";
   return "";
+};
+
+const calculateConversionFactor = (value: PurchaseOrderItemInputValue) => {
+  const purchaseUnit = normalizeUnitLabel(value.purchaseUnit);
+  const baseUnit = normalizeUnitLabel(value.baseUnit);
+  if (!value.measurementType || !purchaseUnit || !baseUnit || !UNIT_SIZE[baseUnit]) return null;
+  if (PACKAGE_UNITS.has(purchaseUnit)) {
+    const contentQuantity = Number(value.packageContentQuantity);
+    const contentUnit = normalizeUnitLabel(value.packageContentUnit);
+    if (!Number.isFinite(contentQuantity) || contentQuantity <= 0 || !UNIT_SIZE[contentUnit]) return null;
+    return contentQuantity * UNIT_SIZE[contentUnit] / UNIT_SIZE[baseUnit];
+  }
+  return UNIT_SIZE[purchaseUnit] ? UNIT_SIZE[purchaseUnit] / UNIT_SIZE[baseUnit] : null;
 };
 
 export function PurchaseOrderItemInput({
@@ -187,26 +171,27 @@ export function PurchaseOrderItemInput({
 
   const categoryOptions = Object.keys(categoryHierarchy);
   const subCategoryOptions = value.category ? categoryHierarchy[value.category] || [] : [];
-  const baseUnitOptions = compatibleBaseUnits(value.purchaseUnit);
-  const unitPairCompatible = isCompatibleUnitPair(value.purchaseUnit, value.baseUnit);
-  const automaticConversionFactor = standardConversionFactor(value.purchaseUnit, value.baseUnit);
-  const needsManualConversion = Boolean(value.purchaseUnit && value.baseUnit && automaticConversionFactor == null);
   const purchaseUnitIsPackage = PACKAGE_UNITS.has(normalizeUnitLabel(value.purchaseUnit));
+  const standardUnits = value.measurementType ? [...STANDARD_UNITS[value.measurementType]] : [];
+  const purchaseUnitOptions = [...standardUnits, ...UNIT_OPTIONS.filter((unit) => PACKAGE_UNITS.has(unit))];
+  const contentUnitOptions = standardUnits;
+  const computedConversionFactor = calculateConversionFactor(value);
 
   useEffect(() => {
-    if (automaticConversionFactor == null) return;
-    const normalized = String(automaticConversionFactor);
+    if (computedConversionFactor == null) return;
+    const normalized = String(computedConversionFactor);
     if (value.conversionFactor !== normalized) {
       onChange({ ...value, conversionFactor: normalized });
     }
-  }, [automaticConversionFactor, value, onChange]);
+  }, [computedConversionFactor, value, onChange]);
   const canAddItem = Boolean(
     value.productName.trim() &&
       value.quantity.trim() &&
+      value.measurementType &&
       value.purchaseUnit.trim() &&
       value.baseUnit.trim() &&
-      unitPairCompatible &&
       Number(value.conversionFactor || 0) > 0 &&
+      (!purchaseUnitIsPackage || (Number(value.packageContentQuantity) > 0 && value.packageContentUnit)) &&
       value.unitPrice.trim() &&
       (!value.isNewProduct || value.category.trim())
   );
@@ -227,6 +212,9 @@ export function PurchaseOrderItemInput({
       purchaseUnit: "",
       baseUnit: "",
       conversionFactor: "1",
+      measurementType: "",
+      packageContentQuantity: "",
+      packageContentUnit: "",
       isNewProduct: false,
     });
   };
@@ -235,6 +223,7 @@ export function PurchaseOrderItemInput({
     const supplierPrice = supplierProducts.find((item) => (item.name || '').toLowerCase() === (product.name || '').toLowerCase())?.price;
     const purchaseUnit = normalizeUnitLabel(product.purchaseUnit || product.unit);
     const baseUnit = normalizeUnitLabel(product.baseUnit || product.unit || purchaseUnit);
+    const measurementType = product.measurementType || inferMeasurementType(baseUnit);
     onChange({
       ...value,
       productId: product.id,
@@ -247,6 +236,9 @@ export function PurchaseOrderItemInput({
       purchaseUnit,
       baseUnit,
       conversionFactor: String(product.conversionFactor || 1),
+      measurementType,
+      packageContentQuantity: String(product.packageContentQuantity ?? (PACKAGE_UNITS.has(purchaseUnit) ? product.conversionFactor ?? "" : 1)),
+      packageContentUnit: normalizeUnitLabel(product.packageContentUnit || (PACKAGE_UNITS.has(purchaseUnit) ? baseUnit : purchaseUnit)),
       unitPrice: supplierPrice !== undefined ? supplierPrice.toString() : value.unitPrice,
       isNewProduct: false,
       unitOverride: false,
@@ -270,6 +262,9 @@ export function PurchaseOrderItemInput({
       purchaseUnit: "",
       baseUnit: "",
       conversionFactor: "1",
+      measurementType: "",
+      packageContentQuantity: "",
+      packageContentUnit: "",
       isNewProduct: true,
       unitOverride: false,
     });
@@ -284,14 +279,27 @@ export function PurchaseOrderItemInput({
   };
 
   const handlePurchaseUnitChange = (nextPurchaseUnit: string) => {
-    const nextBaseUnit = isCompatibleUnitPair(nextPurchaseUnit, value.baseUnit)
-      ? value.baseUnit
-      : preferredBaseUnit(nextPurchaseUnit);
+    const isPackage = PACKAGE_UNITS.has(normalizeUnitLabel(nextPurchaseUnit));
     onChange({
       ...value,
       unit: nextPurchaseUnit,
       purchaseUnit: nextPurchaseUnit,
-      baseUnit: nextBaseUnit,
+      baseUnit: value.baseUnit || (value.measurementType ? CANONICAL_BASE[value.measurementType] : ""),
+      packageContentQuantity: isPackage ? "" : "1",
+      packageContentUnit: isPackage ? "" : nextPurchaseUnit,
+      conversionFactor: "1",
+    });
+  };
+
+  const handleMeasurementChange = (measurementType: "" | "WEIGHT" | "VOLUME" | "COUNT") => {
+    onChange({
+      ...value,
+      measurementType,
+      unit: "",
+      purchaseUnit: "",
+      baseUnit: measurementType ? CANONICAL_BASE[measurementType] : "",
+      packageContentQuantity: "",
+      packageContentUnit: "",
       conversionFactor: "1",
     });
   };
@@ -300,11 +308,17 @@ export function PurchaseOrderItemInput({
     let nextUnit = value.purchaseUnit || value.unit;
     let nextBaseUnit = value.baseUnit;
     let nextConversionFactor = value.conversionFactor;
+    let nextMeasurementType = value.measurementType;
+    let nextContentQuantity = value.packageContentQuantity;
+    let nextContentUnit = value.packageContentUnit;
     if (!next && value.productId) {
       const selectedProduct = productDatabase.find((product) => product.id === value.productId);
       nextUnit = normalizeUnitLabel(selectedProduct?.purchaseUnit || selectedProduct?.unit || value.unit);
       nextBaseUnit = normalizeUnitLabel(selectedProduct?.baseUnit || selectedProduct?.unit || nextUnit);
       nextConversionFactor = String(selectedProduct?.conversionFactor || 1);
+      nextMeasurementType = selectedProduct?.measurementType || inferMeasurementType(nextBaseUnit);
+      nextContentQuantity = String(selectedProduct?.packageContentQuantity ?? 1);
+      nextContentUnit = normalizeUnitLabel(selectedProduct?.packageContentUnit || nextUnit);
     }
 
     onChange({
@@ -314,6 +328,9 @@ export function PurchaseOrderItemInput({
       purchaseUnit: nextUnit,
       baseUnit: nextBaseUnit,
       conversionFactor: nextConversionFactor,
+      measurementType: nextMeasurementType,
+      packageContentQuantity: nextContentQuantity,
+      packageContentUnit: nextContentUnit,
     });
   };
 
@@ -506,6 +523,24 @@ export function PurchaseOrderItemInput({
         </div>
 
         <div>
+          <label htmlFor="po-item-measurement" className="block text-xs mb-1 text-foreground">
+            Measurement Type *
+          </label>
+          <select
+            id="po-item-measurement"
+            value={value.measurementType}
+            onChange={(e) => handleMeasurementChange(e.target.value as PurchaseOrderItemInputValue["measurementType"])}
+            disabled={!value.isNewProduct && !value.unitOverride}
+            className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all appearance-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <option value="">Select measurement</option>
+            <option value="WEIGHT">Weight</option>
+            <option value="VOLUME">Volume</option>
+            <option value="COUNT">Count</option>
+          </select>
+        </div>
+
+        <div>
           <label htmlFor="po-item-purchase-unit" className="block text-xs mb-1 text-foreground">
             Purchase Unit *
           </label>
@@ -513,11 +548,11 @@ export function PurchaseOrderItemInput({
             id="po-item-purchase-unit"
             value={value.purchaseUnit}
             onChange={(e) => handlePurchaseUnitChange(e.target.value)}
-            disabled={!value.isNewProduct && !value.unitOverride}
+            disabled={!value.measurementType || (!value.isNewProduct && !value.unitOverride)}
             className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all appearance-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <option value="">Select unit</option>
-            {UNIT_OPTIONS.map((unit) => (
+            {purchaseUnitOptions.map((unit) => (
               <option key={unit} value={unit}>
                 {unit}
               </option>
@@ -543,56 +578,59 @@ export function PurchaseOrderItemInput({
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <div>
           <label htmlFor="po-item-base-unit" className="block text-xs mb-1 text-foreground">
-            Base Unit *
-          </label>
-          <select
-            id="po-item-base-unit"
-            value={value.baseUnit}
-            onChange={(e) => handleFieldChange("baseUnit", e.target.value)}
-            disabled={!value.isNewProduct && !value.unitOverride}
-            className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all appearance-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <option value="">Select unit</option>
-            {value.baseUnit && !baseUnitOptions.includes(value.baseUnit) && (
-              <option value={value.baseUnit}>{value.baseUnit} (incompatible)</option>
-            )}
-            {baseUnitOptions.map((unit) => (
-              <option key={unit} value={unit}>
-                {unit}
-              </option>
-            ))}
-          </select>
-          {value.purchaseUnit && !unitPairCompatible && value.baseUnit && (
-            <p className="mt-1 text-[11px] text-red-600">
-              {value.purchaseUnit} cannot use {value.baseUnit} as its base unit. Select a compatible unit.
-            </p>
-          )}
-        </div>
-
-        <div>
-          <label htmlFor="po-item-conversion" className="block text-xs mb-1 text-foreground">
-            Conversion Factor {needsManualConversion ? "*" : "(automatic)"}
+            Stock Base Unit (automatic)
           </label>
           <input
-            id="po-item-conversion"
-            type="number"
-            step="any"
-            inputMode="decimal"
-            min="0"
-            value={value.conversionFactor}
-            onWheel={preventNumberWheel}
-            onChange={(e) => handleFieldChange("conversionFactor", e.target.value)}
-            disabled={automaticConversionFactor != null || (!value.isNewProduct && !value.unitOverride)}
-            placeholder="1"
-            className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all disabled:opacity-50 disabled:cursor-not-allowed [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+            id="po-item-base-unit"
+            value={value.baseUnit}
+            readOnly
+            placeholder="Select measurement first"
+            className="w-full px-3 py-2 text-sm bg-muted border border-input rounded-lg text-muted-foreground"
           />
-          <p className="mt-1 text-[11px] text-muted-foreground">
-            1 {value.purchaseUnit || "purchase unit"} = {value.conversionFactor || "?"} {value.baseUnit || "base unit"}
-          </p>
-          {needsManualConversion && (
-            <p className="mt-1 text-[11px] text-amber-700">Enter the actual content of one package in the selected base unit.</p>
-          )}
+          <p className="mt-1 text-[11px] text-muted-foreground">All stock, recipe cost, and deductions normalize to this unit.</p>
         </div>
+
+        {purchaseUnitIsPackage ? (
+          <>
+            <div>
+              <label htmlFor="po-item-content-quantity" className="block text-xs mb-1 text-foreground">Content per {value.purchaseUnit} *</label>
+              <input
+                id="po-item-content-quantity"
+                type="number"
+                step="any"
+                inputMode="decimal"
+                min="0.000001"
+                value={value.packageContentQuantity}
+                onWheel={preventNumberWheel}
+                onChange={(e) => handleFieldChange("packageContentQuantity", e.target.value)}
+                placeholder="e.g. 25"
+                className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+              />
+            </div>
+            <div>
+              <label htmlFor="po-item-content-unit" className="block text-xs mb-1 text-foreground">Content Unit *</label>
+              <select
+                id="po-item-content-unit"
+                value={value.packageContentUnit}
+                onChange={(e) => handleFieldChange("packageContentUnit", e.target.value)}
+                className="w-full px-3 py-2 text-sm bg-input-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+              >
+                <option value="">Select content unit</option>
+                {contentUnitOptions.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+              </select>
+            </div>
+          </>
+        ) : (
+          <div className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-foreground md:col-span-2">
+            Standard conversion is automatic.
+          </div>
+        )}
+
+        {value.purchaseUnit && value.baseUnit && computedConversionFactor != null && (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 md:col-span-3">
+            Equivalent: 1 {value.purchaseUnit} = {computedConversionFactor.toLocaleString()} {value.baseUnit}
+          </div>
+        )}
 
         <div>
           <label htmlFor="po-item-quantity" className="block text-xs mb-1 text-foreground">

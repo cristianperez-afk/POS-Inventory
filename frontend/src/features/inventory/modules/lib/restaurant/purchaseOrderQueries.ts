@@ -102,6 +102,9 @@ export function mapRestaurantPurchaseOrders(orders: ApiPurchaseOrder[]) {
         purchaseUnit: item.purchaseUnit ?? item.inventoryItem?.purchaseUnit ?? item.inventoryItem?.unit ?? 'pcs',
         baseUnit: item.baseUnit ?? item.inventoryItem?.baseUnit ?? item.inventoryItem?.unit ?? 'pcs',
         conversionFactor: item.conversionFactor ?? item.inventoryItem?.conversionFactor ?? 1,
+        measurementType: item.measurementType ?? item.inventoryItem?.measurementType,
+        packageContentQuantity: item.packageContentQuantity ?? item.inventoryItem?.packageContentQuantity,
+        packageContentUnit: item.packageContentUnit ?? item.inventoryItem?.packageContentUnit,
       }))
       .sort((left, right) =>
         compareItemNames(left.productName, right.productName) ||
@@ -166,6 +169,10 @@ export function mapRestaurantGlobalProducts(
       purchaseUnit?: string;
       baseUnit?: string;
       conversionFactor?: number;
+      measurementType?: 'WEIGHT' | 'VOLUME' | 'COUNT';
+      packageContentQuantity?: number;
+      packageContentUnit?: string;
+      unitConfigurationStatus?: 'CONFIGURED' | 'REVIEW_REQUIRED';
     }
   >();
 
@@ -192,6 +199,10 @@ export function mapRestaurantGlobalProducts(
         purchaseUnit: item.purchaseUnit ?? override?.unit ?? item.unit ?? 'pcs',
         baseUnit: item.baseUnit ?? item.unit ?? 'pcs',
         conversionFactor: item.conversionFactor ?? 1,
+        measurementType: item.measurementType ?? undefined,
+        packageContentQuantity: item.packageContentQuantity ?? undefined,
+        packageContentUnit: item.packageContentUnit ?? undefined,
+        unitConfigurationStatus: item.unitConfigurationStatus ?? undefined,
       });
     }
   });
@@ -403,6 +414,9 @@ type SaveRestaurantPurchaseOrderLine = {
   purchaseUnit?: string;
   baseUnit?: string;
   conversionFactor?: number;
+  measurementType?: 'WEIGHT' | 'VOLUME' | 'COUNT';
+  packageContentQuantity?: number;
+  packageContentUnit?: string;
 };
 
 type RestaurantPurchaseOrderProduct = {
@@ -413,6 +427,10 @@ type RestaurantPurchaseOrderProduct = {
   baseUnit?: string;
   unit?: string;
   conversionFactor?: number;
+  measurementType?: 'WEIGHT' | 'VOLUME' | 'COUNT';
+  packageContentQuantity?: number;
+  packageContentUnit?: string;
+  unitConfigurationStatus?: 'CONFIGURED' | 'REVIEW_REQUIRED';
 };
 
 export function useSaveRestaurantPurchaseOrderMutation() {
@@ -467,6 +485,9 @@ export function useSaveRestaurantPurchaseOrderMutation() {
             purchaseUnit,
             baseUnit,
             conversionFactor,
+            measurementType: line.measurementType,
+            packageContentQuantity: line.packageContentQuantity,
+            packageContentUnit: line.packageContentUnit,
             minStock: 0,
             maxStock: 0,
             reorderPoint: 0,
@@ -484,6 +505,9 @@ export function useSaveRestaurantPurchaseOrderMutation() {
           purchaseUnit: line.purchaseUnit || line.unit,
           baseUnit: line.baseUnit || product?.baseUnit || product?.unit || line.unit,
           conversionFactor: line.conversionFactor || product?.conversionFactor || 1,
+          measurementType: line.measurementType || product?.measurementType,
+          packageContentQuantity: line.packageContentQuantity || product?.packageContentQuantity,
+          packageContentUnit: line.packageContentUnit || product?.packageContentUnit,
         });
       }
 
