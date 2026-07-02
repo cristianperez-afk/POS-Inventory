@@ -2213,8 +2213,8 @@ export class InventoryApiService {
 
   async approvePurchaseOrder(headers: HeadersLike, id: string) {
     const scope = await this.resolveScope(headers);
-    if (scope.user.role !== 'Admin') {
-      throw new ForbiddenException('Only Inventory Manager can approve purchase orders.');
+    if (!['Admin', 'Manager'].includes(scope.user.role)) {
+      throw new ForbiddenException('Only a Manager or Admin can approve purchase orders.');
     }
     const rows = await this.safeQuery<{ id: string }>(
       `UPDATE "PurchaseOrder" SET status = 'APPROVED', "updatedAt" = CURRENT_TIMESTAMP
@@ -2236,8 +2236,8 @@ export class InventoryApiService {
 
   async rejectPurchaseOrder(headers: HeadersLike, id: string, body: { reason?: string }) {
     const scope = await this.resolveScope(headers);
-    if (scope.user.role !== 'Admin') {
-      throw new ForbiddenException('Only Inventory Manager can reject purchase orders.');
+    if (!['Admin', 'Manager'].includes(scope.user.role)) {
+      throw new ForbiddenException('Only a Manager or Admin can reject purchase orders.');
     }
     const reason = String(body?.reason ?? '').trim();
     if (!reason) throw new BadRequestException('A rejection reason is required.');
@@ -2807,8 +2807,8 @@ export class InventoryApiService {
   // transit"), recorded as a TRANSFER_OUT movement per item.
   async dispatchTransfer(headers: HeadersLike, id: string) {
     const scope = await this.resolveScope(headers);
-    if (scope.user.role !== 'Admin') {
-      throw new ForbiddenException('Only an Admin can dispatch transfers.');
+    if (!['Admin', 'Manager'].includes(scope.user.role)) {
+      throw new ForbiddenException('Only a Manager or Admin can dispatch transfers.');
     }
 
     let transferNumber = '';
@@ -2894,8 +2894,8 @@ export class InventoryApiService {
   async completeTransfer(headers: HeadersLike, id: string) {
     await this.ensureInventoryItemOperationalColumns();
     const scope = await this.resolveScope(headers);
-    if (scope.user.role !== 'Admin') {
-      throw new ForbiddenException('Only an Admin can complete transfers.');
+    if (!['Admin', 'Manager'].includes(scope.user.role)) {
+      throw new ForbiddenException('Only a Manager or Admin can complete transfers.');
     }
 
     await this.databaseService.withTransaction(async (client) => {
@@ -3029,16 +3029,17 @@ export class InventoryApiService {
         throw new BadRequestException('Only pending or in-transit transfers can be cancelled.');
       }
       // Staff may cancel their own pending request, but cancelling an in-transit
-      // transfer returns stock to the source, so that is an Admin-only action.
-      if (transfer.status === 'IN_TRANSIT' && scope.user.role !== 'Admin') {
-        throw new ForbiddenException('Only an Admin can cancel a transfer that is already in transit.');
+      // transfer returns stock to the source, so that is an approver-only action
+      // (Manager or Admin).
+      if (transfer.status === 'IN_TRANSIT' && !['Admin', 'Manager'].includes(scope.user.role)) {
+        throw new ForbiddenException('Only a Manager or Admin can cancel a transfer that is already in transit.');
       }
-      // For a pending request, an Admin may reject anyone's, but a non-admin may
-      // only cancel (withdraw) a request they created themselves — they cannot
-      // reject another person's request.
+      // For a pending request, an approver (Manager/Admin) may reject anyone's, but
+      // a Staff user may only cancel (withdraw) a request they created themselves —
+      // they cannot reject another person's request.
       if (
         transfer.status === 'PENDING' &&
-        scope.user.role !== 'Admin' &&
+        !['Admin', 'Manager'].includes(scope.user.role) &&
         transfer.createdById !== scope.user.id
       ) {
         throw new ForbiddenException('You can only cancel your own pending transfer requests.');
@@ -3216,6 +3217,166 @@ export class InventoryApiService {
       return bTime - aTime;
     });
     return this.paged(combined.slice(pagination.offset, pagination.offset + pagination.limit), pagination.page, pagination.limit);
+  }
+
+  private async getSaleRow(scope: Scope, id: string) {
+    const rows = await this.safeQuery<Record<string, unknown>>(
+      `
+        SELECT
+          s.id, s."transactionNumber", s."createdAt", s."updatedAt",
+          s.total, s.subtotal, s.discount, s.tax, s."amountPaid", s.change,
+          s."paymentMethod", s.status, s.customer, s."refundReason",
+          s."businessId", s.module,
+          COALESCE(items.items, '[]'::json) AS items
+        FROM "Sale" s
+        LEFT JOIN LATERAL (
+          SELECT json_agg(
+            json_build_object(
+              'id', si.id, 'inventoryItemId', si."inventoryItemId", 'name', si.name,
+              'quantity', si.quantity, 'unitPrice', si."unitPrice", 'totalPrice', si."totalPrice",
+              'createdAt', si."createdAt"
+            ) ORDER BY si."createdAt"
+          ) AS items
+          FROM "SaleItem" si WHERE si."saleId" = s.id
+        ) items ON TRUE
+        WHERE s.id = $1 AND s."businessId" = $2 AND s.module = $3::"BusinessModule"
+        LIMIT 1
+      `,
+      [id, scope.businessId, scope.module],
+    );
+    return rows[0] ?? null;
+  }
+
+  // Refund a completed retail sale: marks it REFUNDED and returns the sold items
+  // to stock (a VOID_RESTOCK movement per line). Refunds are an approver action —
+  // Managers and Admins only, never Staff. Sales surfaced from the POS terminal
+  // (synthetic `pos-order-*` ids) must be refunded in the POS itself, not here.
+  async refundSale(headers: HeadersLike, id: string, body: { refundReason?: string }) {
+    const scope = await this.resolveScope(headers);
+    if (!['Admin', 'Manager'].includes(scope.user.role)) {
+      throw new ForbiddenException('Only a Manager or Admin can refund a sale.');
+    }
+    if (id.startsWith('pos-order-')) {
+      throw new BadRequestException('This sale was made at the POS terminal — refund it there, not from Inventory.');
+    }
+    const refundReason = String(body?.refundReason ?? '').trim();
+    if (!refundReason) throw new BadRequestException('A refund reason is required.');
+
+    const createdById = scope.user.id === 'pos-bridge' ? null : scope.user.id;
+    const lowStockCandidates: LowStockCandidate[] = [];
+    let transactionNumber = '';
+
+    await this.databaseService.withTransaction(async (client) => {
+      lowStockCandidates.length = 0; // reset in case the transaction retries
+      const saleRows = await client.query<{ id: string; status: string; locationId: string; transactionNumber: string }>(
+        `SELECT id, status, "locationId", "transactionNumber" FROM "Sale"
+         WHERE id = $1 AND "businessId" = $2 AND module = $3::"BusinessModule" FOR UPDATE`,
+        [id, scope.businessId, scope.module],
+      );
+      const sale = saleRows.rows[0];
+      if (!sale) throw new NotFoundException(`Sale #${id} not found`);
+      if (sale.status !== 'COMPLETED') {
+        throw new BadRequestException('Only a completed sale can be refunded.');
+      }
+      // Sales mirrored from the POS terminal (transactionNumber "POS-…") deducted
+      // BOTH the POS variant stock and the InventoryItem ledger at sale time. Only
+      // the POS void/refund flow reverses both symmetrically (and marks the order
+      // refunded); restocking here would restore just the InventoryItem — leaving
+      // variant stock adrift and risking a double-restock if the order is later
+      // voided at the POS. So those must be refunded at the POS terminal.
+      if (sale.transactionNumber.startsWith('POS-')) {
+        throw new BadRequestException('This sale originated at the POS terminal — refund it there so both POS and inventory stock stay in sync.');
+      }
+      transactionNumber = sale.transactionNumber;
+
+      const itemRows = await client.query<{ inventoryItemId: string; quantity: number; name: string }>(
+        `SELECT "inventoryItemId", quantity, name FROM "SaleItem" WHERE "saleId" = $1`,
+        [id],
+      );
+
+      for (const line of itemRows.rows) {
+        const invRows = await client.query<{
+          quantity: number;
+          unit: string | null;
+          name: string;
+          reorderPoint: number | null;
+          minStock: number | null;
+        }>(
+          `SELECT quantity, unit, name, "reorderPoint", "minStock" FROM "InventoryItem"
+           WHERE id = $1 AND "businessId" = $2 FOR UPDATE`,
+          [line.inventoryItemId, scope.businessId],
+        );
+        const inv = invRows.rows[0];
+        // The item may have been removed since the sale — skip its restock but still
+        // let the refund complete rather than blocking it.
+        if (!inv) continue;
+
+        const previousQuantity = Number(inv.quantity);
+        const newQuantity = previousQuantity + Number(line.quantity);
+
+        lowStockCandidates.push({
+          id: line.inventoryItemId,
+          name: inv.name,
+          unit: inv.unit,
+          previousQuantity,
+          newQuantity,
+          reorderPoint: inv.reorderPoint,
+          minStock: inv.minStock,
+        });
+
+        await client.query(`UPDATE "InventoryItem" SET quantity = $1, "updatedAt" = CURRENT_TIMESTAMP WHERE id = $2`, [
+          newQuantity,
+          line.inventoryItemId,
+        ]);
+
+        await client.query(
+          `
+            INSERT INTO "StockMovement" (
+              id, type, quantity, "previousQuantity", "newQuantity", unit,
+              reason, "referenceType", "referenceId", notes, "itemId",
+              "locationId", "businessId", module, "createdById"
+            )
+            VALUES ($1, 'VOID_RESTOCK', $2, $3, $4, $5, $6, 'SALE', $7, $8, $9, $10, $11, $12::"BusinessModule", $13)
+          `,
+          [
+            randomUUID(),
+            Number(line.quantity),
+            previousQuantity,
+            newQuantity,
+            inv.unit,
+            refundReason,
+            id,
+            `Refund restock: ${sale.transactionNumber}`,
+            line.inventoryItemId,
+            sale.locationId,
+            scope.businessId,
+            scope.module,
+            createdById,
+          ],
+        );
+      }
+
+      await client.query(
+        `UPDATE "Sale" SET status = 'REFUNDED'::"SaleStatus", "refundReason" = $1, "updatedAt" = CURRENT_TIMESTAMP WHERE id = $2`,
+        [refundReason, id],
+      );
+    });
+
+    await this.recordAudit(scope, {
+      category: 'Void & Refund',
+      action: 'Sale Refunded',
+      entityType: 'Sale',
+      entityId: id,
+      entityName: transactionNumber || undefined,
+      status: 'refunded',
+      summary: `Reason: ${refundReason}`,
+    });
+
+    // Restock usually raises stock, but a refund can still leave an item below its
+    // threshold if it was already low; keep alerts consistent with other flows.
+    await this.notifyLowStock(scope.businessId, lowStockCandidates).catch(() => undefined);
+
+    return this.getSaleRow(scope, id);
   }
 
   async listStockMovements(headers: HeadersLike, query: Record<string, string | undefined>) {
@@ -3986,8 +4147,8 @@ export class InventoryApiService {
 
   async approveAdjustment(headers: HeadersLike, id: string) {
     const scope = await this.resolveScope(headers);
-    if (scope.user.role !== 'Admin') {
-      throw new ForbiddenException('Only Inventory Manager can approve adjustments.');
+    if (!['Admin', 'Manager'].includes(scope.user.role)) {
+      throw new ForbiddenException('Only a Manager or Admin can approve adjustments.');
     }
 
     const lowStockCandidates: LowStockCandidate[] = [];
@@ -4014,6 +4175,15 @@ export class InventoryApiService {
       submitterId = (adj.createdById as string | null) ?? null;
       auditAdjNumber = String(adj.adjustmentNumber ?? '');
       auditAdjType = String(adj.type ?? '');
+
+      // Separation of duties: a Manager cannot approve an adjustment they created
+      // themselves — it must be reviewed by an Admin (or another approver). Admins
+      // are exempt as the highest authority.
+      if (scope.user.role === 'Manager' && submitterId === scope.user.id) {
+        throw new ForbiddenException(
+          'You cannot approve an adjustment you created. An Admin must review your own adjustments.',
+        );
+      }
 
       const itemRows = await client.query<{
         inventoryItemId: string;
@@ -4253,8 +4423,8 @@ export class InventoryApiService {
 
   async rejectAdjustment(headers: HeadersLike, id: string, body: { reason?: string }) {
     const scope = await this.resolveScope(headers);
-    if (scope.user.role !== 'Admin') {
-      throw new ForbiddenException('Only Inventory Manager can reject adjustments.');
+    if (!['Admin', 'Manager'].includes(scope.user.role)) {
+      throw new ForbiddenException('Only a Manager or Admin can reject adjustments.');
     }
     const reason = String(body?.reason ?? '').trim();
     if (!reason) throw new BadRequestException('A rejection reason is required.');
@@ -4907,6 +5077,11 @@ export class InventoryApiService {
   async listAuditLogs(headers: HeadersLike, query: Record<string, string | undefined>) {
     await this.ensureAuditLogTable();
     const scope = await this.resolveScope(headers);
+    // The full audit trail is a confidential, Admin-only report; Managers and Staff
+    // do not have access even though they can perform inventory-changing actions.
+    if (scope.user.role !== 'Admin') {
+      throw new ForbiddenException('Only an Admin can view the audit trail.');
+    }
 
     const where = ['"businessId" = $1', 'module = $2'];
     const params: unknown[] = [scope.businessId, scope.module];

@@ -153,6 +153,9 @@ export default function PurchaseOrdersView({
   currentUser: { email: string; role: string } | null;
 }) {
   const isAdmin = currentUser?.role === 'Admin';
+  // Approving/rejecting submitted POs is an approver action (Manager or Admin).
+  // Supplier management below stays Admin-only via isAdmin.
+  const canApprove = currentUser?.role === 'Admin' || currentUser?.role === 'Manager';
   const ordersQuery = useRetailPurchaseOrderRecordsQuery();
   const suppliersQuery = useRetailSuppliersQuery();
   const archivedSuppliersQuery = useRetailSuppliersQuery({ isActive: false, enabled: isAdmin });
@@ -182,6 +185,8 @@ export default function PurchaseOrdersView({
   const [showPendingApprovalsModal, setShowPendingApprovalsModal] = useState(false);
   const [selectedPOForAction, setSelectedPOForAction] = useState<string | null>(null);
   const [rejectionRemarks, setRejectionRemarks] = useState('');
+  // The order whose full details are open in the history "View" modal.
+  const [viewOrder, setViewOrder] = useState<any | null>(null);
   const [saving, setSaving] = useState(false);
   const [now, setNow] = useState(() => new Date());
 
@@ -425,6 +430,7 @@ export default function PurchaseOrdersView({
   const handleSubmitPO = async (id: string) => {
     try {
       await submitPurchaseOrderMutation.mutateAsync(id);
+      setViewOrder(null);
       toast.success('Purchase order submitted for approval');
     } catch (err: any) {
       toast.error(err.message ?? 'Failed to submit purchase order');
@@ -436,6 +442,7 @@ export default function PurchaseOrdersView({
       await approvePurchaseOrderMutation.mutateAsync(id);
       setSelectedPOForAction(null);
       setShowPendingApprovalsModal(false);
+      setViewOrder(null);
       toast.success('Purchase order approved');
     } catch (err: any) {
       toast.error(err.message ?? 'Failed to approve purchase order');
@@ -451,6 +458,7 @@ export default function PurchaseOrdersView({
       await rejectPurchaseOrderMutation.mutateAsync({ id, reason: rejectionRemarks });
       setRejectionRemarks('');
       setSelectedPOForAction(null);
+      setViewOrder(null);
       toast.success('Purchase order rejected');
     } catch (err: any) {
       toast.error(err.message ?? 'Failed to reject purchase order');
@@ -460,6 +468,7 @@ export default function PurchaseOrdersView({
   const handleCancelPO = async (id: string) => {
     try {
       await cancelPurchaseOrderMutation.mutateAsync(id);
+      setViewOrder(null);
       toast.success('Purchase order cancelled');
     } catch (err: any) {
       toast.error(err.message ?? 'Failed to cancel purchase order');
@@ -522,7 +531,7 @@ export default function PurchaseOrdersView({
             <Users className="size-4" />
             View Suppliers
           </button>
-          {isAdmin && submittedPOs.length > 0 && (
+          {canApprove && submittedPOs.length > 0 && (
             <button
               onClick={() => setShowPendingApprovalsModal(true)}
               className="bg-[#FFA500] text-white px-4 py-2 rounded-[8px] text-[14px] font-medium flex items-center gap-2 hover:bg-[#FF8C00] transition-colors relative"
@@ -1166,85 +1175,182 @@ export default function PurchaseOrdersView({
         </div>
       </div>
 
-      {/* Orders List */}
-      <div className="space-y-4">
-        {filteredOrders.length === 0 && (
-          <div className="text-center py-12 text-muted-foreground">No purchase orders found.</div>
-        )}
-        {filteredOrders.map((order: any) => (
-          <div key={order.id} className="bg-card border border-[rgba(0,0,0,0.1)] rounded-[14px] p-6">
-            <div className="flex items-start justify-between mb-4">
-              <div>
-                <div className="flex items-center gap-3 mb-2">
-                  <h3 className="text-[18px] font-semibold text-foreground">{order.orderNumber}</h3>
-                  <span className={`px-2 py-1 rounded text-[12px] font-semibold ${STATUS_CLASS[order.status] ?? 'bg-muted text-muted-foreground'}`}>
-                    {STATUS_LABEL[order.status] ?? order.status}
-                  </span>
-                  {getDeliveryDelayBadge(order)}
-                </div>
-                <p className="text-[14px] text-foreground">Supplier: <span className="font-medium">{order.supplier?.name ?? '—'}</span></p>
-                <p className="text-[14px] text-foreground">Date: {getManilaDateKey(order.createdAt)}</p>
-                <p className="text-[14px] text-foreground">Expected Delivery: {formatExpectedDelivery(order.expectedDelivery)}</p>
-                {order.paymentMethod && <p className="text-[14px] text-foreground">Payment: {order.paymentMethod}</p>}
-              </div>
-              <div className="text-right">
-                <p className="text-[24px] font-bold text-foreground">₱{order.totalAmount.toLocaleString()}</p>
-                <p className="text-[12px] text-foreground">Total Amount</p>
-              </div>
-            </div>
-
-            <div className="border-t border-[rgba(0,0,0,0.1)] pt-4 mb-4">
-              <p className="text-[14px] font-medium text-foreground mb-2">Items:</p>
-              <div className="space-y-2">
-                {order.items?.map((item: any) => (
-                  <div key={item.id} className="flex items-center justify-between text-[13px]">
-                    <span className="text-foreground">{item.name}</span>
-                    <span className="text-foreground">
-                      {item.quantity} × ₱{item.unitPrice} = <span className="font-medium">₱{item.totalPrice.toLocaleString()}</span>
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Action buttons */}
-            <div className="flex gap-2 border-t border-[rgba(0,0,0,0.1)] pt-4">
-              {order.status === 'DRAFT' && (
-                <button onClick={() => handleSubmitPO(order.id)} className="px-4 py-1.5 bg-primary text-white rounded-[6px] text-[13px] font-medium hover:bg-primary/90">
-                  Submit for Approval
-                </button>
+      {/* Orders History Table */}
+      <div className="bg-card border border-[rgba(0,0,0,0.1)] rounded-[14px] overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-muted/50 border-b border-[rgba(0,0,0,0.1)]">
+              <tr>
+                <th className="px-4 py-3 text-left text-[13px] font-medium text-foreground">Order #</th>
+                <th className="px-4 py-3 text-left text-[13px] font-medium text-foreground">Supplier</th>
+                <th className="px-4 py-3 text-left text-[13px] font-medium text-foreground">Created By</th>
+                <th className="px-4 py-3 text-left text-[13px] font-medium text-foreground">Date</th>
+                <th className="px-4 py-3 text-center text-[13px] font-medium text-foreground">Items</th>
+                <th className="px-4 py-3 text-right text-[13px] font-medium text-foreground">Total</th>
+                <th className="px-4 py-3 text-left text-[13px] font-medium text-foreground">Expected Delivery</th>
+                <th className="px-4 py-3 text-left text-[13px] font-medium text-foreground">Status</th>
+                <th className="px-4 py-3 text-right text-[13px] font-medium text-foreground">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[rgba(0,0,0,0.08)]">
+              {filteredOrders.length === 0 ? (
+                <tr>
+                  <td colSpan={9} className="px-4 py-12 text-center text-[14px] text-muted-foreground">No purchase orders found.</td>
+                </tr>
+              ) : (
+                filteredOrders.map((order: any) => (
+                  <tr key={order.id} className="hover:bg-muted/30 transition-colors">
+                    <td className="px-4 py-3 text-[14px] font-medium text-primary whitespace-nowrap">{order.orderNumber}</td>
+                    <td className="px-4 py-3 text-[14px] text-foreground">{order.supplier?.name ?? '—'}</td>
+                    <td className="px-4 py-3 text-[13px] text-muted-foreground">{order.createdBy?.name ?? order.createdBy?.email ?? '—'}</td>
+                    <td className="px-4 py-3 text-[13px] text-muted-foreground whitespace-nowrap">{getManilaDateKey(order.createdAt)}</td>
+                    <td className="px-4 py-3 text-[14px] text-foreground text-center">{order.items?.length ?? 0}</td>
+                    <td className="px-4 py-3 text-[14px] font-medium text-foreground text-right whitespace-nowrap">₱{order.totalAmount.toLocaleString()}</td>
+                    <td className="px-4 py-3 text-[13px] text-muted-foreground whitespace-nowrap">{formatExpectedDelivery(order.expectedDelivery)}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-col items-start gap-1">
+                        <span className={`px-2 py-1 rounded text-[12px] font-semibold ${STATUS_CLASS[order.status] ?? 'bg-muted text-muted-foreground'}`}>
+                          {STATUS_LABEL[order.status] ?? order.status}
+                        </span>
+                        {getDeliveryDelayBadge(order)}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <button
+                        onClick={() => { setSelectedPOForAction(null); setRejectionRemarks(''); setViewOrder(order); }}
+                        title="View details"
+                        className="p-2 hover:bg-muted rounded-[8px] text-primary transition-colors inline-flex"
+                      >
+                        <Eye className="size-4" />
+                      </button>
+                    </td>
+                  </tr>
+                ))
               )}
-              {order.status === 'SUBMITTED' && isAdmin && (
-                <>
-                  <button onClick={() => handleApprovePO(order.id)} className="px-4 py-1.5 bg-primary text-white rounded-[6px] text-[13px] font-medium hover:bg-primary/90 flex items-center gap-1">
-                    <CheckCircle className="size-3.5" /> Approve
-                  </button>
-                  <button onClick={() => setSelectedPOForAction(order.id)} className="px-4 py-1.5 border border-[#E7000B] text-[#E7000B] rounded-[6px] text-[13px] font-medium hover:bg-[#ffe2e2] flex items-center gap-1">
-                    <XCircle className="size-3.5" /> Reject
-                  </button>
-                </>
-              )}
-              {['DRAFT', 'SUBMITTED', 'APPROVED'].includes(order.status) && (
-                <button onClick={() => handleCancelPO(order.id)} className="px-4 py-1.5 bg-muted text-muted-foreground rounded-[6px] text-[13px] font-medium hover:bg-muted">
-                  Cancel
-                </button>
-              )}
-            </div>
-
-            {/* Rejection form inline */}
-            {selectedPOForAction === order.id && (
-              <div className="mt-4 border-t border-[rgba(0,0,0,0.1)] pt-4">
-                <label className="block text-[14px] font-medium text-foreground mb-2">Rejection Remarks <span className="text-[#E7000B]">*</span></label>
-                <textarea value={rejectionRemarks} onChange={(e) => setRejectionRemarks(e.target.value)} placeholder="Provide reason for rejection..." className="w-full px-3 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary mb-3 resize-none" rows={2} />
-                <div className="flex gap-2">
-                  <button onClick={() => handleRejectPO(order.id)} className="flex-1 bg-[#E7000B] text-white px-4 py-2 rounded-[8px] text-[14px] font-medium hover:bg-[#D10000]">Confirm Rejection</button>
-                  <button onClick={() => { setSelectedPOForAction(null); setRejectionRemarks(''); }} className="flex-1 bg-background text-foreground px-4 py-2 rounded-[8px] text-[14px] font-medium hover:bg-muted">Cancel</button>
-                </div>
-              </div>
-            )}
-          </div>
-        ))}
+            </tbody>
+          </table>
+        </div>
       </div>
+
+      {/* View Order Details Modal */}
+      {viewOrder && (
+        <div
+          className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+          onClick={() => { setViewOrder(null); setSelectedPOForAction(null); setRejectionRemarks(''); }}
+        >
+          <div className="bg-card rounded-[14px] w-full max-w-3xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="sticky top-0 bg-card p-6 border-b border-[rgba(0,0,0,0.1)] flex items-start justify-between">
+              <div>
+                <div className="flex items-center gap-3">
+                  <h3 className="text-[22px] font-bold text-foreground">{viewOrder.orderNumber}</h3>
+                  <span className={`px-2 py-1 rounded text-[12px] font-semibold ${STATUS_CLASS[viewOrder.status] ?? 'bg-muted text-muted-foreground'}`}>
+                    {STATUS_LABEL[viewOrder.status] ?? viewOrder.status}
+                  </span>
+                  {getDeliveryDelayBadge(viewOrder)}
+                </div>
+                <p className="text-[13px] text-muted-foreground mt-1">Purchase Order Details</p>
+              </div>
+              <button
+                onClick={() => { setViewOrder(null); setSelectedPOForAction(null); setRejectionRemarks(''); }}
+                className="p-2 hover:bg-muted rounded-[8px]"
+              >
+                <X className="size-5 text-foreground" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-6">
+              <div className="grid grid-cols-2 gap-4">
+                <div><p className="text-[12px] text-muted-foreground mb-0.5">Supplier</p><p className="text-[14px] font-medium text-foreground">{viewOrder.supplier?.name ?? '—'}</p></div>
+                <div><p className="text-[12px] text-muted-foreground mb-0.5">Created By</p><p className="text-[14px] font-medium text-foreground">{viewOrder.createdBy?.name ?? viewOrder.createdBy?.email ?? '—'}</p></div>
+                <div><p className="text-[12px] text-muted-foreground mb-0.5">Date Created</p><p className="text-[14px] text-foreground">{getManilaDateKey(viewOrder.createdAt)}</p></div>
+                <div><p className="text-[12px] text-muted-foreground mb-0.5">Expected Delivery</p><p className="text-[14px] text-foreground">{formatExpectedDelivery(viewOrder.expectedDelivery)}</p></div>
+                {viewOrder.paymentMethod && <div><p className="text-[12px] text-muted-foreground mb-0.5">Payment Method</p><p className="text-[14px] text-foreground">{viewOrder.paymentMethod}</p></div>}
+                {viewOrder.paymentTerms && <div><p className="text-[12px] text-muted-foreground mb-0.5">Payment Terms</p><p className="text-[14px] text-foreground">{viewOrder.paymentTerms}</p></div>}
+              </div>
+
+              {viewOrder.notes && (
+                <div><p className="text-[12px] text-muted-foreground mb-0.5">Notes</p><p className="text-[14px] text-foreground">{viewOrder.notes}</p></div>
+              )}
+
+              <div className="border-t border-[rgba(0,0,0,0.1)] pt-4">
+                <h4 className="text-[16px] font-semibold text-foreground mb-3">Order Items</h4>
+                <div className="rounded-[10px] border border-[rgba(0,0,0,0.1)] overflow-hidden">
+                  <table className="w-full">
+                    <thead className="bg-muted/50">
+                      <tr>
+                        <th className="px-4 py-2 text-left text-[13px] font-medium text-foreground">Item</th>
+                        <th className="px-4 py-2 text-right text-[13px] font-medium text-foreground">Qty</th>
+                        <th className="px-4 py-2 text-right text-[13px] font-medium text-foreground">Unit Price</th>
+                        <th className="px-4 py-2 text-right text-[13px] font-medium text-foreground">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[rgba(0,0,0,0.08)]">
+                      {viewOrder.items?.map((item: any) => (
+                        <tr key={item.id}>
+                          <td className="px-4 py-2 text-[13px] text-foreground">{item.name}</td>
+                          <td className="px-4 py-2 text-[13px] text-foreground text-right">{item.quantity}</td>
+                          <td className="px-4 py-2 text-[13px] text-foreground text-right whitespace-nowrap">₱{item.unitPrice.toLocaleString()}</td>
+                          <td className="px-4 py-2 text-[13px] font-medium text-foreground text-right whitespace-nowrap">₱{item.totalPrice.toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot className="bg-muted/50 border-t border-[rgba(0,0,0,0.1)]">
+                      <tr>
+                        <td colSpan={3} className="px-4 py-2 text-right text-[14px] font-semibold text-foreground">Grand Total:</td>
+                        <td className="px-4 py-2 text-right text-[16px] font-bold text-primary whitespace-nowrap">₱{viewOrder.totalAmount.toLocaleString()}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+
+              {/* Action buttons */}
+              <div className="flex flex-wrap gap-2 border-t border-[rgba(0,0,0,0.1)] pt-4">
+                {viewOrder.status === 'DRAFT' && selectedPOForAction !== viewOrder.id && (
+                  <button onClick={() => handleSubmitPO(viewOrder.id)} className="px-4 py-2 bg-primary text-white rounded-[8px] text-[14px] font-medium hover:bg-primary/90">
+                    Submit for Approval
+                  </button>
+                )}
+                {viewOrder.status === 'SUBMITTED' && canApprove && selectedPOForAction !== viewOrder.id && (
+                  <>
+                    <button onClick={() => handleApprovePO(viewOrder.id)} className="px-4 py-2 bg-primary text-white rounded-[8px] text-[14px] font-medium hover:bg-primary/90 inline-flex items-center gap-1">
+                      <CheckCircle className="size-4" /> Approve
+                    </button>
+                    <button onClick={() => setSelectedPOForAction(viewOrder.id)} className="px-4 py-2 border border-[#E7000B] text-[#E7000B] rounded-[8px] text-[14px] font-medium hover:bg-[#ffe2e2] inline-flex items-center gap-1">
+                      <XCircle className="size-4" /> Reject
+                    </button>
+                  </>
+                )}
+                {['DRAFT', 'SUBMITTED', 'APPROVED'].includes(viewOrder.status) && selectedPOForAction !== viewOrder.id && (
+                  <button onClick={() => handleCancelPO(viewOrder.id)} className="px-4 py-2 bg-muted text-muted-foreground rounded-[8px] text-[14px] font-medium hover:bg-muted/80">
+                    Cancel Order
+                  </button>
+                )}
+                {selectedPOForAction !== viewOrder.id && (
+                  <button
+                    onClick={() => { setViewOrder(null); setSelectedPOForAction(null); setRejectionRemarks(''); }}
+                    className="ml-auto px-4 py-2 bg-background border border-[rgba(0,0,0,0.1)] text-foreground rounded-[8px] text-[14px] font-medium hover:bg-muted"
+                  >
+                    Close
+                  </button>
+                )}
+              </div>
+
+              {/* Rejection form inline */}
+              {selectedPOForAction === viewOrder.id && (
+                <div className="border-t border-[rgba(0,0,0,0.1)] pt-4">
+                  <label className="block text-[14px] font-medium text-foreground mb-2">Rejection Remarks <span className="text-[#E7000B]">*</span></label>
+                  <textarea value={rejectionRemarks} onChange={(e) => setRejectionRemarks(e.target.value)} placeholder="Provide reason for rejection..." className="w-full px-3 py-2 border border-[rgba(0,0,0,0.1)] rounded-[8px] text-[14px] focus:outline-none focus:border-primary mb-3 resize-none" rows={3} />
+                  <div className="flex gap-2">
+                    <button onClick={() => handleRejectPO(viewOrder.id)} className="flex-1 bg-[#E7000B] text-white px-4 py-2 rounded-[8px] text-[14px] font-medium hover:bg-[#D10000]">Confirm Rejection</button>
+                    <button onClick={() => { setSelectedPOForAction(null); setRejectionRemarks(''); }} className="flex-1 bg-background text-foreground px-4 py-2 rounded-[8px] text-[14px] font-medium hover:bg-muted">Cancel</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Pending Approvals Modal */}
       {showPendingApprovalsModal && (

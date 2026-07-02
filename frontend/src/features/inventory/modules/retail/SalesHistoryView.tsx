@@ -60,7 +60,9 @@ export default function SalesHistoryView({
   const [refundTarget, setRefundTarget] = useState<Sale | null>(null);
   const [refundReason, setRefundReason] = useState('');
 
-  const canRefund = currentUser?.role === 'Admin';
+  // Refunds/returns are an approver action — available to Managers and Admins,
+  // never to Staff.
+  const canRefund = currentUser?.role === 'Admin' || currentUser?.role === 'Manager';
 
   const rangeStart = useMemo(() => {
     if (dateRange === 'all') return null;

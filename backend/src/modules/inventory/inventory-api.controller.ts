@@ -253,6 +253,15 @@ export class InventoryApiController {
     return this.inventoryApiService.listSales(user, query);
   }
 
+  @Patch('sales/:id/refund')
+  refundSale(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() body: { refundReason?: string },
+  ) {
+    return this.inventoryApiService.refundSale(user, id, body);
+  }
+
   @Get('stock-movements')
   listStockMovements(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string | undefined>) {
     return this.inventoryApiService.listStockMovements(user, query);

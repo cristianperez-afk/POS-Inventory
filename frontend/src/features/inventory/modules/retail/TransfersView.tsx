@@ -43,9 +43,10 @@ export default function TransfersView({
   const locations = locationsQuery.data ?? [];
   const inventory = inventoryQuery.data ?? [];
   const loading = transfersQuery.isLoading || locationsQuery.isLoading || inventoryQuery.isLoading;
-  // Staff can request (create) and cancel a pending transfer; only an Admin can
-  // dispatch/complete it (those steps move stock). Mirrors the backend guards.
-  const isAdmin = currentUser?.role === 'Admin';
+  // Staff can request (create) and cancel their own pending transfer; only an
+  // approver (Manager or Admin) can dispatch/complete it or cancel one that is
+  // already in transit (those steps move stock). Mirrors the backend guards.
+  const canApprove = currentUser?.role === 'Admin' || currentUser?.role === 'Manager';
   const [activeTab, setActiveTab] = useState<'transfers' | 'adjustments'>('transfers');
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [showItemSelector, setShowItemSelector] = useState(false);
@@ -317,7 +318,7 @@ export default function TransfersView({
 
                 {transfer.status === 'PENDING' && (
                   <div className="flex gap-2">
-                    {isAdmin && (
+                    {canApprove && (
                       <button onClick={() => handleDispatch(transfer.id)} className="flex-1 px-4 py-2 bg-secondary text-white rounded-[8px] text-[14px] font-medium hover:bg-secondary">
                         Start Transit
                       </button>
@@ -329,7 +330,7 @@ export default function TransfersView({
                 )}
 
                 {transfer.status === 'IN_TRANSIT' && (
-                  isAdmin ? (
+                  canApprove ? (
                     <div className="flex gap-2">
                       <button onClick={() => handleComplete(transfer.id)} className="flex-1 px-4 py-2 bg-secondary text-white rounded-[8px] text-[14px] font-medium hover:bg-secondary">
                         Complete Transfer
@@ -339,7 +340,7 @@ export default function TransfersView({
                       </button>
                     </div>
                   ) : (
-                    <p className="text-[13px] text-muted-foreground text-center py-2">In transit — awaiting an Admin to complete.</p>
+                    <p className="text-[13px] text-muted-foreground text-center py-2">In transit — awaiting a Manager or Admin to complete.</p>
                   )
                 )}
               </div>

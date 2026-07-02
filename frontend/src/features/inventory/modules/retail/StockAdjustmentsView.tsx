@@ -61,7 +61,11 @@ export default function StockAdjustmentsView({
   const adjustments = adjustmentsQuery.data ?? [];
   const loading = itemsQuery.isLoading || locationsQuery.isLoading || adjustmentsQuery.isLoading;
 
-  const canReview = currentUser?.role === 'Admin';
+  // Managers and Admins can review (approve/reject) adjustments. Separation of
+  // duties: a Manager cannot approve an adjustment they created themselves — only
+  // an Admin can (matched by the backend). Admins may approve anything.
+  const canApprove = currentUser?.role === 'Admin' || currentUser?.role === 'Manager';
+  const isManagerReviewer = currentUser?.role === 'Manager';
 
   const [itemSearch, setItemSearch] = useState('');
   const [itemId, setItemId] = useState('');
@@ -380,7 +384,8 @@ export default function StockAdjustmentsView({
               <AdjustmentCard
                 key={adj.id}
                 adj={adj}
-                canReview={canReview}
+                canReview={canApprove}
+                blockOwnApprove={isManagerReviewer && !!adj.createdBy?.email && adj.createdBy.email === currentUser?.email}
                 onApprove={() => handleApprove(adj.id)}
                 onReject={() => { setRejectingId(adj.id); setRejectReason(''); }}
                 approving={approveMutation.isPending}
@@ -428,6 +433,7 @@ export default function StockAdjustmentsView({
 function AdjustmentCard({
   adj,
   canReview,
+  blockOwnApprove = false,
   onApprove,
   onReject,
   approving,
@@ -435,6 +441,7 @@ function AdjustmentCard({
 }: {
   adj: RetailStockAdjustment;
   canReview: boolean;
+  blockOwnApprove?: boolean;
   onApprove: () => void;
   onReject: () => void;
   approving: boolean;
@@ -463,7 +470,12 @@ function AdjustmentCard({
         </div>
         {canReview && adj.status === 'PENDING' && (
           <div className="flex flex-col gap-1.5 flex-shrink-0">
-            <button onClick={onApprove} disabled={approving} className="flex items-center gap-1 px-2.5 py-1 bg-secondary text-white rounded-[6px] text-[12px] font-medium disabled:opacity-50">
+            <button
+              onClick={onApprove}
+              disabled={approving || blockOwnApprove}
+              title={blockOwnApprove ? 'You cannot approve your own adjustment — an Admin must review it.' : undefined}
+              className="flex items-center gap-1 px-2.5 py-1 bg-secondary text-white rounded-[6px] text-[12px] font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+            >
               <Check className="size-3.5" /> Approve
             </button>
             <button onClick={onReject} className="flex items-center gap-1 px-2.5 py-1 border border-destructive text-destructive rounded-[6px] text-[12px] font-medium hover:bg-destructive/10">
