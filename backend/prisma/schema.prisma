@@ -292,6 +292,11 @@ model RecipeIngredient {
   item      InventoryItem @relation(fields: [itemId], references: [id])
   quantity  Float
   unit      String?
+  recipeQuantity           Float?
+  recipeUnit               String?
+  purchaseUnitSnapshot     String?
+  baseUnitSnapshot         String?
+  conversionFactorSnapshot Float?
   unitCost  Float?
   totalCost Float?
   createdAt DateTime      @default(now())
@@ -588,6 +593,9 @@ model Sale {
   discount          Float          @default(0)
   tax               Float          @default(0)
   total             Float
+  costOfGoods       Float          @default(0)
+  grossProfit       Float          @default(0)
+  grossMargin       Float          @default(0)
   paymentMethod     String
   amountPaid        Float
   change            Float          @default(0)
@@ -619,6 +627,9 @@ model SaleItem {
   quantity        Float
   unitPrice       Float
   totalPrice      Float
+  unitCost        Float         @default(0)
+  totalCost       Float         @default(0)
+  grossProfit     Float         @default(0)
   createdAt       DateTime      @default(now())
 
   @@index([saleId])

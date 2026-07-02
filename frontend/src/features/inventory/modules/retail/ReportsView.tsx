@@ -785,7 +785,7 @@ export function ReportsView() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4 mb-4">
             <div className="bg-card border border-border rounded-[12px] p-4">
               <p className="text-[12px] text-muted-foreground">Distinct items sold</p>
               <p className="text-[24px] font-semibold text-foreground">{sold?.totalItems ?? 0}</p>
@@ -798,6 +798,14 @@ export function ReportsView() {
               <p className="text-[12px] text-muted-foreground">Total revenue</p>
               <p className="text-[24px] font-semibold text-foreground">₱{(sold?.totalRevenue ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
             </div>
+            <div className="bg-card border border-border rounded-[12px] p-4">
+              <p className="text-[12px] text-muted-foreground">Cost of goods</p>
+              <p className="text-[24px] font-semibold text-foreground">₱{(sold?.totalCostOfGoods ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+            </div>
+            <div className="bg-card border border-border rounded-[12px] p-4">
+              <p className="text-[12px] text-muted-foreground">Gross profit</p>
+              <p className="text-[24px] font-semibold text-foreground">₱{(sold?.totalGrossProfit ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+            </div>
           </div>
 
           <div className="bg-card border border-border rounded-[12px] overflow-hidden">
@@ -808,6 +816,8 @@ export function ReportsView() {
                   <th className="text-left px-4 py-3 font-medium">Category</th>
                   <th className="text-right px-4 py-3 font-medium">Units sold</th>
                   <th className="text-right px-4 py-3 font-medium">Revenue</th>
+                  <th className="text-right px-4 py-3 font-medium">COGS</th>
+                  <th className="text-right px-4 py-3 font-medium">Gross profit</th>
                   <th className="text-right px-4 py-3 font-medium">Sales</th>
                   <th className="text-right px-4 py-3 font-medium">Current stock</th>
                   <th className="text-left px-4 py-3 font-medium">Last sold</th>
@@ -815,10 +825,10 @@ export function ReportsView() {
               </thead>
               <tbody>
                 {soldQuery.isLoading && (
-                  <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">Loading…</td></tr>
+                  <tr><td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">Loading…</td></tr>
                 )}
                 {!soldQuery.isLoading && (sold?.items?.length ?? 0) === 0 && (
-                  <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">No goods sold in this period.</td></tr>
+                  <tr><td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">No goods sold in this period.</td></tr>
                 )}
                 {sold?.items?.map(r => (
                   <tr key={r.itemId ?? r.name} className="border-t border-border">
@@ -826,6 +836,8 @@ export function ReportsView() {
                     <td className="px-4 py-3 text-muted-foreground">{r.category ?? '—'}</td>
                     <td className="px-4 py-3 text-right text-foreground font-medium">{r.unitsSold.toLocaleString()} {r.unit ?? ''}</td>
                     <td className="px-4 py-3 text-right text-foreground">₱{r.revenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td className="px-4 py-3 text-right text-foreground">₱{r.costOfGoods.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td className="px-4 py-3 text-right text-foreground">₱{r.grossProfit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                     <td className="px-4 py-3 text-right text-muted-foreground">{r.salesCount}</td>
                     <td className="px-4 py-3 text-right text-muted-foreground">{r.currentStock ?? '—'} {r.unit ?? ''}</td>
                     <td className="px-4 py-3 text-muted-foreground">{formatAuditDate(r.lastSoldAt ?? undefined)}</td>

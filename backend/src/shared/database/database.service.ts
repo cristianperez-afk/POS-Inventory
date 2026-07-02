@@ -31,7 +31,15 @@ type PosSaleMovement = {
   // When false, this entry only contributes a SaleItem line (no StockMovement) —
   // used for a restaurant menu dish, which is sold but not itself stock-tracked.
   emitStockMovement: boolean;
-  saleItem: { name: string; quantity: number; unitPrice: number; totalPrice: number } | null;
+  saleItem: {
+    name: string;
+    quantity: number;
+    unitPrice: number;
+    totalPrice: number;
+    unitCost: number;
+    totalCost: number;
+    grossProfit: number;
+  } | null;
 };
 
 type InventorySyncSettings = {
@@ -2425,6 +2433,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   }
 
   async listInventoryDeductionsForAdmin(adminUserId: number) {
+    await this.ensurePosOrderSchema();
     const admin = await this.getUserStoreScope(adminUserId);
 
     if (!this.isStoreManagerRole(admin.role) || !admin.store_id) {
@@ -2451,6 +2460,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           d.deduction_type,
           d.quantity_deducted,
           d.unit,
+          d.unit_cost_snapshot,
+          d.total_cost_snapshot,
           d.created_at
         FROM inventory_deductions d
         LEFT JOIN orders o ON o.id = d.order_id
@@ -5349,14 +5360,18 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       [quantity, variantId],
     );
 
+    let unitCostSnapshot = 0;
     if (variant.inventory_item_id) {
-      const invRows = await this.queryWithClient<{ quantity: string | number; unit: string | null; locationId: string; businessId: string }>(
+      const invRows = await this.queryWithClient<{ quantity: string | number; price: string | number; costPrice: string | number | null; unit: string | null; locationId: string; businessId: string }>(
         client,
-        `SELECT quantity, unit, "locationId", "businessId" FROM "InventoryItem" WHERE id = $1 FOR UPDATE`,
+        `SELECT quantity, price, "costPrice", unit, "locationId", "businessId" FROM "InventoryItem" WHERE id = $1 FOR UPDATE`,
         [variant.inventory_item_id],
       );
       const inv = invRows[0];
       if (inv) {
+        // InventoryItem.price is the per-base-unit weighted-average cost maintained
+        // by PO receiving. Retail selling prices live on the product/variant record.
+        unitCostSnapshot = Number(inv.price ?? inv.costPrice ?? 0);
         const previousQuantity = Number(inv.quantity ?? 0);
         const newQuantity = Math.max(previousQuantity - quantity, 0);
         await this.queryWithClient(
@@ -5388,6 +5403,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             quantity,
             unitPrice,
             totalPrice: unitPrice * quantity,
+            unitCost: unitCostSnapshot,
+            totalCost: unitCostSnapshot * quantity,
+            grossProfit: (unitPrice - unitCostSnapshot) * quantity,
           },
         });
       }
@@ -5397,11 +5415,12 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       client,
       `
         INSERT INTO inventory_deductions (
-          store_id, order_id, order_item_id, product_id, variant_id, deduction_type, quantity_deducted, unit
+          store_id, order_id, order_item_id, product_id, variant_id, deduction_type, quantity_deducted, unit,
+          unit_cost_snapshot, total_cost_snapshot
         )
-        VALUES ($1, $2, $3, $4, $5, 'RETAIL_VARIANT_SALE', $6, $7)
+        VALUES ($1, $2, $3, $4, $5, 'RETAIL_VARIANT_SALE', $6, $7, $8, $9)
       `,
-      [storeId, orderId, orderItemId, productId, variantId, quantity, 'pcs'],
+      [storeId, orderId, orderItemId, productId, variantId, quantity, 'pcs', unitCostSnapshot, unitCostSnapshot * quantity],
     );
 
     await this.queryWithClient(
@@ -5546,6 +5565,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   ) {
     const itemQuantity = Number(item.quantity ?? 1);
     const shouldRecordCustomizations = options.recordCustomizations !== false;
+    let dishSaleMovement: PosSaleMovement | null = null;
     let ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
     const finiteNumberOrNull = (value: unknown) => {
       const parsed = Number(value);
@@ -5571,8 +5591,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         );
         const menu = menuRows[0];
         if (menu) {
-          const unitPrice = Number(item.price ?? item.unit_price ?? 0);
-          movements.push({
+          const lineTotal = Number(item.lineTotal ?? item.line_total ?? (Number(item.price ?? item.unit_price ?? 0) * itemQuantity));
+          const unitPrice = itemQuantity > 0 ? lineTotal / itemQuantity : 0;
+          dishSaleMovement = {
             inventoryItemId: menuItemId,
             businessId: menu.businessId,
             locationId: menu.locationId,
@@ -5588,9 +5609,13 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
               name: item.name ?? item.product_name ?? 'Menu item',
               quantity: itemQuantity,
               unitPrice,
-              totalPrice: unitPrice * itemQuantity,
+              totalPrice: lineTotal,
+              unitCost: 0,
+              totalCost: 0,
+              grossProfit: lineTotal,
             },
-          });
+          };
+          movements.push(dishSaleMovement);
         }
       }
     }
@@ -5741,14 +5766,17 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         [quantity, ingredientId, storeId],
       );
 
+      let unitCostSnapshot = 0;
       if (inventory.inventory_item_id) {
-        const invRows = await this.queryWithClient<{ quantity: string | number; unit: string | null; locationId: string; businessId: string }>(
+        const invRows = await this.queryWithClient<{ quantity: string | number; price: string | number; unit: string | null; locationId: string; businessId: string }>(
           client,
-          `SELECT quantity, unit, "locationId", "businessId" FROM "InventoryItem" WHERE id = $1 FOR UPDATE`,
+          `SELECT quantity, price, unit, "locationId", "businessId" FROM "InventoryItem" WHERE id = $1 FOR UPDATE`,
           [inventory.inventory_item_id],
         );
         const inv = invRows[0];
         if (inv) {
+          unitCostSnapshot = Number(inv.price ?? 0);
+          const totalCostSnapshot = unitCostSnapshot * quantity;
           const previousQuantity = Number(inv.quantity ?? 0);
           const nextQuantity = previousQuantity - quantity;
           const newQuantity = inventorySyncSettings.allowNegativeStock ? nextQuantity : Math.max(nextQuantity, 0);
@@ -5777,6 +5805,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             emitStockMovement: true,
             saleItem: null,
           });
+          if (dishSaleMovement?.saleItem) {
+            dishSaleMovement.saleItem.totalCost += totalCostSnapshot;
+            dishSaleMovement.saleItem.unitCost = dishSaleMovement.saleItem.totalCost / Math.max(itemQuantity, 1);
+            dishSaleMovement.saleItem.grossProfit = dishSaleMovement.saleItem.totalPrice - dishSaleMovement.saleItem.totalCost;
+          }
         }
       }
 
@@ -5785,11 +5818,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         `
           INSERT INTO inventory_deductions (
             store_id, order_id, order_item_id, ingredient_id, product_id,
-            deduction_type, quantity_deducted, unit
+            deduction_type, quantity_deducted, unit, unit_cost_snapshot, total_cost_snapshot
           )
-          VALUES ($1, $2, $3, $4, $5, 'RESTAURANT_INGREDIENT_SALE', $6, $7)
+          VALUES ($1, $2, $3, $4, $5, 'RESTAURANT_INGREDIENT_SALE', $6, $7, $8, $9)
         `,
-        [storeId, orderId, orderItemId, ingredientId, item.productId ?? item.id ?? null, quantity, ingredient.unit ?? inventory.unit],
+        [
+          storeId, orderId, orderItemId, ingredientId, item.productId ?? item.id ?? null,
+          quantity, ingredient.unit ?? inventory.unit, unitCostSnapshot, unitCostSnapshot * quantity,
+        ],
       );
     }
     if (shouldRecordCustomizations) {
@@ -5826,9 +5862,17 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    const items = await this.queryWithClient<{ id: number; product_id: number; variant_id: number | null; product_name: string; quantity: number; unit_price: string | number }>(
+    const items = await this.queryWithClient<{
+      id: number;
+      product_id: number;
+      variant_id: number | null;
+      product_name: string;
+      quantity: number;
+      unit_price: string | number;
+      line_total: string | number;
+    }>(
       client,
-      `SELECT id, product_id, variant_id, product_name, quantity, unit_price FROM order_items WHERE order_id = $1`,
+      `SELECT id, product_id, variant_id, product_name, quantity, unit_price, line_total FROM order_items WHERE order_id = $1`,
       [order.id],
     );
 
@@ -5961,6 +6005,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             productId: oi.product_id,
             name: oi.product_name,
             price: Number(oi.unit_price ?? 0),
+            lineTotal: Number(oi.line_total ?? (Number(oi.unit_price ?? 0) * Number(oi.quantity ?? 1))),
             quantity: Number(oi.quantity ?? 1),
             ingredients: customizedIngredients,
           },
@@ -6173,6 +6218,13 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const paymentMethod = input.payment?.method ?? 'Cash';
     const amountPaid = Number(input.payment?.amountPaid ?? total);
     const change = Number(input.payment?.changeAmount ?? 0);
+    const costOfGoods = movements.reduce(
+      (sum, movement) => sum + Number(movement.saleItem?.totalCost ?? 0),
+      0,
+    );
+    const netItemRevenue = Math.max(0, Number(input.subtotal ?? 0) - Number(input.discount ?? 0));
+    const grossProfit = netItemRevenue - costOfGoods;
+    const grossMargin = netItemRevenue > 0 ? (grossProfit / netItemRevenue) * 100 : 0;
     const transactionNumber = `POS-${orderNumber}`;
     const existingSale = await this.queryWithClient<{ id: string }>(
       client,
@@ -6196,10 +6248,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       `
         INSERT INTO "Sale" (
           id, "transactionNumber", "locationId", "cashierId", subtotal, discount, tax,
-          total, "paymentMethod", "amountPaid", change, customer, status, "businessId",
+          total, "costOfGoods", "grossProfit", "grossMargin", "paymentMethod", "amountPaid", change, customer, status, "businessId",
           module, "updatedAt"
         )
-        VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, $8, $9, $10, $11, 'COMPLETED', $12, $13::"BusinessModule", CURRENT_TIMESTAMP)
+        VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'COMPLETED', $15, $16::"BusinessModule", CURRENT_TIMESTAMP)
       `,
       [
         saleId,
@@ -6209,6 +6261,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         Number(input.discount ?? 0),
         Number(input.tax ?? 0),
         total,
+        costOfGoods,
+        grossProfit,
+        grossMargin,
         paymentMethod,
         amountPaid,
         change,
@@ -6223,8 +6278,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         await this.queryWithClient(
           client,
           `
-            INSERT INTO "SaleItem" (id, "saleId", "inventoryItemId", name, quantity, "unitPrice", "totalPrice")
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO "SaleItem" (
+              id, "saleId", "inventoryItemId", name, quantity, "unitPrice", "totalPrice",
+              "unitCost", "totalCost", "grossProfit"
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
           `,
           [
             randomUUID(),
@@ -6234,6 +6292,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             movement.saleItem.quantity,
             movement.saleItem.unitPrice,
             movement.saleItem.totalPrice,
+            movement.saleItem.unitCost,
+            movement.saleItem.totalCost,
+            movement.saleItem.grossProfit,
           ],
         );
       }
@@ -6585,6 +6646,23 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async ensurePosOrderSchema() {
+    await this.query(
+      `ALTER TABLE inventory_deductions
+         ADD COLUMN IF NOT EXISTS unit_cost_snapshot DECIMAL(14,6) NOT NULL DEFAULT 0,
+         ADD COLUMN IF NOT EXISTS total_cost_snapshot DECIMAL(14,6) NOT NULL DEFAULT 0`,
+    );
+    await this.query(
+      `ALTER TABLE "Sale"
+         ADD COLUMN IF NOT EXISTS "costOfGoods" DOUBLE PRECISION NOT NULL DEFAULT 0,
+         ADD COLUMN IF NOT EXISTS "grossProfit" DOUBLE PRECISION NOT NULL DEFAULT 0,
+         ADD COLUMN IF NOT EXISTS "grossMargin" DOUBLE PRECISION NOT NULL DEFAULT 0`,
+    );
+    await this.query(
+      `ALTER TABLE "SaleItem"
+         ADD COLUMN IF NOT EXISTS "unitCost" DOUBLE PRECISION NOT NULL DEFAULT 0,
+         ADD COLUMN IF NOT EXISTS "totalCost" DOUBLE PRECISION NOT NULL DEFAULT 0,
+         ADD COLUMN IF NOT EXISTS "grossProfit" DOUBLE PRECISION NOT NULL DEFAULT 0`,
+    );
     await this.query(
       `
         CREATE TABLE IF NOT EXISTS ingredients_inventory (

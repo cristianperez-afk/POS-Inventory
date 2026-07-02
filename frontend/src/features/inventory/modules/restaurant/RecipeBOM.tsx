@@ -23,6 +23,9 @@ type Ingredient = {
   unit: string;
   inventoryQuantity?: number;
   inventoryUnit?: string;
+  purchaseUnit?: string;
+  baseUnit?: string;
+  conversionFactor?: number;
   inventoryStock?: number;
   inventoryUsableStock?: number;
   inventoryExpiry?: string | null;
@@ -188,26 +191,6 @@ function StockLinkAutocomplete({
   );
 }
 
-const UNIT_OPTIONS = [
-  "kg",
-  "g",
-  "L",
-  "ml",
-  "milliliter",
-  "pcs",
-  "piece",
-  "liter",
-  "bottle",
-  "can",
-  "pack",
-  "box",
-  "bag",
-  "sack",
-  "carton",
-  "tray",
-  "dozen",
-  "gallon",
-];
 const MODIFIER_GROUPS = [
   "Protein Choice",
   "Flavor Adjustment",
@@ -428,10 +411,17 @@ const normalizeUnit = (unit: string | undefined) => {
   return normalized;
 };
 
-const toInventoryQuantity = (quantity: number, recipeUnit: string, inventoryUnit: string) => {
+const toInventoryQuantity = (
+  quantity: number,
+  recipeUnit: string,
+  inventoryUnit: string,
+  purchaseUnit?: string,
+  conversionFactor = 1,
+) => {
   const from = normalizeUnit(recipeUnit);
   const to = normalizeUnit(inventoryUnit);
   if (from === to) return quantity;
+  if (purchaseUnit && from === normalizeUnit(purchaseUnit)) return quantity * conversionFactor;
   if (from === "g" && to === "kg") return quantity / 1000;
   if (from === "kg" && to === "g") return quantity * 1000;
   if (from === "ml" && to === "l") return quantity / 1000;
@@ -439,6 +429,27 @@ const toInventoryQuantity = (quantity: number, recipeUnit: string, inventoryUnit
   if (from === "dozen" && to === "pcs") return quantity * 12;
   if (from === "pcs" && to === "dozen") return quantity / 12;
   return null;
+};
+
+const compatibleRecipeUnits = (item?: InventoryItem) => {
+  if (!item) return [];
+  const baseUnit = normalizeUnit(item.baseUnit ?? item.unit);
+  const purchaseUnit = normalizeUnit(item.purchaseUnit ?? item.unit);
+  const standardUnits: Record<string, string[]> = {
+    g: ["g", "kg"],
+    kg: ["kg", "g"],
+    ml: ["ml", "L"],
+    l: ["L", "ml"],
+    pcs: ["pcs", "dozen"],
+    dozen: ["dozen", "pcs"],
+  };
+  const options = standardUnits[baseUnit] ?? [item.baseUnit ?? item.unit];
+  if (purchaseUnit && !options.some((unit) => normalizeUnit(unit) === purchaseUnit)) {
+    options.push(item.purchaseUnit ?? purchaseUnit);
+  }
+  return options.filter((unit, index) =>
+    Boolean(unit) && options.findIndex((candidate) => normalizeUnit(candidate) === normalizeUnit(unit)) === index,
+  );
 };
 
 const formatMoney = (value: number) => `₱${Number.isFinite(value) ? value.toFixed(2) : "0.00"}`;
@@ -553,8 +564,11 @@ export function RecipeBOM() {
     productId: "",
     name: "",
     quantity: "",
-    unit: "kg",
+    unit: "",
     inventoryUnit: "",
+    purchaseUnit: "",
+    baseUnit: "",
+    conversionFactor: 1,
     unitCost: "",
   });
 
@@ -562,6 +576,21 @@ export function RecipeBOM() {
 
   // Only show products that are actually in stock and not expired.
   const availableInventoryItems = inventoryItems.filter(item => item.stock > 0 && !isExpiredInventoryItem(item));
+  const selectedIngredientInventoryItem = inventoryItems.find((item) => String(item.id) === currentIngredient.productId);
+  const selectedIngredientBaseUnit = selectedIngredientInventoryItem?.baseUnit ?? selectedIngredientInventoryItem?.unit ?? "";
+  const selectedIngredientPurchaseUnit = selectedIngredientInventoryItem?.purchaseUnit ?? selectedIngredientBaseUnit;
+  const selectedIngredientConversionFactor = Number(selectedIngredientInventoryItem?.conversionFactor ?? 1);
+  const recipeUnitOptions = compatibleRecipeUnits(selectedIngredientInventoryItem);
+  const currentEnteredQuantity = Number(currentIngredient.quantity);
+  const currentBaseEquivalent = selectedIngredientInventoryItem && Number.isFinite(currentEnteredQuantity) && currentEnteredQuantity > 0
+    ? toInventoryQuantity(
+        currentEnteredQuantity,
+        currentIngredient.unit,
+        selectedIngredientBaseUnit,
+        selectedIngredientPurchaseUnit,
+        selectedIngredientConversionFactor,
+      )
+    : null;
 
   const { data: recipes = [], isLoading: recipesLoading } = useRestaurantRecipesQuery();
   const { data: archivedRecipes = [], isLoading: archivedRecipesLoading } = useRestaurantRecipesQuery({ archived: true });
@@ -696,14 +725,17 @@ export function RecipeBOM() {
         return;
       }
 
-      const inventoryQuantity = toInventoryQuantity(quantity, currentIngredient.unit, selectedItem.unit);
+      const baseUnit = selectedItem.baseUnit ?? selectedItem.unit;
+      const purchaseUnit = selectedItem.purchaseUnit ?? baseUnit;
+      const conversionFactor = Number(selectedItem.conversionFactor ?? 1);
+      const inventoryQuantity = toInventoryQuantity(quantity, currentIngredient.unit, baseUnit, purchaseUnit, conversionFactor);
       if (inventoryQuantity === null) {
-        toast.error(`Cannot convert ${currentIngredient.unit} to inventory unit ${selectedItem.unit}. Please choose a compatible unit.`);
+        toast.error(`Cannot convert ${currentIngredient.unit} to inventory base unit ${baseUnit}. Please choose a compatible unit.`);
         return;
       }
 
       if (inventoryQuantity > selectedItem.stock) {
-        toast.warning(`This recipe needs ${inventoryQuantity.toFixed(2)} ${selectedItem.unit}, but only ${selectedItem.stock.toFixed(2)} ${selectedItem.unit} is in stock.`);
+        toast.warning(`This recipe needs ${inventoryQuantity.toFixed(2)} ${baseUnit}, but only ${selectedItem.stock.toFixed(2)} ${baseUnit} is in stock.`);
       }
 
       const totalCost = inventoryQuantity * unitCost;
@@ -716,7 +748,10 @@ export function RecipeBOM() {
         quantity: quantity,
         unit: currentIngredient.unit,
         inventoryQuantity,
-        inventoryUnit: selectedItem.unit,
+        inventoryUnit: baseUnit,
+        purchaseUnit,
+        baseUnit,
+        conversionFactor,
         inventoryStock: selectedItem.stock,
         inventoryUsableStock: selectedItem.stock,
         inventoryExpiry: selectedItem.expiry || null,
@@ -725,17 +760,21 @@ export function RecipeBOM() {
         totalCost: totalCost,
       };
 
-      const existingIngredient = ingredients.find(ing =>
-        ing.productId === selectedItem.id &&
-        normalizeUnit(ing.unit) === normalizeUnit(newIngredient.unit)
-      );
+      const existingIngredient = ingredients.find(ing => ing.productId === selectedItem.id);
 
       setIngredients(existingIngredient
         ? ingredients.map(ing => ing.id === existingIngredient.id
           ? {
               ...ing,
-              quantity: ing.quantity + newIngredient.quantity,
+              quantity: normalizeUnit(ing.unit) === normalizeUnit(newIngredient.unit)
+                ? ing.quantity + newIngredient.quantity
+                : (ing.inventoryQuantity || 0) + (newIngredient.inventoryQuantity || 0),
+              unit: normalizeUnit(ing.unit) === normalizeUnit(newIngredient.unit) ? ing.unit : baseUnit,
               inventoryQuantity: (ing.inventoryQuantity || 0) + (newIngredient.inventoryQuantity || 0),
+              inventoryUnit: baseUnit,
+              purchaseUnit,
+              baseUnit,
+              conversionFactor,
               totalCost: ing.totalCost + newIngredient.totalCost,
             }
           : ing
@@ -746,8 +785,11 @@ export function RecipeBOM() {
         productId: "",
         name: "",
         quantity: "",
-        unit: "kg",
+        unit: "",
         inventoryUnit: "",
+        purchaseUnit: "",
+        baseUnit: "",
+        conversionFactor: 1,
         unitCost: "",
       });
       setIngredientSearch("");
@@ -1196,6 +1238,8 @@ export function RecipeBOM() {
               itemId: inventoryItem.backendId,
               quantity: ingredient.inventoryQuantity ?? ingredient.quantity,
               unit: ingredient.inventoryUnit ?? ingredient.unit,
+              recipeQuantity: ingredient.quantity,
+              recipeUnit: ingredient.unit,
               unitCost: ingredient.unitCost,
             };
           }),
@@ -1387,7 +1431,12 @@ export function RecipeBOM() {
         ...currentIngredient,
         productId: "",
         name: "",
+        quantity: "",
+        unit: "",
         inventoryUnit: "",
+        purchaseUnit: "",
+        baseUnit: "",
+        conversionFactor: 1,
         unitCost: "",
       });
     }
@@ -1400,8 +1449,12 @@ export function RecipeBOM() {
       ...currentIngredient,
       productId: item.id.toString(),
       name: item.name,
-      unit: item.unit,
-      inventoryUnit: item.unit,
+      quantity: "",
+      unit: item.baseUnit ?? item.unit,
+      inventoryUnit: item.baseUnit ?? item.unit,
+      purchaseUnit: item.purchaseUnit ?? item.baseUnit ?? item.unit,
+      baseUnit: item.baseUnit ?? item.unit,
+      conversionFactor: Number(item.conversionFactor ?? 1),
       unitCost: item.price.toString(),
     });
   };
@@ -1429,8 +1482,11 @@ export function RecipeBOM() {
       productId: "",
       name: "",
       quantity: "",
-      unit: "kg",
+      unit: "",
       inventoryUnit: "",
+      purchaseUnit: "",
+      baseUnit: "",
+      conversionFactor: 1,
       unitCost: "",
     });
     setNewRecipe({
@@ -2063,10 +2119,19 @@ export function RecipeBOM() {
                       onChange={handleIngredientInputChange}
                       className="w-full px-3 py-2 text-sm bg-muted/50 border border-input rounded-lg focus:outline-none"
                     >
-                      {UNIT_OPTIONS.map(unit => <option key={unit} value={unit}>{unit}</option>)}
+                      {!currentIngredient.productId && <option value="">Select ingredient first</option>}
+                      {recipeUnitOptions.map((unit) => {
+                        const isPurchaseUnit = normalizeUnit(unit) === normalizeUnit(selectedIngredientPurchaseUnit)
+                          && normalizeUnit(selectedIngredientPurchaseUnit) !== normalizeUnit(selectedIngredientBaseUnit);
+                        return (
+                          <option key={unit} value={unit}>
+                            {unit}{isPurchaseUnit ? ` (${selectedIngredientConversionFactor} ${selectedIngredientBaseUnit} each)` : ""}
+                          </option>
+                        );
+                      })}
                     </select>
                     {currentIngredient.inventoryUnit && (
-                      <p className="mt-1 text-[10px] text-muted-foreground">Inventory unit: {currentIngredient.inventoryUnit}</p>
+                      <p className="mt-1 text-[10px] text-muted-foreground">Default/base unit: {currentIngredient.inventoryUnit}</p>
                     )}
                   </div>
 
@@ -2089,6 +2154,70 @@ export function RecipeBOM() {
                   </div>
                 </div>
 
+                {selectedIngredientInventoryItem && (
+                  <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50/60 p-3 text-xs">
+                    <div className="grid gap-2 sm:grid-cols-3">
+                      <div>
+                        <span className="block text-muted-foreground">Purchased as</span>
+                        <strong className="text-foreground">{selectedIngredientPurchaseUnit}</strong>
+                      </div>
+                      <div>
+                        <span className="block text-muted-foreground">PO conversion</span>
+                        <strong className="text-foreground">
+                          1 {selectedIngredientPurchaseUnit} = {selectedIngredientConversionFactor} {selectedIngredientBaseUnit}
+                        </strong>
+                      </div>
+                      <div>
+                        <span className="block text-muted-foreground">Available stock</span>
+                        <strong className="text-foreground">
+                          {Number(selectedIngredientInventoryItem.stock.toFixed(3))} {selectedIngredientBaseUnit}
+                          {selectedIngredientConversionFactor > 0 && normalizeUnit(selectedIngredientPurchaseUnit) !== normalizeUnit(selectedIngredientBaseUnit)
+                            ? ` (~${Number((selectedIngredientInventoryItem.stock / selectedIngredientConversionFactor).toFixed(2))} ${selectedIngredientPurchaseUnit})`
+                            : ""}
+                        </strong>
+                      </div>
+                    </div>
+
+                    {normalizeUnit(selectedIngredientPurchaseUnit) !== normalizeUnit(selectedIngredientBaseUnit) && selectedIngredientConversionFactor > 0 && (
+                      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-blue-200 pt-3">
+                        <span className="font-medium text-foreground">Quick fill:</span>
+                        {[
+                          { label: "1/4", multiplier: 0.25 },
+                          { label: "1/2", multiplier: 0.5 },
+                          { label: "1", multiplier: 1 },
+                          { label: "2", multiplier: 2 },
+                        ].map((option) => {
+                          const baseQuantity = selectedIngredientConversionFactor * option.multiplier;
+                          return (
+                            <button
+                              key={option.label}
+                              type="button"
+                              onClick={() => setCurrentIngredient((current) => ({
+                                ...current,
+                                quantity: String(Number(baseQuantity.toFixed(3))),
+                                unit: selectedIngredientBaseUnit,
+                              }))}
+                              className="rounded-md border border-blue-200 bg-white px-2.5 py-1 text-blue-700 hover:bg-blue-100"
+                            >
+                              {option.label} {selectedIngredientPurchaseUnit} = {Number(baseQuantity.toFixed(3))} {selectedIngredientBaseUnit}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {currentBaseEquivalent != null && (
+                      <p className="mt-3 rounded-lg bg-white px-3 py-2 text-foreground">
+                        Entered: <strong>{currentIngredient.quantity} {currentIngredient.unit}</strong>
+                        {" -> "}Inventory deduction: <strong>{Number(currentBaseEquivalent.toFixed(3))} {selectedIngredientBaseUnit}</strong>
+                        {selectedIngredientConversionFactor > 0 && normalizeUnit(selectedIngredientPurchaseUnit) !== normalizeUnit(selectedIngredientBaseUnit)
+                          ? ` (~${Number((currentBaseEquivalent / selectedIngredientConversionFactor).toFixed(3))} ${selectedIngredientPurchaseUnit})`
+                          : ""}
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 <button
                   type="button"
                   onClick={handleAddIngredient}
@@ -2109,6 +2238,11 @@ export function RecipeBOM() {
                             <p className="text-xs text-muted-foreground">
                               {ing.quantity} {ing.unit} = {(ing.inventoryQuantity ?? ing.quantity).toFixed(2)} {ing.inventoryUnit || ing.unit} x {formatMoney(ing.unitCost)} = {formatMoney(ing.totalCost)}
                             </p>
+                            {ing.purchaseUnit && ing.baseUnit && ing.conversionFactor && normalizeUnit(ing.purchaseUnit) !== normalizeUnit(ing.baseUnit) && (
+                              <p className="text-[10px] text-muted-foreground">
+                                PO conversion: 1 {ing.purchaseUnit} = {ing.conversionFactor} {ing.baseUnit}
+                              </p>
+                            )}
                             {ing.productSku && <p className="text-[10px] text-muted-foreground">SKU: {ing.productSku}</p>}
                           </div>
                           <button

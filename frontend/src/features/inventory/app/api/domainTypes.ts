@@ -219,6 +219,9 @@ export interface ApiSaleItem {
   quantity: number;
   unitPrice: number;
   totalPrice: number;
+  unitCost?: number;
+  totalCost?: number;
+  grossProfit?: number;
 }
 
 export interface ApiSale {
@@ -232,6 +235,9 @@ export interface ApiSale {
   discount: number;
   tax: number;
   total: number;
+  costOfGoods?: number;
+  grossProfit?: number;
+  grossMargin?: number;
   paymentMethod: string;
   amountPaid: number;
   change: number;
@@ -281,6 +287,11 @@ export interface ApiRecipeIngredient {
   item: ApiInventoryItem;
   quantity: number;
   unit?: string | null;
+  recipeQuantity?: number | null;
+  recipeUnit?: string | null;
+  purchaseUnitSnapshot?: string | null;
+  baseUnitSnapshot?: string | null;
+  conversionFactorSnapshot?: number | null;
   unitCost?: number | null;
   totalCost?: number | null;
   physicalStock?: number;
