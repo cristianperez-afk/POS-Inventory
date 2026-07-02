@@ -51,6 +51,9 @@ const blankOrderItemInput = (): OrderItemInput => ({
   purchaseUnit: "",
   baseUnit: "",
   conversionFactor: "1",
+  measurementType: "",
+  packageContentQuantity: "",
+  packageContentUnit: "",
   quantity: "",
   unitPrice: "",
   isNewProduct: false,
@@ -70,6 +73,9 @@ type OrderItem = {
   purchaseUnit: string;
   baseUnit: string;
   conversionFactor: number;
+  measurementType?: "WEIGHT" | "VOLUME" | "COUNT";
+  packageContentQuantity?: number;
+  packageContentUnit?: string;
 };
 
 type Order = {
@@ -106,6 +112,10 @@ type GlobalProduct = {
   purchaseUnit?: string;
   baseUnit?: string;
   conversionFactor?: number;
+  measurementType?: "WEIGHT" | "VOLUME" | "COUNT";
+  packageContentQuantity?: number;
+  packageContentUnit?: string;
+  unitConfigurationStatus?: "CONFIGURED" | "REVIEW_REQUIRED";
 };
 
 type SupplierProduct = {
@@ -407,6 +417,9 @@ export function PurchaseOrders() {
     purchaseUnit?: string;
     baseUnit?: string;
     conversionFactor?: number;
+    measurementType?: "WEIGHT" | "VOLUME" | "COUNT";
+    packageContentQuantity?: number;
+    packageContentUnit?: string;
   }) => {
     const normalized = normalizeProductName(payload.name);
 
@@ -428,6 +441,9 @@ export function PurchaseOrders() {
       purchaseUnit: payload.purchaseUnit || payload.unit || "pcs",
       baseUnit: payload.baseUnit || payload.unit || payload.purchaseUnit || "pcs",
       conversionFactor: payload.conversionFactor || 1,
+      measurementType: payload.measurementType,
+      packageContentQuantity: payload.packageContentQuantity,
+      packageContentUnit: payload.packageContentUnit,
     };
 
     return newProduct;
@@ -440,6 +456,9 @@ if (
   !currentItem.unitPrice.trim() ||
   !currentItem.purchaseUnit.trim() ||
   !currentItem.baseUnit.trim() ||
+  !currentItem.measurementType ||
+  !currentItem.packageContentUnit.trim() ||
+  Number(currentItem.packageContentQuantity || 0) <= 0 ||
   Number(currentItem.conversionFactor || 0) <= 0
 ) {
       return;
@@ -453,6 +472,9 @@ if (
     let purchaseUnit = currentItem.purchaseUnit || currentItem.unit;
     let baseUnit = currentItem.baseUnit || currentItem.unit;
     let conversionFactor = Number(currentItem.conversionFactor || 1);
+    let measurementType = currentItem.measurementType;
+    let packageContentQuantity = Number(currentItem.packageContentQuantity || 1);
+    let packageContentUnit = currentItem.packageContentUnit;
 
     if (currentItem.isNewProduct || !productId) {
       const created = handleCreateNewProduct({
@@ -464,6 +486,9 @@ if (
         purchaseUnit,
         baseUnit,
         conversionFactor,
+        measurementType: measurementType || undefined,
+        packageContentQuantity,
+        packageContentUnit,
       });
       productId = created.id;
       inventoryId = created.inventoryId;
@@ -473,6 +498,9 @@ if (
       purchaseUnit = created.purchaseUnit || unit;
       baseUnit = created.baseUnit || unit;
       conversionFactor = created.conversionFactor || 1;
+      measurementType = created.measurementType || measurementType;
+      packageContentQuantity = created.packageContentQuantity || packageContentQuantity;
+      packageContentUnit = created.packageContentUnit || packageContentUnit;
     }
 
     const newItem: OrderItem = {
@@ -488,6 +516,9 @@ if (
       purchaseUnit: purchaseUnit || unit || "",
       baseUnit: baseUnit || unit || "",
       conversionFactor,
+      measurementType: measurementType || undefined,
+      packageContentQuantity,
+      packageContentUnit,
     };
 
     setOrderItems([...orderItems, newItem]);

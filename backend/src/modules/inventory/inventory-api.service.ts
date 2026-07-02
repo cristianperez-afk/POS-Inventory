@@ -63,6 +63,13 @@ export class InventoryApiService {
       `ALTER TABLE "InventoryItem" ADD COLUMN IF NOT EXISTS "conversionFactor" DOUBLE PRECISION NOT NULL DEFAULT 1`,
     );
     await this.safeQuery(
+      `ALTER TABLE "InventoryItem"
+         ADD COLUMN IF NOT EXISTS "measurementType" TEXT,
+         ADD COLUMN IF NOT EXISTS "packageContentQuantity" DOUBLE PRECISION,
+         ADD COLUMN IF NOT EXISTS "packageContentUnit" TEXT,
+         ADD COLUMN IF NOT EXISTS "unitConfigurationStatus" TEXT NOT NULL DEFAULT 'REVIEW_REQUIRED'`,
+    );
+    await this.safeQuery(
       `UPDATE "InventoryItem"
        SET "baseUnit" = COALESCE(NULLIF("baseUnit", ''), unit),
            "purchaseUnit" = COALESCE(NULLIF("purchaseUnit", ''), unit),
@@ -78,6 +85,24 @@ export class InventoryApiService {
              ELSE "conversionFactor"
            END`,
     );
+    await this.safeQuery(
+      `UPDATE "InventoryItem"
+       SET "measurementType" = CASE
+             WHEN lower(COALESCE(NULLIF("baseUnit", ''), unit, '')) IN ('g', 'gram', 'grams', 'kg', 'kilogram', 'kilograms') THEN 'WEIGHT'
+             WHEN lower(COALESCE(NULLIF("baseUnit", ''), unit, '')) IN ('ml', 'milliliter', 'milliliters', 'l', 'liter', 'liters', 'litre', 'litres') THEN 'VOLUME'
+             WHEN lower(COALESCE(NULLIF("baseUnit", ''), unit, '')) IN ('pc', 'pcs', 'piece', 'pieces', 'dozen') THEN 'COUNT'
+             ELSE "measurementType"
+           END,
+           "unitConfigurationStatus" = CASE
+             WHEN lower(COALESCE(NULLIF("baseUnit", ''), unit, '')) IN (
+               'g', 'gram', 'grams', 'kg', 'kilogram', 'kilograms',
+               'ml', 'milliliter', 'milliliters', 'l', 'liter', 'liters', 'litre', 'litres',
+               'pc', 'pcs', 'piece', 'pieces', 'dozen'
+             ) THEN 'CONFIGURED'
+             ELSE "unitConfigurationStatus"
+           END
+       WHERE "measurementType" IS NULL OR "unitConfigurationStatus" = 'REVIEW_REQUIRED'`,
+    );
   }
 
   private async ensurePurchaseOrderItemOperationalColumns() {
@@ -89,6 +114,12 @@ export class InventoryApiService {
     );
     await this.safeQuery(
       `ALTER TABLE "PurchaseOrderItem" ADD COLUMN IF NOT EXISTS "conversionFactor" DOUBLE PRECISION NOT NULL DEFAULT 1`,
+    );
+    await this.safeQuery(
+      `ALTER TABLE "PurchaseOrderItem"
+         ADD COLUMN IF NOT EXISTS "measurementType" TEXT,
+         ADD COLUMN IF NOT EXISTS "packageContentQuantity" DOUBLE PRECISION,
+         ADD COLUMN IF NOT EXISTS "packageContentUnit" TEXT`,
     );
     await this.safeQuery(
       `UPDATE "PurchaseOrderItem"
@@ -113,6 +144,24 @@ export class InventoryApiService {
        WHERE po.id = poi."purchaseOrderId"
          AND po.status IN ('DRAFT', 'SUBMITTED', 'APPROVED', 'PARTIALLY_RECEIVED')
          AND COALESCE(poi."receivedQty", 0) = 0`,
+    );
+    await this.safeQuery(
+      `UPDATE "PurchaseOrderItem"
+       SET "measurementType" = COALESCE("measurementType", CASE
+             WHEN lower(COALESCE("baseUnit", '')) IN ('g', 'kg') THEN 'WEIGHT'
+             WHEN lower(COALESCE("baseUnit", '')) IN ('ml', 'l', 'liter', 'litre') THEN 'VOLUME'
+             WHEN lower(COALESCE("baseUnit", '')) IN ('pc', 'pcs', 'piece', 'pieces', 'dozen') THEN 'COUNT'
+             ELSE NULL
+           END),
+           "packageContentQuantity" = COALESCE("packageContentQuantity", CASE
+             WHEN lower(COALESCE("purchaseUnit", '')) IN ('g', 'kg', 'ml', 'l', 'liter', 'litre', 'pc', 'pcs', 'piece', 'pieces', 'dozen') THEN 1
+             ELSE "conversionFactor"
+           END),
+           "packageContentUnit" = COALESCE("packageContentUnit", CASE
+             WHEN lower(COALESCE("purchaseUnit", '')) IN ('g', 'kg', 'ml', 'l', 'liter', 'litre', 'pc', 'pcs', 'piece', 'pieces', 'dozen') THEN "purchaseUnit"
+             ELSE "baseUnit"
+           END)
+       WHERE "measurementType" IS NULL OR "packageContentQuantity" IS NULL OR "packageContentUnit" IS NULL`,
     );
   }
 
@@ -234,6 +283,117 @@ export class InventoryApiService {
     return null;
   }
 
+  private normalizeMeasurementType(value: unknown, unitHint?: unknown): 'WEIGHT' | 'VOLUME' | 'COUNT' | null {
+    const raw = String(value ?? '').trim().toUpperCase();
+    if (['WEIGHT', 'MASS'].includes(raw)) return 'WEIGHT';
+    if (['VOLUME', 'LIQUID'].includes(raw)) return 'VOLUME';
+    if (['COUNT', 'PIECE', 'PIECES'].includes(raw)) return 'COUNT';
+    const family = this.unitFamily(unitHint);
+    if (family === 'mass') return 'WEIGHT';
+    if (family === 'volume') return 'VOLUME';
+    if (family === 'count') return 'COUNT';
+    return null;
+  }
+
+  private canonicalBaseUnit(measurementType: 'WEIGHT' | 'VOLUME' | 'COUNT') {
+    return measurementType === 'WEIGHT' ? 'g' : measurementType === 'VOLUME' ? 'ml' : 'pcs';
+  }
+
+  private measurementForStandardUnit(value: unknown) {
+    return this.normalizeMeasurementType(null, value);
+  }
+
+  private unitSizeInCanonical(value: unknown) {
+    const unit = this.normalizeUnit(value);
+    const sizes: Record<string, number> = { g: 1, kg: 1000, ml: 1, l: 1000, pcs: 1, dozen: 12 };
+    return sizes[unit] ?? null;
+  }
+
+  private deriveUnitProfile(
+    input: Record<string, unknown>,
+    options: {
+      forceCanonicalBase?: boolean;
+      fallback?: Record<string, unknown>;
+      requireProfile?: boolean;
+    } = {},
+  ) {
+    const fallback = options.fallback ?? {};
+    const purchaseUnit = this.normalizeUnit(
+      input.purchaseUnit ?? input.unit ?? fallback.purchaseUnit ?? fallback.unit,
+    );
+    const submittedBaseUnit = this.normalizeUnit(
+      input.baseUnit ?? fallback.baseUnit ?? fallback.unit,
+    );
+    const submittedContentUnit = this.normalizeUnit(
+      input.packageContentUnit ?? fallback.packageContentUnit,
+    );
+    const measurementType = this.normalizeMeasurementType(
+      input.measurementType ?? fallback.measurementType,
+      submittedBaseUnit || submittedContentUnit || purchaseUnit,
+    );
+
+    if (!purchaseUnit && !submittedBaseUnit && !measurementType) {
+      if (options.requireProfile) throw new BadRequestException('A measurement type and purchase unit are required.');
+      return null;
+    }
+    if (!measurementType) {
+      throw new BadRequestException('Select whether this item is measured by weight, volume, or count.');
+    }
+
+    const baseUnit = options.forceCanonicalBase
+      ? this.canonicalBaseUnit(measurementType)
+      : submittedBaseUnit || this.canonicalBaseUnit(measurementType);
+    const baseMeasurement = this.measurementForStandardUnit(baseUnit);
+    if (baseMeasurement !== measurementType) {
+      throw new BadRequestException(`Base unit ${baseUnit || '(blank)'} is not valid for ${measurementType.toLowerCase()}.`);
+    }
+
+    const purchaseFamily = this.unitFamily(purchaseUnit);
+    const isPackage = purchaseFamily === 'package';
+    let packageContentQuantity: number;
+    let packageContentUnit: string;
+    let conversionFactor: number;
+    if (isPackage) {
+      const submittedQuantity = Number(input.packageContentQuantity ?? fallback.packageContentQuantity);
+      const legacyFactor = Number(input.conversionFactor ?? fallback.conversionFactor);
+      packageContentQuantity = Number.isFinite(submittedQuantity) && submittedQuantity > 0
+        ? submittedQuantity
+        : Number.isFinite(legacyFactor) && legacyFactor > 0 ? legacyFactor : 0;
+      packageContentUnit = submittedContentUnit || baseUnit;
+      const contentMeasurement = this.measurementForStandardUnit(packageContentUnit);
+      if (packageContentQuantity <= 0 || contentMeasurement !== measurementType) {
+        throw new BadRequestException(
+          `Enter the content of one ${purchaseUnit} using a ${measurementType.toLowerCase()} unit.`,
+        );
+      }
+      const contentSize = this.unitSizeInCanonical(packageContentUnit);
+      const baseSize = this.unitSizeInCanonical(baseUnit);
+      conversionFactor = packageContentQuantity * Number(contentSize) / Number(baseSize);
+    } else {
+      const purchaseMeasurement = this.measurementForStandardUnit(purchaseUnit);
+      if (purchaseMeasurement !== measurementType) {
+        throw new BadRequestException(`${purchaseUnit || '(blank)'} is not valid for ${measurementType.toLowerCase()}.`);
+      }
+      packageContentQuantity = 1;
+      packageContentUnit = purchaseUnit;
+      conversionFactor = Number(this.unitSizeInCanonical(purchaseUnit)) / Number(this.unitSizeInCanonical(baseUnit));
+    }
+    if (!Number.isFinite(conversionFactor) || conversionFactor <= 0) {
+      throw new BadRequestException('The package content could not be converted to the stock base unit.');
+    }
+
+    return {
+      measurementType,
+      purchaseUnit,
+      baseUnit,
+      packageContentQuantity,
+      packageContentUnit,
+      conversionFactor,
+      unitConfigurationStatus: 'CONFIGURED',
+      isPackage,
+    };
+  }
+
   private assertCompatibleUnitPair(purchaseUnitValue: unknown, baseUnitValue: unknown) {
     const purchaseUnit = this.normalizeUnit(purchaseUnitValue);
     const baseUnit = this.normalizeUnit(baseUnitValue);
@@ -313,6 +473,7 @@ export class InventoryApiService {
           i."targetCustomer", i.subcategory, i.size, i.condition,
           i.quantity, i.price, i."costPrice", i."imageUrl", i.unit,
           i."purchaseUnit", i."baseUnit", i."conversionFactor",
+          i."measurementType", i."packageContentQuantity", i."packageContentUnit", i."unitConfigurationStatus",
           i."minStock", i."maxStock", i."reorderPoint", i."expiryDate",
           i."expiryPeriod", i."storageTemperature", i."dateAdded", i."locationId",
           i."isActive", i."createdAt", i."updatedAt",
@@ -366,10 +527,13 @@ export class InventoryApiService {
 
     const locationId = String(body.locationId ?? (await this.getDefaultLocationId(scope.businessId)));
     const id = randomUUID();
-    const baseUnit = this.normalizeUnit(body.baseUnit ?? body.unit) || null;
-    const purchaseUnit = this.normalizeUnit(body.purchaseUnit ?? body.unit ?? baseUnit) || baseUnit;
-    if (purchaseUnit || baseUnit) this.assertCompatibleUnitPair(purchaseUnit, baseUnit);
-    const conversionFactor = this.resolveConversionFactor(purchaseUnit, baseUnit, body.conversionFactor);
+    const unitProfile = this.deriveUnitProfile(body, {
+      forceCanonicalBase: DEDUP_BY_NAME_ITEM_TYPES.includes(itemType) && body.measurementType !== undefined,
+      requireProfile: DEDUP_BY_NAME_ITEM_TYPES.includes(itemType),
+    });
+    const baseUnit = unitProfile?.baseUnit ?? null;
+    const purchaseUnit = unitProfile?.purchaseUnit ?? null;
+    const conversionFactor = unitProfile?.conversionFactor ?? 1;
 
     // Restaurant items are grouped by a "Main > Sub" category tree. Normalize the
     // incoming category into that shape and make sure the resolved Main/Sub exist
@@ -390,6 +554,7 @@ export class InventoryApiService {
           id, name, description, "itemType", sku, barcode, category, "targetCustomer",
           subcategory, size, condition, quantity, price, "costPrice",
           "imageUrl", unit, "purchaseUnit", "baseUnit", "conversionFactor",
+          "measurementType", "packageContentQuantity", "packageContentUnit", "unitConfigurationStatus",
           "minStock", "maxStock", "reorderPoint",
           "expiryDate", "expiryPeriod", "storageTemperature", "locationId", "businessId",
           "updatedAt"
@@ -398,7 +563,8 @@ export class InventoryApiService {
           $1, $2, $3, $4::"InventoryItemType", $5, $6, $7, $8,
           $9, $10, $11, $12, $13, $14,
           $15, $16, $17, $18, $19,
-          $20, $21, $22, $23, $24, $25, $26, $27,
+          $20, $21, $22, $23,
+          $24, $25, $26, $27, $28, $29, $30, $31,
           CURRENT_TIMESTAMP
         )
         RETURNING *
@@ -423,6 +589,10 @@ export class InventoryApiService {
         purchaseUnit,
         baseUnit,
         conversionFactor,
+        unitProfile?.measurementType ?? null,
+        unitProfile?.packageContentQuantity ?? null,
+        unitProfile?.packageContentUnit ?? null,
+        unitProfile?.unitConfigurationStatus ?? 'REVIEW_REQUIRED',
         body.minStock === undefined ? null : Number(body.minStock),
         body.maxStock === undefined ? null : Number(body.maxStock),
         body.reorderPoint === undefined ? null : Number(body.reorderPoint),
@@ -457,8 +627,13 @@ export class InventoryApiService {
       purchaseUnit: string | null;
       baseUnit: string | null;
       conversionFactor: number;
+      measurementType: string | null;
+      packageContentQuantity: number | null;
+      packageContentUnit: string | null;
+      unitConfigurationStatus: string;
     }>(
-      `SELECT quantity, unit, "purchaseUnit", "baseUnit", "conversionFactor"
+      `SELECT quantity, unit, "purchaseUnit", "baseUnit", "conversionFactor",
+              "measurementType", "packageContentQuantity", "packageContentUnit", "unitConfigurationStatus"
        FROM "InventoryItem" WHERE id = $1 AND "businessId" = $2 LIMIT 1`,
       [id, scope.businessId],
     );
@@ -479,22 +654,19 @@ export class InventoryApiService {
       quantityChange = null;
     }
 
-    const baseUnit =
-      body.baseUnit !== undefined || body.unit !== undefined
-        ? this.normalizeUnit(body.baseUnit ?? body.unit)
-        : null;
-    const purchaseUnit =
-      body.purchaseUnit !== undefined ? this.normalizeUnit(body.purchaseUnit) : null;
-    const effectivePurchaseUnit = purchaseUnit ?? currentItem.purchaseUnit ?? currentItem.unit;
-    const effectiveBaseUnit = baseUnit ?? currentItem.baseUnit ?? currentItem.unit;
     const unitsChanged = body.purchaseUnit !== undefined
       || body.baseUnit !== undefined
       || body.unit !== undefined
-      || body.conversionFactor !== undefined;
-    if (unitsChanged) this.assertCompatibleUnitPair(effectivePurchaseUnit, effectiveBaseUnit);
-    const conversionFactor = body.conversionFactor === undefined
-      ? null
-      : this.resolveConversionFactor(effectivePurchaseUnit, effectiveBaseUnit, body.conversionFactor);
+      || body.conversionFactor !== undefined
+      || body.measurementType !== undefined
+      || body.packageContentQuantity !== undefined
+      || body.packageContentUnit !== undefined;
+    const unitProfile = unitsChanged
+      ? this.deriveUnitProfile(body, { fallback: currentItem as unknown as Record<string, unknown>, requireProfile: true })
+      : null;
+    const baseUnit = unitProfile?.baseUnit ?? null;
+    const purchaseUnit = unitProfile?.purchaseUnit ?? null;
+    const conversionFactor = unitProfile?.conversionFactor ?? null;
 
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
@@ -525,9 +697,13 @@ export class InventoryApiService {
           "purchaseUnit" = COALESCE($25, "purchaseUnit"),
           "baseUnit" = COALESCE($26, "baseUnit"),
           "conversionFactor" = COALESCE($27, "conversionFactor"),
+          "measurementType" = COALESCE($28, "measurementType"),
+          "packageContentQuantity" = COALESCE($29, "packageContentQuantity"),
+          "packageContentUnit" = COALESCE($30, "packageContentUnit"),
+          "unitConfigurationStatus" = COALESCE($31, "unitConfigurationStatus"),
           "updatedAt" = CURRENT_TIMESTAMP
         WHERE id = $1
-          AND "businessId" = $28
+          AND "businessId" = $32
         RETURNING *
       `,
       [
@@ -558,6 +734,10 @@ export class InventoryApiService {
         purchaseUnit,
         baseUnit,
         conversionFactor,
+        unitProfile?.measurementType ?? null,
+        unitProfile?.packageContentQuantity ?? null,
+        unitProfile?.packageContentUnit ?? null,
+        unitProfile?.unitConfigurationStatus ?? null,
         scope.businessId,
       ],
     );
@@ -2240,29 +2420,41 @@ export class InventoryApiService {
       for (const item of items) {
         const qty = Number(item.quantity ?? 0);
         const price = Number(item.unitPrice ?? 0);
-        const purchaseUnit = this.normalizeUnit(item.purchaseUnit ?? item.unit ?? item.baseUnit) || null;
-        const baseUnit = this.normalizeUnit(item.baseUnit ?? item.unit ?? item.purchaseUnit) || purchaseUnit;
-        this.assertCompatibleUnitPair(purchaseUnit, baseUnit);
-        const conversionFactor = this.resolveConversionFactor(purchaseUnit, baseUnit, item.conversionFactor);
+        const inventoryItemId = String(item.inventoryItemId ?? '');
+        const inventoryRows = await client.query<Record<string, unknown>>(
+          `SELECT unit, "purchaseUnit", "baseUnit", "conversionFactor", "measurementType",
+                  "packageContentQuantity", "packageContentUnit", "unitConfigurationStatus"
+           FROM "InventoryItem" WHERE id = $1 AND "businessId" = $2 LIMIT 1`,
+          [inventoryItemId, scope.businessId],
+        );
+        if (!inventoryRows.rows[0]) throw new BadRequestException(`Inventory item for ${String(item.name ?? 'PO line')} was not found.`);
+        const profile = this.deriveUnitProfile(
+          { ...item, baseUnit: inventoryRows.rows[0].baseUnit ?? inventoryRows.rows[0].unit },
+          { fallback: inventoryRows.rows[0], requireProfile: true },
+        )!;
         await client.query(
           `
             INSERT INTO "PurchaseOrderItem" (
               id, "purchaseOrderId", "inventoryItemId", name, quantity, "unitPrice", "totalPrice",
-              "purchaseUnit", "baseUnit", "conversionFactor", "updatedAt"
+              "purchaseUnit", "baseUnit", "conversionFactor", "measurementType",
+              "packageContentQuantity", "packageContentUnit", "updatedAt"
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP)
           `,
           [
             randomUUID(),
             poId,
-            item.inventoryItemId ?? null,
+            inventoryItemId,
             String(item.name ?? ''),
             qty,
             price,
             qty * price,
-            purchaseUnit,
-            baseUnit,
-            conversionFactor,
+            profile.purchaseUnit,
+            profile.baseUnit,
+            profile.conversionFactor,
+            profile.measurementType,
+            profile.packageContentQuantity,
+            profile.packageContentUnit,
           ],
         );
       }
@@ -2345,30 +2537,42 @@ export class InventoryApiService {
         for (const item of items) {
           const qty = Number(item.quantity ?? 0);
           const price = Number(item.unitPrice ?? 0);
-          const purchaseUnit = this.normalizeUnit(item.purchaseUnit ?? item.unit ?? item.baseUnit) || null;
-          const baseUnit = this.normalizeUnit(item.baseUnit ?? item.unit ?? item.purchaseUnit) || purchaseUnit;
-          this.assertCompatibleUnitPair(purchaseUnit, baseUnit);
-          const conversionFactor = this.resolveConversionFactor(purchaseUnit, baseUnit, item.conversionFactor);
+          const inventoryItemId = String(item.inventoryItemId ?? '');
+          const inventoryRows = await client.query<Record<string, unknown>>(
+            `SELECT unit, "purchaseUnit", "baseUnit", "conversionFactor", "measurementType",
+                    "packageContentQuantity", "packageContentUnit", "unitConfigurationStatus"
+             FROM "InventoryItem" WHERE id = $1 AND "businessId" = $2 LIMIT 1`,
+            [inventoryItemId, scope.businessId],
+          );
+          if (!inventoryRows.rows[0]) throw new BadRequestException(`Inventory item for ${String(item.name ?? 'PO line')} was not found.`);
+          const profile = this.deriveUnitProfile(
+            { ...item, baseUnit: inventoryRows.rows[0].baseUnit ?? inventoryRows.rows[0].unit },
+            { fallback: inventoryRows.rows[0], requireProfile: true },
+          )!;
           total += qty * price;
           await client.query(
             `
               INSERT INTO "PurchaseOrderItem" (
                 id, "purchaseOrderId", "inventoryItemId", name, quantity, "unitPrice", "totalPrice",
-                "purchaseUnit", "baseUnit", "conversionFactor", "updatedAt"
+                "purchaseUnit", "baseUnit", "conversionFactor", "measurementType",
+                "packageContentQuantity", "packageContentUnit", "updatedAt"
               )
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP)
             `,
             [
               randomUUID(),
               id,
-              item.inventoryItemId ?? null,
+              inventoryItemId,
               String(item.name ?? ''),
               qty,
               price,
               qty * price,
-              purchaseUnit,
-              baseUnit,
-              conversionFactor,
+              profile.purchaseUnit,
+              profile.baseUnit,
+              profile.conversionFactor,
+              profile.measurementType,
+              profile.packageContentQuantity,
+              profile.packageContentUnit,
             ],
           );
         }
@@ -2657,9 +2861,13 @@ export class InventoryApiService {
         purchaseUnit: string | null;
         baseUnit: string | null;
         conversionFactor: number;
+        measurementType: string | null;
+        packageContentQuantity: number | null;
+        packageContentUnit: string | null;
       }>(
         `SELECT id, name, quantity, "receivedQty", "rejectedQty", "inventoryItemId", "unitPrice",
-                "purchaseUnit", "baseUnit", "conversionFactor"
+                "purchaseUnit", "baseUnit", "conversionFactor", "measurementType",
+                "packageContentQuantity", "packageContentUnit"
          FROM "PurchaseOrderItem"
          WHERE "purchaseOrderId" = $1`,
         [id],
@@ -2739,6 +2947,10 @@ export class InventoryApiService {
                   "purchaseUnit" = COALESCE($8, "purchaseUnit"),
                   "baseUnit" = COALESCE($7, "baseUnit"),
                   "conversionFactor" = $9,
+                  "measurementType" = COALESCE($11, "measurementType"),
+                  "packageContentQuantity" = COALESCE($12, "packageContentQuantity"),
+                  "packageContentUnit" = COALESCE($13, "packageContentUnit"),
+                  "unitConfigurationStatus" = 'CONFIGURED',
                   "expiryDate" = CASE WHEN $10::boolean THEN NULL ELSE COALESCE($3, "expiryDate") END,
                   "expiryPeriod" = CASE WHEN $10::boolean THEN NULL ELSE COALESCE($4, "expiryPeriod") END,
                   "storageTemperature" = COALESCE($5, "storageTemperature"),
@@ -2756,6 +2968,9 @@ export class InventoryApiService {
               purchaseUnit,
               conversionFactor,
               Boolean(ri.noExpiry),
+              poItem.measurementType,
+              poItem.packageContentQuantity,
+              poItem.packageContentUnit,
             ],
           );
 

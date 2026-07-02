@@ -52,6 +52,10 @@ export interface ApiInventoryItem {
   purchaseUnit?: string | null;
   baseUnit?: string | null;
   conversionFactor?: number | null;
+  measurementType?: 'WEIGHT' | 'VOLUME' | 'COUNT' | null;
+  packageContentQuantity?: number | null;
+  packageContentUnit?: string | null;
+  unitConfigurationStatus?: 'CONFIGURED' | 'REVIEW_REQUIRED' | null;
   minStock?: number | null;
   maxStock?: number | null;
   reorderPoint?: number | null;
@@ -102,6 +106,9 @@ export interface ApiPurchaseOrderItem {
   purchaseUnit?: string | null;
   baseUnit?: string | null;
   conversionFactor?: number | null;
+  measurementType?: 'WEIGHT' | 'VOLUME' | 'COUNT' | null;
+  packageContentQuantity?: number | null;
+  packageContentUnit?: string | null;
 }
 
 export interface ApiPurchaseOrder {

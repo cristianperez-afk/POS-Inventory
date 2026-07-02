@@ -220,6 +220,13 @@ model InventoryItem {
   costPrice          Float?
   imageUrl           String?
   unit               String?
+  measurementType    String?
+  packageContentQuantity Float?
+  packageContentUnit String?
+  unitConfigurationStatus String             @default("REVIEW_REQUIRED")
+  purchaseUnit       String?
+  baseUnit           String?
+  conversionFactor   Float                   @default(1)
   minStock           Float?
   maxStock           Float?
   reorderPoint       Float?
@@ -478,6 +485,12 @@ model PurchaseOrderItem {
   rejectedQty     Float              @default(0)
   unitPrice       Float
   totalPrice      Float
+  measurementType String?
+  packageContentQuantity Float?
+  packageContentUnit String?
+  purchaseUnit    String?
+  baseUnit        String?
+  conversionFactor Float             @default(1)
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
   receiptItems    GoodsReceiptItem[]
