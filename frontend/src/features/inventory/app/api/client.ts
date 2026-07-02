@@ -276,6 +276,8 @@ export interface ItemsSoldRow {
   unit: string | null;
   unitsSold: number;
   revenue: number;
+  costOfGoods: number;
+  grossProfit: number;
   salesCount: number;
   lastSoldAt: string | null;
   currentStock: number | null;
@@ -287,6 +289,8 @@ export interface ItemsSoldReport {
   totalItems: number;
   totalUnitsSold: number;
   totalRevenue: number;
+  totalCostOfGoods: number;
+  totalGrossProfit: number;
   items: ItemsSoldRow[];
 }
 

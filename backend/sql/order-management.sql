@@ -362,11 +362,15 @@ CREATE TABLE IF NOT EXISTS inventory_deductions (
   deduction_type VARCHAR(50) NOT NULL,
   quantity_deducted DECIMAL(12,3) NOT NULL DEFAULT 0,
   unit VARCHAR(50),
+  unit_cost_snapshot DECIMAL(14,6) NOT NULL DEFAULT 0,
+  total_cost_snapshot DECIMAL(14,6) NOT NULL DEFAULT 0,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 ALTER TABLE inventory_deductions
-  ADD COLUMN IF NOT EXISTS variant_id BIGINT REFERENCES product_variants(id) ON DELETE SET NULL;
+  ADD COLUMN IF NOT EXISTS variant_id BIGINT REFERENCES product_variants(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS unit_cost_snapshot DECIMAL(14,6) NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS total_cost_snapshot DECIMAL(14,6) NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS order_queue (
   id BIGSERIAL PRIMARY KEY,

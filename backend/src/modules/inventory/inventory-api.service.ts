@@ -66,8 +66,17 @@ export class InventoryApiService {
       `UPDATE "InventoryItem"
        SET "baseUnit" = COALESCE(NULLIF("baseUnit", ''), unit),
            "purchaseUnit" = COALESCE(NULLIF("purchaseUnit", ''), unit),
-           "conversionFactor" = CASE WHEN "conversionFactor" IS NULL OR "conversionFactor" <= 0 THEN 1 ELSE "conversionFactor" END
-       WHERE "baseUnit" IS NULL OR "purchaseUnit" IS NULL OR "conversionFactor" IS NULL OR "conversionFactor" <= 0`,
+           "conversionFactor" = CASE
+             WHEN lower(COALESCE(NULLIF("purchaseUnit", ''), unit, '')) = lower(COALESCE(NULLIF("baseUnit", ''), unit, '')) THEN 1
+             WHEN lower(COALESCE(NULLIF("purchaseUnit", ''), unit, '')) = 'kg' AND lower(COALESCE(NULLIF("baseUnit", ''), unit, '')) = 'g' THEN 1000
+             WHEN lower(COALESCE(NULLIF("purchaseUnit", ''), unit, '')) = 'g' AND lower(COALESCE(NULLIF("baseUnit", ''), unit, '')) = 'kg' THEN 0.001
+             WHEN lower(COALESCE(NULLIF("purchaseUnit", ''), unit, '')) IN ('l', 'liter', 'litre') AND lower(COALESCE(NULLIF("baseUnit", ''), unit, '')) IN ('ml', 'milliliter', 'millilitre') THEN 1000
+             WHEN lower(COALESCE(NULLIF("purchaseUnit", ''), unit, '')) IN ('ml', 'milliliter', 'millilitre') AND lower(COALESCE(NULLIF("baseUnit", ''), unit, '')) IN ('l', 'liter', 'litre') THEN 0.001
+             WHEN lower(COALESCE(NULLIF("purchaseUnit", ''), unit, '')) = 'dozen' AND lower(COALESCE(NULLIF("baseUnit", ''), unit, '')) IN ('pc', 'pcs', 'piece', 'pieces') THEN 12
+             WHEN lower(COALESCE(NULLIF("purchaseUnit", ''), unit, '')) IN ('pc', 'pcs', 'piece', 'pieces') AND lower(COALESCE(NULLIF("baseUnit", ''), unit, '')) = 'dozen' THEN 0.08333333333333333
+             WHEN "conversionFactor" IS NULL OR "conversionFactor" <= 0 THEN 1
+             ELSE "conversionFactor"
+           END`,
     );
   }
 
@@ -88,6 +97,23 @@ export class InventoryApiService {
            "conversionFactor" = CASE WHEN "conversionFactor" IS NULL OR "conversionFactor" <= 0 THEN 1 ELSE "conversionFactor" END
        WHERE "purchaseUnit" IS NULL OR "baseUnit" IS NULL OR "conversionFactor" IS NULL OR "conversionFactor" <= 0`,
     );
+    await this.safeQuery(
+      `UPDATE "PurchaseOrderItem" poi
+       SET "conversionFactor" = CASE
+         WHEN lower(poi."purchaseUnit") = lower(poi."baseUnit") THEN 1
+         WHEN lower(poi."purchaseUnit") = 'kg' AND lower(poi."baseUnit") = 'g' THEN 1000
+         WHEN lower(poi."purchaseUnit") = 'g' AND lower(poi."baseUnit") = 'kg' THEN 0.001
+         WHEN lower(poi."purchaseUnit") IN ('l', 'liter', 'litre') AND lower(poi."baseUnit") IN ('ml', 'milliliter', 'millilitre') THEN 1000
+         WHEN lower(poi."purchaseUnit") IN ('ml', 'milliliter', 'millilitre') AND lower(poi."baseUnit") IN ('l', 'liter', 'litre') THEN 0.001
+         WHEN lower(poi."purchaseUnit") = 'dozen' AND lower(poi."baseUnit") IN ('pc', 'pcs', 'piece', 'pieces') THEN 12
+         WHEN lower(poi."purchaseUnit") IN ('pc', 'pcs', 'piece', 'pieces') AND lower(poi."baseUnit") = 'dozen' THEN 0.08333333333333333
+         ELSE poi."conversionFactor"
+       END
+       FROM "PurchaseOrder" po
+       WHERE po.id = poi."purchaseOrderId"
+         AND po.status IN ('DRAFT', 'SUBMITTED', 'APPROVED', 'PARTIALLY_RECEIVED')
+         AND COALESCE(poi."receivedQty", 0) = 0`,
+    );
   }
 
   private async ensureRecipeIngredientUnitColumns() {
@@ -98,6 +124,21 @@ export class InventoryApiService {
          ADD COLUMN IF NOT EXISTS "purchaseUnitSnapshot" TEXT,
          ADD COLUMN IF NOT EXISTS "baseUnitSnapshot" TEXT,
          ADD COLUMN IF NOT EXISTS "conversionFactorSnapshot" DOUBLE PRECISION`,
+    );
+  }
+
+  private async ensureSalesCostColumns() {
+    await this.safeQuery(
+      `ALTER TABLE "Sale"
+         ADD COLUMN IF NOT EXISTS "costOfGoods" DOUBLE PRECISION NOT NULL DEFAULT 0,
+         ADD COLUMN IF NOT EXISTS "grossProfit" DOUBLE PRECISION NOT NULL DEFAULT 0,
+         ADD COLUMN IF NOT EXISTS "grossMargin" DOUBLE PRECISION NOT NULL DEFAULT 0`,
+    );
+    await this.safeQuery(
+      `ALTER TABLE "SaleItem"
+         ADD COLUMN IF NOT EXISTS "unitCost" DOUBLE PRECISION NOT NULL DEFAULT 0,
+         ADD COLUMN IF NOT EXISTS "totalCost" DOUBLE PRECISION NOT NULL DEFAULT 0,
+         ADD COLUMN IF NOT EXISTS "grossProfit" DOUBLE PRECISION NOT NULL DEFAULT 0`,
     );
   }
 
@@ -155,6 +196,62 @@ export class InventoryApiService {
   private normalizeConversionFactor(value: unknown) {
     const factor = Number(value ?? 1);
     return Number.isFinite(factor) && factor > 0 ? factor : 1;
+  }
+
+  private standardConversionFactor(purchaseUnitValue: unknown, baseUnitValue: unknown) {
+    const purchaseUnit = this.normalizeUnit(purchaseUnitValue);
+    const baseUnit = this.normalizeUnit(baseUnitValue);
+    if (!purchaseUnit || !baseUnit) return null;
+    if (purchaseUnit === baseUnit) return 1;
+    const standard: Record<string, number> = {
+      'kg:g': 1000,
+      'g:kg': 0.001,
+      'l:ml': 1000,
+      'ml:l': 0.001,
+      'dozen:pcs': 12,
+      'pcs:dozen': 1 / 12,
+    };
+    return standard[`${purchaseUnit}:${baseUnit}`] ?? null;
+  }
+
+  private resolveConversionFactor(purchaseUnit: unknown, baseUnit: unknown, submittedFactor: unknown) {
+    return this.standardConversionFactor(purchaseUnit, baseUnit)
+      ?? this.normalizeConversionFactor(submittedFactor);
+  }
+
+  private unitFamily(value: unknown): 'mass' | 'volume' | 'count' | 'package' | null {
+    const unit = this.normalizeUnit(value);
+    if (!unit) return null;
+    if (['kg', 'g'].includes(unit)) return 'mass';
+    if (['l', 'ml'].includes(unit)) return 'volume';
+    if (['pcs', 'dozen'].includes(unit)) return 'count';
+    // Packaging/custom units require an explicit content factor, and may contain
+    // mass, volume, pieces, or a smaller package (for example box -> pack).
+    if ([
+      'bottle', 'can', 'pack', 'box', 'bag', 'sack', 'carton', 'tray', 'gallon',
+      'block', 'loaf', 'pouch', 'tub', 'slice', 'slices',
+    ].includes(unit)) return 'package';
+    return null;
+  }
+
+  private assertCompatibleUnitPair(purchaseUnitValue: unknown, baseUnitValue: unknown) {
+    const purchaseUnit = this.normalizeUnit(purchaseUnitValue);
+    const baseUnit = this.normalizeUnit(baseUnitValue);
+    if (!purchaseUnit || !baseUnit) {
+      throw new BadRequestException('Purchase unit and base unit are required.');
+    }
+    if (purchaseUnit === baseUnit) return;
+    const purchaseFamily = this.unitFamily(purchaseUnit);
+    const baseFamily = this.unitFamily(baseUnit);
+    const compatible = purchaseFamily === 'package'
+      ? baseFamily !== null
+      : purchaseFamily !== null && purchaseFamily === baseFamily;
+    if (!compatible) {
+      throw new BadRequestException(
+        `Incompatible units: ${purchaseUnit} cannot be converted to ${baseUnit}. `
+        + 'Weight must use kg/g, volume must use liter/ml, and count must use pcs/dozen.',
+      );
+    }
   }
 
   private toBaseRecipeQuantity(
@@ -271,7 +368,8 @@ export class InventoryApiService {
     const id = randomUUID();
     const baseUnit = this.normalizeUnit(body.baseUnit ?? body.unit) || null;
     const purchaseUnit = this.normalizeUnit(body.purchaseUnit ?? body.unit ?? baseUnit) || baseUnit;
-    const conversionFactor = this.normalizeConversionFactor(body.conversionFactor);
+    if (purchaseUnit || baseUnit) this.assertCompatibleUnitPair(purchaseUnit, baseUnit);
+    const conversionFactor = this.resolveConversionFactor(purchaseUnit, baseUnit, body.conversionFactor);
 
     // Restaurant items are grouped by a "Main > Sub" category tree. Normalize the
     // incoming category into that shape and make sure the resolved Main/Sub exist
@@ -353,18 +451,26 @@ export class InventoryApiService {
   async updateInventoryItem(headers: HeadersLike, id: string, body: Record<string, unknown>) {
     const scope = await this.resolveScope(headers);
     await this.ensureInventoryItemOperationalColumns();
+    const currentRows = await this.safeQuery<{
+      quantity: number;
+      unit: string | null;
+      purchaseUnit: string | null;
+      baseUnit: string | null;
+      conversionFactor: number;
+    }>(
+      `SELECT quantity, unit, "purchaseUnit", "baseUnit", "conversionFactor"
+       FROM "InventoryItem" WHERE id = $1 AND "businessId" = $2 LIMIT 1`,
+      [id, scope.businessId],
+    );
+    const currentItem = currentRows[0];
+    if (!currentItem) throw new NotFoundException('Inventory item was not found.');
 
     // Stock quantity can only be changed directly by an Admin or Manager. Staff must
     // route stock changes through the adjustment approval workflow, so we reject any
     // attempt by them to set a quantity different from the item's current value.
     let quantityChange: number | null = body.quantity === undefined ? null : Number(body.quantity);
     if (quantityChange !== null && !['Admin', 'Manager'].includes(scope.user.role)) {
-      const current = await this.safeQuery<{ quantity: number }>(
-        `SELECT quantity FROM "InventoryItem" WHERE id = $1 AND "businessId" = $2 LIMIT 1`,
-        [id, scope.businessId],
-      );
-      if (!current[0]) throw new NotFoundException('Inventory item was not found.');
-      if (Number(current[0].quantity) !== quantityChange) {
+      if (Number(currentItem.quantity) !== quantityChange) {
         throw new ForbiddenException(
           'Only an Admin or Manager can change stock quantity directly. Submit a stock adjustment for approval instead.',
         );
@@ -379,8 +485,16 @@ export class InventoryApiService {
         : null;
     const purchaseUnit =
       body.purchaseUnit !== undefined ? this.normalizeUnit(body.purchaseUnit) : null;
-    const conversionFactor =
-      body.conversionFactor === undefined ? null : this.normalizeConversionFactor(body.conversionFactor);
+    const effectivePurchaseUnit = purchaseUnit ?? currentItem.purchaseUnit ?? currentItem.unit;
+    const effectiveBaseUnit = baseUnit ?? currentItem.baseUnit ?? currentItem.unit;
+    const unitsChanged = body.purchaseUnit !== undefined
+      || body.baseUnit !== undefined
+      || body.unit !== undefined
+      || body.conversionFactor !== undefined;
+    if (unitsChanged) this.assertCompatibleUnitPair(effectivePurchaseUnit, effectiveBaseUnit);
+    const conversionFactor = body.conversionFactor === undefined
+      ? null
+      : this.resolveConversionFactor(effectivePurchaseUnit, effectiveBaseUnit, body.conversionFactor);
 
     const rows = await this.safeQuery<Record<string, unknown>>(
       `
@@ -708,8 +822,8 @@ export class InventoryApiService {
               'purchaseUnitSnapshot', ri."purchaseUnitSnapshot",
               'baseUnitSnapshot', ri."baseUnitSnapshot",
               'conversionFactorSnapshot', ri."conversionFactorSnapshot",
-              'unitCost', ri."unitCost",
-              'totalCost', ri."totalCost",
+              'unitCost', COALESCE(item.price, ri."unitCost", 0),
+              'totalCost', ri.quantity * COALESCE(item.price, ri."unitCost", 0),
               'physicalStock', COALESCE(item.quantity, 0),
               'usableStock',
                 CASE
@@ -1106,7 +1220,7 @@ export class InventoryApiService {
         if (!item) throw new BadRequestException('A recipe ingredient is not available in this inventory.');
         const baseUnit = this.normalizeUnit(item.baseUnit ?? item.unit);
         const purchaseUnit = this.normalizeUnit(item.purchaseUnit ?? item.unit ?? baseUnit) || baseUnit;
-        const conversionFactor = this.normalizeConversionFactor(item.conversionFactor);
+        const conversionFactor = this.resolveConversionFactor(purchaseUnit, baseUnit, item.conversionFactor);
         const recipeQuantity = Number(ingredient.recipeQuantity ?? ingredient.quantity ?? 0);
         const recipeUnit = this.normalizeUnit(ingredient.recipeUnit ?? ingredient.unit ?? baseUnit);
         const quantity = this.toBaseRecipeQuantity(
@@ -2128,7 +2242,8 @@ export class InventoryApiService {
         const price = Number(item.unitPrice ?? 0);
         const purchaseUnit = this.normalizeUnit(item.purchaseUnit ?? item.unit ?? item.baseUnit) || null;
         const baseUnit = this.normalizeUnit(item.baseUnit ?? item.unit ?? item.purchaseUnit) || purchaseUnit;
-        const conversionFactor = this.normalizeConversionFactor(item.conversionFactor);
+        this.assertCompatibleUnitPair(purchaseUnit, baseUnit);
+        const conversionFactor = this.resolveConversionFactor(purchaseUnit, baseUnit, item.conversionFactor);
         await client.query(
           `
             INSERT INTO "PurchaseOrderItem" (
@@ -2232,7 +2347,8 @@ export class InventoryApiService {
           const price = Number(item.unitPrice ?? 0);
           const purchaseUnit = this.normalizeUnit(item.purchaseUnit ?? item.unit ?? item.baseUnit) || null;
           const baseUnit = this.normalizeUnit(item.baseUnit ?? item.unit ?? item.purchaseUnit) || purchaseUnit;
-          const conversionFactor = this.normalizeConversionFactor(item.conversionFactor);
+          this.assertCompatibleUnitPair(purchaseUnit, baseUnit);
+          const conversionFactor = this.resolveConversionFactor(purchaseUnit, baseUnit, item.conversionFactor);
           total += qty * price;
           await client.query(
             `
@@ -2595,7 +2711,13 @@ export class InventoryApiService {
           if (!inv) throw new BadRequestException(`Inventory item for "${poItem.name}" is unavailable.`);
 
           const previousQuantity = Number(inv.quantity);
-          const conversionFactor = this.normalizeConversionFactor(
+          this.assertCompatibleUnitPair(
+            poItem.purchaseUnit ?? inv.purchaseUnit,
+            poItem.baseUnit ?? inv.baseUnit ?? inv.unit,
+          );
+          const conversionFactor = this.resolveConversionFactor(
+            poItem.purchaseUnit ?? inv.purchaseUnit,
+            poItem.baseUnit ?? inv.baseUnit ?? inv.unit,
             poItem.conversionFactor ?? inv.conversionFactor ?? 1,
           );
           const baseReceivedQty = receivedQty * conversionFactor;
@@ -3202,6 +3324,7 @@ export class InventoryApiService {
   }
 
   async listSales(headers: HeadersLike, query: Record<string, string | undefined>) {
+    await this.ensureSalesCostColumns();
     const scope = await this.resolveScope(headers);
     const pagination = this.parsePagination(query, 100, 500);
     const dbLimit = pagination.limit + pagination.offset;
@@ -3209,7 +3332,7 @@ export class InventoryApiService {
       `
         SELECT
           s.id, s."transactionNumber", s."createdAt", s."updatedAt",
-          s.total, s.subtotal, s.discount, s.tax, s."amountPaid", s.change,
+          s.total, s.subtotal, s.discount, s.tax, s."costOfGoods", s."grossProfit", s."grossMargin", s."amountPaid", s.change,
           s."paymentMethod", s.status, s.customer, s."businessId", s.module,
           COALESCE(items.items, '[]'::json) AS items
         FROM "Sale" s
@@ -3222,6 +3345,9 @@ export class InventoryApiService {
               'quantity', si.quantity,
               'unitPrice', si."unitPrice",
               'totalPrice', si."totalPrice",
+              'unitCost', si."unitCost",
+              'totalCost', si."totalCost",
+              'grossProfit', si."grossProfit",
               'createdAt', si."createdAt"
             )
             ORDER BY si."createdAt"
@@ -3392,6 +3518,7 @@ export class InventoryApiService {
   // as component items, each component appears here; if sold as one bundle line, the
   // bundle appears by name.
   async itemsSoldReport(headers: HeadersLike, query: Record<string, string | undefined>) {
+    await this.ensureSalesCostColumns();
     const scope = await this.resolveScope(headers);
     const from = query.from && /^\d{4}-\d{2}-\d{2}$/.test(query.from) ? query.from : null;
     const to = query.to && /^\d{4}-\d{2}-\d{2}$/.test(query.to) ? query.to : null;
@@ -3406,6 +3533,8 @@ export class InventoryApiService {
           i.unit                                        AS unit,
           SUM(si.quantity)                              AS "unitsSold",
           SUM(si."totalPrice")                          AS revenue,
+          SUM(si."totalCost")                           AS "costOfGoods",
+          SUM(si."grossProfit")                         AS "grossProfit",
           COUNT(DISTINCT si."saleId")::int              AS "salesCount",
           MAX(s."createdAt")                            AS "lastSoldAt",
           i.quantity                                    AS "currentStock"
@@ -3429,6 +3558,8 @@ export class InventoryApiService {
       ...r,
       unitsSold: Number(r.unitsSold ?? 0),
       revenue: Number(r.revenue ?? 0),
+      costOfGoods: Number(r.costOfGoods ?? 0),
+      grossProfit: Number(r.grossProfit ?? 0),
     }));
     return {
       from,
@@ -3436,6 +3567,8 @@ export class InventoryApiService {
       totalItems: items.length,
       totalUnitsSold: items.reduce((sum, r) => sum + Number(r.unitsSold ?? 0), 0),
       totalRevenue: items.reduce((sum, r) => sum + Number(r.revenue ?? 0), 0),
+      totalCostOfGoods: items.reduce((sum, r) => sum + Number(r.costOfGoods ?? 0), 0),
+      totalGrossProfit: items.reduce((sum, r) => sum + Number(r.grossProfit ?? 0), 0),
       items,
     };
   }

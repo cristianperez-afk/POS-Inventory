@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Boxes, Link2, Merge, PackageSearch, Save, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "../../app/hooks/useSession";
@@ -107,6 +107,67 @@ const units = [
   "tub",
 ];
 const normalizeName = (value: string | undefined) => (value || '').trim().toLowerCase();
+const packageUnits = new Set([
+  "bottle", "can", "pack", "box", "bag", "sack", "carton", "tray", "gallon",
+  "block", "loaf", "pouch", "tub", "slices",
+]);
+
+const normalizeUnit = (value: string | undefined) => {
+  const unit = normalizeName(value);
+  if (["l", "liter", "liters", "litre", "litres"].includes(unit)) return "l";
+  if (["ml", "milliliter", "milliliters", "millilitre", "millilitres"].includes(unit)) return "ml";
+  if (["pc", "pcs", "piece", "pieces"].includes(unit)) return "pcs";
+  return unit;
+};
+
+const standardConversionFactor = (purchaseUnit: string, baseUnit: string) => {
+  const purchase = normalizeUnit(purchaseUnit);
+  const base = normalizeUnit(baseUnit);
+  if (!purchase || !base) return null;
+  if (purchase === base) return 1;
+  if (purchase === "kg" && base === "g") return 1000;
+  if (purchase === "g" && base === "kg") return 0.001;
+  if (purchase === "l" && base === "ml") return 1000;
+  if (purchase === "ml" && base === "l") return 0.001;
+  if (purchase === "dozen" && base === "pcs") return 12;
+  if (purchase === "pcs" && base === "dozen") return 1 / 12;
+  return null;
+};
+
+const unitFamily = (value: string) => {
+  const unit = normalizeUnit(value);
+  if (["kg", "g"].includes(unit)) return "mass";
+  if (["l", "ml"].includes(unit)) return "volume";
+  if (["pcs", "dozen"].includes(unit)) return "count";
+  return packageUnits.has(unit) ? "package" : null;
+};
+
+const isCompatibleUnitPair = (purchaseUnit: string, baseUnit: string) => {
+  const purchase = normalizeUnit(purchaseUnit);
+  const base = normalizeUnit(baseUnit);
+  if (!purchase || !base) return false;
+  if (purchase === base) return true;
+  const purchaseFamily = unitFamily(purchase);
+  return purchaseFamily === "package" || purchaseFamily === unitFamily(base);
+};
+
+const compatibleBaseUnits = (purchaseUnit: string) => {
+  const family = unitFamily(purchaseUnit);
+  if (["mass", "volume", "count"].includes(family ?? "")) {
+    return units.filter((unit) => unitFamily(unit) === family);
+  }
+  if (family === "package") return units;
+  return purchaseUnit ? [purchaseUnit] : [];
+};
+
+const preferredBaseUnit = (purchaseUnit: string) => {
+  const unit = normalizeUnit(purchaseUnit);
+  if (unit === "kg") return "g";
+  if (unit === "l") return "ml";
+  if (unit === "dozen") return "pcs";
+  if (["g", "ml", "pcs"].includes(unit)) return unit;
+  return "";
+};
 
 function splitCategory(value?: string) {
   const [category = "", subCategory = ""] = (value || "").split(" > ");
@@ -159,6 +220,17 @@ export function ProductManagement() {
     locationId: "",
   });
   const [supplierPrices, setSupplierPrices] = useState<Record<string, string>>({});
+  const baseUnitOptions = compatibleBaseUnits(form.unit);
+  const unitPairCompatible = isCompatibleUnitPair(form.unit, form.baseUnit);
+  const automaticConversionFactor = standardConversionFactor(form.unit, form.baseUnit);
+
+  useEffect(() => {
+    if (automaticConversionFactor === null) return;
+    const expected = String(automaticConversionFactor);
+    setForm((current) => current.conversionFactor === expected
+      ? current
+      : { ...current, conversionFactor: expected });
+  }, [automaticConversionFactor]);
 
   const catalog = useMemo<CatalogProduct[]>(() => {
     const grouped = new Map<string, CatalogProduct>();
@@ -264,6 +336,10 @@ export function ProductManagement() {
     }
     if (!Number.isFinite(conversionFactor) || conversionFactor <= 0) {
       toast.error("Conversion factor must be greater than zero");
+      return;
+    }
+    if (!unitPairCompatible) {
+      toast.error(`${form.unit} cannot use ${form.baseUnit} as its base unit`);
       return;
     }
 
@@ -466,7 +542,17 @@ export function ProductManagement() {
                 </div>
                 <div>
                   <label className="mb-1 block text-xs text-foreground">Purchase Unit</label>
-                  <select value={form.unit} onChange={(event) => setForm({ ...form, unit: event.target.value })} className="w-full rounded-lg border border-input bg-input-background px-3 py-2 text-sm outline-none focus:border-primary">
+                  <select
+                    value={form.unit}
+                    onChange={(event) => {
+                      const unit = event.target.value;
+                      const baseUnit = isCompatibleUnitPair(unit, form.baseUnit)
+                        ? form.baseUnit
+                        : preferredBaseUnit(unit);
+                      setForm({ ...form, unit, baseUnit, conversionFactor: "1" });
+                    }}
+                    className="w-full rounded-lg border border-input bg-input-background px-3 py-2 text-sm outline-none focus:border-primary"
+                  >
                     {form.unit && !units.includes(form.unit) && <option value={form.unit}>{form.unit}</option>}
                     {units.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
                   </select>
@@ -475,23 +561,31 @@ export function ProductManagement() {
                 <div>
                   <label className="mb-1 block text-xs text-foreground">Base Unit</label>
                   <select value={form.baseUnit} onChange={(event) => setForm({ ...form, baseUnit: event.target.value })} className="w-full rounded-lg border border-input bg-input-background px-3 py-2 text-sm outline-none focus:border-primary">
-                    {form.baseUnit && !units.includes(form.baseUnit) && <option value={form.baseUnit}>{form.baseUnit}</option>}
-                    {units.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+                    <option value="">Select base unit</option>
+                    {form.baseUnit && !baseUnitOptions.includes(form.baseUnit) && <option value={form.baseUnit}>{form.baseUnit} (incompatible)</option>}
+                    {baseUnitOptions.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
                   </select>
                   <p className="mt-1 text-[10px] text-muted-foreground">Unit used for inventory stock, recipe deductions, and unit cost.</p>
+                  {form.unit && form.baseUnit && !unitPairCompatible && (
+                    <p className="mt-1 text-[10px] text-red-600">Select a base unit compatible with {form.unit}.</p>
+                  )}
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs text-foreground">Conversion Factor</label>
+                  <label className="mb-1 block text-xs text-foreground">
+                    Conversion Factor {automaticConversionFactor !== null ? "(automatic)" : "(required)"}
+                  </label>
                   <input
                     type="number"
                     min="0.000001"
                     step="any"
                     value={form.conversionFactor}
                     onChange={(event) => setForm({ ...form, conversionFactor: event.target.value })}
-                    className="w-full rounded-lg border border-input bg-input-background px-3 py-2 text-sm outline-none focus:border-primary"
+                    disabled={automaticConversionFactor !== null}
+                    className="w-full rounded-lg border border-input bg-input-background px-3 py-2 text-sm outline-none focus:border-primary disabled:cursor-not-allowed disabled:opacity-70"
                   />
                   <p className="mt-1 text-[10px] text-muted-foreground">
                     1 {form.unit || "purchase unit"} = {form.conversionFactor || "?"} {form.baseUnit || "base unit"}.
+                    {automaticConversionFactor === null && " Enter this only for packaging/custom units such as can, pack, tray, or bottle."}
                   </p>
                 </div>
                 <div>
